@@ -382,7 +382,11 @@ function draw(
   ctx.scale(camera.zoom, camera.zoom)
 
   const byId = new Map(list.map(b => [b.id, b]))
-  const active = hoverId || selectedId
+  // Hover only. The selected note used to count as "active" too, so whichever
+  // note happened to be open in the list sat permanently brighter than the
+  // rest with its caption always on — it read as one node glowing for no
+  // reason. Emphasis now appears only under the pointer.
+  const active = hoverId
   const neighbours = new Set<string>()
   if (active)
     for (const edge of edges) {
@@ -409,7 +413,6 @@ function draw(
   // Small, plain white discs. Rings mark hover and selection; nothing glows.
   for (const body of list) {
     const isActive = body.id === active
-    const isSelected = body.id === selectedId
     const related = !active || isActive || neighbours.has(body.id)
     const alpha = body.alpha * (related ? 1 : 0.75)
     const r = body.r
