@@ -239,9 +239,11 @@ export default function BrainGraph({ graph, selectedId, onOpen, fullscreen = fal
     >
       <canvas ref={canvasRef} className="block h-full w-full" role="img" aria-label={`Граф заметок: ${graph.nodes.length} узлов, ${edges.length} связей`} />
 
-      {/* One cluster of controls, top right. In full screen it is the only
-          chrome on the canvas, so it fades back until the pointer is near it. */}
-      <div className={`absolute top-3 right-3.5 flex gap-1.5 transition-opacity duration-300 ${fullscreen ? 'opacity-35 hover:opacity-100' : ''}`}>
+      {/* One cluster of controls, bottom right — out of the way of the window
+          buttons and anything else that lives along the top edge. In full
+          screen it is the only chrome here, so it fades back until the pointer
+          comes near. */}
+      <div className={`absolute bottom-4 right-4 flex gap-1.5 transition-opacity duration-300 ${fullscreen ? 'opacity-35 hover:opacity-100' : ''}`}>
         <button className={GRAPH_BUTTON} title="Приблизить" onClick={() => zoomBy(1.2)}>
           <Plus size={14} />
         </button>
