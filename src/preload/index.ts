@@ -110,6 +110,20 @@ const coordination = {
     onBroadcast('coordination:onChange', cb)
 }
 
+/**
+ * The built-in assistant. `start` resolves when the run finishes *or* parks at
+ * the human gate — a parked run comes back with `status: 'waiting_human'` and
+ * a question, and `answer` continues it from the same step.
+ */
+const assistant = {
+  start: (goal: string): Promise<unknown> => ipcRenderer.invoke('assistant:start', goal),
+  answer: (runId: string, approved: boolean, note?: string): Promise<unknown> =>
+    ipcRenderer.invoke('assistant:answer', runId, approved, note),
+  cancel: (runId: string): Promise<unknown> => ipcRenderer.invoke('assistant:cancel', runId),
+  runs: (): Promise<unknown> => ipcRenderer.invoke('assistant:runs'),
+  onRun: (cb: (run: unknown) => void): (() => void) => onBroadcast('assistant:onRun', cb)
+}
+
 const canvas = {
   load: (): Promise<unknown> => ipcRenderer.invoke('canvas:load'),
   save: (snapshot: unknown): Promise<void> => ipcRenderer.invoke('canvas:save', snapshot)
@@ -136,5 +150,6 @@ contextBridge.exposeInMainWorld('api', {
   brain,
   canvas,
   chat,
+  assistant,
   window: windowControls
 })

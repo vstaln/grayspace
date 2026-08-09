@@ -14,19 +14,28 @@ export interface Task {
   maxReviewIterations: number
   createdAt: number
   updatedAt: number
+  /** Optimistic-concurrency version; send it back as `baseVersion` to edit safely. */
+  version: number
 }
 
-export interface FileLock {
-  path: string
-  taskId: string
-  agentId: string
+/**
+ * A live lock on a resource, addressed `scheme:id` (`file:src/a.ts`,
+ * `note:n1`, `git:repo`). Locks are never persisted — every holder is dead
+ * after a restart — and every one of them expires on its own TTL.
+ */
+export interface ResourceLock {
+  resource: string
+  actorId: string
+  acquiredAt: number
   expiresAt: number
+  reason?: string
+  implicit: boolean
 }
 
 export interface CoordinationSnapshot {
   managerId: string | null
   tasks: Task[]
-  locks: FileLock[]
+  locks: ResourceLock[]
 }
 
 export interface TerminalApi {
@@ -74,6 +83,8 @@ export interface AppSettings {
   backgroundDim: number
   /** Key for the free-tier OpenRouter models in the chat panel. */
   openRouterApiKey?: string
+  /** Model the built-in assistant plans with. */
+  assistantModel?: string
 }
 
 export interface SettingsApi {
@@ -157,6 +168,7 @@ export interface BrainNote {
   links?: string[]
   unresolved?: string[]
   deletedAt?: number
+  version: number
 }
 
 export interface GraphNode { id: string; title: string; tags: string[]; degree: number; color?: string }
@@ -177,7 +189,7 @@ export interface BrainApi {
 export interface CanvasWidget {
   id: string
   title: string
-  kind?: 'terminal' | 'note'
+  kind?: 'terminal' | 'note' | 'git-status'
   noteId?: string
   x: number
   y: number
@@ -186,6 +198,10 @@ export interface CanvasWidget {
   z: number
   minimized?: boolean
   maximized?: boolean
+  /** Stamped by the main process; echo it back on save so the merge can tell
+   *  this window's own layout apart from a concurrent write. */
+  version?: number
+  updatedAt?: number
 }
 
 export interface CanvasPoint { x: number; y: number }
@@ -197,14 +213,61 @@ export interface CanvasStroke {
 }
 
 export interface CanvasSnapshot {
+  schemaVersion: number
   widgets: CanvasWidget[]
   camera: { x: number; y: number; zoom: number }
   strokes: CanvasStroke[]
+  version: number
 }
 
 export interface CanvasApi {
   load(): Promise<CanvasSnapshot>
-  save(snapshot: CanvasSnapshot): Promise<void>
+  /**
+   * Writes the window's live layout back. Merged, not replaced: a widget an
+   * agent created or moved since this window last read the canvas survives.
+   */
+  save(snapshot: { widgets: CanvasWidget[]; camera: { x: number; y: number; zoom: number }; strokes: CanvasStroke[] }): Promise<
+    { applied: number; skipped: number; removed: number } | { error: string }
+  >
+}
+
+// ---- the built-in assistant ------------------------------------------------
+
+export type RunStatus = 'running' | 'waiting_human' | 'done' | 'failed'
+
+export interface PlanStep {
+  command: string
+  target: string
+  payload: unknown
+  summary: string
+  needsApproval?: boolean
+}
+
+export interface RunState {
+  runId: string
+  goal: string
+  actorId: string
+  step: number
+  status: RunStatus
+  currentNode: string
+  plan: PlanStep[]
+  cursor: number
+  held: string[]
+  scratch: Record<string, unknown>
+  log: string[]
+  question?: string
+  error?: string
+  startedAt: number
+  updatedAt: number
+}
+
+export interface AssistantApi {
+  /** Resolves when the run finishes or parks at the human gate. */
+  start(goal: string): Promise<RunState | { error: string }>
+  answer(runId: string, approved: boolean, note?: string): Promise<RunState | null>
+  cancel(runId: string): Promise<RunState | null>
+  runs(): Promise<RunState[]>
+  onRun(cb: (run: RunState) => void): () => void
 }
 
 export interface WindowApi {
@@ -227,6 +290,7 @@ declare global {
       chat: ChatApi
       brain: BrainApi
       canvas: CanvasApi
+      assistant: AssistantApi
       window: WindowApi
     }
   }

@@ -13,12 +13,14 @@ import { BrainStore } from './brain'
 import { CanvasStore } from './canvasState'
 import type { AppState, SettingsPatch } from './appState'
 import type { Command, CommandResult, Core } from './core/index.ts'
+import type { Assistant } from './assistant/index.ts'
 import { CANVAS_TARGET } from './commands/canvas.ts'
 import { TASK_MANAGER_TARGET } from './commands/board.ts'
 import { NEW } from './commands/index.ts'
 
 interface IpcDeps {
   core: Core
+  assistant: Assistant
   terminals: TerminalManager
   coordination: CoordinationStore
   brain: BrainStore
@@ -489,6 +491,24 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle('brain:restore', async (_e, id: string) => unwrap(await send('note.restore', `note:${id}`)))
   ipcMain.handle('brain:purge', async (_e, id: string) => unwrap(await send('note.purge', `note:${id}`)))
   ipcMain.handle('brain:graph', () => brain.graph())
+
+  // ---- the built-in assistant --------------------------------------------
+  // A run is autonomous but never silent: every step it takes is a command in
+  // the same journal as the user's own edits, and anything destructive parks
+  // at the human gate until this window answers.
+  ipcMain.handle('assistant:start', async (_e, goal: string) => {
+    if (typeof goal !== 'string' || !goal.trim()) return { error: 'a goal is required' }
+    try {
+      return await deps.assistant.start(goal.trim())
+    } catch (err) {
+      return { error: String(err) }
+    }
+  })
+  ipcMain.handle('assistant:answer', (_e, runId: string, approved: boolean, note?: string) =>
+    deps.assistant.answer(String(runId), approved === true, note)
+  )
+  ipcMain.handle('assistant:cancel', (_e, runId: string) => deps.assistant.cancel(String(runId)))
+  ipcMain.handle('assistant:runs', () => deps.assistant.list())
 
   // ---- coordination / kanban --------------------------------------------
   ipcMain.handle('coordination:status', () => coordination.snapshot())

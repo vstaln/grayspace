@@ -13,6 +13,7 @@ import { ensureCodexGlobalConfig, syncProjectMcpConfig, syncProjectOpencodeConfi
 import { createCore } from './core/index.ts'
 import { FileJournalSink, readJournalTail } from './journalSink'
 import { registerCommands } from './commands/index.ts'
+import { createAssistant } from './assistant/index.ts'
 import { join as joinPath } from 'path'
 
 let mainWindow: BrowserWindow | null = null
@@ -181,8 +182,30 @@ if (hasInstanceLock) {
       defaultCwd: () => state.workspaceDir
     })
 
+    // The assistant is built last, on top of a finished core — it registers
+    // its checkpoint command on the same bus and writes as an ordinary actor.
+    const assistant = createAssistant({
+      core,
+      brain,
+      canvas,
+      board: coordination,
+      terminals,
+      apiKey: () => state.settings.openRouterApiKey || undefined,
+      model: () => state.settings.assistantModel || undefined,
+      workspaceDir: () => state.workspaceDir
+    })
+    assistant.on('run', (run) => send('assistant:onRun', run))
+    assistant.on('step', (run) => send('assistant:onRun', run))
+    assistant.on('finished', (run) => send('assistant:onRun', run))
+    // Runs interrupted by a restart come back parked at the human gate rather
+    // than resuming unattended.
+    for (const run of assistant.recover(readJournalTail(journalFile).entries)) {
+      console.log(`recovered assistant run ${run.runId} — waiting for the human`)
+    }
+
     registerIpc({
       core,
+      assistant,
       terminals,
       coordination,
       brain,

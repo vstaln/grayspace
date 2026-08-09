@@ -1,7 +1,7 @@
 export interface Widget {
   id: string
   title: string
-  kind?: 'terminal' | 'note'
+  kind?: 'terminal' | 'note' | 'git-status'
   noteId?: string
   x: number
   y: number
@@ -10,6 +10,14 @@ export interface Widget {
   z: number
   minimized?: boolean
   maximized?: boolean
+  /**
+   * Version the main process last stamped on this widget. Carried through the
+   * canvas untouched and sent back on save: it is how the merge on the other
+   * side tells this window echoing back its own layout apart from an agent
+   * having moved the widget in the meantime.
+   */
+  version?: number
+  updatedAt?: number
 }
 
 export interface Camera {

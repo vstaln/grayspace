@@ -30,6 +30,13 @@ export interface AppSettings {
   openRouterApiKey?: string
   /** Encrypted form of `openRouterApiKey` on disk (safeStorage); never sent to the renderer. */
   openRouterApiKeyEnc?: string
+  /**
+   * Model the built-in assistant plans with. Separate from whatever the chat
+   * panel is set to: a chat turn and an autonomous run have different needs,
+   * and silently repurposing the chat model would surprise the user the first
+   * time a cheap chat model produced a bad plan.
+   */
+  assistantModel?: string
 }
 
 export type SettingsPatch = Partial<Omit<AppSettings, 'backgroundImage' | 'openRouterApiKey'>> & {
@@ -134,6 +141,8 @@ export class AppState extends EventEmitter {
     if (patch.linkSyntax && ['wiki', 'dollar', 'both'].includes(patch.linkSyntax))
       this.state.settings.linkSyntax = patch.linkSyntax
     if (patch.role && ['member', 'lead'].includes(patch.role)) this.state.settings.role = patch.role
+    if (typeof patch.assistantModel === 'string')
+      this.state.settings.assistantModel = patch.assistantModel.trim() || undefined
     if (typeof patch.userName === 'string' && patch.userName.trim())
       this.state.settings.userName = patch.userName.trim().slice(0, 40)
     if ('backgroundImage' in patch)
