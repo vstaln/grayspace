@@ -1,7 +1,7 @@
 {
   "name": "workspace",
   "version": "2.0.0",
-  "description": "Workspace — холст с терминалами и доской задач, управляемый агентами через MCP",
+  "description": "OrcSpace — бесконечный холст с терминалами, заметками и координацией агентов",
   "main": "./out/main/index.js",
   "license": "MIT",
   "scripts": {

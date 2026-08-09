@@ -1,5 +1,5 @@
 
-export const APP_TITLE = 'Workspace'
+export const APP_TITLE = 'OrcSpace'
 
 /**
  * Name MCP clients see, and the key used in every generated config snippet.
