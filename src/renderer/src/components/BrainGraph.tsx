@@ -411,15 +411,16 @@ function draw(
     const isActive = body.id === active
     const isSelected = body.id === selectedId
     const related = !active || isActive || neighbours.has(body.id)
-    const alpha = body.alpha * (related ? 1 : 0.22)
+    const alpha = body.alpha * (related ? 1 : 0.75)
     const r = body.r
 
-    // A plain white disc and nothing else — no colour, no glow, no ring.
-    // Hover and selection are shown by brightness alone: the focused node
-    // stays at full white while everything unrelated dims back.
+    // A plain white disc — no colour, no glow, no ring. Nodes unrelated to the
+    // one under the pointer fade back only slightly: at the old 0.22 they went
+    // properly grey and looked broken, so the focus is a hint rather than a
+    // spotlight.
     ctx.beginPath()
     ctx.arc(body.x, body.y, r, 0, Math.PI * 2)
-    ctx.fillStyle = `rgba(255,255,255,${isActive || isSelected ? body.alpha : alpha * 0.82})`
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`
     ctx.fill()
 
     // Labels would be noise on a dense zoomed-out graph.
