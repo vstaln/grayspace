@@ -234,8 +234,8 @@ export default function Sidebar({
             notes — and the brain onto the graph, which is what a mind map
             actually looks like. A separate "new note on the canvas" button is
             gone: the same thing is one right-click away. */}
-        <IconButton label="Второй мозг" active={brainOpen} onClick={onToggleBrain}><FileText size={17} /></IconButton>
-        <IconButton label="Граф мыслей и заметок" active={graphOpen} onClick={onToggleGraph}>
+        <IconButton label="Notes" active={brainOpen} onClick={onToggleBrain}><FileText size={17} /></IconButton>
+        <IconButton label="Graph" active={graphOpen} onClick={onToggleGraph}>
           <Brain size={17} />
         </IconButton>
 
