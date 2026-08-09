@@ -177,7 +177,12 @@ export class CommandBus extends EventEmitter {
       // the payload is re-typed once, here, at the single call site.
       const apply = handler.apply as (ctx: { command: Command; actor: typeof actor; currentVersion: number }) => unknown
       const data = (await apply({ command, actor, currentVersion })) as T
-      const version = this.versionOf(command.target) || currentVersion
+      // A create addresses a `<scheme>:new` sentinel, which has no version of
+      // its own — the object that came back does, and that is the number the
+      // caller needs in order to send a matching baseVersion next time.
+      const created = (data as { version?: unknown } | null)?.version
+      const version =
+        this.versionOf(command.target) || (typeof created === 'number' ? created : 0) || currentVersion
 
       const entry = this.journal.append({
         phase: 'commit',
