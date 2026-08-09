@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import type { LinkSyntax } from './appState'
 import { readStoreJson, writeJsonAtomic } from './storage'
-import { Forbidden } from './coordination'
+import { CommandError, VersionRegistry } from './core/index.ts'
 
 export interface BrainNote {
   id: string
@@ -22,6 +22,8 @@ export interface BrainNote {
   unresolved?: string[]
   /** Set while the note sits in the trash; cleared on restore. */
   deletedAt?: number
+  /** Optimistic-concurrency version, owned by the Command Bus. */
+  version: number
 }
 export interface BrainSnapshot { notes: BrainNote[] }
 
@@ -82,6 +84,8 @@ export class BrainStore {
   private notes: BrainNote[] = []
   private loaded = false
   private saveTimer: ReturnType<typeof setTimeout> | null = null
+  /** Note versions, kept in step with the Command Bus. */
+  readonly versions = new VersionRegistry('note')
   private get file(): string { return join(app.getPath('userData'), 'second-brain.json') }
 
   /** `syntax` is read live so flipping the setting re-links notes without a restart. */
@@ -101,7 +105,7 @@ export class BrainStore {
     this.ensure()
     const now = Date.now()
     const title = String(input.title || '').trim()
-    if (!title) throw new Forbidden('note title is required', 400)
+    if (!title) throw new CommandError('invalid', 'note title is required')
     const note: BrainNote = {
       id: `note-${now}-${Math.random().toString(36).slice(2, 7)}`,
       title,
@@ -111,8 +115,10 @@ export class BrainStore {
       folder: input.folder?.trim() || undefined,
       color: sanitizeColor(input.color),
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      version: 0
     }
+    note.version = this.versions.bump(note.id)
     this.notes.push(note)
     this.reindex()
     this.save()
@@ -122,7 +128,7 @@ export class BrainStore {
   update(id: string, patch: Partial<BrainNote>): BrainNote {
     this.ensure()
     const note = this.notes.find(n => n.id === id)
-    if (!note) throw new Forbidden('note not found', 404)
+    if (!note) throw new CommandError('not_found', 'note not found')
     if (
       patch.title === undefined &&
       patch.content === undefined &&
@@ -132,7 +138,7 @@ export class BrainStore {
       patch.color === undefined
     ) {
       // A no-op patch would silently "succeed" without changing anything.
-      throw new Forbidden('nothing to update', 400)
+      throw new CommandError('invalid', 'nothing to update')
     }
     if (patch.title !== undefined) note.title = String(patch.title).trim() || note.title
     if (patch.content !== undefined) note.content = String(patch.content)
@@ -141,6 +147,7 @@ export class BrainStore {
     if (patch.folder !== undefined) note.folder = String(patch.folder).trim() || undefined
     if (patch.color !== undefined) note.color = sanitizeColor(patch.color)
     note.updatedAt = Date.now()
+    note.version = this.versions.bump(note.id)
     // A renamed title rewires every note pointing at it, so reindex globally.
     this.reindex()
     this.save()
@@ -151,8 +158,9 @@ export class BrainStore {
   remove(id: string): void {
     this.ensure()
     const note = this.notes.find(n => n.id === id)
-    if (!note) throw new Forbidden('note not found', 404)
+    if (!note) throw new CommandError('not_found', 'note not found')
     note.deletedAt = Date.now()
+    note.version = this.versions.bump(note.id)
     this.reindex()
     this.save()
   }
@@ -170,9 +178,10 @@ export class BrainStore {
   restore(id: string): BrainNote {
     this.ensure()
     const note = this.notes.find(n => n.id === id && n.deletedAt)
-    if (!note) throw new Forbidden('note not found', 404)
+    if (!note) throw new CommandError('not_found', 'note not found')
     note.deletedAt = undefined
     note.updatedAt = Date.now()
+    note.version = this.versions.bump(note.id)
     this.reindex()
     this.save()
     return note
@@ -182,8 +191,9 @@ export class BrainStore {
   purge(id: string): void {
     this.ensure()
     const note = this.notes.find(n => n.id === id)
-    if (!note) throw new Forbidden('note not found', 404)
+    if (!note) throw new CommandError('not_found', 'note not found')
     this.notes = this.notes.filter(n => n.id !== id)
+    this.versions.forget(id)
     this.reindex()
     this.save()
   }
@@ -304,6 +314,10 @@ export class BrainStore {
     const before = this.notes.length
     this.notes = this.notes.filter(n => !n.deletedAt || n.deletedAt > cutoff)
     if (this.notes.length !== before) this.save()
+    // A note written before versions existed starts at 1, not 0, so a client
+    // that has read it can send a matching baseVersion straight away.
+    for (const note of this.notes) if (!(note.version > 0)) note.version = 1
+    this.versions.seed(this.notes)
     this.reindex()
   }
 

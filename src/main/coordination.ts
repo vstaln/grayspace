@@ -1,10 +1,14 @@
-﻿import { app } from 'electron'
+import { app } from 'electron'
 import { EventEmitter } from 'events'
 import { join } from 'path'
 import { readStoreJson, writeJsonAtomic } from './storage'
+import { CommandError, fileResource, VersionRegistry, type LockManager, type ResourceLock } from './core/index.ts'
 
 export const TASK_STATES = ['backlog', 'queued', 'in_progress', 'review', 'done', 'cancelled'] as const
 export type TaskState = (typeof TASK_STATES)[number]
+
+/** Bumped whenever the persisted board shape changes. */
+export const BOARD_SCHEMA_VERSION = 2
 
 /** Marks tasks the human added from the kanban board rather than an agent. */
 export const USER_AUTHOR = 'user'
@@ -25,102 +29,91 @@ export interface Task {
   maxReviewIterations: number
   createdAt: number
   updatedAt: number
-}
-
-export interface FileLock {
-  path: string
-  taskId: string
-  agentId: string
-  expiresAt: number
+  /** Optimistic-concurrency version, owned by the Command Bus. */
+  version: number
 }
 
 export interface CoordinationSnapshot {
   managerId: string | null
   tasks: Task[]
-  locks: FileLock[]
+  /**
+   * Live resource locks, read straight from the core lock manager. The board
+   * no longer keeps a lock table of its own: a card is a unit of work, not a
+   * thing that can be held, and pretending otherwise is what let two agents
+   * with different cards edit the same file.
+   */
+  locks: ResourceLock[]
 }
 
-export class Forbidden extends Error {
-  constructor(
-    message: string,
-    readonly status = 403,
-    readonly details: Record<string, unknown> = {}
-  ) {
-    super(message)
-  }
-}
-
-const DEFAULT_LOCK_TTL = 15 * 60_000
-const MIN_LOCK_TTL = 60_000
-const MAX_LOCK_TTL = 60 * 60_000
-/** A manager that hasn't acted in this long is presumed gone (process killed,
- *  crashed, etc.) and the role is freed up automatically. */
+/** How long a claimed task's file locks live before a heartbeat is required. */
+const TASK_LOCK_TTL_MS = 10 * 60_000
+/** A manager that hasn't acted in this long is presumed gone. */
 const MANAGER_TTL = 15 * 60_000
 
 /**
- * Single source of truth for who is coordinating work and what work exists.
- * Exactly one manager agent may hold the role at a time; everything else is
- * either a worker acting on an assigned task, or the human editing the board.
- * Emits `change` whenever state moves so the UI can stay live.
+ * The board: who is coordinating, and what work exists.
+ *
+ * Mutating methods here are called only from the command handlers in
+ * `commands/board.ts`. File reservations are delegated to the core
+ * {@link LockManager} — this class decides *which* resources a claimed task
+ * needs, and the lock manager decides whether they are available.
  */
 export class CoordinationStore extends EventEmitter {
   private manager: string | null = null
   /** Last time the manager did something as manager; drives {@link MANAGER_TTL}. */
   private managerSeenAt: number | null = null
   private readonly tasks = new Map<string, Task>()
-  private readonly locks = new Map<string, FileLock>()
+  private readonly locks: LockManager
   private counter = 0
   private loaded = false
   private persistTimer: ReturnType<typeof setTimeout> | null = null
+  readonly versions = new VersionRegistry('task')
+
+  constructor(locks: LockManager) {
+    super()
+    this.locks = locks
+  }
+
   private get file(): string {
     return join(app.getPath('userData'), 'workspace-board.json')
   }
 
   /**
-   * Tasks, the manager role, and file locks all outlive the process now — a
-   * board (or a manager claim) that reset itself on every launch was useless
-   * for planning. What used to make reviving the manager/locks risky (an
-   * agent that no longer exists still "holding" them) is handled instead by
-   * {@link pruneStale}: locks already expire on their own TTL, and a manager
-   * that stops acting for {@link MANAGER_TTL} is released automatically.
+   * Tasks and the manager claim outlive the process; locks deliberately do
+   * not. Anything that was holding a file when the app died is gone, so the
+   * board comes back with every resource free and `in_progress` cards whose
+   * worker never returns fall back to `queued` on the first prune.
    */
   private ensure(): void {
     if (this.loaded) return
     this.loaded = true
-    const raw = readStoreJson<{ tasks?: unknown; managerId?: unknown; managerSeenAt?: unknown; locks?: unknown }>(
-      this.file,
-      {}
-    )
-    if (Array.isArray(raw.tasks))
-      for (const entry of raw.tasks) {
-        const task = reviveTask(entry)
-        if (task) this.tasks.set(task.id, task)
-      }
-    if (Array.isArray(raw.locks))
-      for (const entry of raw.locks) {
-        const lock = reviveLock(entry)
-        if (lock) this.locks.set(lock.path, lock)
-      }
+    const raw = readStoreJson<Record<string, unknown>>(this.file, {})
+    const tasks = Array.isArray(raw.tasks) ? raw.tasks : []
+    for (const entry of tasks) {
+      const task = reviveTask(entry)
+      if (task) this.tasks.set(task.id, task)
+    }
+    this.versions.seed(this.tasks.values())
     const seenAt = Number(raw.managerSeenAt) || 0
     if (typeof raw.managerId === 'string' && raw.managerId && Date.now() - seenAt < MANAGER_TTL) {
       this.manager = raw.managerId
       this.managerSeenAt = seenAt
     }
+    // Every task that was in flight when the process died has lost its locks
+    // along with the worker holding them.
+    for (const task of this.tasks.values()) {
+      if (task.state !== 'in_progress') continue
+      task.state = 'queued'
+      task.assignee = undefined
+    }
     this.pruneStale()
   }
 
-  /** Live update now, disk write on a short debounce (PERF-005): a burst of
-   *  board ops (agent task updates, lock churn) no longer fsyncs per step. */
+  /** Live update now, disk write on a short debounce. */
   private changed(): void {
     this.ensure()
     this.emit('change', this.snapshot())
     this.schedulePersist()
-  }
-
-  /** Critical ops (claim): the write must land before the reply returns. */
-  private changedNow(): void {
-    this.emit('change', this.snapshot())
-    this.flush()
   }
 
   private schedulePersist(): void {
@@ -138,8 +131,8 @@ export class CoordinationStore extends EventEmitter {
     }
     try {
       writeJsonAtomic(this.file, {
+        schemaVersion: BOARD_SCHEMA_VERSION,
         tasks: Array.from(this.tasks.values()),
-        locks: Array.from(this.locks.values()),
         managerId: this.manager,
         managerSeenAt: this.managerSeenAt
       })
@@ -164,30 +157,22 @@ export class CoordinationStore extends EventEmitter {
   }
 
   /**
-   * Clears out everything describing an agent that has gone quiet: expired
-   * file locks, and — if none of a task's locks survived that sweep — the
-   * task itself falls back to `queued` with its assignee cleared, instead of
-   * sitting `in_progress` forever behind a worker that vanished. The manager
-   * role gets the same treatment on its own {@link MANAGER_TTL}.
+   * Requeues tasks whose worker has lost the files it was holding (the locks
+   * expired with the agent), and frees a manager that has gone quiet.
    */
   private pruneStale(): void {
     const now = Date.now()
-    const affected = new Set<string>()
-    for (const [path, lock] of this.locks) {
-      if (lock.expiresAt <= now) {
-        this.locks.delete(path)
-        affected.add(lock.taskId)
-      }
-    }
     let mutated = false
-    for (const taskId of affected) {
-      const task = this.tasks.get(taskId)
-      if (task && task.state === 'in_progress' && !this.hasActiveLock(taskId)) {
-        task.state = 'queued'
-        task.assignee = undefined
-        task.updatedAt = now
-        mutated = true
-      }
+    for (const task of this.tasks.values()) {
+      if (task.state !== 'in_progress' || !task.assignee) continue
+      if (task.files.length === 0) continue
+      const stillHeld = task.files.some((path) => this.locks.isHeldBy(fileResource(path), task.assignee as string))
+      if (stillHeld) continue
+      task.state = 'queued'
+      task.assignee = undefined
+      task.updatedAt = now
+      task.version = this.versions.bump(task.id)
+      mutated = true
     }
     if (this.manager && this.managerSeenAt !== null && now - this.managerSeenAt > MANAGER_TTL) {
       this.manager = null
@@ -195,17 +180,11 @@ export class CoordinationStore extends EventEmitter {
       mutated = true
     }
     // Deferred: calling changed() here would re-enter snapshot() (which calls
-    // this method) while still inside it. Breaking out to a microtask lets the
-    // current snapshot finish first, so the recursion terminates immediately.
+    // this method) while still inside it.
     if (mutated) {
       this.schedulePersist()
       queueMicrotask(() => this.emit('change', this.snapshot()))
     }
-  }
-
-  private hasActiveLock(taskId: string): boolean {
-    for (const lock of this.locks.values()) if (lock.taskId === taskId) return true
-    return false
   }
 
   snapshot(): CoordinationSnapshot {
@@ -214,8 +193,13 @@ export class CoordinationStore extends EventEmitter {
     return {
       managerId: this.manager,
       tasks: Array.from(this.tasks.values()).sort((a, b) => a.createdAt - b.createdAt),
-      locks: Array.from(this.locks.values())
+      locks: this.locks.list()
     }
+  }
+
+  task(id: string): Task | undefined {
+    this.ensure()
+    return this.tasks.get(id)
   }
 
   get managerId(): string | null {
@@ -227,20 +211,22 @@ export class CoordinationStore extends EventEmitter {
   }
 
   claimManager(agentId: string): { managerId: string; role: 'manager' } {
+    this.ensure()
     const id = agentId?.trim()
-    if (!id) throw new Forbidden('agentId is required', 400)
+    if (!id) throw new CommandError('invalid', 'agentId is required')
     if (this.manager && this.manager !== id) {
-      throw new Forbidden('manager already assigned', 409, { managerId: this.manager })
+      throw new CommandError('forbidden', 'manager already assigned', { managerId: this.manager })
     }
     this.manager = id
     this.managerSeenAt = Date.now()
-    this.changedNow()
+    this.emit('change', this.snapshot())
+    this.flush()
     return { managerId: id, role: 'manager' }
   }
 
   releaseManager(agentId: string): void {
     if (!this.manager || agentId !== this.manager) {
-      throw new Forbidden('only the current manager may release this role')
+      throw new CommandError('forbidden', 'only the current manager may release this role')
     }
     this.manager = null
     this.managerSeenAt = null
@@ -268,11 +254,12 @@ export class CoordinationStore extends EventEmitter {
   }): Task {
     this.ensure()
     const title = input.title?.trim()
-    if (!title) throw new Forbidden('title is required', 400)
+    if (!title) throw new CommandError('invalid', 'title is required')
     this.touchManager(input.createdBy)
     const now = Date.now()
+    const id = this.nextTaskId()
     const task: Task = {
-      id: this.nextTaskId(),
+      id,
       title,
       brief: typeof input.brief === 'string' ? input.brief : '',
       files: Array.isArray(input.files) ? input.files.filter((p): p is string => typeof p === 'string') : [],
@@ -284,7 +271,8 @@ export class CoordinationStore extends EventEmitter {
       maxSteps: clamp(Number(input.maxSteps) || 20, 1, 100),
       maxReviewIterations: clamp(Number(input.maxReviewIterations) || 2, 1, 10),
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
+      version: this.versions.bump(id)
     }
     this.tasks.set(task.id, task)
     this.changed()
@@ -292,48 +280,51 @@ export class CoordinationStore extends EventEmitter {
   }
 
   /**
-   * Claiming auto-locks every file the task declared, atomically: a second
-   * task whose file list overlaps one still in progress is rejected right
-   * here, instead of leaving the collision to be discovered only if (and
-   * when) a worker remembers to call `lock_task_file` itself. This is what
-   * actually makes `files` a reservation rather than a comment.
+   * Claiming reserves every file the task declared, through the real lock
+   * manager, atomically: if any of them is held by another actor the whole
+   * claim is rolled back. This is what makes `files` a reservation rather than
+   * a comment — and unlike the old per-task table, the reservation is on the
+   * same resources an agent's terminal commands are checked against.
    */
   claimTask(taskId: string, agentId: string): Task {
     this.ensure()
     this.pruneStale()
     const task = this.tasks.get(taskId)
-    if (!task) throw new Forbidden('task not found', 404)
+    if (!task) throw new CommandError('not_found', 'task not found')
     const worker = agentId?.trim()
-    if (!worker || worker === this.manager) throw new Forbidden('a worker agentId is required')
+    if (!worker || worker === this.manager) throw new CommandError('invalid', 'a worker agentId is required')
     // Backlog counts as claimable: the board renders backlog and queued in one
     // "To Do" column, so a card the user dragged there must stay pickable.
     if (task.state !== 'queued' && task.state !== 'backlog')
-      throw new Forbidden('task is not available', 409, { task })
+      throw new CommandError('conflict', 'task is not available', { task })
 
-    const conflicts = task.files
-      .map((path) => this.locks.get(path))
-      .filter((lock): lock is FileLock => !!lock && lock.taskId !== taskId)
-    if (conflicts.length > 0) {
-      throw new Forbidden('files are locked by another in-progress task', 409, { locks: conflicts })
+    const taken: string[] = []
+    try {
+      for (const path of task.files) {
+        const resource = fileResource(path)
+        this.locks.acquire({ resource, actorId: worker, ttlMs: TASK_LOCK_TTL_MS, reason: `task ${taskId}` })
+        taken.push(resource)
+      }
+    } catch (err) {
+      for (const resource of taken) this.locks.release(resource, worker)
+      throw err
     }
 
-    const now = Date.now()
-    for (const path of task.files) {
-      this.locks.set(path, { path, taskId, agentId: worker, expiresAt: now + DEFAULT_LOCK_TTL })
-    }
     task.assignee = worker
     task.state = 'in_progress'
-    task.updatedAt = now
-    this.changedNow()
+    task.updatedAt = Date.now()
+    task.version = this.versions.bump(task.id)
+    this.emit('change', this.snapshot())
+    this.flush()
     return task
   }
 
   updateTask(taskId: string, agentId: string, state: unknown): Task {
     this.ensure()
     const task = this.tasks.get(taskId)
-    if (!task) throw new Forbidden('task not found', 404)
+    if (!task) throw new CommandError('not_found', 'task not found')
     if (!this.isManager(agentId) && agentId !== task.assignee) {
-      throw new Forbidden('only the manager or assigned worker may update this task')
+      throw new CommandError('forbidden', 'only the manager or assigned worker may update this task')
     }
     this.touchManager(agentId)
     this.applyState(task, state)
@@ -359,11 +350,11 @@ export class CoordinationStore extends EventEmitter {
   ): Task {
     this.ensure()
     const task = this.tasks.get(taskId)
-    if (!task) throw new Forbidden('task not found', 404)
+    if (!task) throw new CommandError('not_found', 'task not found')
     const owns = task.assignee === actor.name || task.createdBy === USER_AUTHOR
-    if (actor.role !== 'lead' && !owns) throw new Forbidden('only the lead may edit other peopleвЂ™s tasks')
+    if (actor.role !== 'lead' && !owns) throw new CommandError('forbidden', 'only the lead may edit other people’s tasks')
     if (actor.role !== 'lead' && patch.assignee !== undefined)
-      throw new Forbidden('only the lead may reassign tasks')
+      throw new CommandError('forbidden', 'only the lead may reassign tasks')
 
     if (patch.state !== undefined) this.applyState(task, patch.state)
     if (typeof patch.title === 'string' && patch.title.trim()) task.title = patch.title.trim()
@@ -373,6 +364,7 @@ export class CoordinationStore extends EventEmitter {
     if (patch.assignee !== undefined)
       task.assignee = typeof patch.assignee === 'string' && patch.assignee.trim() ? patch.assignee.trim() : undefined
     task.updatedAt = Date.now()
+    task.version = this.versions.bump(task.id)
     this.changed()
     return task
   }
@@ -380,79 +372,46 @@ export class CoordinationStore extends EventEmitter {
   private applyState(task: Task, state: unknown): void {
     if (typeof state === 'string' && (TASK_STATES as readonly string[]).includes(state)) {
       task.state = state as TaskState
-      if (state === 'queued') {
-        task.assignee = undefined
-        this.releaseTaskLocks(task.id)
-      } else if (state === 'done' || state === 'cancelled') {
-        // Free the files the moment the task leaves the board instead of
+      if (state === 'queued' || state === 'done' || state === 'cancelled') {
+        // Free the files the moment the card stops being worked on instead of
         // waiting out the TTL — the next task queued behind this one (a very
         // common shape for a hub file) doesn't have to sit idle for nothing.
-        this.releaseTaskLocks(task.id)
-      } else {
-        // Any state transition is a liveness signal from whoever is driving
-        // the task, so it resets the clock instead of the file going stale
-        // out from under a worker still mid-edit (a long in_progress task
-        // otherwise loses its lock to TTL even while being actively worked).
-        this.renewTaskLocks(task.id)
+        if (state === 'queued') task.assignee = undefined
+        this.releaseTaskLocks(task)
+      } else if (task.assignee) {
+        // Any state transition is a liveness signal from whoever is driving the
+        // task, so it resets the clock instead of the files going stale out
+        // from under a worker still mid-edit.
+        for (const path of task.files) {
+          const resource = fileResource(path)
+          if (this.locks.isHeldBy(resource, task.assignee)) this.locks.renew(resource, task.assignee, TASK_LOCK_TTL_MS)
+        }
       }
     }
     task.updatedAt = Date.now()
+    task.version = this.versions.bump(task.id)
   }
 
-  private renewTaskLocks(taskId: string): void {
-    const expiresAt = Date.now() + DEFAULT_LOCK_TTL
-    for (const lock of this.locks.values()) {
-      if (lock.taskId === taskId) lock.expiresAt = expiresAt
-    }
-  }
-
-  private releaseTaskLocks(taskId: string): void {
-    for (const [path, lock] of this.locks) {
-      if (lock.taskId === taskId) this.locks.delete(path)
+  private releaseTaskLocks(task: Task): void {
+    const owner = task.assignee
+    for (const path of task.files) {
+      const resource = fileResource(path)
+      const holder = this.locks.holder(resource)
+      // Only locks this task actually took are dropped: a file another actor
+      // has picked up since must not be yanked out from under it.
+      if (holder && holder.reason === `task ${task.id}` && (!owner || holder.actorId === owner)) {
+        this.locks.release(resource, holder.actorId)
+      }
     }
   }
 
   deleteTask(taskId: string): void {
     this.ensure()
-    if (!this.tasks.delete(taskId)) throw new Forbidden('task not found', 404)
-    this.releaseTaskLocks(taskId)
-    this.changed()
-  }
-
-  lockFile(input: { path: string; taskId: string; agentId: string; ttlMs?: unknown }): FileLock {
-    this.ensure()
-    this.pruneStale()
-    const path = input.path?.trim()
-    const task = this.tasks.get(input.taskId)
-    if (!path || !task || task.assignee !== input.agentId) {
-      throw new Forbidden('lock requires an assigned task and its worker')
-    }
-    const existing = this.locks.get(path)
-    if (existing && (existing.taskId !== input.taskId || existing.agentId !== input.agentId)) {
-      throw new Forbidden('file is locked', 409, { lock: existing })
-    }
-    const lock: FileLock = {
-      path,
-      taskId: input.taskId,
-      agentId: input.agentId,
-      expiresAt: Date.now() + clamp(Number(input.ttlMs) || DEFAULT_LOCK_TTL, MIN_LOCK_TTL, MAX_LOCK_TTL)
-    }
-    this.locks.set(path, lock)
-    this.changed()
-    return lock
-  }
-
-  unlockFile(path: string, agentId: string): void {
-    const lock = this.locks.get(path)
-    if (!lock) throw new Forbidden('lock not found', 404)
-    if (agentId !== lock.agentId && !this.isManager(agentId)) throw new Forbidden('not lock owner')
-    this.locks.delete(path)
-    this.changed()
-  }
-
-  /** Operator escape hatch: clears every lock regardless of owner. */
-  forceReleaseLocks(): void {
-    this.locks.clear()
+    const task = this.tasks.get(taskId)
+    if (!task) throw new CommandError('not_found', 'task not found')
+    this.releaseTaskLocks(task)
+    this.tasks.delete(taskId)
+    this.versions.forget(taskId)
     this.changed()
   }
 }
@@ -491,24 +450,11 @@ function reviveTask(entry: unknown): Task | null {
     maxSteps: clamp(Number(raw.maxSteps) || 20, 1, 100),
     maxReviewIterations: clamp(Number(raw.maxReviewIterations) || 2, 1, 10),
     createdAt: Number(raw.createdAt) || now,
-    updatedAt: Number(raw.updatedAt) || now
+    updatedAt: Number(raw.updatedAt) || now,
+    // A board written before versions existed starts at 1 rather than 0, so a
+    // client that reads it can send a matching baseVersion immediately.
+    version: Number(raw.version) > 0 ? Number(raw.version) : 1
   }
-}
-
-/**
- * Rebuilds one file lock from the persisted board. Malformed entries are
- * dropped rather than trusted; already-expired ones are kept so
- * {@link CoordinationStore.pruneStale} can requeue their task the same way it
- * would if the expiry had happened live.
- */
-function reviveLock(entry: unknown): FileLock | null {
-  if (!entry || typeof entry !== 'object') return null
-  const raw = entry as Record<string, unknown>
-  const path = typeof raw.path === 'string' ? raw.path : ''
-  const taskId = typeof raw.taskId === 'string' ? raw.taskId : ''
-  const agentId = typeof raw.agentId === 'string' ? raw.agentId : ''
-  if (!path || !taskId || !agentId) return null
-  return { path, taskId, agentId, expiresAt: Number(raw.expiresAt) || 0 }
 }
 
 function normalizeTags(value: unknown): string[] {

@@ -8,18 +8,33 @@ import { isMcpRunning, startMcpServer, stopMcpServer } from './mcpProcess'
 import { registerIpc, focusedTerminalId } from './ipc'
 import { BrainStore } from './brain'
 import { AppState } from './appState'
-import { CanvasState } from './canvasState'
+import { CanvasStore } from './canvasState'
 import { ensureCodexGlobalConfig, syncProjectMcpConfig, syncProjectOpencodeConfig } from './mcpAutoConfig'
+import { createCore } from './core/index.ts'
+import { FileJournalSink, readJournalTail } from './journalSink'
+import { registerCommands } from './commands/index.ts'
+import { join as joinPath } from 'path'
 
 let mainWindow: BrowserWindow | null = null
 
+/**
+ * The unified core, built before anything that writes state exists. Every
+ * store below is mutated only by the command handlers registered on its bus,
+ * and every transport below only translates requests into commands.
+ */
+const journalFile = joinPath(app.getPath('userData'), 'command-journal.ndjson')
+const core = createCore({
+  sink: new FileJournalSink({ file: journalFile }),
+  startSeq: readJournalTail(journalFile, 1).lastSeq
+})
+
 const terminals = new TerminalManager()
-const coordination = new CoordinationStore()
+const coordination = new CoordinationStore(core.locks)
 /** Persisted folders + settings; the brain reads the link syntax from here. */
 const state = new AppState()
 const brain = new BrainStore(() => state.settings.linkSyntax)
 /** Canvas layout (widgets, camera, strokes) survives restarts — DI-004. */
-const canvas = new CanvasState()
+const canvas = new CanvasStore()
 
 /**
  * The app owns two fixed loopback ports and one state file. A second copy would
@@ -153,7 +168,21 @@ if (hasInstanceLock) {
     // Keep the rail's folder list live whenever the persisted state moves.
     state.on('change', (next) => send('workspace:onRecentChange', next.recent))
 
+    // Handlers first: a transport that submits a command before its handler
+    // exists gets `unknown_command`, and the window is created below.
+    registerCommands({
+      core,
+      canvas,
+      brain,
+      board: coordination,
+      terminals,
+      requestWidget: (info) => send('control:add-widget', info),
+      requestWidgetRemoval: (id) => send('control:remove-widget', id),
+      defaultCwd: () => state.workspaceDir
+    })
+
     registerIpc({
+      core,
       terminals,
       coordination,
       brain,
@@ -176,12 +205,11 @@ if (hasInstanceLock) {
     createWindow()
 
     startControlServer({
+      core,
       terminals,
       coordination,
       brain,
       canvas,
-      requestWidget: (info) => send('control:add-widget', info),
-      requestWidgetRemoval: (id) => send('control:remove-widget', id),
       defaultCwd: () => state.workspaceDir,
       mcpRunning: isMcpRunning
     })
@@ -211,4 +239,6 @@ app.on('before-quit', () => {
   // before the process dies.
   brain.dispose()
   coordination.dispose()
+  canvas.dispose()
+  core.dispose()
 })

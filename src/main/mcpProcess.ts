@@ -2,6 +2,7 @@ import { spawn, ChildProcess } from 'child_process'
 import { join } from 'path'
 import * as fs from 'fs'
 import { CONTROL_PORT, MCP_PORT } from './config'
+import { controlToken } from './controlToken'
 import { killProcessTree } from './procTree'
 
 export interface McpStatus {
@@ -77,7 +78,10 @@ function spawnServer(): void {
         ...process.env,
         ELECTRON_RUN_AS_NODE: '1',
         WORKSPACE_CONTROL_PORT: String(CONTROL_PORT),
-        WORKSPACE_MCP_PORT: String(MCP_PORT)
+        WORKSPACE_MCP_PORT: String(MCP_PORT),
+        // The bundled server is trusted local tooling, so it gets the control
+        // token directly rather than being configured with it by hand.
+        ORCSPACE_CONTROL_TOKEN: controlToken()
       },
       stdio: 'pipe',
       windowsHide: true

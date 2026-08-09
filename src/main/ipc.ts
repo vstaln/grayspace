@@ -6,23 +6,35 @@ import { BACKGROUND_DIR_NAME, MCP_PORT, MAX_CHAT_PROMPT_CHARS } from './config'
 import * as media from './media'
 import { streamOpenRouter } from './openrouter'
 import { fetchOpenRouterModels } from './openrouterModels'
-import { CoordinationStore, Forbidden, USER_AUTHOR } from './coordination'
+import { CoordinationStore } from './coordination'
 import { TerminalManager } from './terminals'
 import { killProcessTree } from './procTree'
 import { BrainStore } from './brain'
-import { CanvasState } from './canvasState'
+import { CanvasStore } from './canvasState'
 import type { AppState, SettingsPatch } from './appState'
+import type { Command, CommandResult, Core } from './core/index.ts'
+import { CANVAS_TARGET } from './commands/canvas.ts'
+import { TASK_MANAGER_TARGET } from './commands/board.ts'
+import { NEW } from './commands/index.ts'
 
 interface IpcDeps {
+  core: Core
   terminals: TerminalManager
   coordination: CoordinationStore
   brain: BrainStore
-  canvas: CanvasState
+  canvas: CanvasStore
   state: AppState
   getWindow(): BrowserWindow | null
   getWorkspaceDir(): string | undefined
   setWorkspaceDir(dir: string | undefined): void
 }
+
+/**
+ * The human at the keyboard, as far as the core is concerned. One id for the
+ * whole renderer: every window control, every drag, every note edit is the
+ * same person, and splitting them would only fragment their locks.
+ */
+export const USER_ACTOR_ID = 'user'
 
 /** Id of the terminal widget currently holding keyboard focus, if any. */
 let terminalFocusedId: string | null = null
@@ -32,14 +44,16 @@ export function focusedTerminalId(): string | null {
   return terminalFocusedId
 }
 
-/** Wraps store calls so a Forbidden surfaces to the renderer as `{ error }`. */
-function guard<T>(fn: () => T): T | { error: string } {
-  try {
-    return fn()
-  } catch (err) {
-    if (err instanceof Forbidden) return { error: err.message }
-    throw err
-  }
+/**
+ * Turns a command result into what the renderer's API has always returned:
+ * the data on success, `{ error }` on failure. The renderer stays unaware that
+ * a bus exists — it asks for a note update and gets a note or a message —
+ * while the write itself has already been serialised, version-checked, and
+ * journaled on the way through.
+ */
+function unwrap<T>(result: CommandResult<T>): T | { error: string; code?: string } {
+  if (result.ok) return result.data
+  return { error: result.message, code: result.code }
 }
 
 /**
@@ -54,7 +68,20 @@ function sumTokenFields(usage: Record<string, number>): number | null {
 }
 
 export function registerIpc(deps: IpcDeps): void {
-  const { terminals, coordination, brain, state, canvas } = deps
+  const { terminals, coordination, brain, state, canvas, core } = deps
+
+  // The renderer is an actor like any other. Registering it here, once, is the
+  // whole of "the UI authenticates": there is no path from a window to state
+  // that does not carry this id.
+  core.actors.register({ id: USER_ACTOR_ID, type: 'user', label: state.settings.userName || 'You', transport: 'ipc' })
+
+  /** Submits a command on the human's behalf. */
+  const send = <T>(type: string, target: string, payload: unknown = {}, baseVersion?: number): Promise<CommandResult<T>> => {
+    const command: Command = { actorId: USER_ACTOR_ID, type, target, payload }
+    if (typeof baseVersion === 'number') command.baseVersion = baseVersion
+    return core.bus.submit<T>(command)
+  }
+
   /** The human's identity on the board, used for role checks and assignment. */
   const actor = (): { role: 'member' | 'lead'; name: string } => ({
     role: state.settings.role,
@@ -310,14 +337,21 @@ export function registerIpc(deps: IpcDeps): void {
   })
 
   // ---- terminals ---------------------------------------------------------
-  ipcMain.handle('terminal:create', (_e, id: string, cols?: number, rows?: number) =>
-    terminals.spawn(id, cols, rows, deps.getWorkspaceDir())
+  // Keystrokes go through the bus like everything else, which is what makes an
+  // agent holding `terminal:<id>` actually keep the user out of that shell
+  // instead of the two interleaving characters into one command line.
+  ipcMain.handle('terminal:create', async (_e, id: string, cols?: number, rows?: number) =>
+    unwrap(await send<{ ok: boolean; error?: string }>('terminal.spawn', `terminal:${id}`, { cols, rows }))
   )
-  ipcMain.on('terminal:write', (_e, id: string, data: string) => terminals.write(id, data))
-  ipcMain.on('terminal:resize', (_e, id: string, cols: number, rows: number) =>
-    terminals.resize(id, cols, rows)
-  )
-  ipcMain.on('terminal:dispose', (_e, id: string) => terminals.dispose(id))
+  ipcMain.on('terminal:write', (_e, id: string, data: string) => {
+    void send('terminal.input', `terminal:${id}`, { data })
+  })
+  ipcMain.on('terminal:resize', (_e, id: string, cols: number, rows: number) => {
+    void send('terminal.resize', `terminal:${id}`, { cols, rows })
+  })
+  ipcMain.on('terminal:dispose', (_e, id: string) => {
+    void send('terminal.dispose', `terminal:${id}`)
+  })
   /** The renderer reports which terminal holds keyboard focus, if any. */
   ipcMain.on('terminal:focus', (_e, focused: boolean, id?: string) => {
     terminalFocusedId = focused && typeof id === 'string' ? id : null
@@ -436,52 +470,66 @@ export function registerIpc(deps: IpcDeps): void {
 
   // ---- canvas layout (widgets, camera, strokes) ---------------------------
   ipcMain.handle('canvas:load', () => canvas.load())
-  ipcMain.handle('canvas:save', (_e, snapshot) => {
-    canvas.save(snapshot ?? {})
-  })
+  /**
+   * The renderer owns the live layout while the user drags, and echoes it back
+   * here periodically. `canvas.import` merges rather than replaces, so a
+   * widget an agent created or moved in the meantime is not undone by a save
+   * describing the canvas as the window last saw it.
+   */
+  ipcMain.handle('canvas:save', async (_e, snapshot) => unwrap(await send('canvas.import', CANVAS_TARGET, snapshot ?? {})))
 
   // ---- second brain ------------------------------------------------------
   ipcMain.handle('brain:list', () => brain.snapshot())
-  ipcMain.handle('brain:create', (_e, input) => brain.create(input ?? {}))
-  ipcMain.handle('brain:update', (_e, id: string, patch) => brain.update(id, patch ?? {}))
-  ipcMain.handle('brain:delete', (_e, id: string) => brain.remove(id))
+  ipcMain.handle('brain:create', async (_e, input) => unwrap(await send('note.create', NEW.note, input ?? {})))
+  ipcMain.handle('brain:update', async (_e, id: string, patch) =>
+    unwrap(await send('note.update', `note:${id}`, patch ?? {}, (patch as { baseVersion?: number })?.baseVersion))
+  )
+  ipcMain.handle('brain:delete', async (_e, id: string) => unwrap(await send('note.delete', `note:${id}`)))
   ipcMain.handle('brain:trash', () => brain.trash())
-  ipcMain.handle('brain:restore', (_e, id: string) => brain.restore(id))
-  ipcMain.handle('brain:purge', (_e, id: string) => brain.purge(id))
+  ipcMain.handle('brain:restore', async (_e, id: string) => unwrap(await send('note.restore', `note:${id}`)))
+  ipcMain.handle('brain:purge', async (_e, id: string) => unwrap(await send('note.purge', `note:${id}`)))
   ipcMain.handle('brain:graph', () => brain.graph())
 
   // ---- coordination / kanban --------------------------------------------
   ipcMain.handle('coordination:status', () => coordination.snapshot())
   ipcMain.handle(
     'coordination:create-task',
-    (_e, input: { title: string; brief?: string; state?: string; tags?: string[]; dueAt?: number; assignee?: string }) =>
-      guard(() =>
-        coordination.createTask({
-          title: input?.title ?? '',
-          brief: input?.brief,
-          createdBy: USER_AUTHOR,
-          state: (input?.state as never) ?? 'queued',
-          tags: input?.tags,
-          dueAt: input?.dueAt,
-          assignee: input?.assignee
-        })
-      )
+    async (_e, input: { title: string; brief?: string; state?: string; tags?: string[]; dueAt?: number; assignee?: string }) =>
+      unwrap(await send('task.create', NEW.task, { ...input, title: input?.title ?? '', state: input?.state ?? 'queued' }))
   )
   ipcMain.handle(
     'coordination:update-task',
-    (
+    async (
       _e,
       id: string,
-      patch: { state?: string; title?: string; brief?: string; tags?: string[]; dueAt?: number | null; assignee?: string | null }
-    ) => guard(() => coordination.updateTaskAsUser(id, patch ?? {}, actor()))
+      patch: {
+        state?: string
+        title?: string
+        brief?: string
+        tags?: string[]
+        dueAt?: number | null
+        assignee?: string | null
+        baseVersion?: number
+      }
+    ) => unwrap(await send('task.update', `task:${id}`, { ...patch, ...actor2payload(actor()) }, patch?.baseVersion))
   )
-  ipcMain.handle('coordination:delete-task', (_e, id: string) => guard(() => coordination.deleteTask(id)))
-  ipcMain.handle('coordination:reset-manager', () => {
-    coordination.forceResetManager()
+  ipcMain.handle('coordination:delete-task', async (_e, id: string) => unwrap(await send('task.delete', `task:${id}`)))
+  ipcMain.handle('coordination:reset-manager', async () => {
+    await send('manager.release', TASK_MANAGER_TARGET, { force: true })
     return coordination.snapshot()
   })
+  /**
+   * Operator escape hatch: drop every resource lock, whoever holds it. Not a
+   * command — it is the recovery path for when the bus's own gate is what is
+   * stuck, and routing it through that gate would be circular.
+   */
   ipcMain.handle('coordination:release-locks', () => {
-    coordination.forceReleaseLocks()
+    core.locks.releaseAll()
     return coordination.snapshot()
   })
+}
+
+/** The board-role fields `task.update` expects from a human editor. */
+function actor2payload(actor: { role: 'member' | 'lead'; name: string }): { role: 'member' | 'lead'; userName: string } {
+  return { role: actor.role, userName: actor.name }
 }
