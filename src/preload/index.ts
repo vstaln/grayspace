@@ -124,6 +124,11 @@ const assistant = {
   onRun: (cb: (run: unknown) => void): (() => void) => onBroadcast('assistant:onRun', cb)
 }
 
+const git = {
+  status: (): Promise<unknown> => ipcRenderer.invoke('git:status'),
+  commit: (message: string): Promise<unknown> => ipcRenderer.invoke('git:commit', message)
+}
+
 const canvas = {
   load: (): Promise<unknown> => ipcRenderer.invoke('canvas:load'),
   save: (snapshot: unknown): Promise<void> => ipcRenderer.invoke('canvas:save', snapshot)
@@ -151,5 +156,6 @@ contextBridge.exposeInMainWorld('api', {
   canvas,
   chat,
   assistant,
+  git,
   window: windowControls
 })

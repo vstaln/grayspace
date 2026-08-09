@@ -14,7 +14,14 @@ function terminalIdOf(target: string): string {
  * command. So `terminal.write` goes through the same gate as everything else,
  * and an agent that wants a whole session holds the lock across its turns.
  */
-export function registerTerminalCommands({ core, terminals, requestWidget, requestWidgetRemoval, defaultCwd }: CommandDeps): void {
+export function registerTerminalCommands({
+  core,
+  terminals,
+  snapshots,
+  requestWidget,
+  requestWidgetRemoval,
+  defaultCwd
+}: CommandDeps): void {
   const { bus } = core
 
   bus.register<{ title?: string; cwd?: string; agentOwned?: boolean }, { id: string; title: string; cwd: string; ready: boolean }>(
@@ -52,13 +59,24 @@ export function registerTerminalCommands({ core, terminals, requestWidget, reque
    * supplies the real cols/rows, which must be known before the shell starts
    * or full-screen TUIs render against the wrong geometry.
    */
-  bus.register<{ cols?: number; rows?: number; cwd?: string }, { ok: boolean; error?: string }>('terminal.spawn', {
-    ignoreVersion: true,
-    apply: ({ command }) => {
-      const p = command.payload ?? {}
-      return terminals.spawn(terminalIdOf(command.target), p.cols, p.rows, p.cwd || defaultCwd())
+  bus.register<{ cols?: number; rows?: number; cwd?: string }, { ok: boolean; error?: string; scrollback?: string }>(
+    'terminal.spawn',
+    {
+      ignoreVersion: true,
+      apply: ({ command }) => {
+        const id = terminalIdOf(command.target)
+        const p = command.payload ?? {}
+        // A terminal reopened after a restart comes back in the directory it
+        // was in, with what was on its screen — as static text. The process
+        // that produced that text is gone, and pretending otherwise (an
+        // apparently live `npm run dev` that answers nothing) is worse than
+        // making the user restart it.
+        const saved = snapshots.get(id)
+        const result = terminals.spawn(id, p.cols, p.rows, p.cwd || saved?.cwd || defaultCwd())
+        return result.ok ? { ...result, scrollback: snapshots.scrollback(id) } : result
+      }
     }
-  })
+  )
 
   bus.register<{ text: string; pressEnter?: boolean }, { ok: true }>('terminal.write', {
     ignoreVersion: true,
@@ -96,6 +114,9 @@ export function registerTerminalCommands({ core, terminals, requestWidget, reque
     apply: ({ command }) => {
       const id = terminalIdOf(command.target)
       terminals.dispose(id)
+      // A terminal the user closed is not coming back; its saved screen would
+      // only be restored onto a widget that no longer exists.
+      snapshots.forget(id)
       requestWidgetRemoval(id)
       return { id }
     }

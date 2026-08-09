@@ -270,6 +270,29 @@ export interface AssistantApi {
   onRun(cb: (run: RunState) => void): () => void
 }
 
+/** Repository status for the open project folder (main/git.ts). */
+export interface GitStatus {
+  repo: boolean
+  root?: string
+  branch?: string
+  upstream?: string
+  ahead: number
+  behind: number
+  modified: number
+  untracked: number
+  staged: number
+  conflicted: number
+  lastCommit?: { hash: string; subject: string; at: number }
+  error?: string
+  readAt: number
+}
+
+export interface GitApi {
+  status(): Promise<GitStatus | { error: string }>
+  /** Stages everything and commits; takes the `git:repo` lock on the way. */
+  commit(message: string): Promise<{ hash: string } | { error: string }>
+}
+
 export interface WindowApi {
   minimize(): void
   toggleMaximize(): void
@@ -291,6 +314,7 @@ declare global {
       brain: BrainApi
       canvas: CanvasApi
       assistant: AssistantApi
+      git: GitApi
       window: WindowApi
     }
   }

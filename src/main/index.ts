@@ -14,6 +14,7 @@ import { createCore } from './core/index.ts'
 import { FileJournalSink, readJournalTail } from './journalSink'
 import { registerCommands } from './commands/index.ts'
 import { createAssistant } from './assistant/index.ts'
+import { TerminalSnapshots } from './terminalSnapshots'
 import { join as joinPath } from 'path'
 
 let mainWindow: BrowserWindow | null = null
@@ -30,6 +31,8 @@ const core = createCore({
 })
 
 const terminals = new TerminalManager()
+/** cwd + title + capped scrollback per terminal, so a restart keeps the context. */
+const snapshots = new TerminalSnapshots()
 const coordination = new CoordinationStore(core.locks)
 /** Persisted folders + settings; the brain reads the link syntax from here. */
 const state = new AppState()
@@ -177,6 +180,7 @@ if (hasInstanceLock) {
       brain,
       board: coordination,
       terminals,
+      snapshots,
       requestWidget: (info) => send('control:add-widget', info),
       requestWidgetRemoval: (id) => send('control:remove-widget', id),
       defaultCwd: () => state.workspaceDir
@@ -255,7 +259,27 @@ app.on('window-all-closed', () => {
   app.quit()
 })
 
+/**
+ * Saves what every live terminal had on screen, and drops snapshots for ones
+ * no widget refers to any more. Called before the PTYs are killed — after
+ * that the scrollback is gone with them.
+ */
+function snapshotTerminals(): void {
+  const live = new Set<string>()
+  for (const info of terminals.list()) {
+    live.add(info.id)
+    snapshots.save({
+      id: info.id,
+      title: info.title,
+      cwd: info.cwd,
+      scrollback: terminals.readOutput(info.id) ?? ''
+    })
+  }
+  snapshots.prune(live)
+}
+
 app.on('before-quit', () => {
+  snapshotTerminals()
   terminals.disposeAll()
   stopMcpServer()
   // Debounced stores (PERF-004/005): whatever was pending must reach disk

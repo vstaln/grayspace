@@ -16,6 +16,7 @@ import type { Command, CommandResult, Core } from './core/index.ts'
 import type { Assistant } from './assistant/index.ts'
 import { CANVAS_TARGET } from './commands/canvas.ts'
 import { TASK_MANAGER_TARGET } from './commands/board.ts'
+import { GIT_TARGET } from './commands/git.ts'
 import { NEW } from './commands/index.ts'
 
 interface IpcDeps {
@@ -491,6 +492,15 @@ export function registerIpc(deps: IpcDeps): void {
   ipcMain.handle('brain:restore', async (_e, id: string) => unwrap(await send('note.restore', `note:${id}`)))
   ipcMain.handle('brain:purge', async (_e, id: string) => unwrap(await send('note.purge', `note:${id}`)))
   ipcMain.handle('brain:graph', () => brain.graph())
+
+  // ---- git ----------------------------------------------------------------
+  // Status is read by running git in the project folder, never by scraping a
+  // terminal. A commit takes `git:repo` on the way through the bus, so a
+  // second actor cannot commit a half-written tree underneath the first.
+  ipcMain.handle('git:status', async () => unwrap(await send('git.refresh', GIT_TARGET)))
+  ipcMain.handle('git:commit', async (_e, message: string) =>
+    unwrap(await send('git.commit', GIT_TARGET, { message }))
+  )
 
   // ---- the built-in assistant --------------------------------------------
   // A run is autonomous but never silent: every step it takes is a command in

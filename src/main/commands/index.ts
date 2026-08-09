@@ -2,11 +2,15 @@ import type { BrainStore } from '../brain'
 import type { CanvasStore } from '../canvasState'
 import type { CoordinationStore } from '../coordination'
 import type { TerminalManager } from '../terminals'
+import type { TerminalSnapshots } from '../terminalSnapshots'
 import type { Core } from '../core/index.ts'
 import { registerBoardCommands } from './board.ts'
 import { registerCanvasCommands } from './canvas.ts'
+import { registerGitCommands } from './git.ts'
 import { registerNoteCommands } from './notes.ts'
 import { registerTerminalCommands } from './terminals.ts'
+import { registerBuiltinWidgets } from '../widgets/registry.ts'
+import type { GitStatus } from '../git.ts'
 
 export interface CommandDeps {
   core: Core
@@ -14,6 +18,8 @@ export interface CommandDeps {
   brain: BrainStore
   board: CoordinationStore
   terminals: TerminalManager
+  /** Saved cwd/title/scrollback so a reopened terminal has its context back. */
+  snapshots: TerminalSnapshots
   /** Asks the renderer to mount a widget for an already-reserved terminal id. */
   requestWidget(info: { id: string; title: string }): void
   requestWidgetRemoval(id: string): void
@@ -38,11 +44,13 @@ export interface CommandDeps {
  *   failure. They never send IPC, never touch HTTP, and never check who the
  *   caller is beyond what the bus already established.
  */
-export function registerCommands(deps: CommandDeps): void {
+export function registerCommands(deps: CommandDeps): { git: { status(): Promise<GitStatus> } } {
+  registerBuiltinWidgets()
   registerCanvasCommands(deps)
   registerNoteCommands(deps)
   registerBoardCommands(deps)
   registerTerminalCommands(deps)
+  return { git: registerGitCommands(deps) }
 }
 
 export const NEW = {
