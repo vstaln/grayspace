@@ -278,17 +278,15 @@ export default function BrainGraph({ graph, selectedId, onOpen, fullscreen = fal
 }
 
 /**
- * Obsidian's sizing: leaves are tiny, and a hub grows well past them, so the
- * shape of the graph is legible from the dot sizes alone. The spread matters
- * more than the absolute size — every node the same size is a starfield, not
- * a map.
+ * More connections → slightly bigger dot, capped so hubs stay tasteful.
+ *
+ * Deliberately small: at the old sizes a few dozen notes read as a scatter of
+ * blobs, and the graph's shape — which is the only thing a knowledge graph is
+ * for — got lost behind the dots drawing it. A star, not a bead.
  */
 function radiusFor(degree: number): number {
-  return Math.min(11, 2.4 + Math.sqrt(degree) * 1.7)
+  return Math.min(5.2, 1.9 + Math.sqrt(degree) * 0.85)
 }
-
-/** Obsidian's node grey — a touch below white, so pure white can mean focus. */
-const NODE = '200,203,208'
 
 /** One physics tick: repulsion between all pairs, springs along edges, gentle centring. */
 function simulate(list: Body[], edges: GraphData['edges'], dragId: string | null): void {
@@ -392,19 +390,15 @@ function draw(
       if (edge.target === active) neighbours.add(edge.source)
     }
 
-  // ---- edges --------------------------------------------------------------
-  // Hairlines, grey, and actually visible: in Obsidian the links are what you
-  // read the clusters from, so they sit well above the "barely there" alpha
-  // this used to draw. Rounded caps stop short links from looking like ticks.
-  ctx.lineCap = 'round'
+  // ---- edges: thin, mostly transparent, brighter around the active node ---
+  ctx.lineWidth = 1 / camera.zoom
   for (const edge of edges) {
     const a = byId.get(edge.source)
     const b = byId.get(edge.target)
     if (!a || !b) continue
     const touches = active === edge.source || active === edge.target
-    const alpha = Math.min(a.alpha, b.alpha) * (touches ? 0.85 : edge.kind === 'tag' ? 0.16 : 0.32)
-    ctx.lineWidth = (touches ? 1.5 : 1) / camera.zoom
-    ctx.strokeStyle = touches ? `rgba(255,255,255,${alpha})` : `rgba(${NODE},${alpha})`
+    const alpha = Math.min(a.alpha, b.alpha) * (touches ? 0.55 : edge.kind === 'tag' ? 0.1 : 0.18)
+    ctx.strokeStyle = `rgba(255,255,255,${alpha})`
     ctx.beginPath()
     ctx.moveTo(a.x, a.y)
     ctx.lineTo(b.x, b.y)
@@ -420,23 +414,23 @@ function draw(
     const alpha = body.alpha * (related ? 1 : 0.75)
     const r = body.r
 
-    // A flat, solid disc — Obsidian's look: no gradient, no ring, no glow.
-    // Resting nodes sit just below white so that pure white is available to
-    // mean "this is the one you are pointing at".
+    // A plain white disc — no colour, no glow, no ring. Nodes unrelated to the
+    // one under the pointer fade back only slightly: at the old 0.22 they went
+    // properly grey and looked broken, so the focus is a hint rather than a
+    // spotlight.
     ctx.beginPath()
     ctx.arc(body.x, body.y, r, 0, Math.PI * 2)
-    ctx.fillStyle = isActive || isSelected ? `rgba(255,255,255,${body.alpha})` : `rgba(${NODE},${alpha})`
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`
     ctx.fill()
 
-    // Labels would be noise on a dense zoomed-out graph, so they appear as you
-    // zoom in — and the hovered node keeps its caption at any zoom, which is
-    // what makes a dense cluster explorable instead of anonymous.
+    // Labels would be noise on a dense zoomed-out graph.
     if (camera.zoom > 0.55 || isActive) {
       ctx.font = `${(isActive ? 11.5 : 10.5) / camera.zoom}px Inter, "Segoe UI", system-ui, sans-serif`
       ctx.textAlign = 'center'
-      ctx.shadowColor = 'rgba(0,0,0,0.9)'
+      // A soft black shadow keeps the caption legible over a bright star.
+      ctx.shadowColor = 'rgba(0,0,0,0.85)'
       ctx.shadowBlur = 4 / camera.zoom
-      ctx.fillStyle = `rgba(${NODE},${alpha * (isActive ? 1 : 0.62)})`
+      ctx.fillStyle = `rgba(226,230,238,${alpha * (isActive ? 1 : 0.55)})`
       ctx.fillText(truncate(body.title), body.x, body.y + r + 12 / camera.zoom)
       ctx.shadowBlur = 0
     }
@@ -476,13 +470,10 @@ interface StarLayer {
 // Three depths: a dense faint dust of distant stars, a mid layer, and a
 // sparse handful of bright near ones — the size/brightness spread plus the
 // differing parallax speeds is what reads as depth rather than a flat sprinkle.
-// Sparser and much fainter than they were. A bright star is indistinguishable
-// from a leaf note at a glance, and a background that competes with the data
-// is why the graph read as noise — the field is texture now, not scenery.
 const STAR_LAYERS: StarLayer[] = [
-  { cellSize: 64, parallax: 0.18, density: 0.34, minR: 0.3, maxR: 0.6, minAlpha: 0.07, maxAlpha: 0.14, seed: 1 },
-  { cellSize: 120, parallax: 0.4, density: 0.2, minR: 0.45, maxR: 0.9, minAlpha: 0.1, maxAlpha: 0.2, seed: 2 },
-  { cellSize: 220, parallax: 0.7, density: 0.1, minR: 0.7, maxR: 1.2, minAlpha: 0.14, maxAlpha: 0.28, seed: 3 }
+  { cellSize: 46, parallax: 0.18, density: 0.5, minR: 0.35, maxR: 0.8, minAlpha: 0.15, maxAlpha: 0.35, seed: 1 },
+  { cellSize: 90, parallax: 0.4, density: 0.32, minR: 0.6, maxR: 1.3, minAlpha: 0.25, maxAlpha: 0.55, seed: 2 },
+  { cellSize: 170, parallax: 0.7, density: 0.16, minR: 1, maxR: 2, minAlpha: 0.4, maxAlpha: 0.85, seed: 3 }
 ]
 
 /** A handful of large, very faint grey glows — the "nebula dust" between stars. */
@@ -569,10 +560,7 @@ function drawBackground(
   height: number,
   camera: { x: number; y: number; zoom: number }
 ): void {
-  // Near-black rather than pure black: a graphite ground gives the grey nodes
-  // and links something to sit on, the way Obsidian's canvas does. Pure #000
-  // makes every dot look like it is punched out of the screen.
-  ctx.fillStyle = '#0d0d0f'
+  ctx.fillStyle = '#000000'
   ctx.fillRect(0, 0, width, height)
 
   drawNebulae(ctx, width, height, camera)
