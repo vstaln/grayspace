@@ -404,59 +404,21 @@ function draw(
   }
 
   // ---- nodes --------------------------------------------------------------
-  // Each note is drawn as a small star rather than a flat disc: a wide, very
-  // faint halo, then a solid core with a bright centre. Against the starfield
-  // that reads as something luminous at a distance, which a hard-edged circle
-  // never does — and it lets the dots be much smaller without vanishing.
+  // Small, plain white discs. Rings mark hover and selection; nothing glows.
   for (const body of list) {
     const isActive = body.id === active
     const isSelected = body.id === selectedId
     const related = !active || isActive || neighbours.has(body.id)
     const alpha = body.alpha * (related ? 1 : 0.22)
     const r = body.r
-    const tint = body.color
 
-    // Focus ring: a soft pool of light under the node the pointer is on.
-    if (isActive || isSelected) {
-      const pool = r + 9 / camera.zoom
-      const glow = ctx.createRadialGradient(body.x, body.y, 0, body.x, body.y, pool)
-      glow.addColorStop(0, tint ? rgba(tint, 0.22 * body.alpha) : `rgba(255,255,255,${0.2 * body.alpha})`)
-      glow.addColorStop(1, 'rgba(255,255,255,0)')
-      ctx.fillStyle = glow
-      ctx.beginPath()
-      ctx.arc(body.x, body.y, pool, 0, Math.PI * 2)
-      ctx.fill()
-    }
-
-    // The star's own halo, sized off the node so hubs glow a little wider.
-    const halo = r * 2.6
-    const aura = ctx.createRadialGradient(body.x, body.y, r * 0.5, body.x, body.y, halo)
-    aura.addColorStop(0, tint ? rgba(tint, 0.3 * alpha) : `rgba(255,255,255,${0.3 * alpha})`)
-    aura.addColorStop(1, 'rgba(255,255,255,0)')
-    ctx.fillStyle = aura
-    ctx.beginPath()
-    ctx.arc(body.x, body.y, halo, 0, Math.PI * 2)
-    ctx.fill()
-
+    // A plain white disc and nothing else — no colour, no glow, no ring.
+    // Hover and selection are shown by brightness alone: the focused node
+    // stays at full white while everything unrelated dims back.
     ctx.beginPath()
     ctx.arc(body.x, body.y, r, 0, Math.PI * 2)
-    ctx.fillStyle = tint ? rgba(tint, alpha * 0.92) : `rgba(232,236,244,${alpha * 0.92})`
+    ctx.fillStyle = `rgba(255,255,255,${isActive || isSelected ? body.alpha : alpha * 0.82})`
     ctx.fill()
-
-    // A brighter pinprick just off-centre — the highlight that makes it read
-    // as a sphere catching light rather than a sticker.
-    ctx.beginPath()
-    ctx.arc(body.x - r * 0.22, body.y - r * 0.22, r * 0.42, 0, Math.PI * 2)
-    ctx.fillStyle = `rgba(255,255,255,${alpha})`
-    ctx.fill()
-
-    if (isSelected) {
-      ctx.lineWidth = 1.2 / camera.zoom
-      ctx.strokeStyle = tint ? rgba(tint, 0.9) : 'rgba(255,255,255,0.9)'
-      ctx.beginPath()
-      ctx.arc(body.x, body.y, r + 3.5 / camera.zoom, 0, Math.PI * 2)
-      ctx.stroke()
-    }
 
     // Labels would be noise on a dense zoomed-out graph.
     if (camera.zoom > 0.55 || isActive) {
@@ -476,14 +438,6 @@ function draw(
 
 function truncate(title: string): string {
   return title.length > 26 ? `${title.slice(0, 25)}…` : title
-}
-
-/** `#rrggbb` → `rgba(r,g,b,alpha)`; anything unparseable falls back to white. */
-function rgba(hex: string, alpha: number): string {
-  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex)
-  if (!match) return `rgba(255,255,255,${alpha})`
-  const [r, g, b] = match.slice(1).map(x => parseInt(x, 16))
-  return `rgba(${r},${g},${b},${alpha})`
 }
 
 /** Deterministic 0..1 pseudo-random from a cell's integer coordinates, so a
