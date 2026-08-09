@@ -5,6 +5,29 @@ let localCounter = 0
 const makeLocalId = (kind: 'terminal' | 'note' = 'terminal'): string => `${kind}-${Date.now()}-${++localCounter}`
 const makeStrokeId = (): string => `stroke-${Date.now()}-${++localCounter}`
 
+/** `Terminal 3` → 3; anything else is not a numbered terminal. */
+const TERMINAL_TITLE = /^Terminal (\d+)$/
+
+/**
+ * The lowest terminal number not currently on the canvas.
+ *
+ * Reusing a closed terminal's number is the point: a counter that only ever
+ * goes up means the only terminal on an otherwise empty canvas can be called
+ * "Terminal 6", which tells the user nothing except how many they have opened
+ * since the app started.
+ */
+function nextTerminalNumber(widgets: Widget[]): number {
+  const taken = new Set<number>()
+  for (const widget of widgets) {
+    if (widget.kind && widget.kind !== 'terminal') continue
+    const match = TERMINAL_TITLE.exec(widget.title)
+    if (match) taken.add(Number(match[1]))
+  }
+  let n = 1
+  while (taken.has(n)) n += 1
+  return n
+}
+
 /**
  * Owns the infinite canvas: camera, widget list, and the mapping between screen
  * and world coordinates. Also bridges widgets requested by agents over MCP.
@@ -16,10 +39,6 @@ export function useCanvas() {
   const [strokes, setStrokes] = useState<Stroke[]>([])
   const [strokeColor, setStrokeColor] = useState<string>(STROKE_COLORS[0])
   const zRef = useRef(1)
-  // Counts terminals ever created, not ones currently open — using the open
-  // count instead reused numbers after a close and skipped ahead whenever a
-  // note widget was also on the canvas, since that shared the same tally.
-  const terminalNumRef = useRef(0)
 
   // Event subscriptions below register once, so they must never close over
   // `camera`/`widgets` directly — these refs keep them reading current state.
@@ -62,13 +81,15 @@ export function useCanvas() {
 
   const addWidget = useCallback(
     (point: Point, id: string = makeLocalId(), title?: string, kind: 'terminal' | 'note' = 'terminal', noteId?: string): void => {
-      const resolvedTitle =
-        title || (kind === 'note' ? 'Новая заметка' : `Terminal ${++terminalNumRef.current}`)
       setWidgets((prev) => [
         ...prev,
         {
           id,
-          title: resolvedTitle,
+          // Numbering fills the first gap rather than counting up forever:
+          // close "Terminal 1" and the next one you open is 1 again, not 2.
+          // The name describes what is on the canvas now, and a desk with a
+          // single terminal on it labelled "Terminal 7" is just confusing.
+          title: title || (kind === 'note' ? 'Новая заметка' : `Terminal ${nextTerminalNumber(prev)}`),
           kind,
           noteId,
           x: point.x - 16,
