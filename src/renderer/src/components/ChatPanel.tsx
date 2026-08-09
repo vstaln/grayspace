@@ -3,10 +3,16 @@ import { ArrowUp, Key, X } from 'lucide-react'
 import { pasteHasImage, saveImageFromPaste } from '../lib/paste'
 import { Markdown } from '../lib/markdown'
 import { useFocusTrap } from '../hooks/useFocusTrap'
-import type { CatalogModel } from '../../../preload/index.d'
+import type { CatalogModel, RunState } from '../../../preload/index.d'
 
 type Message = { role: 'user' | 'assistant'; text: string }
-type Provider = 'claude' | 'codex' | 'opencode' | 'openrouter'
+/**
+ * `assistant` is not a chat backend at all — it is the built-in agent, which
+ * plans and then acts on the canvas through the command bus. It sits in the
+ * same picker because from the user's side the question is one question:
+ * "who am I talking to?"
+ */
+type Provider = 'claude' | 'codex' | 'opencode' | 'openrouter' | 'assistant'
 type Effort = 'low' | 'medium' | 'high'
 type Mode = 'fast' | 'build' | 'plan'
 
@@ -26,7 +32,17 @@ interface ModelOption {
  * are fixed by the tools themselves, so unlike the OpenRouter catalog they are
  * not fetched; the numbers are each vendor's published window for the model.
  */
+const ASSISTANT_MODEL: ModelOption = {
+  provider: 'assistant',
+  id: 'orcspace',
+  label: 'Ассистент OrcSpace',
+  group: 'Встроенный',
+  hint: 'Выполняет цель шаг за шагом',
+  contextLength: 200_000
+}
+
 const LOCAL_MODELS: ModelOption[] = [
+  ASSISTANT_MODEL,
   { provider: 'claude', id: 'sonnet', label: 'Claude Sonnet', group: 'Локальные агенты', hint: 'Claude Code', contextLength: 200_000 },
   { provider: 'claude', id: 'opus', label: 'Claude Opus', group: 'Локальные агенты', hint: 'Claude Code', contextLength: 200_000 },
   { provider: 'codex', id: 'gpt-5-codex', label: 'GPT-5 Codex', group: 'Локальные агенты', hint: 'Codex', contextLength: 272_000 },
@@ -53,7 +69,20 @@ const EFFORTS: { id: Effort; label: string }[] = [
 // vocabulary, so adding the others back is a matter of listing them here.
 const MODES: { id: Mode; label: string }[] = [{ id: 'fast', label: 'Fast' }]
 
-export default function ChatPanel({ open, onClose }: { open: boolean; onClose(): void }): React.JSX.Element | null {
+export default function ChatPanel({
+  open,
+  onClose,
+  /**
+   * Bumped by the caller to mean "open on the assistant". A counter rather
+   * than a boolean so asking for it twice in a row works — after the first
+   * request the user may well have switched the engine back by hand.
+   */
+  focusAssistant = 0
+}: {
+  open: boolean
+  onClose(): void
+  focusAssistant?: number
+}): React.JSX.Element | null {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [selected, setSelected] = useState<ModelOption>(LOCAL_MODELS[0])
@@ -65,6 +94,8 @@ export default function ChatPanel({ open, onClose }: { open: boolean; onClose():
   // `done`; when they do, it is an exact figure and replaces the heuristic
   // below entirely instead of just tweaking it.
   const [realTokens, setRealTokens] = useState<number | null>(null)
+  /** The live assistant run, when the assistant is the selected engine. */
+  const [run, setRun] = useState<RunState | null>(null)
   const [hasKey, setHasKey] = useState(true) // assume yes until settings load, to avoid a flash of the prompt
   const [keyInput, setKeyInput] = useState('')
   const activeId = useRef<string | null>(null)
@@ -82,6 +113,9 @@ export default function ChatPanel({ open, onClose }: { open: boolean; onClose():
   useEffect(() => {
     if (!open || catalog.length > 0) return
     void window.api.chat.models().then(setCatalog)
+    // Steps arrive as they happen, so the panel shows the run progressing
+    // instead of sitting blank until it resolves.
+    return window.api.assistant.onRun(setRun)
   }, [open, catalog.length])
 
   useEffect(
@@ -141,11 +175,30 @@ export default function ChatPanel({ open, onClose }: { open: boolean; onClose():
 
   if (!open) return null
 
-  const needsKey = selected.provider === 'openrouter' && !hasKey
+  // The assistant plans through OpenRouter, so it needs the same key.
+  const isAssistant = selected.provider === 'assistant'
+  const needsKey = (selected.provider === 'openrouter' || isAssistant) && !hasKey
 
   const submit = async (): Promise<void> => {
     const prompt = input.trim()
     if (!prompt || busy) return
+
+    // The assistant does not answer, it acts: the goal goes to the run engine,
+    // and what comes back is a plan being executed rather than a reply.
+    if (isAssistant) {
+      setMessages((p) => [...p, { role: 'user', text: prompt }])
+      setInput('')
+      setBusy(true)
+      const result = await window.api.assistant.start(prompt)
+      setBusy(false)
+      if (result && 'error' in result) {
+        setMessages((p) => [...p, { role: 'assistant', text: `Ошибка: ${result.error}` }])
+        return
+      }
+      setRun(result)
+      return
+    }
+
     const id = `chat-${Date.now()}`
     activeId.current = id
     setMessages((p) => [...p, { role: 'user', text: prompt }])
@@ -153,7 +206,9 @@ export default function ChatPanel({ open, onClose }: { open: boolean; onClose():
     setBusy(true)
     const result = await window.api.chat.send({
       id,
-      provider: selected.provider,
+      // Narrowed by the early return above: the assistant never reaches here,
+      // and `chat.send` only knows the four real chat backends.
+      provider: selected.provider as Exclude<Provider, 'assistant'>,
       prompt,
       model: selected.id,
       effort,
@@ -235,12 +290,26 @@ export default function ChatPanel({ open, onClose }: { open: boolean; onClose():
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-4" role="log" aria-live="polite">
             {messages.length === 0 && (
               <p className="m-auto max-w-[80%] text-center text-[13px] leading-relaxed text-text-faint">
-                Спросите {selected.label} о проекте, задаче или следующем действии.
+                {isAssistant
+                  ? 'Опишите цель — ассистент составит план и выполнит его на холсте. Он берёт блокировки как обычный участник, обходит занятые ресурсы и спрашивает перед всем, что удаляет.'
+                  : `Спросите ${selected.label} о проекте, задаче или следующем действии.`}
               </p>
             )}
             {messages.map((m, i) => (
               <MessageView key={i} message={m} />
             ))}
+            {isAssistant && run && (
+              <RunView
+                run={run}
+                onAnswer={(approved) => {
+                  setBusy(true)
+                  void window.api.assistant.answer(run.runId, approved).then((next) => {
+                    setBusy(false)
+                    if (next) setRun(next)
+                  })
+                }}
+              />
+            )}
             {busy && (
               <div className="flex items-center gap-1.5 rounded-[10px] p-1.5 text-[11px] text-text-dim" role="status">
                 <i className="thinking-dot h-1.5 w-1.5 rounded-full bg-text-dim" />
@@ -567,6 +636,81 @@ function ContextRing({
 /** One chat bubble. Memoized (PERF-008): while the agent streams, only the
  *  last message's text changes, so the earlier history must not re-render —
  *  the `text` prop identity keeps completed bubbles stable. */
+/**
+ * A run in progress: the plan with the current step marked, the trace under
+ * it, and — when the graph has stopped at the human gate — the two buttons
+ * that are the whole reason the gate can exist.
+ */
+function RunView({ run, onAnswer }: { run: RunState; onAnswer(approved: boolean): void }): React.JSX.Element {
+  return (
+    <div className="flex flex-col gap-2 rounded-[10px] border border-line-soft bg-white/[0.02] p-2.5">
+      <div className="flex items-center gap-2">
+        <span className="flex-1 truncate text-[11px] text-text-dim">{run.goal}</span>
+        <RunStatus status={run.status} />
+      </div>
+
+      {run.plan.length > 0 && (
+        <ol className="flex flex-col gap-1">
+          {run.plan.map((step, i) => (
+            <li
+              key={`${step.command}-${i}`}
+              className={`flex items-start gap-1.5 text-[11px] ${
+                i < run.cursor ? 'text-text-faint line-through' : i === run.cursor ? 'text-text' : 'text-text-dim'
+              }`}
+            >
+              <span className="flex-none text-text-faint">{i + 1}.</span>
+              <span className="min-w-0 flex-1">{step.summary}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {run.log.length > 0 && (
+        <div className="flex flex-col gap-0.5 border-t border-line-soft pt-1.5">
+          {run.log.slice(-6).map((line, i) => (
+            <p key={i} className="text-[10.5px] leading-relaxed text-text-faint">
+              {line}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {run.error && <p className="text-[11px] text-danger">{run.error}</p>}
+
+      {run.status === 'waiting_human' && (
+        <div className="flex flex-col gap-1.5 border-t border-line-soft pt-2">
+          <p className="text-[11px] text-text">{run.question}</p>
+          <div className="flex gap-1.5">
+            <button
+              className="flex-1 rounded-[10px] bg-accent px-2.5 py-1 text-[11px] font-semibold text-black hover:bg-white"
+              onClick={() => onAnswer(true)}
+            >
+              Разрешить
+            </button>
+            <button
+              className="flex-1 rounded-[10px] border border-line px-2.5 py-1 text-[11px] text-text hover:bg-bg-hover"
+              onClick={() => onAnswer(false)}
+            >
+              Отклонить
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RunStatus({ status }: { status: RunState['status'] }): React.JSX.Element {
+  const label = { running: 'работает', waiting_human: 'ждёт вас', done: 'готово', failed: 'ошибка' }[status]
+  const tone = {
+    running: 'border-line text-text-dim',
+    waiting_human: 'border-[#f59e0b]/40 text-[#f59e0b]',
+    done: 'border-ok/40 text-ok',
+    failed: 'border-danger/40 text-danger'
+  }[status]
+  return <span className={`flex-none rounded-full border px-1.5 py-0.5 text-[9.5px] ${tone}`}>{label}</span>
+}
+
 const MessageView = React.memo(function MessageView({ message }: { message: Message }): React.JSX.Element {
   if (message.role === 'user') {
     return (

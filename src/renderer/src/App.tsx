@@ -9,7 +9,6 @@ import { useCoordination } from './hooks/useCoordination'
 import { HEADER_H, MIN_H, MIN_W, Point, ResizeDir, Stroke, Widget, WidgetKind } from './types'
 import ChatPanel from './components/ChatPanel'
 import SecondBrain from './components/SecondBrain'
-import AssistantPanel from './components/AssistantPanel'
 import Toolbar from './components/Toolbar'
 import ErrorBoundary from './components/ErrorBoundary'
 import StrokesLayer from './components/StrokesLayer'
@@ -86,7 +85,7 @@ function Workspace(): React.JSX.Element {
   const editingRef = useRef<string | null>(null)
   editingRef.current = editingId
   const [boardOpen, setBoardOpen] = useState(false)
-  const [assistantOpen, setAssistantOpen] = useState(false)
+  const [assistantRequest, setAssistantRequest] = useState(0)
   const [brainOpen, setBrainOpen] = useState(false)
   const [brainView, setBrainView] = useState<'list' | 'graph'>('list')
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null)
@@ -444,7 +443,6 @@ function Workspace(): React.JSX.Element {
         graphOpen={brainOpen && brainView === 'graph'}
         taskCount={openTasks}
         onNewTerminal={spawnTerminalAtCenter}
-        onNewNote={() => spawnNoteAt(toWorld(window.innerWidth / 2 - 260, window.innerHeight / 2 - 180))}
         onToggleBoard={() => setBoardOpen((v) => !v)}
         onToggleBrain={() => {
           // Re-clicking while the graph is up brings the notes back rather than closing.
@@ -520,7 +518,10 @@ function Workspace(): React.JSX.Element {
             onPickSchedule={() => { placeWidget('schedule', toWorld(menu.x, menu.y)); setMenu(null) }}
             onOpenBoard={() => { placeWidget('board', toWorld(menu.x, menu.y)); setMenu(null) }}
             onOpenAssistant={() => {
-              setAssistantOpen(true)
+              // The assistant lives in the chat panel — it is one question of
+              // "who am I talking to", not two places to look.
+              setChatOpen(true)
+              setAssistantRequest((n) => n + 1)
               setMenu(null)
             }}
             onClose={() => setMenu(null)}
@@ -551,7 +552,6 @@ function Workspace(): React.JSX.Element {
           onClose={() => setBoardOpen(false)}
         />
       )}
-      {assistantOpen && <AssistantPanel onClose={() => setAssistantOpen(false)} />}
       {brainOpen && (
         <SecondBrain
           workspaceDir={workspaceDir}
@@ -573,7 +573,7 @@ function Workspace(): React.JSX.Element {
         strokeColor={strokeColor}
         onStrokeColorChange={setStrokeColor}
       />
-      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
+      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} focusAssistant={assistantRequest} />
     </div>
   )
 }

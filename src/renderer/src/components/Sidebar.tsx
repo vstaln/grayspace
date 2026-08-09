@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Brain, Check, FileText, FolderOpen, Image, KanbanSquare, Network, Pin, Plus, Settings, ShieldCheck, Trash2, X } from 'lucide-react'
+import { Brain, Check, FileText, FolderOpen, Image, KanbanSquare, Pin, Plus, Settings, ShieldCheck, Trash2, X } from 'lucide-react'
 import type { RecentDir } from '../../../preload/index.d'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { THEMES, useTheme } from '../theme'
@@ -12,7 +12,6 @@ interface Props {
   graphOpen: boolean
   taskCount: number
   onNewTerminal(): void
-  onNewNote(): void
   onToggleBoard(): void
   onToggleBrain(): void
   onToggleGraph(): void
@@ -181,7 +180,6 @@ export default function Sidebar({
   graphOpen,
   taskCount,
   onNewTerminal,
-  onNewNote,
   onToggleBoard,
   onToggleBrain,
   onToggleGraph,
@@ -229,13 +227,16 @@ export default function Sidebar({
     >
       <div className="flex flex-col gap-1.5">
         <IconButton label="Новый терминал" onClick={onNewTerminal}><Plus size={19} /></IconButton>
-        <IconButton label="Новая заметка на холсте" onClick={onNewNote}><FileText size={17} /></IconButton>
         <IconButton label="Доска задач" active={boardOpen} badge={taskCount} onClick={onToggleBoard}>
           <KanbanSquare size={17} />
         </IconButton>
-        <IconButton label="Второй мозг" active={brainOpen} onClick={onToggleBrain}><Brain size={17} /></IconButton>
+        {/* The page icon moves onto the Second Brain — that panel *is* the
+            notes — and the brain onto the graph, which is what a mind map
+            actually looks like. A separate "new note on the canvas" button is
+            gone: the same thing is one right-click away. */}
+        <IconButton label="Второй мозг" active={brainOpen} onClick={onToggleBrain}><FileText size={17} /></IconButton>
         <IconButton label="Граф мыслей и заметок" active={graphOpen} onClick={onToggleGraph}>
-          <Network size={17} />
+          <Brain size={17} />
         </IconButton>
 
         <div className="relative" ref={foldersRef}>
