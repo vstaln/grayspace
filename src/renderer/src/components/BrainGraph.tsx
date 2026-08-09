@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Crosshair, Minus, Plus } from 'lucide-react'
+import { Crosshair, Minus, Plus, X } from 'lucide-react'
 import type { BrainGraph as GraphData } from '../../../preload/index.d'
 
 interface Props {
@@ -7,6 +7,10 @@ interface Props {
   selectedId: string | null
   /** Fired on a click that was not a drag — opens the note. */
   onOpen(id: string): void
+  /** Full-screen mode: no chrome but the corner controls, no bottom bar. */
+  fullscreen?: boolean
+  /** Leaves the graph. Rendered as the last button in the top-right corner. */
+  onExit?(): void
 }
 
 interface Body {
@@ -34,12 +38,16 @@ const DAMPING = 0.9
 const MAX_SPEED = 12
 const CLICK_SLOP = 4
 
+/** Shared look for the corner controls — glassy, quiet, same size. */
+const GRAPH_BUTTON =
+  'grid h-8 w-8 place-items-center rounded-[10px] border border-white/10 bg-black/40 text-text backdrop-blur-md transition-colors hover:bg-white/10'
+
 /**
  * Force-directed knowledge graph drawn on a canvas: notes are white dots,
  * links are thin grey lines. Physics runs only while the layout is still
  * settling (or while dragging), so an idle panel costs no CPU.
  */
-export default function BrainGraph({ graph, selectedId, onOpen }: Props): React.JSX.Element {
+export default function BrainGraph({ graph, selectedId, onOpen, fullscreen = false, onExit }: Props): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const bodies = useRef<Map<string, Body>>(new Map())
@@ -230,40 +238,52 @@ export default function BrainGraph({ graph, selectedId, onOpen }: Props): React.
       onWheel={onWheel}
     >
       <canvas ref={canvasRef} className="block h-full w-full" role="img" aria-label={`Граф заметок: ${graph.nodes.length} узлов, ${edges.length} связей`} />
-      <div className="absolute top-3 right-3.5 flex gap-1.5">
-        <button
-          className="grid h-8 w-8 place-items-center rounded-[10px] border border-line bg-white/[0.03] text-text hover:bg-bg-hover"
-          title="Приблизить"
-          onClick={() => zoomBy(1.2)}
-        >
+
+      {/* One cluster of controls, top right. In full screen it is the only
+          chrome on the canvas, so it fades back until the pointer is near it. */}
+      <div className={`absolute top-3 right-3.5 flex gap-1.5 transition-opacity duration-300 ${fullscreen ? 'opacity-35 hover:opacity-100' : ''}`}>
+        <button className={GRAPH_BUTTON} title="Приблизить" onClick={() => zoomBy(1.2)}>
           <Plus size={14} />
         </button>
-        <button
-          className="grid h-8 w-8 place-items-center rounded-[10px] border border-line bg-white/[0.03] text-text hover:bg-bg-hover"
-          title="Отдалить"
-          onClick={() => zoomBy(1 / 1.2)}
-        >
+        <button className={GRAPH_BUTTON} title="Отдалить" onClick={() => zoomBy(1 / 1.2)}>
           <Minus size={14} />
         </button>
-        <button
-          className="grid h-8 w-8 place-items-center rounded-[10px] border border-line bg-white/[0.03] text-text hover:bg-bg-hover"
-          title="Вписать в экран"
-          onClick={fit}
-        >
+        <button className={GRAPH_BUTTON} title="Вписать в экран" onClick={fit}>
           <Crosshair size={14} />
         </button>
+        {onExit && (
+          <button
+            className={`${GRAPH_BUTTON} ml-1 hover:border-white/30 hover:bg-white/10`}
+            title="Выйти из графа (Esc)"
+            onClick={onExit}
+          >
+            <X size={15} />
+          </button>
+        )}
       </div>
-      <div className="pointer-events-none absolute bottom-3 left-3.5 rounded-[10px] border border-line-soft bg-bg/80 px-2.5 py-1.5 text-[11px] text-text-faint">
-        {hoverTitle ? <b>{hoverTitle}</b> : `${graph.nodes.length} заметок · ${edges.length} связей`}
-        {!hoverTitle && ' · клик по точке открывает заметку, колесо — масштаб'}
-      </div>
+
+      {/* The bottom bar is a hint for someone still learning the panel, so it
+          is off in full screen — the point there is the graph and nothing
+          else. The hovered title floats over the canvas instead. */}
+      {!fullscreen && (
+        <div className="pointer-events-none absolute bottom-3 left-3.5 rounded-[10px] border border-line-soft bg-bg/80 px-2.5 py-1.5 text-[11px] text-text-faint">
+          {hoverTitle ? <b>{hoverTitle}</b> : `${graph.nodes.length} заметок · ${edges.length} связей`}
+          {!hoverTitle && ' · клик по точке открывает заметку, колесо — масштаб'}
+        </div>
+      )}
     </div>
   )
 }
 
-/** More connections → slightly bigger dot, capped so hubs stay tasteful. */
+/**
+ * More connections → slightly bigger dot, capped so hubs stay tasteful.
+ *
+ * Deliberately small: at the old sizes a few dozen notes read as a scatter of
+ * blobs, and the graph's shape — which is the only thing a knowledge graph is
+ * for — got lost behind the dots drawing it. A star, not a bead.
+ */
 function radiusFor(degree: number): number {
-  return Math.min(9, 3.2 + Math.sqrt(degree) * 1.5)
+  return Math.min(5.2, 1.9 + Math.sqrt(degree) * 0.85)
 }
 
 /** One physics tick: repulsion between all pairs, springs along edges, gentle centring. */
@@ -383,36 +403,71 @@ function draw(
     ctx.stroke()
   }
 
-  // ---- nodes: white dots, dimmed when another node holds focus ------------
+  // ---- nodes --------------------------------------------------------------
+  // Each note is drawn as a small star rather than a flat disc: a wide, very
+  // faint halo, then a solid core with a bright centre. Against the starfield
+  // that reads as something luminous at a distance, which a hard-edged circle
+  // never does — and it lets the dots be much smaller without vanishing.
   for (const body of list) {
     const isActive = body.id === active
+    const isSelected = body.id === selectedId
     const related = !active || isActive || neighbours.has(body.id)
-    const alpha = body.alpha * (related ? 1 : 0.28)
+    const alpha = body.alpha * (related ? 1 : 0.22)
+    const r = body.r
+    const tint = body.color
 
-    if (isActive || body.id === selectedId) {
+    // Focus ring: a soft pool of light under the node the pointer is on.
+    if (isActive || isSelected) {
+      const pool = r + 9 / camera.zoom
+      const glow = ctx.createRadialGradient(body.x, body.y, 0, body.x, body.y, pool)
+      glow.addColorStop(0, tint ? rgba(tint, 0.22 * body.alpha) : `rgba(255,255,255,${0.2 * body.alpha})`)
+      glow.addColorStop(1, 'rgba(255,255,255,0)')
+      ctx.fillStyle = glow
       ctx.beginPath()
-      ctx.arc(body.x, body.y, body.r + 5 / camera.zoom, 0, Math.PI * 2)
-      ctx.fillStyle = `rgba(255,255,255,${0.1 * body.alpha})`
+      ctx.arc(body.x, body.y, pool, 0, Math.PI * 2)
       ctx.fill()
     }
 
+    // The star's own halo, sized off the node so hubs glow a little wider.
+    const halo = r * 2.6
+    const aura = ctx.createRadialGradient(body.x, body.y, r * 0.5, body.x, body.y, halo)
+    aura.addColorStop(0, tint ? rgba(tint, 0.3 * alpha) : `rgba(255,255,255,${0.3 * alpha})`)
+    aura.addColorStop(1, 'rgba(255,255,255,0)')
+    ctx.fillStyle = aura
     ctx.beginPath()
-    ctx.arc(body.x, body.y, body.r, 0, Math.PI * 2)
-    ctx.fillStyle = body.color ? rgba(body.color, alpha) : `rgba(255,255,255,${alpha})`
+    ctx.arc(body.x, body.y, halo, 0, Math.PI * 2)
     ctx.fill()
 
-    if (body.id === selectedId) {
-      ctx.lineWidth = 1.5 / camera.zoom
-      ctx.strokeStyle = body.color ? rgba(body.color, 0.85) : 'rgba(255,255,255,0.85)'
+    ctx.beginPath()
+    ctx.arc(body.x, body.y, r, 0, Math.PI * 2)
+    ctx.fillStyle = tint ? rgba(tint, alpha * 0.92) : `rgba(232,236,244,${alpha * 0.92})`
+    ctx.fill()
+
+    // A brighter pinprick just off-centre — the highlight that makes it read
+    // as a sphere catching light rather than a sticker.
+    ctx.beginPath()
+    ctx.arc(body.x - r * 0.22, body.y - r * 0.22, r * 0.42, 0, Math.PI * 2)
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`
+    ctx.fill()
+
+    if (isSelected) {
+      ctx.lineWidth = 1.2 / camera.zoom
+      ctx.strokeStyle = tint ? rgba(tint, 0.9) : 'rgba(255,255,255,0.9)'
+      ctx.beginPath()
+      ctx.arc(body.x, body.y, r + 3.5 / camera.zoom, 0, Math.PI * 2)
       ctx.stroke()
     }
 
     // Labels would be noise on a dense zoomed-out graph.
     if (camera.zoom > 0.55 || isActive) {
-      ctx.font = `${11 / camera.zoom}px Inter, "Segoe UI", system-ui, sans-serif`
+      ctx.font = `${(isActive ? 11.5 : 10.5) / camera.zoom}px Inter, "Segoe UI", system-ui, sans-serif`
       ctx.textAlign = 'center'
-      ctx.fillStyle = `rgba(235,235,235,${alpha * (isActive ? 0.95 : 0.6)})`
-      ctx.fillText(truncate(body.title), body.x, body.y + body.r + 13 / camera.zoom)
+      // A soft black shadow keeps the caption legible over a bright star.
+      ctx.shadowColor = 'rgba(0,0,0,0.85)'
+      ctx.shadowBlur = 4 / camera.zoom
+      ctx.fillStyle = `rgba(226,230,238,${alpha * (isActive ? 1 : 0.55)})`
+      ctx.fillText(truncate(body.title), body.x, body.y + r + 12 / camera.zoom)
+      ctx.shadowBlur = 0
     }
   }
 

@@ -193,13 +193,18 @@ export default function SecondBrain({ workspaceDir, initialView = 'list', onView
 
   // Escape closes the panel — matches ChatPanel/KanbanBoard's expectation that
   // a full-screen modal responds to the same key the user reaches for first.
+  // From the full-screen graph the first Escape steps back to the list rather
+  // than closing outright — the graph is a mode inside the panel, and losing
+  // the whole panel because you wanted out of the map is a surprise.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      if (view === 'graph') setView('list')
+      else onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, view])
 
   /** Opens a note by title, creating it when the link is still unresolved. */
   const openByTitle = async (title: string): Promise<void> => {
@@ -218,9 +223,18 @@ export default function SecondBrain({ workspaceDir, initialView = 'list', onView
       role="dialog"
       aria-modal="true"
       aria-label="Второй мозг"
-      className="brain-panel-shell fixed inset-[52px_24px_24px_80px] z-[650] flex flex-col overflow-hidden rounded-[10px] border border-line shadow-[0_30px_90px_rgba(0,0,0,0.75)] glass:border-line-soft glass:bg-bg-panel/72 glass:backdrop-blur-2xl glass:backdrop-saturate-150"
+      /* The graph takes the whole screen: it is a map, and a map framed inside
+         a panel with a header is a map you cannot read. Other views keep the
+         inset panel. */
+      className={
+        view === 'graph'
+          ? 'brain-panel-shell fixed inset-0 z-[650] flex flex-col overflow-hidden bg-black'
+          : 'brain-panel-shell fixed inset-[52px_24px_24px_80px] z-[650] flex flex-col overflow-hidden rounded-[10px] border border-line shadow-[0_30px_90px_rgba(0,0,0,0.75)] glass:border-line-soft glass:bg-bg-panel/72 glass:backdrop-blur-2xl glass:backdrop-saturate-150'
+      }
     >
-      <header className="flex flex-none items-center justify-between gap-4 border-b border-line-soft bg-bg-raise px-4 py-3.5 glass:bg-transparent">
+      <header
+        className={`flex flex-none items-center justify-between gap-4 border-b border-line-soft bg-bg-raise px-4 py-3.5 glass:bg-transparent ${view === 'graph' ? 'hidden' : ''}`}
+      >
         <div>
           <h2 className="flex items-center gap-2 text-[15px] font-semibold tracking-tight">
             <Brain size={17} className="text-text-dim" /> Второй мозг
@@ -261,7 +275,16 @@ export default function SecondBrain({ workspaceDir, initialView = 'list', onView
       </header>
 
       {view === 'graph' ? (
-        <BrainGraph graph={graph} selectedId={selected} onOpen={(id) => { setSelected(id); setView('list') }} />
+        <BrainGraph
+          graph={graph}
+          selectedId={selected}
+          onOpen={(id) => {
+            setSelected(id)
+            setView('list')
+          }}
+          fullscreen
+          onExit={() => setView('list')}
+        />
       ) : (
         <div
           className={`grid min-h-0 flex-1 ${note ? 'grid-cols-[290px_minmax(0,1fr)_236px]' : 'grid-cols-[290px_minmax(0,1fr)]'} max-lg:grid-cols-[240px_minmax(0,1fr)]`}
