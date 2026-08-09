@@ -1,0 +1,63 @@
+{
+  "name": "workspace",
+  "version": "2.0.0",
+  "description": "Workspace — холст с терминалами и доской задач, управляемый агентами через MCP",
+  "main": "./out/main/index.js",
+  "license": "MIT",
+  "scripts": {
+    "build:mcp": "npm --prefix mcp-server install --no-fund --no-audit && npm --prefix mcp-server run build",
+    "predev": "npm run build:mcp",
+    "dev": "electron-vite dev",
+    "prebuild": "npm run build:mcp",
+    "build": "electron-vite build",
+    "prestart": "npm run build:mcp",
+    "start": "electron-vite preview",
+    "reset": "node scripts/reset.mjs",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "website": "npx serve website -l 5173",
+    "dist": "npm run build && electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "com.workspace.app",
+    "productName": "Workspace",
+    "npmRebuild": false,
+    "files": [
+      "out/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "dependencies": {
+    "@homebridge/node-pty-prebuilt-multiarch": "0.13.1",
+    "lucide-react": "^1.28.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^43.3.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^3.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~7.0.2",
+    "vite": "^6.0.0",
+    "xterm": "^5.3.0",
+    "xterm-addon-fit": "^0.8.0"
+  }
+}

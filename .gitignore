@@ -1,0 +1,19 @@
+node_modules/
+out/
+dist/
+*.log
+.DS_Store
+
+# Build output of the bundled MCP server
+mcp-server/dist/
+mcp-server/node_modules/
+
+# Editor / OS noise
+.vscode/
+Thumbs.db
+desktop.ini
+
+# Local state and quarantined store files
+*.bak
+*.corrupt-*
+.workspace/

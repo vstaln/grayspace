@@ -1,0 +1,178 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Camera, CanvasTool, Point, STROKE_COLORS, Stroke, Widget, WIDGET_H, WIDGET_W } from '../types'
+
+let localCounter = 0
+const makeLocalId = (kind: 'terminal' | 'note' = 'terminal'): string => `${kind}-${Date.now()}-${++localCounter}`
+const makeStrokeId = (): string => `stroke-${Date.now()}-${++localCounter}`
+
+/**
+ * Owns the infinite canvas: camera, widget list, and the mapping between screen
+ * and world coordinates. Also bridges widgets requested by agents over MCP.
+ */
+export function useCanvas() {
+  const [widgets, setWidgets] = useState<Widget[]>([])
+  const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, zoom: 1 })
+  const [tool, setTool] = useState<CanvasTool>('select')
+  const [strokes, setStrokes] = useState<Stroke[]>([])
+  const [strokeColor, setStrokeColor] = useState<string>(STROKE_COLORS[0])
+  const zRef = useRef(1)
+  // Counts terminals ever created, not ones currently open — using the open
+  // count instead reused numbers after a close and skipped ahead whenever a
+  // note widget was also on the canvas, since that shared the same tally.
+  const terminalNumRef = useRef(0)
+
+  // Event subscriptions below register once, so they must never close over
+  // `camera`/`widgets` directly — these refs keep them reading current state.
+  const cameraRef = useRef(camera)
+  cameraRef.current = camera
+  const countRef = useRef(0)
+  countRef.current = widgets.length
+
+  const nextZ = useCallback(() => ++zRef.current, [])
+
+  // ---- persistence (DI-004) -----------------------------------------------
+  // Layout and strokes are restored from disk on mount and saved back on a
+  // debounce, so a restart returns the desktop the user left instead of a
+  // blank canvas. Saves are skipped until hydration finishes — otherwise the
+  // first effect run would overwrite the saved desktop with an empty one.
+  const hydratedRef = useRef(false)
+
+  useEffect(() => {
+    void window.api.canvas.load().then((snapshot) => {
+      setWidgets(snapshot.widgets)
+      setCamera(snapshot.camera)
+      setStrokes(snapshot.strokes)
+      const maxZ = snapshot.widgets.reduce((max, w) => Math.max(max, w.z), 0)
+      if (maxZ >= zRef.current) zRef.current = maxZ + 1
+      hydratedRef.current = true
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!hydratedRef.current) return
+    const timer = setTimeout(() => {
+      void window.api.canvas.save({ widgets, camera, strokes })
+    }, 800)
+    return () => clearTimeout(timer)
+  }, [widgets, camera, strokes])
+
+  const screenToWorld = useCallback((x: number, y: number, cam: Camera = cameraRef.current): Point => {
+    return { x: (x - cam.x) / cam.zoom, y: (y - cam.y) / cam.zoom }
+  }, [])
+
+  const addWidget = useCallback(
+    (point: Point, id: string = makeLocalId(), title?: string, kind: 'terminal' | 'note' = 'terminal', noteId?: string): void => {
+      const resolvedTitle =
+        title || (kind === 'note' ? 'Новая заметка' : `Terminal ${++terminalNumRef.current}`)
+      setWidgets((prev) => [
+        ...prev,
+        {
+          id,
+          title: resolvedTitle,
+          kind,
+          noteId,
+          x: point.x - 16,
+          y: point.y - 16,
+          w: WIDGET_W,
+          h: WIDGET_H,
+          z: nextZ()
+        }
+      ])
+    },
+    [nextZ]
+  )
+
+  const addNoteWidget = useCallback((point: Point, noteId: string, title = 'Новая заметка'): void => {
+    addWidget(point, makeLocalId('note'), title, 'note', noteId)
+  }, [addWidget])
+
+  const removeWidget = useCallback((id: string): void => {
+    setWidgets((prev) => prev.filter((w) => w.id !== id))
+  }, [])
+
+  const updateWidget = useCallback((id: string, change: Partial<Widget>): void => {
+    setWidgets((prev) => prev.map((w) => (w.id === id ? { ...w, ...change } : w)))
+  }, [])
+
+  const bringToFront = useCallback(
+    (id: string): void => updateWidget(id, { z: nextZ() }),
+    [nextZ, updateWidget]
+  )
+
+  /** Starts a new pencil stroke at a world point and returns its id to extend. */
+  const beginStroke = useCallback(
+    (point: Point): string => {
+      const id = makeStrokeId()
+      setStrokes((prev) => [...prev, { id, points: [point], color: strokeColor }])
+      return id
+    },
+    [strokeColor]
+  )
+
+  const extendStroke = useCallback((id: string, point: Point): void => {
+    setStrokes((prev) => prev.map((s) => (s.id === id ? { ...s, points: [...s.points, point] } : s)))
+  }, [])
+
+  const clearStrokes = useCallback((): void => setStrokes([]), [])
+
+  /**
+   * Removes only the points within `radius` of a world point, splitting a
+   * stroke into whatever pieces remain on either side of the gap — dragging
+   * the eraser over the middle of a line erases that middle, not the whole
+   * line the way a single "clear" click used to.
+   */
+  const eraseAt = useCallback((point: Point, radius = 14): void => {
+    setStrokes((prev) => {
+      const next: Stroke[] = []
+      for (const s of prev) {
+        let current: Point[] = []
+        for (const p of s.points) {
+          if (Math.hypot(p.x - point.x, p.y - point.y) <= radius) {
+            if (current.length > 0) next.push({ id: makeStrokeId(), points: current, color: s.color })
+            current = []
+          } else {
+            current.push(p)
+          }
+        }
+        if (current.length > 0) next.push({ id: makeStrokeId(), points: current, color: s.color })
+      }
+      return next
+    })
+  }, [])
+
+  useEffect(() => {
+    const offAdd = window.api.control.onAddWidget(({ id, title }) => {
+      // Cascade agent-opened terminals instead of stacking them all at one spot,
+      // and place them relative to wherever the camera currently is.
+      const step = (countRef.current % 8) * 34
+      addWidget(screenToWorld(90 + step, 90 + step), id, title)
+    })
+    const offRemove = window.api.control.onRemoveWidget(removeWidget)
+    return () => {
+      offAdd()
+      offRemove()
+    }
+  }, [addWidget, removeWidget, screenToWorld])
+
+  return {
+    widgets,
+    camera,
+    setCamera,
+    topZ: zRef,
+    screenToWorld,
+    addWidget,
+    addNoteWidget,
+    removeWidget,
+    updateWidget,
+    bringToFront,
+    tool,
+    setTool,
+    strokes,
+    beginStroke,
+    extendStroke,
+    clearStrokes,
+    eraseAt,
+    strokeColor,
+    setStrokeColor
+  }
+}

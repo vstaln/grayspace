@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      SEC-005: defense-in-depth. The renderer is trusted input-free today, but
+      if anything ever injects markup this policy keeps it from running scripts
+      or reaching the network beyond the dev server. 'unsafe-inline' for style
+      only: React lays out widgets with inline style attributes.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:2222 http://localhost:2222; object-src 'none'; base-uri 'none'"
+    />
+    <title>Workspace</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
