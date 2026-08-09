@@ -251,12 +251,16 @@ const componentsLayer: Sheet = {
 export const appStylesheet: Sheet = {
   ...tokenSheet,
   '@layer base': baseLayer,
-  ':focus-visible': { outline: '2px solid var(--color-accent)', outlineOffset: '2px' },
-  // The composer's textarea already shows focus via the card's own border
-  // turning from `line` to `text-faint` (see `.composer-shell` in ChatPanel) —
-  // a second, blunt browser-style ring on top of that reads as unstyled chrome
-  // rather than as this app's own UI. Higher specificity than the bare
-  // `:focus-visible` above, so it wins without needing `!important`.
+  // A hairline, not a slab. The old ring was 2px of solid white at a 2px
+  // offset, which around a rounded input drew a hard rectangle floating off
+  // the control — it read as unstyled browser chrome. Keyboard users still get
+  // a clear ring; it just belongs to this app now.
+  ':focus-visible': { outline: '1px solid rgba(255,255,255,0.38)', outlineOffset: '1px', borderRadius: '10px' },
+  // Text surfaces that already show focus themselves get no ring at all: the
+  // note's body border lightens, the chat composer's card border lifts, and a
+  // second ring on top of that is noise. Higher specificity than the bare
+  // `:focus-visible` above, so these win without needing `!important`.
   '.composer-shell textarea:focus-visible': { outline: 'none' },
+  '.note-surface :is(input, textarea):focus-visible': { outline: 'none' },
   '@layer components': componentsLayer
 }

@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Camera, CanvasTool, Point, STROKE_COLORS, Stroke, Widget, WIDGET_H, WIDGET_W } from '../types'
+import { Camera, CanvasTool, Point, STROKE_COLORS, Stroke, Widget, WidgetKind, WIDGET_H, WIDGET_W } from '../types'
 
 let localCounter = 0
-const makeLocalId = (kind: 'terminal' | 'note' = 'terminal'): string => `${kind}-${Date.now()}-${++localCounter}`
+const makeLocalId = (kind: WidgetKind = 'terminal'): string => `${kind}-${Date.now()}-${++localCounter}`
 const makeStrokeId = (): string => `stroke-${Date.now()}-${++localCounter}`
+
+/** Default title and size per widget type, used when the caller gives none. */
+const WIDGET_DEFAULTS: Record<WidgetKind, { title: string; w: number; h: number }> = {
+  terminal: { title: 'Terminal', w: WIDGET_W, h: WIDGET_H },
+  note: { title: 'Новая заметка', w: WIDGET_W, h: WIDGET_H },
+  'git-status': { title: 'Репозиторий', w: 340, h: 260 },
+  timer: { title: 'Таймер', w: 300, h: 220 },
+  schedule: { title: 'Запланированные задачи', w: 400, h: 320 }
+}
 
 /** `Terminal 3` → 3; anything else is not a numbered terminal. */
 const TERMINAL_TITLE = /^Terminal (\d+)$/
@@ -80,22 +89,23 @@ export function useCanvas() {
   }, [])
 
   const addWidget = useCallback(
-    (point: Point, id: string = makeLocalId(), title?: string, kind: 'terminal' | 'note' = 'terminal', noteId?: string): void => {
+    (point: Point, id: string = makeLocalId(), title?: string, kind: WidgetKind = 'terminal', noteId?: string): void => {
+      const defaults = WIDGET_DEFAULTS[kind]
       setWidgets((prev) => [
         ...prev,
         {
           id,
-          // Numbering fills the first gap rather than counting up forever:
-          // close "Terminal 1" and the next one you open is 1 again, not 2.
-          // The name describes what is on the canvas now, and a desk with a
-          // single terminal on it labelled "Terminal 7" is just confusing.
-          title: title || (kind === 'note' ? 'Новая заметка' : `Terminal ${nextTerminalNumber(prev)}`),
+          // Terminal numbering fills the first gap rather than counting up
+          // forever: close "Terminal 1" and the next one you open is 1 again.
+          // The name describes what is on the canvas now, not how many have
+          // been opened since launch.
+          title: title || (kind === 'terminal' ? `Terminal ${nextTerminalNumber(prev)}` : defaults.title),
           kind,
           noteId,
           x: point.x - 16,
           y: point.y - 16,
-          w: WIDGET_W,
-          h: WIDGET_H,
+          w: defaults.w,
+          h: defaults.h,
           z: nextZ()
         }
       ])

@@ -11,7 +11,7 @@ import { VersionRegistry } from './core/index.ts'
  */
 export const CANVAS_SCHEMA_VERSION = 2
 
-export type WidgetKind = 'terminal' | 'note' | 'git-status'
+export type WidgetKind = 'terminal' | 'note' | 'git-status' | 'timer' | 'schedule'
 
 export interface CanvasWidget {
   id: string
@@ -64,7 +64,7 @@ export const CANVAS_TARGET_ID = 'main'
 
 const isNum = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 
-const WIDGET_KINDS = new Set<string>(['terminal', 'note', 'git-status'])
+const WIDGET_KINDS = new Set<string>(['terminal', 'note', 'git-status', 'timer', 'schedule'])
 
 function sanitizeWidget(value: unknown): CanvasWidget | null {
   const w = value as Record<string, unknown>

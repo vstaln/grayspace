@@ -89,7 +89,7 @@ export default function NoteWidget({ noteId }: { noteId: string; workspaceDir?: 
   const statusTitle = state === 'saved' ? 'Сохранено' : state === 'error' ? 'Ошибка сохранения' : 'Сохранение...'
 
   return (
-    <div className="flex h-full flex-col gap-3 bg-[rgba(18,18,20,0.6)] backdrop-blur-[28px] p-4 rounded-[10px]">
+    <div className="note-surface flex h-full flex-col gap-3 bg-[rgba(18,18,20,0.6)] backdrop-blur-[28px] p-4 rounded-[10px]">
       <div className="flex items-center gap-3">
         <input
           className="flex-1 border-0 bg-transparent py-1 text-[22px] font-bold text-text outline-none placeholder:text-text-dim"

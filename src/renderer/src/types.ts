@@ -1,7 +1,14 @@
+/**
+ * Everything that can sit on the canvas. `terminal` and `note` own external
+ * state (a PTY, a note in the brain); the rest render from state the app
+ * already has, which is why they need no id of their own beyond the widget's.
+ */
+export type WidgetKind = 'terminal' | 'note' | 'git-status' | 'timer' | 'schedule'
+
 export interface Widget {
   id: string
   title: string
-  kind?: 'terminal' | 'note' | 'git-status'
+  kind?: WidgetKind
   noteId?: string
   x: number
   y: number
