@@ -40,10 +40,23 @@ export class TerminalManager extends EventEmitter {
   // remembered forever; this blocks the P3-012 resurrection race.
   private readonly disposed = new Set<string>()
   private counter = 0
-  // Counts agent-opened terminals ever created, not ones currently open, so a
-  // closed one's number is never handed to the next — same reasoning as the
-  // renderer's own numbering for terminals the user opens by hand.
-  private agentTerminalCounter = 0
+
+  /**
+   * The lowest `Agent Terminal N` not currently open. Numbers are reused once
+   * a terminal is closed, matching how the canvas names the ones the user
+   * opens by hand — otherwise a single agent terminal on an empty canvas ends
+   * up called "Agent Terminal 9", which says nothing useful.
+   */
+  private nextAgentNumber(): number {
+    const taken = new Set<number>()
+    for (const record of this.terminals.values()) {
+      const match = /^Agent Terminal (\d+)$/.exec(record.title)
+      if (match) taken.add(Number(match[1]))
+    }
+    let n = 1
+    while (taken.has(n)) n += 1
+    return n
+  }
 
   private nextId(prefix: string): string {
     this.counter += 1
@@ -58,7 +71,7 @@ export class TerminalManager extends EventEmitter {
     // the agent asked for is not used. Without a fixed, predictable name the
     // user can't tell an agent's terminal apart from one they opened themselves
     // at a glance, which is the entire point of naming it differently.
-    const title = prefix === 'agent' ? `Agent Terminal ${++this.agentTerminalCounter}` : options.title?.trim() || id
+    const title = prefix === 'agent' ? `Agent Terminal ${this.nextAgentNumber()}` : options.title?.trim() || id
     const record: TerminalRecord = {
       pty: null,
       title,
