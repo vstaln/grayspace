@@ -5,7 +5,11 @@ interface Props {
   at: Point
   onPickTerminal: () => void
   onPickNote: () => void
+  onPickGit: () => void
+  onPickTimer: () => void
+  onPickSchedule: () => void
   onOpenBoard: () => void
+  onOpenAssistant: () => void
   onClose: () => void
 }
 
@@ -13,21 +17,35 @@ interface Item {
   label: string
   hint: string
   onSelect: () => void
+  /** `panel` items open over the canvas rather than placing a widget on it. */
+  group?: 'widget' | 'panel'
 }
 
 export default function ContextMenu({
   at,
-  onPickTerminal, onPickNote,
+  onPickTerminal,
+  onPickNote,
+  onPickGit,
+  onPickTimer,
+  onPickSchedule,
   onOpenBoard,
+  onOpenAssistant,
   onClose
 }: Props): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState(at)
 
+  // Widgets that land on the canvas first, then the panels that open over it —
+  // the divider between the two groups is what keeps a seven-item menu
+  // scannable instead of a wall of equivalent-looking choices.
   const items: Item[] = [
     { label: 'Терминал', hint: 'Оболочка в рабочей папке', onSelect: onPickTerminal },
     { label: 'Заметка', hint: 'Мысль или фрагмент знаний на холсте', onSelect: onPickNote },
-    { label: 'Доска задач', hint: 'Задачи для вас и агентов', onSelect: onOpenBoard }
+    { label: 'Репозиторий', hint: 'Ветка, изменения, коммит', onSelect: onPickGit },
+    { label: 'Таймер', hint: 'Обратный отсчёт для одного дела', onSelect: onPickTimer },
+    { label: 'Запланированные задачи', hint: 'Всё со сроком, ближайшее сверху', onSelect: onPickSchedule },
+    { label: 'Доска задач', hint: 'Задачи для вас и агентов, прямо на холсте', onSelect: onOpenBoard },
+    { label: 'Ассистент', hint: 'Выполнит цель шаг за шагом', onSelect: onOpenAssistant, group: 'panel' }
   ]
 
   // Nudge the menu back on-screen once its real size is known.
@@ -116,6 +134,9 @@ export default function ContextMenu({
       {items.map((item, i) => (
         <div
           key={item.label}
+          {...(item.group === 'panel' && items[i - 1]?.group !== 'panel'
+            ? { style: { marginTop: 6, paddingTop: 8, borderTop: '1px solid var(--color-line-soft)' } }
+            : {})}
           role="menuitem"
           tabIndex={-1}
           className="cursor-pointer rounded-[10px] px-2.5 py-1.5 hover:bg-bg-hover focus:bg-bg-hover"

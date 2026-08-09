@@ -189,7 +189,7 @@ export interface BrainApi {
 export interface CanvasWidget {
   id: string
   title: string
-  kind?: 'terminal' | 'note' | 'git-status' | 'timer' | 'schedule'
+  kind?: 'terminal' | 'note' | 'git-status' | 'timer' | 'schedule' | 'board'
   noteId?: string
   x: number
   y: number

@@ -6,9 +6,10 @@ import ContextMenu from './components/ContextMenu'
 import TitleBar from './components/TitleBar'
 import { useCanvas } from './hooks/useCanvas'
 import { useCoordination } from './hooks/useCoordination'
-import { HEADER_H, MIN_H, MIN_W, Point, ResizeDir, Stroke, Widget } from './types'
+import { HEADER_H, MIN_H, MIN_W, Point, ResizeDir, Stroke, Widget, WidgetKind } from './types'
 import ChatPanel from './components/ChatPanel'
 import SecondBrain from './components/SecondBrain'
+import AssistantPanel from './components/AssistantPanel'
 import Toolbar from './components/Toolbar'
 import ErrorBoundary from './components/ErrorBoundary'
 import StrokesLayer from './components/StrokesLayer'
@@ -85,6 +86,7 @@ function Workspace(): React.JSX.Element {
   const editingRef = useRef<string | null>(null)
   editingRef.current = editingId
   const [boardOpen, setBoardOpen] = useState(false)
+  const [assistantOpen, setAssistantOpen] = useState(false)
   const [brainOpen, setBrainOpen] = useState(false)
   const [brainView, setBrainView] = useState<'list' | 'graph'>('list')
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null)
@@ -123,6 +125,19 @@ function Workspace(): React.JSX.Element {
   const spawnTerminalAtCenter = useCallback(
     (): void => canvas.addWidget(toWorld(window.innerWidth / 2 - 260, window.innerHeight / 2 - 180)),
     [canvas.addWidget, toWorld]
+  )
+
+  /**
+   * Drops a widget that needs no external resource at the point the context
+   * menu was opened — git status, a timer, the schedule, the board. Terminals
+   * and notes go through their own paths because each has to create something
+   * first (a PTY, a note in the brain).
+   */
+  const placeWidget = useCallback(
+    (kind: WidgetKind, point: Point): void => {
+      canvas.addWidget(point, `${kind}-${Date.now()}`, undefined, kind)
+    },
+    [canvas.addWidget]
   )
 
   const spawnNoteAt = useCallback(
@@ -500,8 +515,12 @@ function Workspace(): React.JSX.Element {
               setMenu(null)
             }}
             onPickNote={() => { spawnNoteAt(toWorld(menu.x, menu.y)); setMenu(null) }}
-            onOpenBoard={() => {
-              setBoardOpen(true)
+            onPickGit={() => { placeWidget('git-status', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onPickTimer={() => { placeWidget('timer', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onPickSchedule={() => { placeWidget('schedule', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onOpenBoard={() => { placeWidget('board', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onOpenAssistant={() => {
+              setAssistantOpen(true)
               setMenu(null)
             }}
             onClose={() => setMenu(null)}
@@ -532,6 +551,7 @@ function Workspace(): React.JSX.Element {
           onClose={() => setBoardOpen(false)}
         />
       )}
+      {assistantOpen && <AssistantPanel onClose={() => setAssistantOpen(false)} />}
       {brainOpen && (
         <SecondBrain
           workspaceDir={workspaceDir}

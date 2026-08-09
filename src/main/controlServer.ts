@@ -7,6 +7,7 @@ import { CanvasStore } from './canvasState'
 import { CONTROL_TOKEN_HEADER, controlToken } from './controlToken'
 import { CANVAS_TARGET } from './commands/canvas.ts'
 import { TASK_MANAGER_TARGET } from './commands/board.ts'
+import { GIT_TARGET } from './commands/git.ts'
 import { NEW } from './commands/index.ts'
 import type { ActorType, CommandErrorCode, CommandResult, Core } from './core/index.ts'
 
@@ -207,6 +208,20 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
         code,
         ...((err as { details?: Json }).details ?? {})
       })
+    }
+  }
+
+  // ---- git ----------------------------------------------------------------
+  if (parts[0] === 'git') {
+    const body = method === 'GET' ? {} : await readJson(req)
+    if (method === 'GET' && parts[1] === 'status') {
+      // Status is a read, but it still goes through the bus so the refresh is
+      // journaled next to whatever the agent does with the answer.
+      core.actors.register({ id: 'system', type: 'system', label: 'OrcSpace', transport: 'internal' })
+      return reply(await core.bus.submit({ actorId: 'system', type: 'git.refresh', target: GIT_TARGET, payload: {} }))
+    }
+    if (method === 'POST' && parts[1] === 'commit') {
+      return reply(await submit(body, 'git.commit', GIT_TARGET, { message: body.message }))
     }
   }
 

@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { registerBrainTools, BRAIN_TOOL_NAMES } from './tools/brain.js'
 import { registerTerminalTools, TERMINAL_TOOL_NAMES } from './tools/terminals.js'
 import { registerCoordinationTools, COORDINATION_TOOL_NAMES } from './tools/coordination.js'
+import { registerWidgetTools, WIDGET_TOOL_NAMES } from './tools/widgets.js'
 import { createRequestListener, listenOnLoopback } from './http.js'
 
 /**
@@ -12,7 +13,12 @@ import { createRequestListener, listenOnLoopback } from './http.js'
  * tell a protocol error from a tool failure. The isolated-instance regression
  * (audit REGRESSION_PLAN 1.2) diffs this set against the live `tools/list`.
  */
-const TOOL_NAMES = new Set<string>([...BRAIN_TOOL_NAMES, ...TERMINAL_TOOL_NAMES, ...COORDINATION_TOOL_NAMES])
+const TOOL_NAMES = new Set<string>([
+  ...BRAIN_TOOL_NAMES,
+  ...TERMINAL_TOOL_NAMES,
+  ...COORDINATION_TOOL_NAMES,
+  ...WIDGET_TOOL_NAMES
+])
 
 function createServer(): McpServer {
   // Not "workspace" — Claude Code reserves that exact name and silently drops
@@ -21,6 +27,7 @@ function createServer(): McpServer {
   registerBrainTools(server)
   registerTerminalTools(server)
   registerCoordinationTools(server)
+  registerWidgetTools(server)
   return server
 }
 

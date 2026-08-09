@@ -10,6 +10,13 @@ interface Props {
   onResetManager: () => void
   onReleaseLocks: () => void
   onClose: () => void
+  /**
+   * Rendered inside a canvas widget rather than as a modal over it. The board
+   * is a thing you keep beside your terminals, not a dialog you dismiss — so
+   * embedded it drops the fixed framing, the focus trap and the close button,
+   * and the widget frame supplies all three.
+   */
+  embedded?: boolean
 }
 
 const COLUMNS: { state: TaskState; states: TaskState[]; label: string; tone: 'blue' | 'amber' | 'green' | 'red' }[] = [
@@ -33,7 +40,8 @@ export default function KanbanBoard({
   onDelete,
   onResetManager,
   onReleaseLocks,
-  onClose
+  onClose,
+  embedded = false
 }: Props): React.JSX.Element {
   const [title, setTitle] = useState('')
   const [dragId, setDragId] = useState<string | null>(null)
@@ -41,7 +49,7 @@ export default function KanbanBoard({
   const titleInputRef = useRef<HTMLInputElement>(null)
   const panelRef = useRef<HTMLElement>(null)
 
-  useFocusTrap(panelRef, true)
+  useFocusTrap(panelRef, !embedded)
 
   const submit = (): void => {
     const value = title.trim()
@@ -62,10 +70,14 @@ export default function KanbanBoard({
   return (
     <section
       ref={panelRef}
-      role="dialog"
-      aria-modal="true"
+      role={embedded ? 'group' : 'dialog'}
+      aria-modal={embedded ? undefined : true}
       aria-label="Доска задач"
-      className="board-shell fixed z-[620] inset-[76px_7%_42px] w-auto min-w-[760px] overflow-hidden rounded-[10px] border border-line-soft bg-[rgba(18,18,20,0.6)] backdrop-blur-[28px] shadow-[0_28px_80px_rgba(0,0,0,0.7)] animate-in fade-in zoom-in-95 duration-200 flex flex-col"
+      className={
+        embedded
+          ? 'board-shell flex h-full flex-col overflow-hidden bg-[rgba(18,18,20,0.6)] backdrop-blur-[28px]'
+          : 'board-shell fixed z-[620] inset-[76px_7%_42px] w-auto min-w-[760px] overflow-hidden rounded-[10px] border border-line-soft bg-[rgba(18,18,20,0.6)] backdrop-blur-[28px] shadow-[0_28px_80px_rgba(0,0,0,0.7)] animate-in fade-in zoom-in-95 duration-200 flex flex-col'
+      }
     >
       <header className="flex min-h-[46px] items-center justify-between gap-3 border-b border-line-soft px-4">
         <h2 className="text-[14px] font-medium text-text">Доска задач</h2>
@@ -74,7 +86,7 @@ export default function KanbanBoard({
             {doneTasks} <span className="text-text-faint">/ {totalTasks}</span>
           </div>
           <button
-            className="grid h-7 w-7 place-items-center rounded-[10px] border-0 text-xl leading-none text-text-dim hover:bg-white/[0.06] hover:text-text transition-colors"
+            className={`grid h-7 w-7 place-items-center rounded-[10px] border-0 text-xl leading-none text-text-dim hover:bg-white/[0.06] hover:text-text transition-colors ${embedded ? 'hidden' : ''}`}
             onClick={onClose}
             title="Закрыть"
           >

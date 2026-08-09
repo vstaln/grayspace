@@ -11,7 +11,8 @@ const WIDGET_DEFAULTS: Record<WidgetKind, { title: string; w: number; h: number 
   note: { title: 'Новая заметка', w: WIDGET_W, h: WIDGET_H },
   'git-status': { title: 'Репозиторий', w: 340, h: 260 },
   timer: { title: 'Таймер', w: 300, h: 220 },
-  schedule: { title: 'Запланированные задачи', w: 400, h: 320 }
+  schedule: { title: 'Запланированные задачи', w: 400, h: 320 },
+  board: { title: 'Доска задач', w: 900, h: 520 }
 }
 
 /** `Terminal 3` → 3; anything else is not a numbered terminal. */

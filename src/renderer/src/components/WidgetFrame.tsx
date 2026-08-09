@@ -2,6 +2,10 @@ import React from 'react'
 import { Minus, Pencil, X } from 'lucide-react'
 import TerminalWidget from './TerminalWidget'
 import NoteWidget from './NoteWidget'
+import GitStatusWidget from './GitStatusWidget'
+import TimerWidget from './TimerWidget'
+import ScheduleWidget from './ScheduleWidget'
+import BoardWidget from './BoardWidget'
 import { RESIZE_HANDLES, ResizeDir, Widget } from '../types'
 
 interface Props {
@@ -88,8 +92,8 @@ const WidgetFrame = React.memo(function WidgetFrame({
           <button
             className="grid h-6 w-6 place-items-center rounded-[10px] text-text-faint hover:bg-bg-hover hover:text-text"
             onClick={onStartEditing}
-            title="Переименовать терминал"
-            aria-label="Переименовать терминал"
+            title="Переименовать"
+            aria-label="Переименовать"
           >
             <Pencil size={11} strokeWidth={1.5} />
           </button>
@@ -112,11 +116,7 @@ const WidgetFrame = React.memo(function WidgetFrame({
         </button>
       </div>
       <div className={`widget-body min-h-0 flex-1 bg-transparent ${widget.minimized ? 'hidden' : ''}`}>
-        {widget.kind === 'note' && widget.noteId ? (
-          <NoteWidget noteId={widget.noteId} workspaceDir={workspaceDir} />
-        ) : (
-          <TerminalWidget id={widget.id} />
-        )}
+        <WidgetBody widget={widget} workspaceDir={workspaceDir} />
       </div>
       {!widget.minimized &&
         !widget.maximized &&
@@ -130,5 +130,37 @@ const WidgetFrame = React.memo(function WidgetFrame({
     </div>
   )
 })
+
+/**
+ * Which component fills the frame. A terminal is the fallback rather than an
+ * explicit case: widgets restored from an older layout carry no `kind`, and
+ * before other kinds existed every one of them was a terminal.
+ */
+function WidgetBody({
+  widget,
+  workspaceDir
+}: {
+  widget: Widget
+  workspaceDir?: string | null
+}): React.JSX.Element {
+  switch (widget.kind) {
+    case 'note':
+      return widget.noteId ? (
+        <NoteWidget noteId={widget.noteId} workspaceDir={workspaceDir} />
+      ) : (
+        <div className="grid h-full place-items-center text-[13px] text-text-faint">Заметка не привязана</div>
+      )
+    case 'git-status':
+      return <GitStatusWidget />
+    case 'timer':
+      return <TimerWidget />
+    case 'schedule':
+      return <ScheduleWidget />
+    case 'board':
+      return <BoardWidget />
+    default:
+      return <TerminalWidget id={widget.id} />
+  }
+}
 
 export default WidgetFrame
