@@ -13,6 +13,7 @@
     "prestart": "npm run build:mcp",
     "start": "electron-vite preview",
     "reset": "node scripts/reset.mjs",
+    "test": "node --test \"src/main/core/**/*.test.ts\"",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",

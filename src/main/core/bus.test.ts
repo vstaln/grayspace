@@ -1,0 +1,293 @@
+import { strict as assert } from 'node:assert'
+import { test, describe } from 'node:test'
+import { ActorRegistry } from './actors.ts'
+import { CommandBus } from './bus.ts'
+import { Journal } from './journal.ts'
+import { LockManager } from './locks.ts'
+import { VersionRegistry } from './versioned.ts'
+import { CommandError, type JournalEntry } from './types.ts'
+
+/**
+ * A minimal note store standing in for the real ones: an object with a body
+ * and a version, mutated only through the bus. Every concurrency property the
+ * four real stores need holds or fails here first.
+ */
+function harness(options: { now?: () => number } = {}): {
+  bus: CommandBus
+  locks: LockManager
+  journal: Journal
+  actors: ActorRegistry
+  notes: Map<string, { id: string; body: string; version: number }>
+  entries: JournalEntry[]
+} {
+  const now = options.now ?? Date.now
+  const actors = new ActorRegistry(now)
+  const locks = new LockManager({ now })
+  const journal = new Journal({ now })
+  const bus = new CommandBus({ actors, locks, journal, now })
+  const versions = new VersionRegistry('note')
+  const notes = new Map<string, { id: string; body: string; version: number }>()
+  const entries: JournalEntry[] = []
+  journal.on('entry', (entry: JournalEntry) => entries.push(entry))
+
+  bus.registerVersions('note', versions)
+  bus.register<{ id: string; body: string }, { id: string; version: number }>('note.create', {
+    ignoreVersion: true,
+    apply: ({ command }) => {
+      const { id, body } = command.payload
+      notes.set(id, { id, body, version: versions.bump(id) })
+      return { id, version: versions.current(id) }
+    }
+  })
+  bus.register<{ body: string }, { body: string; version: number }>('note.update', {
+    apply: ({ command }) => {
+      const id = command.target.slice('note:'.length)
+      const note = notes.get(id)
+      if (!note) throw new CommandError('not_found', `no note ${id}`)
+      note.body = command.payload.body
+      note.version = versions.bump(id)
+      return { body: note.body, version: note.version }
+    }
+  })
+  bus.register('note.explode', {
+    apply: () => {
+      throw new Error('handler blew up')
+    }
+  })
+
+  actors.register({ id: 'user', type: 'user', label: 'Human', transport: 'ipc' })
+  actors.register({ id: 'assistant', type: 'assistant', label: 'OrcSpace assistant', transport: 'internal' })
+  actors.register({ id: 'agent-a', type: 'agent', label: 'Claude Code', transport: 'mcp' })
+
+  return { bus, locks, journal, actors, notes, entries }
+}
+
+describe('CommandBus — the lost update', () => {
+  test('a stale baseVersion is a conflict, not a silent overwrite', async () => {
+    const { bus, notes } = harness()
+    await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'v1' } })
+
+    // The agent read the note at version 1 and went off to think about it.
+    const agentSawVersion = 1
+    // Meanwhile the user edited it in the UI.
+    const userEdit = await bus.submit({
+      actorId: 'user',
+      type: 'note.update',
+      target: 'note:n1',
+      baseVersion: 1,
+      payload: { body: 'the human’s edit' }
+    })
+    assert.equal(userEdit.ok, true)
+
+    const agentWrite = await bus.submit({
+      actorId: 'agent-a',
+      type: 'note.update',
+      target: 'note:n1',
+      baseVersion: agentSawVersion,
+      payload: { body: 'the agent’s stale version' }
+    })
+    assert.equal(agentWrite.ok, false)
+    assert.equal(agentWrite.ok === false && agentWrite.code, 'conflict')
+    assert.equal(notes.get('n1')?.body, 'the human’s edit', 'the human’s edit survives')
+  })
+
+  test('a command with no baseVersion is a deliberate last-writer-wins', async () => {
+    const { bus, notes } = harness()
+    await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'v1' } })
+    const blind = await bus.submit({
+      actorId: 'agent-a',
+      type: 'note.update',
+      target: 'note:n1',
+      payload: { body: 'blind write' }
+    })
+    assert.equal(blind.ok, true)
+    assert.equal(notes.get('n1')?.body, 'blind write')
+  })
+
+  test('the version advances by exactly one per accepted write', async () => {
+    const { bus } = harness()
+    await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'a' } })
+    for (let expected = 2; expected <= 5; expected += 1) {
+      const result = await bus.submit({
+        actorId: 'user',
+        type: 'note.update',
+        target: 'note:n1',
+        baseVersion: expected - 1,
+        payload: { body: `v${expected}` }
+      })
+      assert.equal(result.ok && result.version, expected)
+    }
+  })
+})
+
+describe('CommandBus — locks gate every write', () => {
+  test('a write to a resource another actor holds is refused', async () => {
+    const { bus, locks } = harness()
+    await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'a' } })
+    locks.acquire({ resource: 'note:n1', actorId: 'agent-a', reason: 'refactor' })
+
+    const blocked = await bus.submit({
+      actorId: 'assistant',
+      type: 'note.update',
+      target: 'note:n1',
+      payload: { body: 'nope' }
+    })
+    assert.equal(blocked.ok, false)
+    assert.equal(blocked.ok === false && blocked.code, 'locked')
+    assert.equal(blocked.ok === false && (blocked.details?.lock as { actorId: string }).actorId, 'agent-a')
+  })
+
+  test('the lock holder can still write to what it holds', async () => {
+    const { bus, locks } = harness()
+    await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'a' } })
+    locks.acquire({ resource: 'note:n1', actorId: 'agent-a' })
+    const ok = await bus.submit({
+      actorId: 'agent-a',
+      type: 'note.update',
+      target: 'note:n1',
+      payload: { body: 'mine' }
+    })
+    assert.equal(ok.ok, true)
+    assert.equal(locks.holder('note:n1')?.actorId, 'agent-a', 'an explicit lock outlives the command')
+  })
+
+  test('an implicit lock is taken for the apply and released after', async () => {
+    const { bus, locks } = harness()
+    await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'a' } })
+    assert.equal(locks.holder('note:n1'), undefined, 'nothing is left holding the resource')
+  })
+
+  test('the assistant is an ordinary actor with no special privileges', async () => {
+    const { bus, locks } = harness()
+    await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'a' } })
+    locks.acquire({ resource: 'note:n1', actorId: 'user' })
+    const assistant = await bus.submit({
+      actorId: 'assistant',
+      type: 'note.update',
+      target: 'note:n1',
+      payload: { body: 'assistant edit' }
+    })
+    assert.equal(assistant.ok === false && assistant.code, 'locked')
+  })
+})
+
+describe('CommandBus — identity and validation', () => {
+  test('an unregistered actor cannot write anything', async () => {
+    const { bus } = harness()
+    const result = await bus.submit({
+      actorId: 'ghost',
+      type: 'note.create',
+      target: 'note:n1',
+      payload: { id: 'n1', body: 'x' }
+    })
+    assert.equal(result.ok === false && result.code, 'unknown_actor')
+  })
+
+  test('an unknown command type is refused before anything is journaled', async () => {
+    const { bus, entries } = harness()
+    const result = await bus.submit({ actorId: 'user', type: 'note.teleport', target: 'note:n1', payload: {} })
+    assert.equal(result.ok === false && result.code, 'unknown_command')
+    assert.deepEqual(entries, [])
+  })
+
+  test('a malformed target is refused', async () => {
+    const { bus } = harness()
+    const result = await bus.submit({ actorId: 'user', type: 'note.update', target: 'n1', payload: { body: 'x' } })
+    assert.equal(result.ok === false && result.code, 'invalid')
+  })
+})
+
+describe('CommandBus — sequencing', () => {
+  test('commands apply strictly in submission order, never interleaved', async () => {
+    const { bus, actors } = harness()
+    const order: string[] = []
+    let live = 0
+    bus.register<{ tag: string; delay: number }, void>('trace.step', {
+      apply: async ({ command }) => {
+        live += 1
+        assert.equal(live, 1, 'two handlers ran at once')
+        await new Promise((resolve) => setTimeout(resolve, command.payload.delay))
+        order.push(command.payload.tag)
+        live -= 1
+      }
+    })
+    actors.register({ id: 'agent-b', type: 'agent', label: 'Codex', transport: 'mcp' })
+
+    await Promise.all([
+      bus.submit({ actorId: 'user', type: 'trace.step', target: 'canvas:main', payload: { tag: 'slow', delay: 20 } }),
+      bus.submit({ actorId: 'agent-a', type: 'trace.step', target: 'canvas:main', payload: { tag: 'fast', delay: 0 } }),
+      bus.submit({ actorId: 'agent-b', type: 'trace.step', target: 'note:n1', payload: { tag: 'other', delay: 0 } })
+    ])
+    assert.deepEqual(order, ['slow', 'fast', 'other'])
+  })
+
+  test('a failing command does not stall the queue behind it', async () => {
+    const { bus, notes } = harness()
+    const boom = bus.submit({ actorId: 'user', type: 'note.explode', target: 'note:n1', payload: {} })
+    const after = bus.submit({
+      actorId: 'user',
+      type: 'note.create',
+      target: 'note:n2',
+      payload: { id: 'n2', body: 'still works' }
+    })
+    assert.equal((await boom).ok, false)
+    assert.equal((await after).ok, true)
+    assert.equal(notes.get('n2')?.body, 'still works')
+  })
+
+  test('a handler that throws never leaks its lock', async () => {
+    const { bus, locks } = harness()
+    await bus.submit({ actorId: 'user', type: 'note.explode', target: 'note:n1', payload: {} })
+    assert.equal(locks.holder('note:n1'), undefined)
+  })
+})
+
+describe('CommandBus — the journal', () => {
+  test('an applied command is written as intent then commit', async () => {
+    const { bus, entries } = harness()
+    await bus.submit({ actorId: 'agent-a', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'a' } })
+    assert.deepEqual(
+      entries.map((e) => e.phase),
+      ['intent', 'commit']
+    )
+    assert.equal(entries[1].actorId, 'agent-a', 'the journal records who did it')
+    assert.equal(entries[1].version, 1)
+  })
+
+  test('a failed command is written as intent then abort', async () => {
+    const { bus, entries } = harness()
+    await bus.submit({ actorId: 'user', type: 'note.explode', target: 'note:n1', payload: {} })
+    assert.deepEqual(
+      entries.map((e) => e.phase),
+      ['intent', 'abort']
+    )
+    assert.match(String(entries[1].error), /blew up/)
+  })
+
+  test('a command interrupted mid-apply is reported as unfinished', async () => {
+    const { bus, journal } = harness()
+    // Simulates the crash window: intent on disk, no commit after it.
+    journal.append({ phase: 'intent', actorId: 'assistant', type: 'widget.delete', target: 'widget:w1' })
+    await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'a' } })
+
+    const open = journal.unfinished()
+    assert.equal(open.length, 1)
+    assert.equal(open[0].type, 'widget.delete')
+  })
+
+  test('the change stream replays only what a client has not seen', async () => {
+    const { bus, journal } = harness()
+    await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'a' } })
+    const seen = journal.lastSeq
+    await bus.submit({
+      actorId: 'user',
+      type: 'note.update',
+      target: 'note:n1',
+      baseVersion: 1,
+      payload: { body: 'b' }
+    })
+    const fresh = journal.since(seen)
+    assert.equal(fresh.length, 2)
+    assert.ok(fresh.every((entry) => entry.seq > seen))
+  })
+})

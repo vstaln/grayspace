@@ -5,6 +5,10 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    // core/ is executed directly by `node --test` through Node's type
+    // stripping, whose ESM resolver needs the real extension on every
+    // relative import. Vite resolves the same specifiers unchanged.
+    "allowImportingTsExtensions": true,
     "lib": ["ES2023"],
     "types": ["node"],
     "strict": true,
