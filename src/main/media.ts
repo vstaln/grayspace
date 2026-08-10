@@ -1,7 +1,7 @@
 import { app, clipboard } from 'electron'
 import { createHash } from 'crypto'
 import * as fs from 'fs'
-import { extname, isAbsolute, join, sep } from 'path'
+import { extname, isAbsolute, join, relative, resolve, sep } from 'path'
 
 /** A picture that now lives in the app's own store, addressable by absolute path. */
 export interface MediaFile {
@@ -38,6 +38,7 @@ export function mediaDir(): string {
  * file, and re-pasting after a restart resolves to the copy already on disk.
  */
 export function saveBytes(bytes: Buffer, ext: string): MediaFile {
+  if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('Р¤Р°Р№Р» Р±РѕР»СЊС€Рµ 24 РњР‘')
   const safeExt = MIME_BY_EXT[ext.replace(/^\./, '').toLowerCase()] ? ext.replace(/^\./, '').toLowerCase() : 'png'
   const digest = createHash('sha1').update(bytes).digest('hex').slice(0, 16)
   const dir = mediaDir()
@@ -60,7 +61,9 @@ export function importFile(source: string): MediaFile {
 export function saveClipboardImage(): MediaFile | null {
   const image = clipboard.readImage()
   if (image.isEmpty()) return null
-  return saveBytes(image.toPNG(), 'png')
+  const bytes = image.toPNG()
+  if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('Р¤Р°Р№Р» Р±РѕР»СЊС€Рµ 24 РњР‘')
+  return saveBytes(bytes, 'png')
 }
 
 /**
@@ -95,11 +98,12 @@ export function isLocalPath(path: string): boolean {
  */
 export async function dataUrl(path: string): Promise<string | null> {
   if (!isLocalPath(path)) return null
-  if (!isAuthorizedMediaPath(path)) return null
+  const authorizedPath = await authorizedMediaPath(path)
+  if (!authorizedPath) return null
   try {
-    const bytes = await fs.promises.readFile(path)
+    const bytes = await fs.promises.readFile(authorizedPath)
     if (bytes.byteLength > MAX_MEDIA_BYTES) return null
-    const mime = MIME_BY_EXT[extname(path).slice(1).toLowerCase()] || 'image/png'
+    const mime = MIME_BY_EXT[extname(authorizedPath).slice(1).toLowerCase()] || 'image/png'
     return `data:${mime};base64,${bytes.toString('base64')}`
   } catch {
     return null
@@ -110,9 +114,20 @@ export async function dataUrl(path: string): Promise<string | null> {
  * True for anything under the app's profile dir (media store, wallpapers) —
  * the only places this app itself ever writes pictures.
  */
-function isAuthorizedMediaPath(path: string): boolean {
+async function authorizedMediaPath(path: string): Promise<string | null> {
   const userData = app.getPath('userData')
-  return path === userData || path.startsWith(userData.endsWith(sep) ? userData : userData + sep)
+  try {
+    const root = await fs.promises.realpath(userData)
+    const candidate = await fs.promises.realpath(resolve(path))
+    const remainder = relative(root, candidate)
+    if (remainder === '' || remainder === '..' || remainder.startsWith(`..${sep}`) || isAbsolute(remainder)) return null
+    return candidate
+  } catch {
+    // Missing files and broken links are not authorized reads. In particular,
+    // do not fall back to a lexical prefix check: `userData\\..\\secret.png`
+    // and symlinks must never escape the profile directory.
+    return null
+  }
 }
 
 /**
