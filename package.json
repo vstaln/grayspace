@@ -5,7 +5,7 @@
   "main": "./out/main/index.js",
   "license": "MIT",
   "scripts": {
-    "build:mcp": "npm --prefix mcp-server install --no-fund --no-audit && npm --prefix mcp-server run build",
+    "build:mcp": "npm --prefix ../Orcspace-mcp install --no-fund --no-audit && npm --prefix ../Orcspace-mcp run build",
     "predev": "npm run build:mcp",
     "dev": "electron-vite dev",
     "prebuild": "npm run build:mcp",

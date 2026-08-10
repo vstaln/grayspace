@@ -14,7 +14,7 @@ export const MCP_PORT = Number(process.env.WORKSPACE_MCP_PORT || 47940)
 /**
  * The endpoint MCP clients attach to; also what the config panel copies.
  * `localhost`, not a literal IP: the MCP server itself binds both loopback
- * addresses (see mcp-server/src/index.ts) precisely so this name always
+ * addresses (see Orcspace-mcp/src/index.ts) precisely so this name always
  * resolves to a listener no matter which address family a client prefers.
  */
 export function mcpUrl(port: number = MCP_PORT): string {

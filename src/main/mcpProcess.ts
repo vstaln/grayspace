@@ -27,7 +27,7 @@ const RETRY_DELAYS = [1_000, 2_000, 5_000, 10_000, 30_000]
 const MAX_RESTARTS = RETRY_DELAYS.length
 
 function scriptPath(): string {
-  return join(__dirname, '../../mcp-server/dist/index.js')
+  return join(__dirname, '../../../Orcspace-mcp/dist/index.js')
 }
 
 export function mcpStatus(): McpStatus {
