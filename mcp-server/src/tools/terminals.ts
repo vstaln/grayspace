@@ -4,22 +4,25 @@ import { controlApi, post, text } from '../control.js'
 
 export const TERMINAL_TOOL_NAMES = ['list_terminals', 'create_terminal', 'send_text', 'read_output', 'close_terminal']
 
-/** Terminals and note widgets on the Workspace canvas. */
+/** Terminals and note widgets on the OrcSpace canvas. */
 export function registerTerminalTools(server: McpServer): void {
   server.tool(
     'list_terminals',
-    'Виджеты на холсте Workspace: терминалы (id, заголовок, рабочая папка) и заметки (id, заголовок).',
+    'Виджеты на холсте OrcSpace: терминалы (id, заголовок, рабочая папка) и заметки (id, заголовок).',
     {},
     async () => text(await controlApi<{ widgets: unknown[] }>('/widgets'))
   )
 
   server.tool(
     'create_terminal',
-    'Открывает новый терминал на холсте Workspace и возвращает его id. Пользователь видит это окно и всё, что в нём происходит.',
+    'Открывает новый терминал на холсте OrcSpace и возвращает его id. Пользователь видит это окно и всё, что в нём происходит.',
     {
       title: z.string().optional().describe('Заголовок окна терминала'),
       cwd: z.string().optional().describe('Рабочая папка; по умолчанию — папка воркспейса'),
-      agentId: z.string().optional().describe('ID руководителя; обязателен после назначения руководителя')
+      // All control-API mutations are journaled under an actor.  This must be
+      // required in the MCP schema too: otherwise the client omits it and the
+      // backend rejects the call with the much less useful "agentId is required".
+      agentId: z.string().min(1).describe('Stable ID of this agent')
     },
     async (input) => text(await post('/widgets/terminal', input))
   )
@@ -30,7 +33,8 @@ export function registerTerminalTools(server: McpServer): void {
     {
       id: z.string().describe('id терминала из create_terminal или list_terminals'),
       text: z.string().describe('Текст для ввода'),
-      pressEnter: z.boolean().optional().describe('Нажать Enter после текста (по умолчанию true)')
+      pressEnter: z.boolean().optional().describe('Нажать Enter после текста (по умолчанию true)'),
+      agentId: z.string().min(1).describe('Stable ID of this agent')
     },
     async ({ id, ...body }) => text(await post(`/terminal/${encodeURIComponent(id)}/write`, body))
   )
@@ -55,7 +59,7 @@ export function registerTerminalTools(server: McpServer): void {
     'Закрывает терминал и завершает его процесс.',
     {
       id: z.string().describe('id терминала'),
-      agentId: z.string().optional().describe('ID руководителя; обязателен после назначения руководителя')
+      agentId: z.string().min(1).describe('Stable ID of this agent')
     },
     async ({ id, agentId }) =>
       text(

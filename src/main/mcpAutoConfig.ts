@@ -31,6 +31,7 @@ interface McpJson {
 
 /** The server used to register under this name, which Claude Code silently drops. */
 const RESERVED_NAME = 'workspace'
+const LEGACY_NAMES = ['workspace-app', 'my-workspace'] as const
 
 /** Where Codex keeps its global config; honors the env override the CLI itself uses. */
 function codexConfigFile(): string {
@@ -127,6 +128,7 @@ export async function syncProjectMcpConfig(dir: string): Promise<void> {
   // Claude Code never loaded it, so it's dead weight, not a user's own server.
   const hadReserved = RESERVED_NAME in servers
   delete servers[RESERVED_NAME]
+  for (const legacy of LEGACY_NAMES) delete servers[legacy]
 
   const existing = servers[MCP_SERVER_NAME] as { url?: string; type?: string } | undefined
   // A workspace-app entry that points somewhere else belongs to another
@@ -181,6 +183,7 @@ export async function syncProjectOpencodeConfig(dir: string): Promise<void> {
   }
 
   const servers = { ...(config.mcp || {}) }
+  for (const legacy of LEGACY_NAMES) delete servers[legacy]
   const existing = servers[MCP_SERVER_NAME] as
     | { type?: string; url?: string; enabled?: boolean }
     | undefined
@@ -261,6 +264,10 @@ export async function ensureCodexGlobalConfig(): Promise<void> {
   // rather than leave two servers pointed at the same URL.
   const reservedSection = `[mcp_servers.${RESERVED_NAME}]`
   let cleaned = current.includes(reservedSection) ? stripTomlSection(current, reservedSection) : current
+  for (const legacy of LEGACY_NAMES) {
+    const legacySection = `[mcp_servers.${legacy}]`
+    if (cleaned.includes(legacySection)) cleaned = stripTomlSection(cleaned, legacySection)
+  }
 
   if (cleaned.includes(section)) {
     if (cleaned.includes(body)) return // already exactly right, nothing to do
@@ -281,6 +288,36 @@ export async function ensureCodexGlobalConfig(): Promise<void> {
 
   const addition = `${cleaned && !cleaned.endsWith('\n') ? '\n' : ''}\n${body}`
   writeFileIfPossible(file, cleaned + addition)
+}
+
+/**
+ * Registers OrcSpace in Grok Build's project-scoped config. Grok uses TOML and
+ * reads `.grok/config.toml` from the current repository. Only the OrcSpace MCP
+ * section is managed; model, UI, permissions, and any user MCP entries remain
+ * untouched.
+ */
+export function syncProjectGrokConfig(dir: string): void {
+  if (!dir) return
+  const file = join(dir, '.grok', 'config.toml')
+  let current = ''
+  if (fs.existsSync(file)) {
+    try {
+      current = fs.readFileSync(file, 'utf8')
+    } catch (err) {
+      console.error(`could not read ${file}`, err)
+      return
+    }
+  }
+  let cleaned = current
+  for (const legacy of [...LEGACY_NAMES, RESERVED_NAME]) {
+    const section = `[mcp_servers.${legacy}]`
+    if (cleaned.includes(section)) cleaned = stripTomlSection(cleaned, section)
+  }
+  const section = `[mcp_servers.${MCP_SERVER_NAME}]`
+  if (cleaned.includes(section)) cleaned = stripTomlSection(cleaned, section)
+  const body = `${section}\nurl = "${mcpUrl()}"\nenabled = true\n`
+  const next = `${cleaned.trimEnd()}${cleaned.trim() ? '\n\n' : ''}${body}`
+  if (next !== current) writeConfigAtomic(file, next, dirname(file))
 }
 
 function writeFileIfPossible(file: string, content: string): void {

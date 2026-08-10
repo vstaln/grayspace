@@ -220,86 +220,143 @@ export default function Sidebar({
     setFoldersOpen(false)
   }
 
+  const RAIL_ITEM_IDS = ['new', 'board', 'notes', 'graph', 'folders'] as const
+  type RailItemId = (typeof RAIL_ITEM_IDS)[number]
+  const [order, setOrder] = useState<RailItemId[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('rail-order') || 'null') as RailItemId[] | null
+      if (saved && RAIL_ITEM_IDS.every((id) => saved.includes(id))) return saved
+    } catch {
+      // ignore malformed storage
+    }
+    return [...RAIL_ITEM_IDS]
+  })
+  const dragIdRef = useRef<RailItemId | null>(null)
+
+  const reorder = (target: RailItemId): void => {
+    const dragged = dragIdRef.current
+    if (!dragged || dragged === target) return
+    setOrder((prev) => {
+      const next = prev.filter((id) => id !== dragged)
+      next.splice(next.indexOf(target), 0, dragged)
+      localStorage.setItem('rail-order', JSON.stringify(next))
+      return next
+    })
+  }
+
+  const railItems: Record<RailItemId, React.ReactNode> = {
+    new: (
+      <IconButton label="Новый терминал" onClick={onNewTerminal}>
+        <Plus size={19} />
+      </IconButton>
+    ),
+    board: (
+      <IconButton label="Доска задач" active={boardOpen} badge={taskCount} onClick={onToggleBoard}>
+        <KanbanSquare size={17} />
+      </IconButton>
+    ),
+    notes: (
+      <IconButton label="Notes" active={brainOpen} onClick={onToggleBrain}>
+        <FileText size={17} />
+      </IconButton>
+    ),
+    graph: (
+      <IconButton label="Graph" active={graphOpen} onClick={onToggleGraph}>
+        <Brain size={17} />
+      </IconButton>
+    ),
+    folders: (
+      <div className="relative" ref={foldersRef}>
+        <IconButton
+          label={workspaceDir ? `Папки · сейчас: ${dirName}` : 'Рабочие папки'}
+          active={Boolean(workspaceDir)}
+          onClick={() => setFoldersOpen((v) => !v)}
+        >
+          <FolderOpen size={17} />
+        </IconButton>
+
+        {foldersOpen && (
+          <div
+            ref={foldersMenuRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Рабочие папки"
+            className="absolute top-0 left-[calc(100%+10px)] z-[900] w-72 rounded-[10px] border border-line bg-bg-panel p-2 shadow-2xl glass:bg-bg-panel/85 glass:backdrop-blur-2xl"
+          >
+            <div className="px-1.5 pt-1 pb-2 text-[10px] tracking-wider text-text-faint uppercase">Рабочие папки</div>
+            <div className="flex max-h-72 flex-col gap-1 overflow-auto">
+              {recent.map((entry) => (
+                <div
+                  key={entry.path}
+                  className={`group flex items-center gap-1 rounded-[10px] ${entry.path === workspaceDir ? 'bg-bg-hover' : ''}`}
+                  title={entry.path}
+                >
+                  <button className="min-w-0 flex-1 px-2 py-1.5 text-left" onClick={() => void open(entry.path)}>
+                    <b className="block truncate text-xs font-semibold text-text">{entry.name}</b>
+                    <span className="block truncate text-[10px] text-text-faint">{entry.path}</span>
+                  </button>
+                  <button
+                    className={`flex-none rounded-[10px] p-1 text-text-faint hover:bg-bg-hover hover:text-text ${entry.pinned ? 'text-accent' : ''}`}
+                    title={entry.pinned ? 'Открепить' : 'Закрепить'}
+                    onClick={() => void window.api.workspace.pinRecent(entry.path)}
+                  >
+                    <Pin size={12} />
+                  </button>
+                  <button
+                    className="flex-none rounded-[10px] p-1 text-text-faint hover:bg-bg-hover hover:text-text"
+                    title="Убрать из списка"
+                    onClick={() => void window.api.workspace.forgetRecent(entry.path)}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+              {!recent.length && (
+                <div className="px-2 py-3 text-center text-[11px] text-text-faint">Список пуст — выберите первую папку</div>
+              )}
+            </div>
+            <button
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-[10px] bg-accent px-3 py-2 text-xs font-semibold text-black hover:bg-white"
+              onClick={() => {
+                onPickDir()
+                setFoldersOpen(false)
+              }}
+            >
+              <FolderOpen size={14} /> Выбрать папку…
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <aside
       className="rail-shell rail relative z-[500] flex w-14 flex-none flex-col items-center gap-1.5 border-r border-line pt-8 pb-2.5 glass:border-line-soft select-none"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
+      <div className="flex-1" />
       <div className="flex flex-col gap-1.5">
-        <IconButton label="Новый терминал" onClick={onNewTerminal}><Plus size={19} /></IconButton>
-        <IconButton label="Доска задач" active={boardOpen} badge={taskCount} onClick={onToggleBoard}>
-          <KanbanSquare size={17} />
-        </IconButton>
-        {/* The page icon moves onto the Second Brain — that panel *is* the
-            notes — and the brain onto the graph, which is what a mind map
-            actually looks like. A separate "new note on the canvas" button is
-            gone: the same thing is one right-click away. */}
-        <IconButton label="Notes" active={brainOpen} onClick={onToggleBrain}><FileText size={17} /></IconButton>
-        <IconButton label="Graph" active={graphOpen} onClick={onToggleGraph}>
-          <Brain size={17} />
-        </IconButton>
-
-        <div className="relative" ref={foldersRef}>
-          <IconButton
-            label={workspaceDir ? `Папки · сейчас: ${dirName}` : 'Рабочие папки'}
-            active={Boolean(workspaceDir)}
-            onClick={() => setFoldersOpen((v) => !v)}
+        {order.map((id) => (
+          <div
+            key={id}
+            draggable
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            onDragStart={() => {
+              dragIdRef.current = id
+            }}
+            onDragOver={(e) => {
+              e.preventDefault()
+              reorder(id)
+            }}
+            onDragEnd={() => {
+              dragIdRef.current = null
+            }}
+            className="cursor-grab active:cursor-grabbing"
           >
-            <FolderOpen size={17} />
-          </IconButton>
-
-          {foldersOpen && (
-            <div
-              ref={foldersMenuRef}
-              role="dialog"
-              aria-modal="true"
-              aria-label="Рабочие папки"
-              className="absolute top-0 left-[calc(100%+10px)] z-[900] w-72 rounded-[10px] border border-line bg-bg-panel p-2 shadow-2xl glass:bg-bg-panel/85 glass:backdrop-blur-2xl"
-            >
-              <div className="px-1.5 pt-1 pb-2 text-[10px] tracking-wider text-text-faint uppercase">Рабочие папки</div>
-              <div className="flex max-h-72 flex-col gap-1 overflow-auto">
-                {recent.map((entry) => (
-                  <div
-                    key={entry.path}
-                    className={`group flex items-center gap-1 rounded-[10px] ${entry.path === workspaceDir ? 'bg-bg-hover' : ''}`}
-                    title={entry.path}
-                  >
-                    <button className="min-w-0 flex-1 px-2 py-1.5 text-left" onClick={() => void open(entry.path)}>
-                      <b className="block truncate text-xs font-semibold text-text">{entry.name}</b>
-                      <span className="block truncate text-[10px] text-text-faint">{entry.path}</span>
-                    </button>
-                    <button
-                      className={`flex-none rounded-[10px] p-1 text-text-faint hover:bg-bg-hover hover:text-text ${entry.pinned ? 'text-accent' : ''}`}
-                      title={entry.pinned ? 'Открепить' : 'Закрепить'}
-                      onClick={() => void window.api.workspace.pinRecent(entry.path)}
-                    >
-                      <Pin size={12} />
-                    </button>
-                    <button
-                      className="flex-none rounded-[10px] p-1 text-text-faint hover:bg-bg-hover hover:text-text"
-                      title="Убрать из списка"
-                      onClick={() => void window.api.workspace.forgetRecent(entry.path)}
-                    >
-                      <X size={12} />
-                    </button>
-                  </div>
-                ))}
-                {!recent.length && (
-                  <div className="px-2 py-3 text-center text-[11px] text-text-faint">Список пуст — выберите первую папку</div>
-                )}
-              </div>
-              <button
-                className="mt-2 flex w-full items-center justify-center gap-2 rounded-[10px] bg-accent px-3 py-2 text-xs font-semibold text-black hover:bg-white"
-                onClick={() => {
-                  onPickDir()
-                  setFoldersOpen(false)
-                }}
-              >
-                <FolderOpen size={14} /> Выбрать папку…
-              </button>
-            </div>
-          )}
-        </div>
+            {railItems[id]}
+          </div>
+        ))}
       </div>
 
       <div className="flex-1" />

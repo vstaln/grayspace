@@ -53,7 +53,7 @@ const chat = {
 }
 
 const control = {
-  onAddWidget: (cb: (payload: { id: string; title: string }) => void): (() => void) =>
+  onAddWidget: (cb: (payload: { id: string; title: string; from?: string | null }) => void): (() => void) =>
     onBroadcast('control:add-widget', cb),
   onRemoveWidget: (cb: (id: string) => void): (() => void) => onBroadcast('control:remove-widget', cb)
 }
@@ -111,6 +111,31 @@ const coordination = {
 }
 
 /**
+ * Day outline — not board tasks. Items can be checked off, slotted to a day
+ * and time, and reordered by hand. Lives in its own store so the planner stays
+ * independent of the kanban "scheduled tasks" view.
+ */
+const planner = {
+  list: (): Promise<unknown> => ipcRenderer.invoke('planner:list'),
+  create: (input: { title: string; note?: string; day?: string; time?: string }): Promise<unknown> =>
+    ipcRenderer.invoke('planner:create', input),
+  update: (
+    id: string,
+    patch: {
+      title?: string
+      note?: string
+      day?: string | null
+      time?: string | null
+      done?: boolean
+      order?: number
+      baseVersion?: number
+    }
+  ): Promise<unknown> => ipcRenderer.invoke('planner:update', id, patch),
+  delete: (id: string): Promise<unknown> => ipcRenderer.invoke('planner:delete', id),
+  onChange: (cb: (items: unknown) => void): (() => void) => onBroadcast('planner:onChange', cb)
+}
+
+/**
  * The built-in assistant. `start` resolves when the run finishes *or* parks at
  * the human gate — a parked run comes back with `status: 'waiting_human'` and
  * a question, and `answer` continues it from the same step.
@@ -131,7 +156,8 @@ const git = {
 
 const canvas = {
   load: (): Promise<unknown> => ipcRenderer.invoke('canvas:load'),
-  save: (snapshot: unknown): Promise<void> => ipcRenderer.invoke('canvas:save', snapshot)
+  save: (snapshot: unknown): Promise<void> => ipcRenderer.invoke('canvas:save', snapshot),
+  onChange: (cb: (snapshot: unknown) => void): (() => void) => onBroadcast('canvas:onChange', cb)
 }
 
 const brain = {
@@ -152,6 +178,7 @@ contextBridge.exposeInMainWorld('api', {
   settings,
   media,
   coordination,
+  planner,
   brain,
   canvas,
   chat,

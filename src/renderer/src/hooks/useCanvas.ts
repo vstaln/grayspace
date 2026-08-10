@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Camera, CanvasTool, Point, STROKE_COLORS, Stroke, Widget, WidgetKind, WIDGET_H, WIDGET_W } from '../types'
+import {
+  Camera,
+  CanvasTool,
+  Connection,
+  Point,
+  STROKE_COLORS,
+  Stroke,
+  Widget,
+  WidgetKind,
+  WIDGET_H,
+  WIDGET_W
+} from '../types'
 
 let localCounter = 0
 const makeLocalId = (kind: WidgetKind = 'terminal'): string => `${kind}-${Date.now()}-${++localCounter}`
@@ -12,8 +23,11 @@ const WIDGET_DEFAULTS: Record<WidgetKind, { title: string; w: number; h: number 
   'git-status': { title: 'Репозиторий', w: 340, h: 260 },
   timer: { title: 'Таймер', w: 300, h: 220 },
   schedule: { title: 'Запланированные задачи', w: 400, h: 320 },
-  board: { title: 'Доска задач', w: 900, h: 520 }
+  board: { title: 'Доска задач', w: 900, h: 520 },
+  planner: { title: 'Планер', w: 360, h: 440 }
 }
+
+const makeConnectionId = (): string => `conn-${Date.now()}-${++localCounter}`
 
 /** `Terminal 3` → 3; anything else is not a numbered terminal. */
 const TERMINAL_TITLE = /^Terminal (\d+)$/
@@ -48,14 +62,19 @@ export function useCanvas() {
   const [tool, setTool] = useState<CanvasTool>('select')
   const [strokes, setStrokes] = useState<Stroke[]>([])
   const [strokeColor, setStrokeColor] = useState<string>(STROKE_COLORS[0])
+  const [connections, setConnections] = useState<Connection[]>([])
   const zRef = useRef(1)
 
   // Event subscriptions below register once, so they must never close over
   // `camera`/`widgets` directly — these refs keep them reading current state.
   const cameraRef = useRef(camera)
   cameraRef.current = camera
-  const countRef = useRef(0)
-  countRef.current = widgets.length
+  // Bumped once per agent-created widget, independent of React's render
+  // cycle. `widgets.length` looked equivalent but isn't: several terminals
+  // created back-to-back (an agent cascading `terminal.create`) arrive
+  // faster than a render can flush, so they all read the same stale length
+  // and landed on the exact same cascade offset — a pile, not a cascade.
+  const cascadeRef = useRef(0)
 
   const nextZ = useCallback(() => ++zRef.current, [])
 
@@ -65,6 +84,7 @@ export function useCanvas() {
   // blank canvas. Saves are skipped until hydration finishes — otherwise the
   // first effect run would overwrite the saved desktop with an empty one.
   const hydratedRef = useRef(false)
+  const skipNextSaveRef = useRef(false)
 
   useEffect(() => {
     void window.api.canvas.load().then((snapshot) => {
@@ -79,11 +99,48 @@ export function useCanvas() {
 
   useEffect(() => {
     if (!hydratedRef.current) return
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false
+      return
+    }
     const timer = setTimeout(() => {
       void window.api.canvas.save({ widgets, camera, strokes })
     }, 800)
     return () => clearTimeout(timer)
   }, [widgets, camera, strokes])
+
+  // Keep the visible canvas in sync with MCP/assistant writes made in the main
+  // process. The save echo is consumed once so an external update cannot cause
+  // an import/save feedback loop.
+  useEffect(() => {
+    return window.api.canvas.onChange((snapshot) => {
+      if (!snapshot || !Array.isArray(snapshot.widgets)) return
+      skipNextSaveRef.current = true
+      setWidgets((prev) => {
+        const prevById = new Map(prev.map((w) => [w.id, w]))
+        return snapshot.widgets.map((incoming) => {
+          const local = prevById.get(incoming.id)
+          // A `change` broadcast fires for *any* canvas write — an agent
+          // opening a terminal, another widget resizing — not just ones that
+          // touch this widget. If its version hasn't moved on since we last
+          // synced it, our copy wins: it may hold a drag/resize the 800ms
+          // debounced save hasn't reached the main process yet, and blindly
+          // taking the incoming (stale) position snapped it back mid-drag.
+          if (
+            local &&
+            incoming.version !== undefined &&
+            local.version !== undefined &&
+            incoming.version <= local.version
+          ) {
+            return local
+          }
+          return incoming
+        })
+      })
+      if (snapshot.camera) setCamera(snapshot.camera)
+      if (Array.isArray(snapshot.strokes)) setStrokes(snapshot.strokes)
+    })
+  }, [])
 
   const screenToWorld = useCallback((x: number, y: number, cam: Camera = cameraRef.current): Point => {
     return { x: (x - cam.x) / cam.zoom, y: (y - cam.y) / cam.zoom }
@@ -120,6 +177,9 @@ export function useCanvas() {
 
   const removeWidget = useCallback((id: string): void => {
     setWidgets((prev) => prev.filter((w) => w.id !== id))
+    // A link to or from a closed widget describes a connection that no longer
+    // exists — leaving it drawn would point at empty canvas.
+    setConnections((prev) => prev.filter((c) => c.from !== id && c.to !== id))
   }, [])
 
   const updateWidget = useCallback((id: string, change: Partial<Widget>): void => {
@@ -173,11 +233,23 @@ export function useCanvas() {
   }, [])
 
   useEffect(() => {
-    const offAdd = window.api.control.onAddWidget(({ id, title }) => {
+    const offAdd = window.api.control.onAddWidget(({ id, title, from }) => {
       // Cascade agent-opened terminals instead of stacking them all at one spot,
       // and place them relative to wherever the camera currently is.
-      const step = (countRef.current % 8) * 34
-      addWidget(screenToWorld(90 + step, 90 + step), id, title)
+      const n = cascadeRef.current
+      cascadeRef.current += 1
+      const col = n % 6
+      const row = Math.floor(n / 6) % 6
+      addWidget(screenToWorld(90 + col * 60, 90 + row * 60), id, title)
+      // `from` is the shell the request came from — draw the line that says so.
+      // A dangling id (its widget already closed) draws nothing rather than an
+      // arc anchored on empty canvas.
+      if (from) {
+        setConnections((prev) => [
+          ...prev,
+          { id: makeConnectionId(), from, to: id, bornAt: Date.now() }
+        ])
+      }
     })
     const offRemove = window.api.control.onRemoveWidget(removeWidget)
     return () => {
@@ -205,6 +277,7 @@ export function useCanvas() {
     clearStrokes,
     eraseAt,
     strokeColor,
-    setStrokeColor
+    setStrokeColor,
+    connections
   }
 }

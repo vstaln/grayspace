@@ -32,7 +32,7 @@ export async function streamOpenRouter(
         'Content-Type': 'application/json',
         // OpenRouter asks for these on free-tier requests; harmless to send always.
         'HTTP-Referer': 'https://workspace.local',
-        'X-Title': 'Workspace'
+        'X-Title': 'OrcSpace'
       },
       body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: true }),
       signal

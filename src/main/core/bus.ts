@@ -91,17 +91,37 @@ export class CommandBus extends EventEmitter {
    * result, not an exception it might forget to catch.
    */
   submit<T = unknown>(command: Command): Promise<CommandResult<T>> {
-    const run = this.queue.then(
-      () => this.apply<T>(command),
-      () => this.apply<T>(command)
-    )
+    const prior = this.queue
+    // The turn is held by an explicit signal rather than by the apply promise
+    // itself, so a handler can hand the queue on early via `ctx.unblock()`
+    // without having to finish first.
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
     // The queue tracks completion only — a failed command must not poison the
     // chain and stall every later one.
-    this.queue = run.then(
-      () => undefined,
-      () => undefined
+    this.queue = prior.then(
+      () => held,
+      () => held
     )
-    return run
+    const start = (): Promise<CommandResult<T>> => this.runTurn<T>(command, release)
+    return prior.then(start, start)
+  }
+
+  /** One queued turn: applies the command and always hands the queue on. */
+  private async runTurn<T>(command: Command, release: () => void): Promise<CommandResult<T>> {
+    let handedOn = false
+    const unblock = (): void => {
+      if (handedOn) return
+      handedOn = true
+      release()
+    }
+    try {
+      return await this.apply<T>(command, unblock)
+    } finally {
+      unblock()
+    }
   }
 
   /**
@@ -114,7 +134,7 @@ export class CommandBus extends EventEmitter {
     return this.apply<T>(command)
   }
 
-  private async apply<T>(command: Command): Promise<CommandResult<T>> {
+  private async apply<T>(command: Command, unblock: () => void = () => {}): Promise<CommandResult<T>> {
     this.depth += 1
     let implicitLock: ResourceId | null = null
     let intentWritten = false
@@ -175,8 +195,13 @@ export class CommandBus extends EventEmitter {
       // The handler map is heterogeneous by design — each entry knows its own
       // payload type, which the map's shared value type cannot express — so
       // the payload is re-typed once, here, at the single call site.
-      const apply = handler.apply as (ctx: { command: Command; actor: typeof actor; currentVersion: number }) => unknown
-      const data = (await apply({ command, actor, currentVersion })) as T
+      const apply = handler.apply as (ctx: {
+        command: Command
+        actor: typeof actor
+        currentVersion: number
+        unblock: () => void
+      }) => unknown
+      const data = (await apply({ command, actor, currentVersion, unblock })) as T
       // A create addresses a `<scheme>:new` sentinel, which has no version of
       // its own — the object that came back does, and that is the number the
       // caller needs in order to send a matching baseVersion next time.

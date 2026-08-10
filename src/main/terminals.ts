@@ -130,7 +130,15 @@ export class TerminalManager extends EventEmitter {
         cols: isPositiveInt(cols) ? cols : 80,
         rows: isPositiveInt(rows) ? rows : 24,
         cwd: record.cwd,
-        env: process.env as Record<string, string>
+        // Lets anything started in this shell — a CLI agent asked to "create
+        // a terminal" or otherwise act on its surroundings — tell it's
+        // running inside an OrcSpace-managed terminal rather than a bare one,
+        // without having to guess from the process tree.
+        env: {
+          ...(process.env as Record<string, string>),
+          ORCSPACE: '1',
+          ORCSPACE_TERMINAL_ID: id
+        }
       })
       record.pty = child
       record.rootPid = child.pid

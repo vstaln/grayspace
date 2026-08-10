@@ -6,7 +6,7 @@ export const APP_TITLE = 'OrcSpace'
  * Not "workspace" — Claude Code treats that as a reserved server name and
  * silently refuses to load it, which is a wordless failure to debug.
  */
-export const MCP_SERVER_NAME = 'workspace-app'
+export const MCP_SERVER_NAME = 'orcspace'
 
 export const CONTROL_PORT = Number(process.env.WORKSPACE_CONTROL_PORT || 47932)
 export const MCP_PORT = Number(process.env.WORKSPACE_MCP_PORT || 47940)

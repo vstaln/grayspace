@@ -43,7 +43,8 @@ export const RESOURCE_SCHEMES = [
   'task',
   'canvas',
   'git',
-  'run'
+  'run',
+  'plan'
 ] as const
 export type ResourceScheme = (typeof RESOURCE_SCHEMES)[number]
 
@@ -152,6 +153,21 @@ export interface CommandContext {
   actor: Actor
   /** Version of the target when the handler was entered (`0` if new). */
   currentVersion: number
+  /**
+   * Lets the next command start while this handler is still running.
+   *
+   * A handler that waits on something *outside* the bus — the renderer
+   * mounting a widget, a pty coming up — cannot hold the queue while it waits,
+   * because the thing it is waiting for arrives as another command and would
+   * be stuck behind it. That is a deadlock the handler always loses, once per
+   * timeout.
+   *
+   * Call it at the point where the handler has finished mutating state and is
+   * only observing. The target's lock is *not* released — it is held until the
+   * command actually returns — so nothing else may write to the resource in
+   * the meantime; only unrelated commands proceed.
+   */
+  unblock(): void
 }
 
 export interface CommandHandler<P = never, R = unknown> {

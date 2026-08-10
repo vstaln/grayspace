@@ -3,7 +3,7 @@
  * state (a PTY, a note in the brain); the rest render from state the app
  * already has, which is why they need no id of their own beyond the widget's.
  */
-export type WidgetKind = 'terminal' | 'note' | 'git-status' | 'timer' | 'schedule' | 'board'
+export type WidgetKind = 'terminal' | 'note' | 'git-status' | 'timer' | 'schedule' | 'board' | 'planner'
 
 export interface Widget {
   id: string
@@ -43,6 +43,23 @@ export interface Stroke {
   id: string
   points: Point[]
   color: string
+}
+
+/**
+ * "This shell opened that one." Drawn as a lit arc between the two widgets so
+ * a canvas full of terminals still reads as a tree rather than a pile: when an
+ * agent runs `opencode` in a new window, the line is the only thing that says
+ * where it came from.
+ *
+ * Deliberately not persisted — it describes a live process relationship, and
+ * after a restart both ptys are dead and the claim would be a lie.
+ */
+export interface Connection {
+  id: string
+  from: string
+  to: string
+  /** When it was created, so the arrival flare can play once and settle. */
+  bornAt: number
 }
 
 export type CanvasTool = 'select' | 'pan' | 'draw' | 'erase'

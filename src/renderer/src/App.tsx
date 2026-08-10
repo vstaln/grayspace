@@ -12,6 +12,7 @@ import SecondBrain from './components/SecondBrain'
 import Toolbar from './components/Toolbar'
 import ErrorBoundary from './components/ErrorBoundary'
 import StrokesLayer from './components/StrokesLayer'
+import ConnectionsLayer from './components/ConnectionsLayer'
 import { ThemeProvider, useTheme } from './theme'
 import { ConfirmProvider, useConfirm } from './components/ConfirmDialog'
 
@@ -24,7 +25,7 @@ export default function App(): React.JSX.Element {
             <Wallpaper />
             <TitleBar />
             <ErrorBoundary>
-              <Workspace />
+              <OrcSpaceCanvas />
             </ErrorBoundary>
           </div>
         </ConfirmProvider>
@@ -50,10 +51,21 @@ function Wallpaper(): React.JSX.Element | null {
   )
 }
 
-function Workspace(): React.JSX.Element {
+function OrcSpaceCanvas(): React.JSX.Element {
   const canvas = useCanvas()
-  const { widgets, camera, setCamera, topZ, screenToWorld, tool, setTool, strokes, strokeColor, setStrokeColor } =
-    canvas
+  const {
+    widgets,
+    camera,
+    setCamera,
+    topZ,
+    screenToWorld,
+    tool,
+    setTool,
+    strokes,
+    strokeColor,
+    setStrokeColor,
+    connections
+  } = canvas
   const coordination = useCoordination()
   const confirm = useConfirm()
   const mainRef = useRef<HTMLElement>(null)
@@ -393,7 +405,7 @@ function Workspace(): React.JSX.Element {
     if (cached) return cached
     const style = w.maximized
       ? { left: 0, top: HEADER_H, right: 0, bottom: 0 }
-      : { left: w.x, top: w.y, width: w.w, height: w.h }
+      : { left: w.x, top: w.y, width: w.w, height: w.minimized ? 34 : w.h }
     styleCacheRef.current.set(w, style)
     return style
   }
@@ -491,6 +503,7 @@ function Workspace(): React.JSX.Element {
           className="absolute inset-0 h-px w-px origin-top-left"
           style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})` }}
         >
+          <ConnectionsLayer connections={connections} widgets={visibleWidgets} />
           <StrokesLayer strokes={strokes} />
           {visibleWidgets.map((w) => (
             <WidgetFrame
@@ -516,6 +529,7 @@ function Workspace(): React.JSX.Element {
             onPickGit={() => { placeWidget('git-status', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickTimer={() => { placeWidget('timer', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickSchedule={() => { placeWidget('schedule', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onPickPlanner={() => { placeWidget('planner', toWorld(menu.x, menu.y)); setMenu(null) }}
             onOpenBoard={() => { placeWidget('board', toWorld(menu.x, menu.y)); setMenu(null) }}
             onOpenAssistant={() => {
               // The assistant lives in the chat panel — it is one question of

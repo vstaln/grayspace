@@ -11,6 +11,7 @@ import { TerminalManager } from './terminals'
 import { killProcessTree } from './procTree'
 import { BrainStore } from './brain'
 import { CanvasStore } from './canvasState'
+import type { PlannerStore } from './plannerStore.ts'
 import type { AppState, SettingsPatch } from './appState'
 import type { Command, CommandResult, Core } from './core/index.ts'
 import type { Assistant } from './assistant/index.ts'
@@ -24,6 +25,7 @@ interface IpcDeps {
   assistant: Assistant
   terminals: TerminalManager
   coordination: CoordinationStore
+  planner: PlannerStore
   brain: BrainStore
   canvas: CanvasStore
   state: AppState
@@ -41,10 +43,28 @@ export const USER_ACTOR_ID = 'user'
 
 /** Id of the terminal widget currently holding keyboard focus, if any. */
 let terminalFocusedId: string | null = null
+/**
+ * The last terminal to hold focus, which — unlike the one holding it *now* —
+ * survives the user clicking away. When an agent opens a terminal, this is the
+ * shell that agent is running in: the user typed the request into it and it is
+ * the only end of the connection the app can actually know about.
+ */
+let lastFocusedTerminalId: string | null = null
 
 /** Read by `before-input-event` in the main window so terminal keys win over menu accelerators. */
 export function focusedTerminalId(): string | null {
   return terminalFocusedId
+}
+
+/** Best guess at which terminal a newly requested widget was spawned from. */
+export function originTerminalId(): string | null {
+  return terminalFocusedId ?? lastFocusedTerminalId
+}
+
+/** Forgets a closed terminal so a dead id never anchors a new connection. */
+export function forgetTerminalOrigin(id: string): void {
+  if (terminalFocusedId === id) terminalFocusedId = null
+  if (lastFocusedTerminalId === id) lastFocusedTerminalId = null
 }
 
 /**
@@ -71,7 +91,7 @@ function sumTokenFields(usage: Record<string, number>): number | null {
 }
 
 export function registerIpc(deps: IpcDeps): void {
-  const { terminals, coordination, brain, state, canvas, core } = deps
+  const { terminals, coordination, planner, brain, state, canvas, core } = deps
 
   // The renderer is an actor like any other. Registering it here, once, is the
   // whole of "the UI authenticates": there is no path from a window to state
@@ -223,7 +243,7 @@ export function registerIpc(deps: IpcDeps): void {
       }
 
       const turns = request.mode === 'fast' ? 3 : request.mode === 'plan' ? 5 : request.effort === 'high' ? 20 : request.effort === 'medium' ? 10 : 5
-      const prompt = `[Workspace assistant; mode=${request.mode}; effort=${request.effort}]\n${request.mode === 'fast' ? 'Be concise and use at most the needed investigation.\n' : ''}${request.prompt}`
+      const prompt = `[OrcSpace assistant; mode=${request.mode}; effort=${request.effort}]\n${request.mode === 'fast' ? 'Be concise and use at most the needed investigation.\n' : ''}${request.prompt}`
       const args = provider === 'claude'
         ? ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--model', request.model || 'sonnet', '--max-turns', String(turns)]
         : provider === 'codex'
@@ -358,6 +378,7 @@ export function registerIpc(deps: IpcDeps): void {
   /** The renderer reports which terminal holds keyboard focus, if any. */
   ipcMain.on('terminal:focus', (_e, focused: boolean, id?: string) => {
     terminalFocusedId = focused && typeof id === 'string' ? id : null
+    if (terminalFocusedId) lastFocusedTerminalId = terminalFocusedId
   })
 
   // ---- workspace directory ----------------------------------------------
@@ -557,6 +578,23 @@ export function registerIpc(deps: IpcDeps): void {
     core.locks.releaseAll()
     return coordination.snapshot()
   })
+
+  // ---- planner ------------------------------------------------------------
+  ipcMain.handle('planner:list', () => planner.list())
+  ipcMain.handle(
+    'planner:create',
+    async (_e, input: { title: string; note?: string; day?: string; time?: string }) =>
+      unwrap(await send('plan.create', NEW.plan, input))
+  )
+  ipcMain.handle(
+    'planner:update',
+    async (
+      _e,
+      id: string,
+      patch: { title?: string; note?: string; day?: string | null; time?: string | null; done?: boolean; order?: number; baseVersion?: number }
+    ) => unwrap(await send('plan.update', `plan:${id}`, patch, patch?.baseVersion))
+  )
+  ipcMain.handle('planner:delete', async (_e, id: string) => unwrap(await send('plan.delete', `plan:${id}`)))
 }
 
 /** The board-role fields `task.update` expects from a human editor. */

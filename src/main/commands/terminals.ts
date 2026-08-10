@@ -20,6 +20,8 @@ export function registerTerminalCommands({
   snapshots,
   requestWidget,
   requestWidgetRemoval,
+  originWidgetId,
+  forgetOrigin,
   defaultCwd
 }: CommandDeps): void {
   const { bus } = core
@@ -28,14 +30,22 @@ export function registerTerminalCommands({
     'terminal.create',
     {
       ignoreVersion: true,
-      apply: async ({ command }) => {
+      apply: async ({ command, unblock }) => {
         const p = command.payload ?? {}
         const info = terminals.reserve({
           title: p.title,
           cwd: p.cwd || defaultCwd(),
           prefix: p.agentOwned ? 'agent' : 'term'
         })
-        requestWidget({ id: info.id, title: info.title })
+        // Only an agent's terminal gets a link drawn: one the user opened by
+        // hand came from the toolbar, not from another shell, and tying it to
+        // whatever they last clicked would be a line that means nothing.
+        requestWidget({ id: info.id, title: info.title, from: p.agentOwned ? originWidgetId() : null })
+        // The widget answers with `terminal.spawn`, which is a command like any
+        // other and would queue behind this one. Waiting for it while still
+        // holding the turn deadlocks every agent-created terminal into its own
+        // timeout, so the queue is handed on before the wait begins.
+        unblock()
         const ready = await terminals.waitUntilRunning(info.id)
         if (!ready) {
           // The renderer never mounted a widget for this id (window still
@@ -80,8 +90,14 @@ export function registerTerminalCommands({
 
   bus.register<{ text: string; pressEnter?: boolean }, { ok: true }>('terminal.write', {
     ignoreVersion: true,
-    apply: async ({ command }) => {
+    apply: async ({ command, unblock }) => {
       const id = terminalIdOf(command.target)
+      // Same deadlock as `terminal.create`: a write aimed at a terminal whose
+      // widget is still mounting has to let that widget's `terminal.spawn`
+      // through, or it waits out the timeout for a pty stuck behind it. The
+      // lock on `terminal:<id>` is still held, so no other actor slips a write
+      // into this shell meanwhile.
+      if (!terminals.isRunning(id)) unblock()
       if (!(await terminals.waitUntilRunning(id))) throw new CommandError('not_found', 'terminal not found')
       const text = typeof command.payload?.text === 'string' ? command.payload.text : ''
       terminals.write(id, text + (command.payload?.pressEnter === false ? '' : '\r'))
@@ -117,6 +133,8 @@ export function registerTerminalCommands({
       // A terminal the user closed is not coming back; its saved screen would
       // only be restored onto a widget that no longer exists.
       snapshots.forget(id)
+      // Nor should it anchor the next agent terminal's connection line.
+      forgetOrigin(id)
       requestWidgetRemoval(id)
       return { id }
     }

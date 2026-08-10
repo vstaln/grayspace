@@ -50,7 +50,7 @@ export interface TerminalApi {
 }
 
 export interface ControlApi {
-  onAddWidget(cb: (payload: { id: string; title: string }) => void): () => void
+  onAddWidget(cb: (payload: { id: string; title: string; from?: string | null }) => void): () => void
   onRemoveWidget(cb: (id: string) => void): () => void
 }
 
@@ -139,6 +139,46 @@ export interface CoordinationApi {
   onChange(cb: (snapshot: CoordinationSnapshot) => void): () => void
 }
 
+/**
+ * One line of the personal day plan. Distinct from a board {@link Task}: no
+ * assignee, no state machine — just a hand-ordered outline the human (or a
+ * manager agent) can check off.
+ */
+export interface PlanItem {
+  id: string
+  title: string
+  note: string
+  /** `YYYY-MM-DD`, or unset when the item is not slotted to a day. */
+  day?: string
+  /** `HH:MM`, or unset when there is no particular time. */
+  time?: string
+  done: boolean
+  createdBy: string
+  order: number
+  createdAt: number
+  updatedAt: number
+  version: number
+}
+
+export interface PlannerApi {
+  list(): Promise<PlanItem[]>
+  create(input: { title: string; note?: string; day?: string; time?: string }): Promise<PlanItem | { error: string }>
+  update(
+    id: string,
+    patch: {
+      title?: string
+      note?: string
+      day?: string | null
+      time?: string | null
+      done?: boolean
+      order?: number
+      baseVersion?: number
+    }
+  ): Promise<PlanItem | { error: string }>
+  delete(id: string): Promise<void | { error: string }>
+  onChange(cb: (items: PlanItem[]) => void): () => void
+}
+
 /** One entry of the live OpenRouter catalog (see main/openrouterModels.ts). */
 export interface CatalogModel {
   id: string
@@ -189,7 +229,7 @@ export interface BrainApi {
 export interface CanvasWidget {
   id: string
   title: string
-  kind?: 'terminal' | 'note' | 'git-status' | 'timer' | 'schedule' | 'board'
+  kind?: 'terminal' | 'note' | 'git-status' | 'timer' | 'schedule' | 'board' | 'planner'
   noteId?: string
   x: number
   y: number
@@ -222,6 +262,7 @@ export interface CanvasSnapshot {
 
 export interface CanvasApi {
   load(): Promise<CanvasSnapshot>
+  onChange(cb: (snapshot: CanvasSnapshot) => void): () => void
   /**
    * Writes the window's live layout back. Merged, not replaced: a widget an
    * agent created or moved since this window last read the canvas survives.
@@ -310,6 +351,7 @@ declare global {
       settings: SettingsApi
       media: MediaApi
       coordination: CoordinationApi
+      planner: PlannerApi
       chat: ChatApi
       brain: BrainApi
       canvas: CanvasApi

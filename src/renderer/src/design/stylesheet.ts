@@ -124,7 +124,10 @@ const componentsLayer: Sheet = {
       position: 'absolute',
       inset: 0,
       background: '#000000',
-      opacity: 'var(--wallpaper-dim, 0.45)'
+      // A 45% black veil made vivid wallpapers look nearly monochrome. Keep
+      // the user's dim setting, but apply it more gently so the canvas remains
+      // readable without washing the image's colour out.
+      opacity: 'calc(var(--wallpaper-dim, 0.45) * 0.68)'
     }
   },
 
@@ -192,7 +195,8 @@ const componentsLayer: Sheet = {
       animationIterationCount: '1 !important',
       transitionDuration: '0.01ms !important'
     },
-    '.thinking-dot': { animation: 'none' }
+    '.thinking-dot': { animation: 'none' },
+    '.conn-flare-dot, .conn-idle-dot': { display: 'none' }
   },
 
   '.brain-graph-surface': { background: 'var(--color-bg)' },
@@ -218,6 +222,35 @@ const componentsLayer: Sheet = {
     }
   },
 
+  // The lit cable between an agent's terminal and the one it opened. A thin
+  // steady thread carries the "this connects to that" fact permanently; the
+  // wide blurred pass on top is what actually reads as glow. Fresh links
+  // simply run brighter/wider for their flare window — the shape is identical
+  // either way, so nothing jumps when it settles.
+  '.conn-thread': {
+    stroke: 'rgba(223, 231, 255, 0.34)',
+    strokeWidth: 1,
+    vectorEffect: 'non-scaling-stroke'
+  },
+  '.conn-glow': {
+    stroke: 'rgba(223, 231, 255, 0.5)',
+    strokeWidth: 2.4,
+    vectorEffect: 'non-scaling-stroke',
+    transition: 'stroke-width 0.4s ease, stroke-opacity 0.4s ease'
+  },
+  '.conn-arc-fresh .conn-glow': {
+    stroke: 'rgba(255, 255, 255, 0.85)',
+    strokeWidth: 3.4
+  },
+  '.conn-arc-fresh .conn-thread': {
+    stroke: 'rgba(255, 255, 255, 0.55)'
+  },
+  '.conn-flare-dot': {
+    filter: 'drop-shadow(0 0 4px rgba(255,255,255,0.95)) drop-shadow(0 0 9px rgba(180,200,255,0.8))'
+  },
+  '.conn-idle-dot': {
+    filter: 'drop-shadow(0 0 3px rgba(200,215,255,0.75))'
+  },
   // Kanban lanes keep a faint colour identity per status — a low-alpha tint over
   // the flat fill rather than a gradient, so they stay legible without glowing.
   '.lane-blue': { background: lanes.blue.fill, borderColor: lanes.blue.border },

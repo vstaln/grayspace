@@ -1,5 +1,6 @@
 import { CANVAS_TARGET_ID, type CanvasWidget, type WidgetKind } from '../canvasState'
 import { CommandError, parseResource, resourceId } from '../core/index.ts'
+import { widgetType } from '../widgets/registry.ts'
 import type { CommandDeps } from './index.ts'
 
 interface WidgetCreatePayload {
@@ -35,15 +36,16 @@ export function registerCanvasCommands({ core, canvas }: CommandDeps): void {
       const p = command.payload ?? {}
       const id = (p.id || `${p.kind ?? 'widget'}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`).trim()
       if (canvas.widget(id)) throw new CommandError('conflict', `widget ${id} already exists`)
+      const defaults = widgetType(p.kind)?.defaultSize
       return canvas.putWidget({
         id,
         kind: p.kind,
-        title: p.title?.trim() || id,
+        title: p.title?.trim() || widgetType(p.kind)?.label || id,
         noteId: p.noteId,
         x: Number(p.x) || 0,
         y: Number(p.y) || 0,
-        w: Number(p.w) || 520,
-        h: Number(p.h) || 360,
+        w: Number(p.w) || defaults?.w || 520,
+        h: Number(p.h) || defaults?.h || 360,
         z: Number(p.z) || 1
       })
     }

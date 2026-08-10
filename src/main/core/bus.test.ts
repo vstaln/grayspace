@@ -242,6 +242,106 @@ describe('CommandBus — sequencing', () => {
   })
 })
 
+describe('CommandBus — waiting on the outside world', () => {
+  /**
+   * The shape of `terminal.create`: a handler asks the renderer for a widget
+   * and then waits for the widget to answer — with another command. Held turn,
+   * the answer queues behind the question and neither ever arrives.
+   */
+  test('a handler awaiting a follow-up command deadlocks without unblock', async () => {
+    const { bus } = harness()
+    let answered = false
+    bus.register<Record<string, never>, { answered: boolean }>('widget.request', {
+      apply: async () => {
+        // The "renderer" replies out of band, as a fresh submission.
+        setTimeout(() => void bus.submit({ actorId: 'user', type: 'widget.answer', target: 'widget:w1', payload: {} }), 0)
+        const deadline = Date.now() + 100
+        while (!answered && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5))
+        return { answered }
+      }
+    })
+    bus.register('widget.answer', {
+      apply: () => {
+        answered = true
+      }
+    })
+
+    const result = await bus.submit<{ answered: boolean }>({
+      actorId: 'user',
+      type: 'widget.request',
+      target: 'widget:new',
+      payload: {}
+    })
+    assert.equal(result.ok, true)
+    assert.equal(result.ok && result.data.answered, false, 'the reply must not have landed — this is the bug')
+  })
+
+  test('unblock lets the follow-up command through', async () => {
+    const { bus } = harness()
+    let answered = false
+    bus.register<Record<string, never>, { answered: boolean }>('widget.request', {
+      apply: async ({ unblock }) => {
+        setTimeout(() => void bus.submit({ actorId: 'user', type: 'widget.answer', target: 'widget:w1', payload: {} }), 0)
+        unblock()
+        const deadline = Date.now() + 500
+        while (!answered && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5))
+        return { answered }
+      }
+    })
+    bus.register('widget.answer', {
+      apply: () => {
+        answered = true
+      }
+    })
+
+    const result = await bus.submit<{ answered: boolean }>({
+      actorId: 'user',
+      type: 'widget.request',
+      target: 'widget:new',
+      payload: {}
+    })
+    assert.equal(result.ok && result.data.answered, true)
+  })
+
+  test('unblock hands on the queue but keeps the lock on its own target', async () => {
+    const { bus, locks } = harness()
+    let held: string | undefined
+    bus.register('slow.observe', {
+      apply: async ({ unblock, command }) => {
+        unblock()
+        await new Promise((r) => setTimeout(r, 30))
+        held = locks.holder(command.target)?.actorId
+      }
+    })
+
+    const observing = bus.submit({ actorId: 'user', type: 'slow.observe', target: 'note:n1', payload: {} })
+    // Another actor writing to the same resource is still refused while the
+    // unblocked handler runs; the queue is free, the resource is not.
+    const intruder = await bus.submit({
+      actorId: 'agent-a',
+      type: 'note.create',
+      target: 'note:n1',
+      payload: { id: 'n1', body: 'x' }
+    })
+    await observing
+    assert.equal(intruder.ok, false)
+    assert.equal(intruder.ok === false && intruder.code, 'locked')
+    assert.equal(held, 'user', 'the lock outlives the unblock')
+  })
+
+  test('the lock is released once the unblocked handler actually returns', async () => {
+    const { bus, locks } = harness()
+    bus.register('slow.observe', {
+      apply: async ({ unblock }) => {
+        unblock()
+        await new Promise((r) => setTimeout(r, 10))
+      }
+    })
+    await bus.submit({ actorId: 'user', type: 'slow.observe', target: 'note:n1', payload: {} })
+    assert.equal(locks.holder('note:n1'), undefined)
+  })
+})
+
 describe('CommandBus — the journal', () => {
   test('an applied command is written as intent then commit', async () => {
     const { bus, entries } = harness()

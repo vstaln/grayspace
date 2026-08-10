@@ -5,11 +5,12 @@ import { CoordinationStore } from './coordination'
 import { TerminalManager } from './terminals'
 import { startControlServer } from './controlServer'
 import { isMcpRunning, startMcpServer, stopMcpServer } from './mcpProcess'
-import { registerIpc, focusedTerminalId } from './ipc'
+import { registerIpc, focusedTerminalId, originTerminalId, forgetTerminalOrigin } from './ipc'
 import { BrainStore } from './brain'
 import { AppState } from './appState'
 import { CanvasStore } from './canvasState'
-import { ensureCodexGlobalConfig, syncProjectMcpConfig, syncProjectOpencodeConfig } from './mcpAutoConfig'
+import { PlannerStore } from './plannerStore.ts'
+import { ensureCodexGlobalConfig, syncProjectGrokConfig, syncProjectMcpConfig, syncProjectOpencodeConfig } from './mcpAutoConfig'
 import { createCore } from './core/index.ts'
 import { FileJournalSink, readJournalTail } from './journalSink'
 import { registerCommands } from './commands/index.ts'
@@ -39,6 +40,8 @@ const state = new AppState()
 const brain = new BrainStore(() => state.settings.linkSyntax)
 /** Canvas layout (widgets, camera, strokes) survives restarts — DI-004. */
 const canvas = new CanvasStore()
+/** The planner's outline — a day plan distinct from the delegable task board. */
+const planner = new PlannerStore()
 
 /**
  * The app owns two fixed loopback ports and one state file. A second copy would
@@ -146,6 +149,11 @@ function createWindow(): void {
 terminals.on('data', (id: string, chunk: string) => send('terminal:onData', id, chunk))
 terminals.on('exit', (id: string, code: number) => send('terminal:onExit', id, code))
 coordination.on('change', (snapshot) => send('coordination:onChange', snapshot))
+planner.on('change', (items) => send('planner:onChange', items))
+// MCP/assistant canvas commands are applied in the main process. Broadcast the
+// resulting snapshot so a rename or move is visible immediately in the open
+// renderer instead of only after the next restart.
+canvas.on('change', (snapshot) => send('canvas:onChange', snapshot))
 
 if (hasInstanceLock) {
   app.on('second-instance', focusMainWindow)
@@ -167,6 +175,7 @@ if (hasInstanceLock) {
     if (state.workspaceDir) {
       void syncProjectMcpConfig(state.workspaceDir)
       void syncProjectOpencodeConfig(state.workspaceDir)
+      syncProjectGrokConfig(state.workspaceDir)
     }
 
     // Keep the rail's folder list live whenever the persisted state moves.
@@ -179,10 +188,13 @@ if (hasInstanceLock) {
       canvas,
       brain,
       board: coordination,
+      planner,
       terminals,
       snapshots,
       requestWidget: (info) => send('control:add-widget', info),
       requestWidgetRemoval: (id) => send('control:remove-widget', id),
+      originWidgetId: originTerminalId,
+      forgetOrigin: forgetTerminalOrigin,
       defaultCwd: () => state.workspaceDir
     })
 
@@ -212,6 +224,7 @@ if (hasInstanceLock) {
       assistant,
       terminals,
       coordination,
+      planner,
       brain,
       canvas,
       state,
@@ -224,6 +237,7 @@ if (hasInstanceLock) {
         if (dir) {
           void syncProjectMcpConfig(dir)
           void syncProjectOpencodeConfig(dir)
+          syncProjectGrokConfig(dir)
         }
         send('workspace:onDirChange', dir ?? null)
       }
@@ -235,6 +249,7 @@ if (hasInstanceLock) {
       core,
       terminals,
       coordination,
+      planner,
       brain,
       canvas,
       defaultCwd: () => state.workspaceDir,
@@ -286,6 +301,7 @@ app.on('before-quit', () => {
   // before the process dies.
   brain.dispose()
   coordination.dispose()
+  planner.dispose()
   canvas.dispose()
   core.dispose()
 })

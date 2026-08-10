@@ -4,6 +4,7 @@ import { CoordinationStore, USER_AUTHOR } from './coordination'
 import { TerminalManager } from './terminals'
 import { BrainStore } from './brain'
 import { CanvasStore } from './canvasState'
+import type { PlannerStore } from './plannerStore.ts'
 import { CONTROL_TOKEN_HEADER, controlToken } from './controlToken'
 import { CANVAS_TARGET } from './commands/canvas.ts'
 import { TASK_MANAGER_TARGET } from './commands/board.ts'
@@ -17,6 +18,7 @@ interface ControlDeps {
   core: Core
   terminals: TerminalManager
   coordination: CoordinationStore
+  planner: PlannerStore
   brain: BrainStore
   canvas: CanvasStore
   defaultCwd(): string | undefined
@@ -118,7 +120,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
   const url = new URL(req.url || '/', 'http://localhost')
   const parts = url.pathname.split('/').filter(Boolean)
   const method = req.method || 'GET'
-  const { terminals, coordination, brain, canvas, core } = deps
+  const { terminals, coordination, planner, brain, canvas, core } = deps
 
   /**
    * Registers the caller and submits one command as them. Every external
@@ -280,6 +282,27 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     if (method === 'DELETE' && parts[1] === 'tasks' && parts.length === 3) {
       const body = await readJson(req)
       return reply(await submit(body, 'task.delete', `task:${decodeURIComponent(parts[2])}`, {}))
+    }
+  }
+
+  // ---- planner ------------------------------------------------------------
+  // Personal day outline, separate from the kanban board. Agents (especially a
+  // manager) may list and edit plan lines the same way the planner widget does.
+  if (parts[0] === 'planner') {
+    if (method === 'GET' && parts.length === 1) {
+      return sendJson(res, 200, { items: planner.list() })
+    }
+    if (method === 'POST' && parts.length === 1) {
+      const body = await readJson(req)
+      return reply(await submit(body, 'plan.create', NEW.plan, body), 201)
+    }
+    if (method === 'PATCH' && parts[1]) {
+      const body = await readJson(req)
+      return reply(await submit(body, 'plan.update', `plan:${decodeURIComponent(parts[1])}`, body))
+    }
+    if (method === 'DELETE' && parts[1]) {
+      const body = await readJson(req)
+      return reply(await submit(body, 'plan.delete', `plan:${decodeURIComponent(parts[1])}`, {}))
     }
   }
 

@@ -81,9 +81,11 @@ export function registerWidgetTools(server: McpServer): void {
 
   server.tool(
     'place_widget',
-    'Ставит на холст виджет, которому не нужен процесс: git-статус репозитория, таймер или список запланированных задач. Терминал открывается отдельным инструментом create_terminal.',
+    'Ставит на холст виджет, которому не нужен процесс: git-статус, таймер, запланированные задачи (с доски), планер (личный outline на день) или доску задач. Терминал открывается отдельным инструментом create_terminal. Планер ≠ schedule: schedule — задачи со сроком с kanban, planner — отдельный day plan.',
     {
-      kind: z.enum(['git-status', 'timer', 'schedule']).describe('Тип виджета'),
+      kind: z
+        .enum(['git-status', 'timer', 'schedule', 'planner', 'board'])
+        .describe('Тип виджета: planner — day plan, schedule — due tasks с доски'),
       title: z.string().optional(),
       x: z.number().optional(),
       y: z.number().optional(),

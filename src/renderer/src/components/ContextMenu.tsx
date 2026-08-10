@@ -8,6 +8,7 @@ interface Props {
   onPickGit: () => void
   onPickTimer: () => void
   onPickSchedule: () => void
+  onPickPlanner: () => void
   onOpenBoard: () => void
   onOpenAssistant: () => void
   onClose: () => void
@@ -28,6 +29,7 @@ export default function ContextMenu({
   onPickGit,
   onPickTimer,
   onPickSchedule,
+  onPickPlanner,
   onOpenBoard,
   onOpenAssistant,
   onClose
@@ -44,6 +46,7 @@ export default function ContextMenu({
     { label: 'Репозиторий', hint: 'Ветка, изменения, коммит', onSelect: onPickGit },
     { label: 'Таймер', hint: 'Обратный отсчёт для одного дела', onSelect: onPickTimer },
     { label: 'Запланированные задачи', hint: 'Всё со сроком, ближайшее сверху', onSelect: onPickSchedule },
+    { label: 'Планер', hint: 'Пункты плана на день, без срока и доски', onSelect: onPickPlanner },
     { label: 'Доска задач', hint: 'Задачи для вас и агентов, прямо на холсте', onSelect: onOpenBoard },
     { label: 'Ассистент', hint: 'Выполнит цель шаг за шагом', onSelect: onOpenAssistant, group: 'panel' }
   ]

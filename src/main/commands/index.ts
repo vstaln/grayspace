@@ -1,6 +1,7 @@
 import type { BrainStore } from '../brain'
 import type { CanvasStore } from '../canvasState'
 import type { CoordinationStore } from '../coordination'
+import type { PlannerStore } from '../plannerStore.ts'
 import type { TerminalManager } from '../terminals'
 import type { TerminalSnapshots } from '../terminalSnapshots'
 import type { Core } from '../core/index.ts'
@@ -8,6 +9,7 @@ import { registerBoardCommands } from './board.ts'
 import { registerCanvasCommands } from './canvas.ts'
 import { registerGitCommands } from './git.ts'
 import { registerNoteCommands } from './notes.ts'
+import { registerPlannerCommands } from './planner.ts'
 import { registerTerminalCommands } from './terminals.ts'
 import { registerBuiltinWidgets } from '../widgets/registry.ts'
 import type { GitStatus } from '../git.ts'
@@ -17,12 +19,20 @@ export interface CommandDeps {
   canvas: CanvasStore
   brain: BrainStore
   board: CoordinationStore
+  planner: PlannerStore
   terminals: TerminalManager
   /** Saved cwd/title/scrollback so a reopened terminal has its context back. */
   snapshots: TerminalSnapshots
-  /** Asks the renderer to mount a widget for an already-reserved terminal id. */
-  requestWidget(info: { id: string; title: string }): void
+  /**
+   * Asks the renderer to mount a widget for an already-reserved terminal id.
+   * `from` is the widget that caused it to open — the canvas draws the link.
+   */
+  requestWidget(info: { id: string; title: string; from?: string | null }): void
   requestWidgetRemoval(id: string): void
+  /** Which terminal an agent is most likely running in, for the link above. */
+  originWidgetId(): string | null
+  /** Drops a closed terminal so it stops being offered as an origin. */
+  forgetOrigin(id: string): void
   defaultCwd(): string | undefined
 }
 
@@ -49,6 +59,7 @@ export function registerCommands(deps: CommandDeps): { git: { status(): Promise<
   registerCanvasCommands(deps)
   registerNoteCommands(deps)
   registerBoardCommands(deps)
+  registerPlannerCommands(deps)
   registerTerminalCommands(deps)
   return { git: registerGitCommands(deps) }
 }
@@ -57,5 +68,6 @@ export const NEW = {
   note: 'note:new',
   task: 'task:new',
   terminal: 'terminal:new',
-  widget: 'widget:new'
+  widget: 'widget:new',
+  plan: 'plan:new'
 } as const

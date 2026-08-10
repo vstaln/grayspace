@@ -10,14 +10,29 @@ interface Props {
   id: string
 }
 
+/** Standard-ish ANSI palette for dark terminals — not grayscale. Apps like
+ *  Claude Code colour their UI with these slots; mapping them all to grey made
+ *  every TUI look monochrome. */
 const BASE_COLORS = {
-  foreground: '#e2e2e2',
-  cursor: '#d7d7d7',
-  selectionBackground: 'rgba(255, 255, 255, 0.28)',
-  black: '#111111', red: '#8f8f8f', green: '#a3a3a3', yellow: '#b7b7b7',
-  blue: '#989898', magenta: '#adadad', cyan: '#bcbcbc', white: '#dedede',
-  brightBlack: '#555555', brightRed: '#b0b0b0', brightGreen: '#bdbdbd', brightYellow: '#c8c8c8',
-  brightBlue: '#b5b5b5', brightMagenta: '#c2c2c2', brightCyan: '#d0d0d0', brightWhite: '#ffffff'
+  foreground: '#e8e8ea',
+  cursor: '#e8e8ea',
+  selectionBackground: 'rgba(120, 160, 255, 0.35)',
+  black: '#1a1a1e',
+  red: '#f07178',
+  green: '#7fd99a',
+  yellow: '#e6c07b',
+  blue: '#7aa2f7',
+  magenta: '#c792ea',
+  cyan: '#7dcfff',
+  white: '#d4d4d8',
+  brightBlack: '#6b6b74',
+  brightRed: '#ff8b92',
+  brightGreen: '#95e6a8',
+  brightYellow: '#f0d48a',
+  brightBlue: '#9ab8ff',
+  brightMagenta: '#d7a6f5',
+  brightCyan: '#9de8ff',
+  brightWhite: '#ffffff'
 }
 
 /**
