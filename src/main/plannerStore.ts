@@ -168,13 +168,27 @@ export class PlannerStore extends EventEmitter {
 /** Accepts `YYYY-MM-DD` only — anything else is treated as no day. */
 function normalizeDay(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
-  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) return undefined
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  // Date normalizes overflows (e.g. 2026-02-31), so compare every component
+  // after constructing it instead of trusting the regex alone.
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+    ? value
+    : undefined
 }
 
 /** Accepts `HH:MM` only — anything else is treated as no time. */
 function normalizeTime(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
-  return /^\d{2}:\d{2}$/.test(value) ? value : undefined
+  const match = /^(\d{2}):(\d{2})$/.exec(value)
+  if (!match) return undefined
+  const hours = Number(match[1])
+  const minutes = Number(match[2])
+  return hours < 24 && minutes < 60 ? value : undefined
 }
 
 function revive(entry: unknown): PlanItem | null {
