@@ -146,6 +146,11 @@ export function useCanvas() {
         clearTimeout(retryTimerRef.current)
         retryTimerRef.current = null
       }
+      if (strokeRafRef.current !== null) {
+        cancelAnimationFrame(strokeRafRef.current)
+        strokeRafRef.current = null
+        strokeBatchRef.current.clear()
+      }
     }
   }, [hydrate])
 
@@ -387,12 +392,16 @@ export function useCanvas() {
    */
   const eraseAt = useCallback((point: Point, radius = 14): void => {
     strokesDirtyRef.current = true
+    // Radius is specified in screen px; the ink layer lives in world space
+    // (scale(zoom)), so the hit-test radius must be widened as you zoom out
+    // to keep the eraser footprint constant on screen (CANV-10).
+    const worldRadius = radius / cameraRef.current.zoom
     setStrokes((prev) => {
       const next: Stroke[] = []
       for (const s of prev) {
         let current: Point[] = []
         for (const p of s.points) {
-          if (Math.hypot(p.x - point.x, p.y - point.y) <= radius) {
+          if (Math.hypot(p.x - point.x, p.y - point.y) <= worldRadius) {
             if (current.length > 0) next.push({ id: makeStrokeId(), points: current, color: s.color })
             current = []
           } else {

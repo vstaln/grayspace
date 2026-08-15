@@ -17,6 +17,9 @@ import ConnectionsLayer from './components/ConnectionsLayer'
 import { ThemeProvider, useTheme } from './theme'
 import { ConfirmProvider, useConfirm } from './components/ConfirmDialog'
 
+/** Per-session counter so local widget ids never collide (CANV-12). */
+let localCounter = 0
+
 export default function App(): React.JSX.Element {
   return (
     <ErrorBoundary>
@@ -167,9 +170,11 @@ function OrcSpaceCanvas(): React.JSX.Element {
    * and notes go through their own paths because each has to create something
    * first (a PTY, a note in the brain).
    */
+  // Date.now() alone collides when two widgets of the same kind are placed in
+  // the same millisecond (CANV-12); a per-session counter keeps ids unique.
   const placeWidget = useCallback(
     (kind: WidgetKind, point: Point): void => {
-      canvas.addWidget(point, `${kind}-${Date.now()}`, undefined, kind)
+      canvas.addWidget(point, `${kind}-${Date.now()}-${++localCounter}`, undefined, kind)
     },
     [canvas.addWidget]
   )
@@ -564,6 +569,7 @@ const style = w.maximized
         ref={mainRef}
         tabIndex={0}
         aria-label="Холст"
+        data-testid="canvas"
         className="desktop-surface relative min-w-0 flex-1 overflow-hidden"
         onContextMenu={(e) => {
           if ((e.target as HTMLElement).closest('.widget,.board')) return
