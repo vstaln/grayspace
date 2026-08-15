@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar'
 import KanbanBoard from './components/KanbanBoard'
 import WidgetFrame from './components/WidgetFrame'
@@ -9,6 +9,7 @@ import { useCoordination } from './hooks/useCoordination'
 import { HEADER_H, MIN_H, MIN_W, Point, ResizeDir, Stroke, Widget, WidgetKind } from './types'
 import ChatPanel from './components/ChatPanel'
 import SecondBrain from './components/SecondBrain'
+import SkillsPanel from './components/SkillsPanel'
 import Toolbar from './components/Toolbar'
 import ErrorBoundary from './components/ErrorBoundary'
 import StrokesLayer from './components/StrokesLayer'
@@ -34,6 +35,18 @@ export default function App(): React.JSX.Element {
   )
 }
 
+/**
+ * Only safe image data-URLs from main's media picker. Reject anything else so a
+ * poisoned settings value cannot inject CSS via `url("...")` (quotes, `)`, etc.).
+ */
+function wallpaperBackgroundImage(background: string | null): string | undefined {
+  if (!background) return undefined
+  if (!/^data:image\/(png|jpe?g|gif|webp|avif|bmp);base64,[A-Za-z0-9+/=]+$/i.test(background)) {
+    return undefined
+  }
+  return `url("${background}")`
+}
+
 /** The user's photo, shown behind the whole window in the `photo` theme. */
 function Wallpaper(): React.JSX.Element | null {
   const { theme, background, dim } = useTheme()
@@ -43,7 +56,7 @@ function Wallpaper(): React.JSX.Element | null {
       className="wallpaper-layer"
       style={
         {
-          backgroundImage: background ? `url("${background}")` : undefined,
+          backgroundImage: wallpaperBackgroundImage(background),
           '--wallpaper-dim': dim / 100
         } as React.CSSProperties
       }
@@ -100,8 +113,10 @@ function OrcSpaceCanvas(): React.JSX.Element {
   const [assistantRequest, setAssistantRequest] = useState(0)
   const [brainOpen, setBrainOpen] = useState(false)
   const [brainView, setBrainView] = useState<'list' | 'graph'>('list')
+  const [skillsOpen, setSkillsOpen] = useState(false)
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null)
   const [chatOpen, setChatOpen] = useState(false)
+  const [isPanning, setIsPanning] = useState(false)
 
   useEffect(() => {
     void window.api.workspace.getDir().then(setWorkspaceDir)
@@ -118,15 +133,23 @@ function OrcSpaceCanvas(): React.JSX.Element {
       if ((e.target as HTMLElement | null)?.closest?.('input,textarea,select')) return
       if (menu) return setMenu(null)
       if (boardOpen) return setBoardOpen(false)
-      if (brainOpen) return setBrainOpen(false)
+      // SecondBrain's own Escape handler also reacts to this key (its listener
+      // is registered after this one, so this runs first). Mirror its
+      // graph-step-back behaviour here instead of closing outright: from the
+      // full-screen graph the first Escape returns to the note list, and
+      // without this branch the two listeners would disagree and the panel
+      // would close in the same keystroke that was meant to leave the map.
+      if (brainOpen) return brainView === 'graph' ? setBrainView('list') : setBrainOpen(false)
+      if (skillsOpen) return setSkillsOpen(false)
       setChatOpen(false)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [menu, boardOpen, brainOpen, chatOpen])
+  }, [menu, boardOpen, brainOpen, brainView, skillsOpen, chatOpen])
 
   const closeWidget = useCallback(
     (id: string): void => {
+      // removeWidget disposes terminal shells when the kind is terminal.
       canvas.removeWidget(id)
       setEditingId((cur) => (cur === id ? null : cur))
     },
@@ -155,7 +178,13 @@ function OrcSpaceCanvas(): React.JSX.Element {
     (point: Point): void => {
       void window.api.brain
         .create({ title: 'Новая заметка', content: '', tags: [], projectDir: workspaceDir || undefined })
-        .then((note) => canvas.addNoteWidget(point, note.id, note.title))
+        .then((note) => {
+          if (!note || 'error' in note) return
+          canvas.addNoteWidget(point, note.id, note.title)
+        })
+        .catch(() => {
+          /* a failed note create is not worth a dialog; the canvas is unchanged */
+        })
     },
     [canvas.addNoteWidget, workspaceDir]
   )
@@ -175,11 +204,11 @@ function OrcSpaceCanvas(): React.JSX.Element {
       const startX = e.clientX
       const startY = e.clientY
       const { x: origX, y: origY } = widget
+      const startZoom = cameraRef.current.zoom
       const onMove = (ev: MouseEvent): void => {
-        const zoom = cameraRef.current.zoom
         canvas.updateWidget(id, {
-          x: origX + (ev.clientX - startX) / zoom,
-          y: origY + (ev.clientY - startY) / zoom
+          x: origX + (ev.clientX - startX) / startZoom,
+          y: origY + (ev.clientY - startY) / startZoom
         })
       }
       trackDrag(onMove)
@@ -198,10 +227,10 @@ function OrcSpaceCanvas(): React.JSX.Element {
       const startX = e.clientX
       const startY = e.clientY
       const { x: ox, y: oy, w: ow, h: oh } = widget
+      const startZoom = cameraRef.current.zoom
       const onMove = (ev: MouseEvent): void => {
-        const zoom = cameraRef.current.zoom
-        const dx = (ev.clientX - startX) / zoom
-        const dy = (ev.clientY - startY) / zoom
+        const dx = (ev.clientX - startX) / startZoom
+        const dy = (ev.clientY - startY) / startZoom
         let [x, y, w, h] = [ox, oy, ow, oh]
         if (dir.includes('e')) w = Math.max(MIN_W, ow + dx)
         if (dir.includes('s')) h = Math.max(MIN_H, oh + dy)
@@ -221,21 +250,50 @@ function OrcSpaceCanvas(): React.JSX.Element {
   )
 
   const onWidgetFocus = useCallback((id: string): void => canvas.bringToFront(id), [canvas.bringToFront])
-  const onStartEditing = useCallback((id: string): void => setEditingId(id), [])
+  // Escape in the title input cancels the edit, but the input unmounts right
+  // after and the browser fires its own onBlur on removal — which WidgetFrame
+  // treats as a commit. Remember the cancelled id so that stale blur commit is
+  // dropped instead of silently saving text the user just discarded (and clear
+  // it when a fresh edit starts, so the next commit is never swallowed).
+  const cancelledEditRef = useRef<string | null>(null)
+  const onStartEditing = useCallback((id: string): void => {
+    cancelledEditRef.current = null
+    setEditingId(id)
+  }, [])
   const onRename = useCallback(
     (id: string, title: string): void => {
+      if (cancelledEditRef.current === id) {
+        cancelledEditRef.current = null
+        return
+      }
       canvas.updateWidget(id, { title })
       setEditingId((cur) => (cur === id ? null : cur))
     },
     [canvas.updateWidget]
   )
-  const onCancelEditing = useCallback((id: string): void => setEditingId((cur) => (cur === id ? null : cur)), [])
+  const onCancelEditing = useCallback((id: string): void => {
+    cancelledEditRef.current = id
+    setEditingId((cur) => (cur === id ? null : cur))
+  }, [])
   const onToggleMinimize = useCallback(
     (id: string): void => {
       const widget = widgetsRef.current.find((w) => w.id === id)
-      if (widget) canvas.updateWidget(id, { minimized: !widget.minimized })
+      if (widget) canvas.updateWidget(id, { minimized: !widget.minimized, maximized: false })
     },
     [canvas.updateWidget]
+  )
+  const onToggleMaximize = useCallback(
+    (id: string): void => {
+      const widget = widgetsRef.current.find((w) => w.id === id)
+      if (!widget) return
+      // Maximize and minimize are mutually exclusive chrome states.
+      canvas.updateWidget(id, {
+        maximized: !widget.maximized,
+        minimized: widget.maximized ? widget.minimized : false
+      })
+      canvas.bringToFront(id)
+    },
+    [canvas.updateWidget, canvas.bringToFront]
   )
   const onWidgetClose = useCallback((id: string): void => closeWidget(id), [closeWidget])
 
@@ -255,7 +313,21 @@ function OrcSpaceCanvas(): React.JSX.Element {
       if (!dir) {
         if ((e.key === 'Delete' || e.key === 'Backspace') && !e.altKey && !e.ctrlKey && !e.metaKey) {
           e.preventDefault()
-          onWidgetClose(id)
+          const widget = widgetsRef.current.find((w) => w.id === id)
+          // Deleting a terminal kills a live shell with no undo; ask before
+          // it. Note widgets (and the other stateless kinds) close instantly
+          // — a closed note window doesn't destroy the brain note (CANV-04).
+          if (widget && (widget.kind ?? 'terminal') === 'terminal') {
+            void confirm('Закрыть терминал? Процесс будет остановлен.', {
+              danger: true,
+              title: 'Закрыть терминал',
+              confirmLabel: 'Закрыть'
+            }).then((ok) => {
+              if (ok) onWidgetClose(id)
+            })
+          } else {
+            onWidgetClose(id)
+          }
         }
         return
       }
@@ -284,8 +356,8 @@ function OrcSpaceCanvas(): React.JSX.Element {
       } else {
         canvas.updateWidget(id, { x: widget.x + dx * step, y: widget.y + dy * step })
       }
-    },
-    [canvas, onWidgetClose]
+},
+    [canvas, onWidgetClose, confirm]
   )
 
   // P3-219: keyboard pan — arrows move the view while the canvas itself has
@@ -306,7 +378,7 @@ function OrcSpaceCanvas(): React.JSX.Element {
   }
 
   const onCanvasMouseDown = (e: React.MouseEvent): void => {
-    if ((e.target as HTMLElement).closest('.widget,.board,.rail')) return
+    if ((e.target as HTMLElement).closest('.widget, .board, .board-shell, .chat-panel-shell, .rail, [data-canvas-scroll-lock]')) return
 
     if (tool === 'draw' && e.button === 0) {
       e.preventDefault()
@@ -330,8 +402,10 @@ function OrcSpaceCanvas(): React.JSX.Element {
     const startX = e.clientX
     const startY = e.clientY
     const origin = camera
-    trackDrag((ev) =>
-      setCamera({ ...origin, x: origin.x + ev.clientX - startX, y: origin.y + ev.clientY - startY })
+    setIsPanning(true)
+    trackDrag(
+      (ev) => setCamera({ ...origin, x: origin.x + ev.clientX - startX, y: origin.y + ev.clientY - startY }),
+      () => setIsPanning(false)
     )
   }
 
@@ -355,8 +429,11 @@ function OrcSpaceCanvas(): React.JSX.Element {
         if (step.kind === 'pan') {
           next = { ...next, x: next.x + step.dx, y: next.y + step.dy }
         } else {
-          // Keep the world point under (sx, sy) stationary: cam.x = sx - world.x*zoom.
-          const zoom = clamp(next.zoom * (step.deltaY < 0 ? 1.1 : 0.9), 0.6, 2)
+// Keep the world point under (sx, sy) stationary: cam.x = sx - world.x*zoom.
+          // Range must match sanitizeCamera in main, or a zoom outside [0.2,4]
+          // gets clamped on the next persisted round-trip and the view snaps
+          // back ~800ms later (CANV-03).
+          const zoom = clamp(next.zoom * (step.deltaY < 0 ? 1.1 : 0.9), 0.2, 4)
           next = {
             zoom,
             x: step.sx - ((step.sx - next.x) / next.zoom) * zoom,
@@ -373,7 +450,11 @@ function OrcSpaceCanvas(): React.JSX.Element {
   }, [])
 
   const onWheel = (e: React.WheelEvent): void => {
-    if ((e.target as HTMLElement).closest('.board,.term')) return
+    // Terminals and boards used to be the only scrollable widgets worth
+    // protecting; the planner, schedule and git widgets all have overflow-auto
+    // regions too, and letting the wheel pan the canvas under them meant a
+    // single scroll gesture scrolled the list AND drifted the whole canvas.
+    if ((e.target as HTMLElement).closest('.widget, .board, .board-shell, .chat-panel-shell, .term, [data-canvas-scroll-lock]')) return
     if (e.ctrlKey) {
       const rect = mainRef.current?.getBoundingClientRect()
       wheelStepsRef.current.push({
@@ -403,9 +484,13 @@ function OrcSpaceCanvas(): React.JSX.Element {
   const widgetStyle = (w: Widget): React.CSSProperties => {
     const cached = styleCacheRef.current.get(w)
     if (cached) return cached
-    const style = w.maximized
-      ? { left: 0, top: HEADER_H, right: 0, bottom: 0 }
-      : { left: w.x, top: w.y, width: w.w, height: w.minimized ? 34 : w.h }
+const style = w.maximized
+      // A maximized widget floats above the world (other widgets stay at their
+      // own z) but must stay BELOW the app chrome — the toolbar (z-[9500]) and
+      // the context menu (z-[10000]) — or it would bury the tools with no way
+      // back (CANV-08).
+      ? { left: 0, top: HEADER_H, right: 0, bottom: 0, zIndex: 9000 }
+      : { left: w.x, top: w.y, width: w.w, height: w.minimized ? 34 : w.h, zIndex: w.z }
     styleCacheRef.current.set(w, style)
     return style
   }
@@ -423,6 +508,7 @@ function OrcSpaceCanvas(): React.JSX.Element {
     onRename: (title: string) => void
     onCancelEditing: () => void
     onToggleMinimize: () => void
+    onToggleMaximize: () => void
     onClose: () => void
     onKeyDown: (e: React.KeyboardEvent) => void
   }
@@ -438,6 +524,7 @@ function OrcSpaceCanvas(): React.JSX.Element {
       onRename: (title: string) => onRename(id, title),
       onCancelEditing: () => onCancelEditing(id),
       onToggleMinimize: () => onToggleMinimize(id),
+      onToggleMaximize: () => onToggleMaximize(id),
       onClose: () => onWidgetClose(id),
       onKeyDown: (e: React.KeyboardEvent) => onFrameKey(e, id)
     }
@@ -453,6 +540,7 @@ function OrcSpaceCanvas(): React.JSX.Element {
         boardOpen={boardOpen}
         brainOpen={brainOpen && brainView === 'list'}
         graphOpen={brainOpen && brainView === 'graph'}
+        skillsOpen={skillsOpen}
         taskCount={openTasks}
         onNewTerminal={spawnTerminalAtCenter}
         onToggleBoard={() => setBoardOpen((v) => !v)}
@@ -467,6 +555,7 @@ function OrcSpaceCanvas(): React.JSX.Element {
           setBrainOpen(true)
           setBrainView('graph')
         }}
+        onToggleSkills={() => setSkillsOpen((v) => !v)}
         onPickDir={() => void window.api.workspace.pickDir().then(setWorkspaceDir)}
         onResetManager={() => void coordination.resetManager()}
       />
@@ -485,20 +574,15 @@ function OrcSpaceCanvas(): React.JSX.Element {
         onWheel={onWheel}
         onKeyDown={onCanvasKey}
         style={{
-          cursor: tool === 'pan' ? 'grab' : tool === 'draw' || tool === 'erase' ? 'crosshair' : 'default'
+          cursor: isPanning
+            ? 'grabbing'
+            : tool === 'pan'
+              ? 'grab'
+              : tool === 'draw' || tool === 'erase'
+                ? 'crosshair'
+                : 'default'
         }}
       >
-        {maximizedWidgets.map((w) => (
-          <WidgetFrame
-            key={w.id}
-            widget={w}
-            active={w.z === topZ.current}
-            editing={editingId === w.id}
-            style={widgetStyle(w)}
-            {...widgetHandlers(w.id)}
-            workspaceDir={workspaceDir}
-          />
-        ))}
         <div
           className="absolute inset-0 h-px w-px origin-top-left"
           style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})` }}
@@ -517,7 +601,17 @@ function OrcSpaceCanvas(): React.JSX.Element {
             />
           ))}
         </div>
-
+        {maximizedWidgets.map((w) => (
+          <WidgetFrame
+            key={w.id}
+            widget={w}
+            active={w.z === topZ.current}
+            editing={editingId === w.id}
+            style={widgetStyle(w)}
+            {...widgetHandlers(w.id)}
+            workspaceDir={workspaceDir}
+          />
+        ))}
         {menu && (
           <ContextMenu
             at={menu}
@@ -546,22 +640,16 @@ function OrcSpaceCanvas(): React.JSX.Element {
       {boardOpen && (
         <KanbanBoard
           snapshot={coordination.snapshot}
-          onCreate={(title, brief) => void coordination.createTask(title, brief)}
-          onMove={(id, state) => void coordination.moveTask(id, state)}
-          onDelete={(id) => {
-            void confirm('Удалить задачу? Действие необратимо.', { danger: true, confirmLabel: 'Удалить' }).then((ok) => {
-              if (ok) void coordination.deleteTask(id)
-            })
+          onCreate={(title, brief) => coordination.createTask(title, brief)}
+          onMove={(id, state) => coordination.moveTask(id, state)}
+          onDelete={(id) => coordination.deleteTask(id)}
+          onResetManager={async () => {
+            const ok = await confirm('Сбросить роль руководителя? Любой агент сможет занять её заново.')
+            return ok ? coordination.resetManager() : { ok: true }
           }}
-          onResetManager={() => {
-            void confirm('Сбросить роль руководителя? Любой агент сможет занять её заново.').then((ok) => {
-              if (ok) void coordination.resetManager()
-            })
-          }}
-          onReleaseLocks={() => {
-            void confirm('Снять все блокировки файлов?').then((ok) => {
-              if (ok) void coordination.releaseLocks()
-            })
+          onReleaseLocks={async () => {
+            const ok = await confirm('Снять все блокировки файлов?')
+            return ok ? coordination.releaseLocks() : { ok: true }
           }}
           onClose={() => setBoardOpen(false)}
         />
@@ -574,6 +662,8 @@ function OrcSpaceCanvas(): React.JSX.Element {
           onClose={() => setBrainOpen(false)}
         />
       )}
+      {skillsOpen && <SkillsPanel onClose={() => setSkillsOpen(false)} />}
+      {!(brainOpen && brainView === 'graph') && (
       <Toolbar
         tool={tool}
         onToolChange={setTool}
@@ -587,18 +677,20 @@ function OrcSpaceCanvas(): React.JSX.Element {
         strokeColor={strokeColor}
         onStrokeColorChange={setStrokeColor}
       />
+      )}
       <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} focusAssistant={assistantRequest} />
     </div>
   )
 }
 
 /** Runs `onMove` for the duration of a mouse drag, then cleans itself up. */
-function trackDrag(onMove: (e: MouseEvent) => void): void {
+function trackDrag(onMove: (e: MouseEvent) => void, onEnd?: () => void): void {
   const release = (): void => {
     window.removeEventListener('mousemove', onMove)
     window.removeEventListener('mouseup', release)
     window.removeEventListener('blur', release)
     window.removeEventListener('pointercancel', release)
+    onEnd?.()
   }
   window.addEventListener('mousemove', onMove)
   window.addEventListener('mouseup', release)

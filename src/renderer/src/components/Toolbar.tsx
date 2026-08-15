@@ -1,6 +1,7 @@
 import React from 'react'
-import { Eraser, Hand, MessageCircle, MousePointer2, Pencil, Trash2 } from 'lucide-react'
+import { Eraser, MessageCircle, MousePointer2, Pencil, Trash2 } from 'lucide-react'
 import { CanvasTool, STROKE_COLORS } from '../types'
+import { frost, palette } from '../design'
 
 interface Props {
   tool: CanvasTool
@@ -26,7 +27,7 @@ function ToolButton({
   return (
     <button
       className={`grid h-9 w-9 flex-none place-items-center rounded-full transition-colors duration-150 ${
-        active ? 'bg-accent text-black' : 'text-text-dim hover:bg-bg-hover hover:text-text'
+        active ? 'bg-accent text-bg' : 'text-text-dim hover:bg-bg-hover hover:text-text'
       }`}
       onClick={onClick}
       title={label}
@@ -48,15 +49,31 @@ export default function Toolbar({
   strokeColor,
   onStrokeColorChange
 }: Props): React.JSX.Element {
+  const shellStyle = {
+    background: palette.graphite,
+    backdropFilter: frost.shell,
+    WebkitBackdropFilter: frost.shell
+  } as React.CSSProperties
+
   return (
-    <div className="fixed bottom-8 left-1/2 z-[700] flex -translate-x-1/2 items-center gap-1 rounded-full border border-line bg-[rgba(18,18,20,0.6)] p-1 shadow-2xl backdrop-blur-2xl backdrop-saturate-150 glass:border-line-soft">
+    <div
+      className="fixed bottom-8 left-1/2 z-[9500] flex -translate-x-1/2 items-center gap-1 rounded-full border border-line p-1 shadow-2xl glass:border-line-soft"
+      style={shellStyle}
+      role="toolbar"
+      aria-label="Инструменты холста"
+    >
       {/* Only relevant while actually drawing, so it stays out of the way otherwise. */}
       {tool === 'draw' && (
-        <div className="absolute bottom-[calc(100%+8px)] left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-line bg-[rgba(18,18,20,0.6)] px-2.5 py-2 shadow-2xl backdrop-blur-2xl backdrop-saturate-150 glass:border-line-soft">
+        <div
+          className="absolute bottom-[calc(100%+8px)] left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-line px-2.5 py-2 shadow-2xl glass:border-line-soft"
+          style={shellStyle}
+          role="group"
+          aria-label="Цвет линии"
+        >
           {STROKE_COLORS.map((c) => (
             <button
               key={c}
-              className={`relative h-5 w-5 flex-none rounded-full border transition-transform duration-100 after:absolute after:-inset-[2px] after:rounded-full after:content-[''] ${
+              className={`relative h-5 w-5 flex-none rounded-full border transition-transform duration-150 after:absolute after:-inset-[2px] after:rounded-full after:content-[''] ${
                 strokeColor === c ? 'scale-110 border-white' : 'border-white/25 hover:scale-105'
               }`}
               style={{ backgroundColor: c }}
@@ -71,9 +88,6 @@ export default function Toolbar({
 
       <ToolButton label="Курсор" active={tool === 'select'} onClick={() => onToolChange('select')}>
         <MousePointer2 size={16} />
-      </ToolButton>
-      <ToolButton label="Рука — перетаскивание холста" active={tool === 'pan'} onClick={() => onToolChange('pan')}>
-        <Hand size={16} />
       </ToolButton>
       <ToolButton label="Рисование" active={tool === 'draw'} onClick={() => onToolChange('draw')}>
         <Pencil size={16} />
