@@ -47,6 +47,23 @@ const baseLayer: Sheet = {
     color: 'var(--color-text)',
     background: 'var(--color-bg)'
   },
+  // Native controls (date pickers, scrollbars, autofill) follow the dark
+  // theme instead of flashing the OS light defaults (AUD-09).
+  ':root': { colorScheme: 'dark' },
+  // One shared scrollbar look for every surface, matching the xterm viewport.
+  '::-webkit-scrollbar': {
+    width: '9px',
+    height: '9px',
+    background: 'transparent'
+  },
+  '::-webkit-scrollbar-thumb': {
+    background: '#3a3f4a',
+    borderRadius: '6px',
+    backgroundClip: 'padding-box',
+    border: '2px solid transparent'
+  },
+  '::-webkit-scrollbar-thumb:hover': { background: '#4a5160' },
+  '::-webkit-scrollbar-corner': { background: 'transparent' },
   // A translucent theme lets the desktop show through the window itself.
   'html[data-translucent], html[data-translucent] body, html[data-translucent] #root': {
     background: 'transparent'
@@ -136,7 +153,16 @@ const componentsLayer: Sheet = {
   '.widget-shell': {
     background: palette.graphite,
     boxShadow: `0 0 0 1px ${hairline.soft}`,
+    // main has touch-action:none so canvas gestures own the touch stream;
+    // widget bodies still need native touch scroll inside their own bounds.
+    touchAction: 'pan-x pan-y',
     '&.is-active': { boxShadow: `0 0 0 1px ${hairline.active}` },
+    // Keyboard focus (Tab onto the frame) gets a visible ring so the user can
+    // tell whether arrows will move the widget or pan the canvas (CANV-14).
+    '&:focus-visible': {
+      outline: 'none',
+      boxShadow: `0 0 0 1px ${hairline.soft}, 0 0 0 3px ${hairline.active}`
+    },
     'html[data-translucent] &': {
       background: palette.graphite,
       backdropFilter: frost.shell,
@@ -181,12 +207,21 @@ const componentsLayer: Sheet = {
   // opaque and lose the wallpaper showing through.
   '.composer-shell': { background: palette.surfaceLift },
 
-  '.thinking-dot': {
-    animation: 'blink 0.9s infinite alternate',
-    '&:nth-child(2)': { animationDelay: '0.2s' },
-    '&:nth-child(3)': { animationDelay: '0.4s' }
+  // A band of highlight sweeping through otherwise-dim text — the same "is
+  // typing" cue Claude/ChatGPT/Grok use instead of a spinner, because it reads
+  // at a glance without pulling focus the way a moving dot does.
+  '.thinking-shimmer': {
+    backgroundImage: `linear-gradient(90deg, ${hairline.active} 0%, ${palette.white} 50%, ${hairline.active} 100%)`,
+    backgroundSize: '200% 100%',
+    backgroundClip: 'text',
+    WebkitBackgroundClip: 'text',
+    color: 'transparent',
+    animation: 'shimmer 1.6s linear infinite'
   },
-  '@keyframes blink': { to: { opacity: 0.2, transform: 'translateY(-2px)' } },
+  '@keyframes shimmer': {
+    from: { backgroundPosition: '150% 0' },
+    to: { backgroundPosition: '-50% 0' }
+  },
 
   // P3-221: honour the OS-level reduced-motion preference.
   '@media (prefers-reduced-motion: reduce)': {
@@ -196,6 +231,7 @@ const componentsLayer: Sheet = {
       transitionDuration: '0.01ms !important'
     },
     '.thinking-dot': { animation: 'none' },
+    '.thinking-shimmer': { animation: 'none', backgroundImage: 'none', color: hairline.active },
     '.conn-flare-dot, .conn-idle-dot': { display: 'none' }
   },
 

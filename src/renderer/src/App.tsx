@@ -198,8 +198,8 @@ function OrcSpaceCanvas(): React.JSX.Element {
   // Handlers take the widget id as an argument instead of closing over it, so
   // they keep a stable identity across renders and React.memo on the widget
   // layer can actually skip re-renders while another widget drags.
-  const onHeaderMouseDown = useCallback(
-    (e: React.MouseEvent, id: string): void => {
+  const onHeaderPointerDown = useCallback(
+    (e: React.PointerEvent, id: string): void => {
       if (editingRef.current === id || (e.target as HTMLElement).closest('button,input')) return
       e.preventDefault()
       canvas.bringToFront(id)
@@ -222,7 +222,7 @@ function OrcSpaceCanvas(): React.JSX.Element {
   )
 
   const onResizeStart = useCallback(
-    (e: React.MouseEvent, id: string, dir: ResizeDir): void => {
+    (e: React.PointerEvent, id: string, dir: ResizeDir): void => {
       e.preventDefault()
       e.stopPropagation()
       canvas.bringToFront(id)
@@ -316,6 +316,14 @@ function OrcSpaceCanvas(): React.JSX.Element {
       }
       const dir = dirs[e.key]
       if (!dir) {
+        // Escape is the one key the frame claims for navigation: it hands focus
+        // back to the canvas so the arrow keys return to panning instead of
+        // still moving a widget the user thought they had left (CANV-14).
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          mainRef.current?.focus()
+          return
+        }
         if ((e.key === 'Delete' || e.key === 'Backspace') && !e.altKey && !e.ctrlKey && !e.metaKey) {
           e.preventDefault()
           const widget = widgetsRef.current.find((w) => w.id === id)
@@ -382,7 +390,7 @@ function OrcSpaceCanvas(): React.JSX.Element {
     setCamera((c) => ({ ...c, x: c.x - dir[0] * step, y: c.y - dir[1] * step }))
   }
 
-  const onCanvasMouseDown = (e: React.MouseEvent): void => {
+const onCanvasPointerDown = (e: React.PointerEvent): void => {
     if ((e.target as HTMLElement).closest('.widget, .board, .board-shell, .chat-panel-shell, .rail, [data-canvas-scroll-lock]')) return
 
     if (tool === 'draw' && e.button === 0) {
@@ -506,9 +514,9 @@ const style = w.maximized
    *  the cache never goes stale and untouched widgets skip re-rendering
    *  entirely while another widget drags (PERF-001). */
   interface BoundWidgetHandlers {
-    onFocus: () => void
-    onHeaderMouseDown: (e: React.MouseEvent) => void
-    onResizeStart: (e: React.MouseEvent, dir: ResizeDir) => void
+onFocus: () => void
+    onHeaderPointerDown: (e: React.PointerEvent) => void
+    onResizeStart: (e: React.PointerEvent, dir: ResizeDir) => void
     onStartEditing: () => void
     onRename: (title: string) => void
     onCancelEditing: () => void
@@ -522,9 +530,9 @@ const style = w.maximized
     const cached = handlersRef.current.get(id)
     if (cached) return cached
     const bound: BoundWidgetHandlers = {
-      onFocus: () => onWidgetFocus(id),
-      onHeaderMouseDown: (e: React.MouseEvent) => onHeaderMouseDown(e, id),
-      onResizeStart: (e: React.MouseEvent, dir: ResizeDir) => onResizeStart(e, id, dir),
+onFocus: () => onWidgetFocus(id),
+      onHeaderPointerDown: (e: React.PointerEvent) => onHeaderPointerDown(e, id),
+      onResizeStart: (e: React.PointerEvent, dir: ResizeDir) => onResizeStart(e, id, dir),
       onStartEditing: () => onStartEditing(id),
       onRename: (title: string) => onRename(id, title),
       onCancelEditing: () => onCancelEditing(id),
@@ -576,10 +584,14 @@ const style = w.maximized
           e.preventDefault()
           setMenu({ x: e.clientX, y: e.clientY })
         }}
-        onMouseDown={onCanvasMouseDown}
+        onPointerDown={onCanvasPointerDown}
         onWheel={onWheel}
         onKeyDown={onCanvasKey}
         style={{
+          // Without touch-action:none a touch drag on the canvas scrolls the
+          // OS page instead of drawing/panning; the widget chrome below sets
+          // its own touch-action so inner scrolling still works (CANV-15).
+          touchAction: 'none',
           cursor: isPanning
             ? 'grabbing'
             : tool === 'pan'
@@ -689,17 +701,22 @@ const style = w.maximized
   )
 }
 
-/** Runs `onMove` for the duration of a mouse drag, then cleans itself up. */
-function trackDrag(onMove: (e: MouseEvent) => void, onEnd?: () => void): void {
+/**
+ * Runs `onMove` for the duration of a pointer drag, then cleans itself up.
+ * Pointer events unify mouse, touch and pen into one code path (CANV-15); the
+ * callbacks only read clientX/clientY, which PointerEvent inherits from
+ * MouseEvent, so existing mouse-typed handlers keep working unchanged.
+ */
+function trackDrag(onMove: (e: PointerEvent) => void, onEnd?: () => void): void {
   const release = (): void => {
-    window.removeEventListener('mousemove', onMove)
-    window.removeEventListener('mouseup', release)
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', release)
     window.removeEventListener('blur', release)
     window.removeEventListener('pointercancel', release)
     onEnd?.()
   }
-  window.addEventListener('mousemove', onMove)
-  window.addEventListener('mouseup', release)
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', release)
   // The window can lose focus while the button is still down (alt-tab, click
   // on another window); without these the drag stays stuck until the next
   // click ever lands on the window (P2-208).

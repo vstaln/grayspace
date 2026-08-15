@@ -19,8 +19,8 @@ interface Props {
   active: boolean
   editing: boolean
   style: React.CSSProperties
-  onHeaderMouseDown: (e: React.MouseEvent) => void
-  onResizeStart: (e: React.MouseEvent, dir: ResizeDir) => void
+  onHeaderPointerDown: (e: React.PointerEvent) => void
+  onResizeStart: (e: React.PointerEvent, dir: ResizeDir) => void
   onFocus: () => void
   onStartEditing: () => void
   onRename: (title: string) => void
@@ -56,7 +56,7 @@ const WidgetFrame = React.memo(function WidgetFrame({
   active,
   editing,
   style,
-  onHeaderMouseDown,
+  onHeaderPointerDown,
   onResizeStart,
   onFocus,
   onStartEditing,
@@ -122,7 +122,8 @@ const WidgetFrame = React.memo(function WidgetFrame({
         active ? 'is-active' : ''
       ].join(' ')}
       style={style}
-      onMouseDown={onFocus}
+      data-testid={`widget-${widget.kind ?? 'terminal'}-${widget.id}`}
+      onPointerDown={onFocus}
       // P3-219: the frame is a keyboard stop — arrows move it, Alt+arrows
       // resize it, Delete closes it (handled in App's onFrameKey).
       tabIndex={0}
@@ -132,7 +133,7 @@ const WidgetFrame = React.memo(function WidgetFrame({
     >
       <div
         className="widget-header-shell flex h-[34px] flex-none cursor-grab items-center gap-1 py-0 pr-0 pl-2.5 active:cursor-grabbing"
-        onMouseDown={onHeaderMouseDown}
+        onPointerDown={onHeaderPointerDown}
       >
         {editing ? (
           <input
@@ -147,7 +148,7 @@ const WidgetFrame = React.memo(function WidgetFrame({
             }}
           />
         ) : (
-          <span className="min-w-0 flex-1 truncate text-xs text-text" onDoubleClick={onStartEditing}>
+          <span className="min-w-0 flex-1 truncate text-xs text-text" data-testid="widget-title" onDoubleClick={onStartEditing}>
             {widget.title}
           </span>
         )}
@@ -155,6 +156,7 @@ const WidgetFrame = React.memo(function WidgetFrame({
           <button
             className="grid h-6 w-6 place-items-center rounded-[10px] text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
             onClick={launchAgent}
+            data-testid="widget-launch-agent"
             title={`Запустить ${agent.label}`}
             aria-label={`Запустить ${agent.label}`}
           >
@@ -171,14 +173,15 @@ const WidgetFrame = React.memo(function WidgetFrame({
         )}
         {isTerminal && (
           <div className="relative" ref={agentMenuRef}>
-            <button
-              className="grid h-6 w-6 place-items-center rounded-[10px] text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
-              onClick={() => setAgentMenuOpen((v) => !v)}
-              title="Выбрать агента"
-              aria-label="Выбрать агента"
-              aria-haspopup="menu"
-              aria-expanded={agentMenuOpen}
-            >
+<button
+            className="grid h-6 w-6 place-items-center rounded-[10px] text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
+            onClick={() => setAgentMenuOpen((v) => !v)}
+            data-testid="widget-agent-menu"
+            title="Выбрать агента"
+            aria-label="Выбрать агента"
+            aria-haspopup="menu"
+            aria-expanded={agentMenuOpen}
+          >
               <Pencil size={11} strokeWidth={1.5} />
             </button>
             {agentMenuOpen &&
@@ -216,6 +219,7 @@ const WidgetFrame = React.memo(function WidgetFrame({
           <button
             className="grid h-6 w-6 place-items-center rounded-[10px] text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
             onClick={onStartEditing}
+            data-testid="widget-rename"
             title="Переименовать"
             aria-label="Переименовать"
           >
@@ -226,6 +230,7 @@ const WidgetFrame = React.memo(function WidgetFrame({
           <button
             className="grid h-full w-8 place-items-center text-text-dim outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
             onClick={onToggleMinimize}
+            data-testid="widget-minimize"
             title={widget.minimized ? 'Развернуть' : 'Свернуть'}
             aria-label={widget.minimized ? 'Развернуть' : 'Свернуть'}
           >
@@ -234,6 +239,7 @@ const WidgetFrame = React.memo(function WidgetFrame({
           <button
             className="grid h-full w-8 place-items-center text-text-dim outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
             onClick={onToggleMaximize}
+            data-testid="widget-maximize"
             title={widget.maximized ? 'Восстановить' : 'На весь холст'}
             aria-label={widget.maximized ? 'Восстановить' : 'На весь холст'}
           >
@@ -242,6 +248,7 @@ const WidgetFrame = React.memo(function WidgetFrame({
           <button
             className="grid h-full w-8 place-items-center rounded-tr-[10px] text-text-dim outline-none transition-colors duration-150 hover:bg-[#e04343] hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
             onClick={onClose}
+            data-testid="widget-close"
             title="Закрыть"
             aria-label="Закрыть"
           >
@@ -258,7 +265,7 @@ const WidgetFrame = React.memo(function WidgetFrame({
           <div
             key={dir}
             className={`absolute z-[5] ${HANDLE_CLASS[dir]}`}
-            onMouseDown={(e) => onResizeStart(e, dir)}
+            onPointerDown={(e) => onResizeStart(e, dir)}
           />
         ))}
     </div>
