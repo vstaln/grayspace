@@ -1,9 +1,11 @@
 import * as fs from 'fs'
 import * as net from 'net'
+import { randomBytes } from 'crypto'
 import { dirname, join } from 'path'
 import { homedir } from 'os'
-import { app } from 'electron'
-import { MCP_SERVER_NAME, mcpUrl } from './config'
+import { MCP_SERVER_NAME, mcpUrl } from './config.ts'
+import { isLoopbackUrl } from './netGuard.ts'
+import { mcpAuthHeaders } from './controlToken.ts'
 
 /**
  * Wires this app's own MCP server into whatever CLI agent the user opens inside
@@ -29,6 +31,13 @@ interface McpJson {
   [key: string]: unknown
 }
 
+interface JsonServerConfig {
+  url?: string
+  serverUrl?: string
+  type?: string
+  disabled?: boolean
+}
+
 /** The server used to register under this name, which Claude Code silently drops. */
 const RESERVED_NAME = 'workspace'
 const LEGACY_NAMES = ['workspace-app', 'my-workspace'] as const
@@ -44,7 +53,7 @@ function codexConfigFile(): string {
  * deadline — used to tell a *live* foreign server (another instance running)
  * from a stale entry left behind by a dead one.
  */
-function probeUrl(url: string): Promise<boolean> {
+export function probeUrl(url: string): Promise<boolean> {
   return new Promise((resolve) => {
     let parsed: URL
     try {
@@ -54,6 +63,12 @@ function probeUrl(url: string): Promise<boolean> {
       return
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      resolve(false)
+      return
+    }
+    // The URL comes from a user-controlled config file. Only another local
+    // OrcSpace instance needs probing; arbitrary remote probes are an SSRF.
+    if (!isLoopbackUrl(parsed.origin)) {
       resolve(false)
       return
     }
@@ -74,20 +89,35 @@ function probeUrl(url: string): Promise<boolean> {
  * truncate the user's config. The previous content is preserved as a single
  * `.bak` sibling so a bad merge can be undone by hand.
  */
-function writeConfigAtomic(file: string, content: string, ensureDir: string | null): void {
+export function writeConfigAtomic(file: string, content: string, ensureDir: string | null): void {
   if (ensureDir) fs.mkdirSync(ensureDir, { recursive: true })
   const dir = dirname(file)
   fs.mkdirSync(dir, { recursive: true })
   const previous = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
+  // Preserve the original file's mode (P8): these configs can carry secrets
+  // (the MCP token), and an atomic rename would otherwise drop a user's
+  // carefully-set 0600 down to the umask default (typically 0644).
+  let mode: number | undefined
+  try {
+    mode = fs.statSync(file).mode
+  } catch {
+    /* new file — keep the umask default */
+  }
   if (previous !== content) {
     try {
       fs.writeFileSync(`${file}.bak`, previous, 'utf8')
+      if (mode !== undefined) fs.chmodSync(`${file}.bak`, mode)
     } catch (err) {
       console.error(`could not back up ${file}`, err)
     }
   }
-  const temp = join(dir, `.${Date.now()}-${process.pid}.tmp`)
+  // Syncs can overlap when a workspace is selected while startup config work is
+  // still in flight. A timestamp/PID name can collide in that case and one
+  // writer may rename or delete the other writer's temporary file.
+  const temp = join(dir, `.${Date.now()}-${process.pid}-${randomBytes(8).toString('hex')}.tmp`)
   fs.writeFileSync(temp, content, 'utf8')
+  if (mode !== undefined) fs.chmodSync(temp, mode)
+  else fs.chmodSync(temp, 0o600)
   try {
     fs.renameSync(temp, file)
   } catch (err) {
@@ -111,12 +141,14 @@ function writeConfigAtomic(file: string, content: string, ensureDir: string | nu
 export async function syncProjectMcpConfig(dir: string): Promise<void> {
   if (!dir) return
   const file = join(dir, '.mcp.json')
-  const entry = { type: 'http', url: mcpUrl() }
+  // Headers matter here: without them the CLI agent cannot authenticate to the
+  // token-gated MCP endpoint and the entry would be dead weight (P1).
+  const entry = { type: 'http', url: mcpUrl(), headers: mcpAuthHeaders() }
 
   let config: McpJson = {}
   if (fs.existsSync(file)) {
     try {
-      config = JSON.parse(fs.readFileSync(file, 'utf8')) as McpJson
+      config = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) as McpJson
     } catch (err) {
       console.error(`.mcp.json in ${dir} is not valid JSON — leaving it alone`, err)
       return
@@ -130,10 +162,12 @@ export async function syncProjectMcpConfig(dir: string): Promise<void> {
   delete servers[RESERVED_NAME]
   for (const legacy of LEGACY_NAMES) delete servers[legacy]
 
-  const existing = servers[MCP_SERVER_NAME] as { url?: string; type?: string } | undefined
+  const existing = servers[MCP_SERVER_NAME] as { url?: string; type?: string; headers?: unknown } | undefined
   // A workspace-app entry that points somewhere else belongs to another
   // instance (or a hand edit) — leave it alone instead of fighting over it.
-  if (!hadReserved && existing?.url === entry.url && existing?.type === entry.type) return
+  // Headers are compared too: an entry this app wrote before the token gate
+  // must be refreshed with the auth headers, not skipped as "already right".
+  if (!hadReserved && existing && existing.url === entry.url && existing.type === entry.type && JSON.stringify(existing.headers) === JSON.stringify(entry.headers)) return
   if (existing && existing.url !== entry.url) {
     const alive = existing.url ? await probeUrl(existing.url) : false
     if (alive) {
@@ -175,7 +209,7 @@ export async function syncProjectOpencodeConfig(dir: string): Promise<void> {
   let config: OpenCodeConfig = {}
   if (fs.existsSync(file)) {
     try {
-      config = JSON.parse(fs.readFileSync(file, 'utf8')) as OpenCodeConfig
+      config = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')) as OpenCodeConfig
     } catch (err) {
       console.error(`opencode.json in ${dir} is not valid JSON — leaving it alone`, err)
       return
@@ -185,9 +219,9 @@ export async function syncProjectOpencodeConfig(dir: string): Promise<void> {
   const servers = { ...(config.mcp || {}) }
   for (const legacy of LEGACY_NAMES) delete servers[legacy]
   const existing = servers[MCP_SERVER_NAME] as
-    | { type?: string; url?: string; enabled?: boolean }
+    | { type?: string; url?: string; enabled?: boolean; headers?: unknown }
     | undefined
-  if (existing?.type === 'remote' && existing?.url === mcpUrl() && existing?.enabled !== false) {
+  if (existing?.type === 'remote' && existing?.url === mcpUrl() && existing?.enabled !== false && JSON.stringify(existing.headers) === JSON.stringify(mcpAuthHeaders())) {
     return
   }
   if (existing && existing.url !== mcpUrl()) {
@@ -199,7 +233,7 @@ export async function syncProjectOpencodeConfig(dir: string): Promise<void> {
     console.warn(`${file} has ${MCP_SERVER_NAME} pointing at a dead server (${existing.url}) — taking over`)
   }
 
-  servers[MCP_SERVER_NAME] = { type: 'remote', url: mcpUrl(), enabled: true }
+  servers[MCP_SERVER_NAME] = { type: 'remote', url: mcpUrl(), enabled: true, headers: mcpAuthHeaders() }
   const next: OpenCodeConfig = {
     ...config,
     $schema: config.$schema || 'https://opencode.ai/config.json',
@@ -212,8 +246,129 @@ export async function syncProjectOpencodeConfig(dir: string): Promise<void> {
   }
 }
 
+/**
+ * Shared JSON merger for clients whose config is a top-level `mcpServers`
+ * object. The caller supplies the documented transport key because Cursor,
+ * Windsurf, and Cline use different names for a remote URL.
+ */
+async function syncJsonMcpConfig(
+  file: string,
+  urlKey: 'url' | 'serverUrl',
+  entry: JsonServerConfig,
+  label: string
+): Promise<void> {
+  // Every HTTP client entry must carry the token headers or the CLI agent
+  // would connect to a server that now refuses unauthenticated requests (P1).
+  const authedEntry: JsonServerConfig & { headers?: Record<string, string> } = { ...entry, headers: mcpAuthHeaders() }
+  let config: McpJson = {}
+  if (fs.existsSync(file)) {
+    try {
+      const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('root is not an object')
+      config = parsed as McpJson
+      if (config.mcpServers !== undefined && (!config.mcpServers || typeof config.mcpServers !== 'object' || Array.isArray(config.mcpServers))) {
+        throw new Error('mcpServers is not an object')
+      }
+    } catch (err) {
+      console.error(`${label} is not valid JSON — leaving it alone`, err)
+      return
+    }
+  }
+
+  const servers = { ...(config.mcpServers || {}) }
+  for (const legacy of [...LEGACY_NAMES, RESERVED_NAME]) delete servers[legacy]
+  const existing = servers[MCP_SERVER_NAME] as JsonServerConfig | undefined
+  const existingUrl = existing?.[urlKey] || existing?.url || existing?.serverUrl
+  const targetUrl = authedEntry[urlKey] || authedEntry.url || authedEntry.serverUrl
+  if (existing && existingUrl === targetUrl && !existing.disabled) {
+    // Removing a legacy entry is still a meaningful cleanup, so only return
+    // when the rest of the managed section is already exactly right.
+    if (JSON.stringify(existing) === JSON.stringify(authedEntry) && Object.keys(servers).length === Object.keys(config.mcpServers || {}).length) return
+  }
+  if (existing && existingUrl && existingUrl !== targetUrl) {
+    const alive = await probeUrl(existingUrl)
+    if (alive) {
+      console.warn(`${file} already has ${MCP_SERVER_NAME} at ${existingUrl} — not overwriting it`)
+      return
+    }
+    console.warn(`${file} has ${MCP_SERVER_NAME} pointing at a dead server (${existingUrl}) — taking over`)
+  }
+
+  servers[MCP_SERVER_NAME] = authedEntry
+  const next = { ...config, mcpServers: servers }
+  if (JSON.stringify(next) === JSON.stringify(config)) return
+  try {
+    writeConfigAtomic(file, JSON.stringify(next, null, 2) + '\n', null)
+  } catch (err) {
+    console.error(`could not write ${file}`, err)
+  }
+}
+
+/** Cursor's project MCP file is `.cursor/mcp.json` and uses `url` for HTTP. */
+export function syncProjectCursorConfig(dir: string): Promise<void> {
+  if (!dir) return Promise.resolve()
+  return syncJsonMcpConfig(join(dir, '.cursor', 'mcp.json'), 'url', { url: mcpUrl(), type: 'streamableHttp' }, `${dir}/.cursor/mcp.json`)
+}
+
+/**
+ * Registers OrcSpace in Google Antigravity / Gemini CLI project configuration.
+ * Antigravity discovers MCP configs hierarchically in `.gemini/config/mcp_config.json`,
+ * `.gemini/mcp_config.json`, and `.agents/mcp_config.json`.
+ */
+export async function syncProjectAntigravityConfig(dir: string): Promise<void> {
+  if (!dir) return
+  const files = [
+    join(dir, '.gemini', 'config', 'mcp_config.json'),
+    join(dir, '.gemini', 'mcp_config.json'),
+    join(dir, '.agents', 'mcp_config.json')
+  ]
+  for (const file of files) {
+    await syncJsonMcpConfig(file, 'serverUrl', { serverUrl: mcpUrl(), url: mcpUrl() }, file)
+  }
+}
+
+/**
+ * Registers OrcSpace in Google Antigravity global configuration (~/.gemini/config/mcp_config.json).
+ */
+export async function syncGlobalAntigravityConfig(): Promise<void> {
+  const files = [
+    join(homedir(), '.gemini', 'config', 'mcp_config.json'),
+    join(homedir(), '.gemini', 'mcp_config.json'),
+    join(homedir(), '.antigravity', 'mcp_config.json')
+  ]
+  for (const file of files) {
+    await syncJsonMcpConfig(file, 'serverUrl', { serverUrl: mcpUrl(), url: mcpUrl() }, file)
+  }
+}
+
+/** Windsurf/Cascade reads one global file and documents `serverUrl` for HTTP. */
+export function syncGlobalWindsurfConfig(): Promise<void> {
+  const file = join(homedir(), '.codeium', 'windsurf', 'mcp_config.json')
+  return syncJsonMcpConfig(file, 'serverUrl', { serverUrl: mcpUrl() }, file)
+}
+
+/**
+ * Cline's VS Code extension stores this JSON below VS Code's globalStorage.
+ * Only installed Cline extensions are touched; OrcSpace does not create a
+ * phantom extension directory on machines that do not have Cline installed.
+ */
+export async function syncClineConfig(): Promise<void> {
+  if (process.platform !== 'win32') return
+  const appData = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming')
+  const roots = [join(appData, 'Code', 'User', 'globalStorage'), join(appData, 'Code - Insiders', 'User', 'globalStorage')]
+  const extensionIds = ['saoudrizwan.claude-dev']
+  for (const root of roots) {
+    for (const extensionId of extensionIds) {
+      const extensionRoot = join(root, extensionId)
+      if (!fs.existsSync(extensionRoot)) continue
+      const file = join(extensionRoot, 'settings', 'cline_mcp_settings.json')
+      await syncJsonMcpConfig(file, 'url', { url: mcpUrl(), type: 'streamableHttp', disabled: false }, file)
+    }
+  }
+}
+
 /** Cuts a `[table.header]` section (up to the next top-level header) out of TOML text. */
-function stripTomlSection(text: string, header: string): string {
+export function stripTomlSection(text: string, header: string): string {
   const lines = text.split('\n')
   const out: string[] = []
   let inSection = false
@@ -242,13 +397,16 @@ function stripTomlSection(text: string, header: string): string {
 export async function ensureCodexGlobalConfig(): Promise<void> {
   // An isolated/test instance (--user-data-dir) must never rewrite the real
   // user's global Codex config — DI-005.
-  if (app.commandLine.hasSwitch('user-data-dir')) {
+  if (process.env.ORCSPACE_TEST_USER_DATA || process.argv.includes('--user-data-dir')) {
     console.warn('custom userData dir — leaving the global Codex config alone')
     return
   }
   const file = codexConfigFile()
   const section = `[mcp_servers.${MCP_SERVER_NAME}]`
-  const body = `${section}\nurl = "${mcpUrl()}"\n`
+  // Codex's streamable-HTTP schema takes static headers as `http_headers`;
+  // without them the CLI could not authenticate to the token-gated endpoint (P1).
+  const headerLine = Object.entries(mcpAuthHeaders()).map(([key, value]) => `"${key}" = "${value}"`).join(', ')
+  const body = `${section}\nurl = "${mcpUrl()}"\nhttp_headers = { ${headerLine} }\n`
   let current = ''
   if (fs.existsSync(file)) {
     try {
@@ -294,9 +452,10 @@ export async function ensureCodexGlobalConfig(): Promise<void> {
  * Registers OrcSpace in Grok Build's project-scoped config. Grok uses TOML and
  * reads `.grok/config.toml` from the current repository. Only the OrcSpace MCP
  * section is managed; model, UI, permissions, and any user MCP entries remain
- * untouched.
+ * untouched. A live foreign URL in our section is left alone (same rule as
+ * Claude/opencode), so a second instance does not steal the entry.
  */
-export function syncProjectGrokConfig(dir: string): void {
+export async function syncProjectGrokConfig(dir: string): Promise<void> {
   if (!dir) return
   const file = join(dir, '.grok', 'config.toml')
   let current = ''
@@ -314,8 +473,21 @@ export function syncProjectGrokConfig(dir: string): void {
     if (cleaned.includes(section)) cleaned = stripTomlSection(cleaned, section)
   }
   const section = `[mcp_servers.${MCP_SERVER_NAME}]`
-  if (cleaned.includes(section)) cleaned = stripTomlSection(cleaned, section)
-  const body = `${section}\nurl = "${mcpUrl()}"\nenabled = true\n`
+  const headerLine = Object.entries(mcpAuthHeaders()).map(([key, value]) => `"${key}" = "${value}"`).join(', ')
+  const body = `${section}\nurl = "${mcpUrl()}"\nhttp_headers = { ${headerLine} }\nenabled = true\n`
+  if (cleaned.includes(section)) {
+    if (cleaned.includes(body)) return
+    const foreignUrl = /url\s*=\s*"([^"]+)"/.exec(cleaned.split(section)[1] || '')?.[1]
+    if (foreignUrl && foreignUrl !== mcpUrl()) {
+      const alive = await probeUrl(foreignUrl)
+      if (alive) {
+        console.warn(`${file} has ${MCP_SERVER_NAME} at ${foreignUrl} — not overwriting it`)
+        return
+      }
+      console.warn(`${file} has ${MCP_SERVER_NAME} pointing at a dead server (${foreignUrl}) — taking over`)
+    }
+    cleaned = stripTomlSection(cleaned, section)
+  }
   const next = `${cleaned.trimEnd()}${cleaned.trim() ? '\n\n' : ''}${body}`
   if (next !== current) writeConfigAtomic(file, next, dirname(file))
 }

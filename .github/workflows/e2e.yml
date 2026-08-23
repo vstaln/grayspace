@@ -1,0 +1,65 @@
+name: E2E
+
+# Desktop end-to-end tests via Playwright against a real Electron build.
+# Windows is the only target of this project's packaging, and headful Electron
+# needs no extra services there, so the job runs on windows-latest.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  e2e:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # The app spawns the MCP server from the sibling `Orcspace-mcp` repo
+      # (`build:mcp` → `../Orcspace-mcp`, see src/main/mcpProcess.ts). CI does
+      # not share the developer's local drive, so the workflow materializes it
+      # next to the checkout. Point the `ORCSPACE_MCP_REPO` repository variable
+      # (owner/repo) at the Orcspace-mcp repository to enable the run — add it
+      # under Settings → Secrets and variables → Actions → Variables.
+      - name: Check out the MCP server sibling repo
+        shell: pwsh
+        run: |
+          $repo = "${{ vars.ORCSPACE_MCP_REPO }}"
+          if (-not $repo) {
+            throw "ORCSPACE_MCP_REPO repository variable is not set. Add it (e.g. 'acme/Orcspace-mcp') under Settings - Secrets and variables - Actions."
+          }
+          git clone --depth 1 "https://github.com/$repo.git" "$env:GITHUB_WORKSPACE\..\Orcspace-mcp"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install app dependencies
+        run: npm ci
+
+      # `npm run build` runs `prebuild` → `npm run build:mcp` first, which
+      # installs and builds the sibling repo materialized above.
+      - name: Build the app
+        run: npm run build
+
+      - name: Run Playwright E2E
+        run: npm run test:e2e:ci
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
+
+      - name: Upload traces and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results/
+          retention-days: 14

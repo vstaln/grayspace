@@ -23,17 +23,18 @@ const makeStrokeId = (): string => `stroke-${Date.now()}-${++localCounter}`
  * re-added by the merge on every broadcast — a renderer/main split that never
  * heals. Refuse the addition up front instead (CANV-07).
  */
-const MAX_WIDGETS = 200
+export const MAX_WIDGETS = 200
 
 /** Default title and size per widget type, used when the caller gives none. */
 const WIDGET_DEFAULTS: Record<WidgetKind, { title: string; w: number; h: number }> = {
   terminal: { title: 'Terminal', w: WIDGET_W, h: WIDGET_H },
-  note: { title: 'Новая заметка', w: WIDGET_W, h: WIDGET_H },
-  'git-status': { title: 'Репозиторий', w: 340, h: 260 },
-  timer: { title: 'Таймер', w: 300, h: 220 },
-  schedule: { title: 'Запланированные задачи', w: 400, h: 320 },
-  board: { title: 'Доска задач', w: 900, h: 520 },
-  planner: { title: 'Планер', w: 420, h: 520 }
+  note: { title: 'New Note', w: WIDGET_W, h: WIDGET_H },
+  timer: { title: 'Timer', w: 300, h: 220 },
+  board: { title: 'Task Board', w: 900, h: 520 },
+  planner: { title: 'Planner', w: 420, h: 520 },
+  files: { title: 'Files', w: 580, h: 480 },
+  'sys-monitor': { title: 'System Monitor', w: 460, h: 380 },
+  browser: { title: 'Browser', w: 720, h: 480 }
 }
 
 const makeConnectionId = (): string => `conn-${Date.now()}-${++localCounter}`
@@ -78,6 +79,8 @@ export function useCanvas() {
   // `camera`/`widgets` directly — these refs keep them reading current state.
   const cameraRef = useRef(camera)
   cameraRef.current = camera
+  const widgetsRef = useRef(widgets)
+  widgetsRef.current = widgets
   // Bumped once per agent-created widget, independent of React's render
   // cycle. `widgets.length` looked equivalent but isn't: several terminals
   // created back-to-back (an agent cascading `terminal.create`) arrive
@@ -96,6 +99,7 @@ export function useCanvas() {
   const skipNextSaveRef = useRef(false)
   const hydrationRunRef = useRef(0)
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const workspaceDirRef = useRef<string | null>(null)
 
   const hydrate = useCallback(() => {
@@ -103,6 +107,15 @@ export function useCanvas() {
       clearTimeout(retryTimerRef.current)
       retryTimerRef.current = null
     }
+    if (saveTimerRef.current !== null) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+    widgetsDirtyRef.current = false
+    cameraDirtyRef.current = false
+    strokesDirtyRef.current = false
+    pendingDeletesRef.current.clear()
+    pendingCreatesRef.current.clear()
     const run = ++hydrationRunRef.current
     hydratedRef.current = false
     skipNextSaveRef.current = true
@@ -118,7 +131,6 @@ export function useCanvas() {
         cascadeRef.current = 0
         // Everything the snapshot lists is acknowledged by main, so no local
         // id is awaiting its first save round-trip anymore.
-        pendingCreatesRef.current.clear()
         hydratedRef.current = true
       })
       .catch(() => {
@@ -132,11 +144,21 @@ export function useCanvas() {
   }, [])
 
   useEffect(() => {
-    void window.api.workspace.getDir().then((dir) => {
-      workspaceDirRef.current = dir
-      hydrate()
-    })
+    void window.api.workspace
+      .getDir()
+      .then((dir) => {
+        workspaceDirRef.current = dir
+      })
+      .catch((err) => {
+        console.warn('workspace:getDir failed — hydrating the default canvas anyway', err)
+      })
+      .finally(() => {
+        // Hydration must not depend on getDir() succeeding: a rejected call
+        // would otherwise leave the canvas unhydrated for the whole session.
+        hydrate()
+      })
     const unbindDir = window.api.workspace.onDirChange((dir) => {
+      if (workspaceDirRef.current === dir) return
       workspaceDirRef.current = dir
       hydrate()
     })
@@ -150,6 +172,16 @@ export function useCanvas() {
         cancelAnimationFrame(strokeRafRef.current)
         strokeRafRef.current = null
         strokeBatchRef.current.clear()
+      }
+      if (eraseRafRef.current !== null) {
+        cancelAnimationFrame(eraseRafRef.current)
+        eraseRafRef.current = null
+        pendingEraseRef.current = null
+      }
+      if (widgetRafRef.current !== null) {
+        cancelAnimationFrame(widgetRafRef.current)
+        widgetRafRef.current = null
+        widgetPatchRef.current.clear()
       }
     }
   }, [hydrate])
@@ -167,8 +199,11 @@ export function useCanvas() {
       skipNextSaveRef.current = false
       if (!hasLocalEdits) return
     }
+    const dirAtSchedule = workspaceDirRef.current
     const timer = setTimeout(() => {
-      const payload = { widgets, camera, strokes, workspaceDir: workspaceDirRef.current ?? undefined }
+      saveTimerRef.current = null
+      if (workspaceDirRef.current !== dirAtSchedule) return
+      const payload = { widgets, camera, strokes, workspaceDir: dirAtSchedule ?? undefined }
       widgetsDirtyRef.current = false
       cameraDirtyRef.current = false
       strokesDirtyRef.current = false
@@ -177,7 +212,11 @@ export function useCanvas() {
         // stays armed until main actually drops it — no silent data loss.
       })
     }, 800)
-    return () => clearTimeout(timer)
+    saveTimerRef.current = timer
+    return () => {
+      clearTimeout(timer)
+      if (saveTimerRef.current === timer) saveTimerRef.current = null
+    }
   }, [widgets, camera, strokes])
 
   // Widgets the user closed locally but whose removal has not reached the
@@ -227,12 +266,10 @@ export function useCanvas() {
           // synced it, our copy wins: it may hold a drag/resize the 800ms
           // debounced save hasn't reached the main process yet, and blindly
           // taking the incoming (stale) position snapped it back mid-drag.
-          if (
-            local &&
-            incoming.version !== undefined &&
-            local.version !== undefined &&
-            incoming.version <= local.version
-          ) {
+          if (local && incoming.version !== undefined && (local.version ?? 0) >= incoming.version) {
+            return local
+          }
+          if (local && local.version === undefined && (widgetsDirtyRef.current || pendingCreatesRef.current.has(local.id))) {
             return local
           }
           return incoming
@@ -262,15 +299,26 @@ export function useCanvas() {
   }, [])
 
   const addWidget = useCallback(
-    (point: Point, id: string = makeLocalId(), title?: string, kind: WidgetKind = 'terminal', noteId?: string): void => {
+    (point: Point, id: string = makeLocalId(), title?: string, kind: WidgetKind = 'terminal', noteId?: string): boolean => {
       const defaults = WIDGET_DEFAULTS[kind]
+      // Cheap up-front check so the caller's boolean is correct even before
+      // React runs the state updater — a functional setState is not guaranteed
+      // to execute synchronously in concurrent rendering, so reading `added`
+      // right after the dispatch was unreliable ("canvas full" go unnoticed,
+      // widget silently staying local-only). The updater re-checks as a
+      // backstop against same-tick bursts.
+      if (widgetsRef.current.length >= MAX_WIDGETS) return false
       // The store refuses to accept a 201st widget and slices imports to 200,
       // so a widget added past the limit would never persist and the merge
       // would re-add it forever (CANV-07). Refuse up front, inside the updater,
       // so the pending-creates bookkeeping below never happens for a widget
       // that doesn't actually get added.
+      let added = true
       setWidgets((prev) => {
-        if (prev.length >= MAX_WIDGETS) return prev
+        if (prev.length >= MAX_WIDGETS) {
+          added = false
+          return prev
+        }
         // Main hasn't seen this widget yet; remember it so a broadcast snapshot
         // that merely hasn't caught up to it cannot be mistaken for a main-side
         // deletion (CANV-01). Cleared once the id appears in an incoming snapshot.
@@ -291,16 +339,18 @@ export function useCanvas() {
             y: point.y - 16,
             w: defaults.w,
             h: defaults.h,
-            z: nextZ()
+            z: nextZ(),
+            version: 0
           }
         ]
       })
+      return added
     },
     [nextZ]
   )
 
-  const addNoteWidget = useCallback((point: Point, noteId: string, title = 'Новая заметка'): void => {
-    addWidget(point, makeLocalId('note'), title, 'note', noteId)
+  const addNoteWidget = useCallback((point: Point, noteId: string, title = 'New Note'): boolean => {
+    return addWidget(point, makeLocalId('note'), title, 'note', noteId)
   }, [addWidget])
 
   const removeWidget = useCallback((id: string): void => {
@@ -317,7 +367,11 @@ export function useCanvas() {
       // when a terminal leaves the canvas permanently — otherwise park-on-detach
       // would leave Claude sessions running with no widget to reclaim them.
       if (target && (target.kind ?? 'terminal') === 'terminal') {
-        window.api.terminal.dispose(id)
+        // An agent holding the terminal's lock makes this reject — expected,
+        // and the parked pty is reclaimed when the widget remounts.
+        window.api.terminal.dispose(id).catch((err) => {
+          console.warn(`terminal ${id} dispose deferred`, err)
+        })
       }
       return prev.filter((w) => w.id !== id)
     })
@@ -326,21 +380,69 @@ export function useCanvas() {
     setConnections((prev) => prev.filter((c) => c.from !== id && c.to !== id))
   }, [])
 
+  // Drag/resize fire many pointer events per frame. Batch into one React
+  // commit per animation frame so the whole widget list is not rewritten
+  // on every mouse sample.
+  const widgetPatchRef = useRef<Map<string, Partial<Widget>>>(new Map())
+  const widgetRafRef = useRef<number | null>(null)
+
   const updateWidget = useCallback((id: string, change: Partial<Widget>): void => {
     widgetsDirtyRef.current = true
-    setWidgets((prev) => prev.map((w) => (w.id === id ? { ...w, ...change } : w)))
+    const pending = widgetPatchRef.current.get(id)
+    widgetPatchRef.current.set(id, pending ? { ...pending, ...change } : change)
+    if (widgetRafRef.current !== null) return
+    widgetRafRef.current = requestAnimationFrame(() => {
+      widgetRafRef.current = null
+      const batch = widgetPatchRef.current
+      widgetPatchRef.current = new Map()
+      if (batch.size === 0) return
+      setWidgets((prev) => {
+        let next: Widget[] | null = null
+        for (const [wid, patch] of batch) {
+          const idx = (next ?? prev).findIndex((w) => w.id === wid)
+          if (idx < 0) continue
+          if (!next) next = prev.slice()
+          next[idx] = { ...next[idx], ...patch }
+        }
+        return next ?? prev
+      })
+    })
   }, [])
 
   const bringToFront = useCallback(
-    (id: string): void => updateWidget(id, { z: nextZ() }),
+    (id: string): void => {
+      // Already the top-most widget: re-stamping its z would dirty the canvas,
+      // schedule a save, journal a widget.update pair and echo a full snapshot
+      // back — for a click that changed nothing. Clicking the focused pane is
+      // the most common gesture on the canvas, so the no-op guard is what
+      // keeps idle clicking from producing write churn (PERF-focus-noop).
+      if (widgetsRef.current.find((w) => w.id === id)?.z === zRef.current) return
+      updateWidget(id, { z: nextZ() })
+    },
     [nextZ, updateWidget]
   )
+
+  /**
+   * Points a widget's wire manually at a target — a Check widget locking onto
+   * a terminal by dragging a connector rather than the auto "who spawned
+   * whom" arcs above. A widget wears only one manual link at a time, so
+   * rebinding replaces the old arc instead of stacking a new one on top.
+   */
+  const setBinding = useCallback((fromId: string, toId: string | null): void => {
+    setConnections((prev) => {
+      const kept = prev.filter((c) => c.from !== fromId)
+      return toId ? [...kept, { id: makeConnectionId(), from: fromId, to: toId, bornAt: Date.now() }] : kept
+    })
+  }, [])
 
   /** Starts a new pencil stroke at a world point and returns its id to extend. */
   // Pencil moves fire many times per frame. Batching into rAF keeps React from
   // committing a full stroke-array rewrite on every pointer sample (PERF-draw).
   const strokeBatchRef = useRef<Map<string, Point[]>>(new Map())
   const strokeRafRef = useRef<number | null>(null)
+  // Same treatment for the eraser (PERF-erase): one rebuild per frame, latest position wins.
+  const pendingEraseRef = useRef<{ point: Point; worldRadius: number } | null>(null)
+  const eraseRafRef = useRef<number | null>(null)
 
   const beginStroke = useCallback(
     (point: Point): string => {
@@ -389,39 +491,55 @@ export function useCanvas() {
    * stroke into whatever pieces remain on either side of the gap — dragging
    * the eraser over the middle of a line erases that middle, not the whole
    * line the way a single "clear" click used to.
+   *
+   * The rebuild is batched into one animation frame like the pencil path
+   * above: the erase itself walks every point of every stroke, so running it
+   * once per pointer sample (a fast drag emits far more samples than frames)
+   * re-did that full walk several times between two paints for nothing
+   * (PERF-erase). Only the latest position per frame matters.
    */
   const eraseAt = useCallback((point: Point, radius = 14): void => {
     strokesDirtyRef.current = true
     // Radius is specified in screen px; the ink layer lives in world space
     // (scale(zoom)), so the hit-test radius must be widened as you zoom out
     // to keep the eraser footprint constant on screen (CANV-10).
-    const worldRadius = radius / cameraRef.current.zoom
-    setStrokes((prev) => {
-      const next: Stroke[] = []
-      for (const s of prev) {
-        let current: Point[] = []
-        for (const p of s.points) {
-          if (Math.hypot(p.x - point.x, p.y - point.y) <= worldRadius) {
-            if (current.length > 0) next.push({ id: makeStrokeId(), points: current, color: s.color })
-            current = []
-          } else {
-            current.push(p)
+    const zoom = Math.max(0.1, cameraRef.current.zoom || 1)
+    pendingEraseRef.current = { point, worldRadius: radius / zoom }
+    if (eraseRafRef.current !== null) return
+    eraseRafRef.current = requestAnimationFrame(() => {
+      eraseRafRef.current = null
+      const pending = pendingEraseRef.current
+      pendingEraseRef.current = null
+      if (!pending) return
+      setStrokes((prev) => {
+        const next: Stroke[] = []
+        for (const s of prev) {
+          let current: Point[] = []
+          for (const p of s.points) {
+            if (Math.hypot(p.x - pending.point.x, p.y - pending.point.y) <= pending.worldRadius) {
+              if (current.length > 0) next.push({ id: makeStrokeId(), points: current, color: s.color })
+              current = []
+            } else {
+              current.push(p)
+            }
           }
+          if (current.length > 0) next.push({ id: makeStrokeId(), points: current, color: s.color })
         }
-        if (current.length > 0) next.push({ id: makeStrokeId(), points: current, color: s.color })
-      }
-      return next
+        return next
+      })
     })
   }, [])
 
   useEffect(() => {
     const offAdd = window.api.control.onAddWidget(({ id, title, from }) => {
       // Cascade agent-opened terminals instead of stacking them all at one spot,
-      // and place them relative to wherever the camera currently is.
+      // and place them relative to wherever the camera currently is. Columns
+      // cycle 0..5; rows grow forever so the 37th widget keeps cascading
+      // instead of landing back on top of the first one (CANV-17).
       const n = cascadeRef.current
       cascadeRef.current += 1
       const col = n % 6
-      const row = Math.floor(n / 6) % 6
+      const row = Math.floor(n / 6)
       addWidget(screenToWorld(90 + col * 60, 90 + row * 60), id, title)
       // `from` is the shell the request came from — draw the line that says so.
       // A dangling id (its widget already closed) draws nothing rather than an
@@ -467,6 +585,7 @@ export function useCanvas() {
     eraseAt,
     strokeColor,
     setStrokeColor,
-    connections
+    connections,
+    setBinding
   }
 }

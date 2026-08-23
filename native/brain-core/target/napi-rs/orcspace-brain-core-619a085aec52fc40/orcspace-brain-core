@@ -1,0 +1,3 @@
+{"kind": "interface", "name": "ReindexNoteInput", "js_doc": "", "def": "id: string\ntitle: string\ncontent: string\nalive: boolean", "original_name": "ReindexNoteInput"}
+{"kind": "interface", "name": "ReindexNoteResult", "js_doc": "", "def": "id: string\nlinks: Array<string>\nunresolved: Array<string>", "original_name": "ReindexNoteResult"}
+{"kind": "fn", "name": "reindexNotes", "js_doc": "", "def": "function reindexNotes(notes: Array<ReindexNoteInput>, syntax: string): Array<ReindexNoteResult>"}

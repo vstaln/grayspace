@@ -1,4 +1,4 @@
-import { CANVAS_TARGET_ID, type CanvasWidget, type WidgetKind } from '../canvasState'
+import { CANVAS_TARGET_ID, type CanvasWidget, type WidgetKind } from '../canvasState.ts'
 import { CommandError, parseResource, resourceId } from '../core/index.ts'
 import { widgetType } from '../widgets/registry.ts'
 import type { CommandDeps } from './index.ts'
@@ -38,77 +38,148 @@ export function registerCanvasCommands({
   bus.registerVersions('widget', canvas.widgetVersions)
   bus.registerVersions('canvas', canvas.canvasVersions)
 
-  bus.register<WidgetCreatePayload, CanvasWidget>('widget.create', {
+  bus.registerDefinition<WidgetCreatePayload, CanvasWidget>({
+    type: 'widget.create',
+    description: 'Create a canvas widget (note, terminal, timer, board, …).',
+    targetScheme: 'widget',
     ignoreVersion: true,
-    apply: ({ command }) => {
-      const p = command.payload ?? {}
-      const id = (p.id || `${p.kind ?? 'widget'}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`).trim()
-      if (canvas.widget(id)) throw new CommandError('conflict', `widget ${id} already exists`)
-      const defaults = widgetType(p.kind)?.defaultSize
-      return canvas.putWidget({
-        id,
-        kind: p.kind,
-        title: p.title?.trim() || widgetType(p.kind)?.label || id,
-        noteId: p.noteId,
-        x: Number(p.x) || 0,
-        y: Number(p.y) || 0,
-        w: Number(p.w) || defaults?.w || 520,
-        h: Number(p.h) || defaults?.h || 360,
-        z: Number(p.z) || 1
-      })
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '1–128 chars of [A-Za-z0-9._:-]; generated when omitted' },
+        kind: { type: 'string', description: 'Widget kind from the registry' },
+        title: { type: 'string' },
+        noteId: { type: 'string' },
+        x: { type: 'number' },
+        y: { type: 'number' },
+        w: { type: 'number' },
+        h: { type: 'number' },
+        z: { type: 'number' }
+      }
+    },
+    handler: {
+      apply: ({ command }) => {
+        const p = command.payload ?? {}
+        const id = (p.id || `${p.kind ?? 'widget'}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`).trim()
+        if (!id || id.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(id)) {
+          throw new CommandError('invalid', 'widget id must be 1–128 chars of [A-Za-z0-9._:-]')
+        }
+        if (canvas.widget(id)) throw new CommandError('conflict', `widget ${id} already exists`)
+        const defaults = widgetType(p.kind)?.defaultSize
+        try {
+          return canvas.putWidget({
+            id,
+            kind: p.kind,
+            title: (p.title?.trim() || widgetType(p.kind)?.label || id).slice(0, 120),
+            noteId: p.noteId,
+            x: Number(p.x) || 0,
+            y: Number(p.y) || 0,
+            w: Number(p.w) || defaults?.w || 520,
+            h: Number(p.h) || defaults?.h || 360,
+            z: Number(p.z) || 1
+          })
+        } catch (err) {
+          if (err instanceof CommandError) throw err
+          throw new CommandError('invalid', err instanceof Error ? err.message : String(err))
+        }
+      }
     }
   })
 
-  bus.register<WidgetPatchPayload, CanvasWidget>('widget.update', {
-    apply: ({ command }) => {
-      let id = widgetIdOf(command.target)
-      // "Rename it to Agent" after opening a shell: no valid widget id, but
-      // there is an obvious preferred terminal on the canvas.
-      if (!canvas.widget(id) && typeof command.payload?.title === 'string') {
-        const preferred = terminals.resolveWriteTarget('')
-        if (preferred && canvas.widget(preferred)) id = preferred
+  bus.registerDefinition<WidgetPatchPayload, CanvasWidget>({
+    type: 'widget.update',
+    description: 'Move/resize/retitle a widget. Geometry is world-space; z orders the stack.',
+    targetScheme: 'widget',
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        noteId: { type: 'string' },
+        x: { type: 'number' },
+        y: { type: 'number' },
+        w: { type: 'number' },
+        h: { type: 'number' },
+        z: { type: 'number' }
       }
-      if (!canvas.widget(id)) throw new CommandError('not_found', `widget ${id} not found`)
-      const updated = canvas.patchWidget(id, command.payload ?? {})
-      // Keep the shell list label in the assistant's context in sync.
-      if (typeof command.payload?.title === 'string' && (updated.kind === 'terminal' || !updated.kind)) {
-        terminals.setTitle(id, command.payload.title)
+    },
+    handler: {
+      apply: ({ command }) => {
+        let id = widgetIdOf(command.target)
+        // Models often say widget:new / terminal:new after opening a shell.
+        // Only that sentinel retargets — a typo must not rename the focused pane.
+        if (!canvas.widget(id) && id === 'new' && typeof command.payload?.title === 'string') {
+          const preferred = terminals.resolveWriteTarget('')
+          if (preferred && canvas.widget(preferred)) id = preferred
+        }
+        if (!canvas.widget(id)) throw new CommandError('not_found', `widget ${id} not found`)
+        const updated = canvas.patchWidget(id, command.payload ?? {})
+        // Keep the shell list label in the assistant's context in sync.
+        if (typeof command.payload?.title === 'string' && (updated.kind === 'terminal' || !updated.kind)) {
+          terminals.setTitle(id, command.payload.title)
+        }
+        return updated
       }
-      return updated
     }
   })
 
-  bus.register<Record<string, never>, { id: string }>('widget.remove', {
-    apply: ({ command }) => {
-      const id = widgetIdOf(command.target)
-      // Closing a terminal widget must also tear the shell down: a live PTY
-      // with no widget to reclaim it is a zombie process that keeps running
-      // unseen. Mirror terminal.dispose's teardown so an agent's close_widget
-      // cleans up everything (CANV-01).
-      const widget = canvas.widget(id)
-      if (widget && (widget.kind === 'terminal' || !widget.kind)) {
-        terminals.dispose(id)
-        snapshots.forget(id)
-        forgetOrigin(id)
+  bus.registerDefinition<Record<string, never>, { id: string }>({
+    type: 'widget.remove',
+    description:
+      'Remove a widget. Closing a terminal widget also tears down its shell.',
+    targetScheme: 'widget',
+    payloadSchema: { type: 'object', properties: {} },
+    handler: {
+      apply: ({ command }) => {
+        const id = widgetIdOf(command.target)
+        // Closing a terminal widget must also tear the shell down: a live PTY
+        // with no widget to reclaim it is a zombie process that keeps running
+        // unseen. Mirror terminal.dispose's teardown so an agent's close_widget
+        // cleans up everything (CANV-01).
+        const widget = canvas.widget(id)
+        if (widget && (widget.kind === 'terminal' || !widget.kind)) {
+          terminals.dispose(id)
+          snapshots.forget(id)
+          forgetOrigin(id)
+        }
+        // Idempotent on purpose: this is the command most likely to be replayed
+        // after a crash, and "it is already gone" is the outcome the caller
+        // wanted either way.
+        canvas.removeWidget(id)
+        return { id }
       }
-      // Idempotent on purpose: this is the command most likely to be replayed
-      // after a crash, and "it is already gone" is the outcome the caller
-      // wanted either way.
-      canvas.removeWidget(id)
-      return { id }
     }
   })
 
-  bus.register<{ x: number; y: number; zoom: number }, { camera: unknown }>('canvas.camera', {
-    // The camera is per-viewer framing, not shared content: refusing to pan
-    // because an agent holds a widget lock would be nonsense.
+  bus.registerDefinition<{ x: number; y: number; zoom: number }, { camera: unknown }>({
+    type: 'canvas.camera',
+    description: 'Set the viewer camera (world-space offset + zoom) for the main canvas.',
+    targetScheme: 'canvas',
     requiresLock: false,
     ignoreVersion: true,
-    apply: ({ command }) => ({ camera: canvas.setCamera(command.payload) })
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        x: { type: 'number', description: 'Camera offset X' },
+        y: { type: 'number', description: 'Camera offset Y' },
+        zoom: { type: 'number', description: 'Zoom, 0.2–4' }
+      }
+    },
+    handler: {
+      apply: ({ command }) => ({ camera: canvas.setCamera(command.payload) })
+    }
   })
 
-  bus.register<{ strokes: unknown }, { count: number }>('canvas.strokes', {
-    apply: ({ command }) => ({ count: canvas.setStrokes(command.payload?.strokes).length })
+  bus.registerDefinition<{ strokes: unknown }, { count: number }>({
+    type: 'canvas.strokes',
+    description: 'Replace the freehand stroke layer of the canvas.',
+    targetScheme: 'canvas',
+    payloadSchema: {
+      type: 'object',
+      properties: { strokes: { type: 'array', description: 'Stroke list as the renderer draws it' } }
+    },
+    handler: {
+      apply: ({ command }) => ({ count: canvas.setStrokes(command.payload?.strokes).length })
+    }
   })
 
   /**
@@ -116,13 +187,41 @@ export function registerCanvasCommands({
    * see `CanvasStore.importFromRenderer` — so a widget an agent created or
    * moved mid-drag is not undone by the UI echoing back what it last read.
    */
-  bus.register<
+  bus.registerDefinition<
     { widgets?: unknown; camera?: unknown; strokes?: unknown; removed?: unknown },
-    { applied: number; skipped: number }
-  >('canvas.import', {
+    { applied: number; skipped: number; removed: number }
+  >({
+    type: 'canvas.import',
+    description: 'Merge a renderer layout snapshot into the canvas store.',
+    targetScheme: 'canvas',
     requiresLock: false,
     ignoreVersion: true,
-    apply: ({ command }) => canvas.importFromRenderer(command.payload ?? {})
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        widgets: { type: 'array', description: 'Widget geometry list' },
+        camera: { type: 'object' },
+        strokes: { type: 'array' },
+        removed: { type: 'array' }
+      }
+    },
+    handler: {
+      apply: ({ command }) => {
+        const result = canvas.importFromRenderer(command.payload ?? {})
+        // A terminal widget the renderer no longer reports is gone from the
+        // canvas for good: nothing will ever reclaim its pty, so tear the shell
+        // down here exactly like widget.remove does. Otherwise the process keeps
+        // running unseen until the app quits (CANV-01).
+        for (const gone of result.removedWidgets) {
+          if (gone.kind === 'terminal' || !gone.kind) {
+            terminals.dispose(gone.id)
+            snapshots.forget(gone.id)
+            forgetOrigin(gone.id)
+          }
+        }
+        return result
+      }
+    }
   })
 }
 

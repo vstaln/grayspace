@@ -1,7 +1,7 @@
-import { app } from 'electron'
 import { randomBytes } from 'crypto'
 import * as fs from 'fs'
 import { join } from 'path'
+import { getUserDataDir } from './userData.ts'
 
 /** Header every control-server request must carry. */
 export const CONTROL_TOKEN_HEADER = 'x-orcspace-token'
@@ -35,7 +35,7 @@ export function controlToken(): string {
   }
   const token = randomBytes(32).toString('hex')
   try {
-    fs.mkdirSync(join(app.getPath('userData')), { recursive: true })
+    fs.mkdirSync(join(getUserDataDir()), { recursive: true })
     // 0o600: on POSIX this keeps other users out. Windows ignores the mode —
     // the profile directory's own ACL is what protects it there.
     fs.writeFileSync(file, token, { encoding: 'utf8', mode: 0o600 })
@@ -47,5 +47,15 @@ export function controlToken(): string {
 }
 
 export function tokenFile(): string {
-  return join(app.getPath('userData'), 'control-token')
+  return join(getUserDataDir(), 'control-token')
+}
+
+/**
+ * The headers every generated MCP client config must carry. The MCP endpoint
+ * is gated by the same token as the control API (P1), so `.mcp.json`,
+ * `opencode.json`, codex `config.toml` and the copy-paste recipes all embed
+ * these so CLI agents can authenticate without a manual step.
+ */
+export function mcpAuthHeaders(): Record<string, string> {
+  return { [CONTROL_TOKEN_HEADER]: controlToken() }
 }

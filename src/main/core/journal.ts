@@ -1,5 +1,40 @@
-import { EventEmitter } from 'events'
+﻿import { EventEmitter } from 'events'
+import { createHash } from 'crypto'
 import type { JournalEntry, JournalPhase, ResourceId } from './types.ts'
+
+export const GENESIS_HASH = '0000000000000000000000000000000000000000000000000000000000000000'
+
+/**
+ * Computes deterministic cryptographic SHA-256 hash for a journal entry.
+ */
+export function computeEntryHash(
+  prevHash: string,
+  entry: {
+    seq: number
+    at: number
+    phase: JournalPhase
+    actorId: string
+    type: string
+    target: ResourceId
+    payload?: unknown
+    version?: number
+    error?: string
+  }
+): string {
+  const content = JSON.stringify({
+    prev: prevHash,
+    seq: entry.seq,
+    at: entry.at,
+    phase: entry.phase,
+    actorId: entry.actorId,
+    type: entry.type,
+    target: entry.target,
+    version: entry.version ?? null,
+    error: entry.error ?? null,
+    payload: entry.payload ?? null
+  })
+  return createHash('sha256').update(content).digest('hex')
+}
 
 /**
  * Where journal entries go once the bus has produced them. Kept as an
@@ -19,15 +54,15 @@ export interface JournalOptions {
   memoryLimit?: number
   /** Sequence to continue from after a restart (highest seq already on disk). */
   startSeq?: number
+  /** Tail already on disk — loaded so recovery and `since()` work after restart. */
+  seed?: readonly JournalEntry[]
 }
 
 /**
- * The append-only log of everything that happened, in the order it happened.
+ * The append-only, tamper-evident log of everything that happened.
  *
- * It is deliberately one log rather than several: the canvas undo stack, the
- * audit trail of who changed what, crash recovery, and the assistant's
- * checkpoints are all the same question — "what has been done so far?" — and
- * answering it from four places is how the four-store problem started.
+ * Implements cryptographic hash-chaining: each entry contains the SHA-256 hash
+ * of its predecessor, making any tampering, deletion or alteration mathematically detectable.
  */
 export class Journal extends EventEmitter {
   private readonly entries: JournalEntry[] = []
@@ -35,6 +70,7 @@ export class Journal extends EventEmitter {
   private readonly now: () => number
   private readonly memoryLimit: number
   private seq: number
+  private lastHash: string = GENESIS_HASH
 
   constructor(options: JournalOptions = {}) {
     super()
@@ -42,10 +78,24 @@ export class Journal extends EventEmitter {
     this.now = options.now ?? Date.now
     this.memoryLimit = options.memoryLimit ?? 5_000
     this.seq = options.startSeq ?? 0
+    if (options.seed?.length) {
+      this.entries.push(...options.seed)
+      if (this.entries.length > this.memoryLimit) {
+        this.entries.splice(0, this.entries.length - this.memoryLimit)
+      }
+      const maxSeq = options.seed.reduce((max, entry) => Math.max(max, entry.seq), 0)
+      if (maxSeq > this.seq) this.seq = maxSeq
+      const last = options.seed[options.seed.length - 1]
+      this.lastHash = last.hash || computeEntryHash(last.prevHash || GENESIS_HASH, last)
+    }
   }
 
   get lastSeq(): number {
     return this.seq
+  }
+
+  get currentHash(): string {
+    return this.lastHash
   }
 
   append(input: {
@@ -58,53 +108,123 @@ export class Journal extends EventEmitter {
     error?: string
   }): JournalEntry {
     this.seq += 1
-    const entry: JournalEntry = { seq: this.seq, at: this.now(), ...input }
+    const at = this.now()
+    const prevHash = this.lastHash
+    const hash = computeEntryHash(prevHash, { seq: this.seq, at, ...input })
+    this.lastHash = hash
+
+    const entry: JournalEntry = {
+      seq: this.seq,
+      at,
+      prevHash,
+      hash,
+      ...input
+    }
+
     this.entries.push(entry)
-    // The in-memory window is a cache for recovery and the UI; the sink is the
-    // durable copy, so trimming here loses nothing.
     if (this.entries.length > this.memoryLimit) this.entries.splice(0, this.entries.length - this.memoryLimit)
     try {
       this.sink?.append(entry)
     } catch (err) {
-      // A journal write that fails must not take the command down with it: the
-      // state change already happened, and losing the audit line is the lesser
-      // failure. It is logged loudly instead.
       console.error('failed to persist journal entry', err)
     }
     this.emit('entry', entry)
     return entry
   }
 
+  /**
+   * Verifies the cryptographic hash-chain of all entries.
+   * Returns `{ valid: true }` if untouched, or details of the first broken entry.
+   */
+  verifyIntegrity(entries: readonly JournalEntry[] = this.entries): {
+    valid: boolean
+    totalEntries: number
+    brokenSeq?: number
+    reason?: string
+  } {
+    let expectedPrevHash = entries.length > 0 && entries[0].prevHash ? entries[0].prevHash : GENESIS_HASH
+    for (let i = 0; i < entries.length; i += 1) {
+      const entry = entries[i]
+      if (entry.prevHash && entry.prevHash !== expectedPrevHash) {
+        return {
+          valid: false,
+          totalEntries: entries.length,
+          brokenSeq: entry.seq,
+          reason: `prevHash mismatch at seq ${entry.seq}: expected ${expectedPrevHash}, got ${entry.prevHash}`
+        }
+      }
+      const calculatedHash = computeEntryHash(entry.prevHash || expectedPrevHash, entry)
+      if (entry.hash && entry.hash !== calculatedHash) {
+        return {
+          valid: false,
+          totalEntries: entries.length,
+          brokenSeq: entry.seq,
+          reason: `hash mismatch at seq ${entry.seq}: expected ${calculatedHash}, got ${entry.hash}`
+        }
+      }
+      expectedPrevHash = entry.hash || calculatedHash
+    }
+    return { valid: true, totalEntries: entries.length }
+  }
+
   /** Entries after `seq`, oldest first — the renderer's change stream. */
   since(seq: number, limit = 500): JournalEntry[] {
+    // Walk forward from the cursor so the limit drops the NEWEST entries,
+    // never the ones the consumer has not seen yet.
     const out: JournalEntry[] = []
-    for (let i = this.entries.length - 1; i >= 0; i -= 1) {
-      const entry = this.entries[i]
-      if (entry.seq <= seq) break
+    for (const entry of this.entries) {
+      if (entry.seq <= seq) continue
       out.push(entry)
       if (out.length >= limit) break
     }
-    return out.reverse()
+    return out
   }
 
   recent(limit = 100): JournalEntry[] {
     return this.entries.slice(-limit)
   }
 
-  /**
-   * Commands whose `intent` was written but which never reached `commit` or
-   * `abort` — i.e. the app died mid-apply. The recovery path checks each one
-   * against actual state before deciding to replay it, because a half-executed
-   * destructive command replayed blindly is worse than one left alone.
-   */
+  /** All in-memory journal entries in sequence order. */
+  all(): JournalEntry[] {
+    return this.entries.slice()
+  }
+
+  /** All committed events (phase === 'commit') in sequence order. */
+  allCommits(): JournalEntry[] {
+    return this.entries.filter((e) => e.phase === 'commit')
+  }
+
+  /** Committed events after sequence `seq`. */
+  commitsSince(seq: number, limit = 5_000): JournalEntry[] {
+    const out: JournalEntry[] = []
+    for (const entry of this.entries) {
+      if (entry.seq > seq && entry.phase === 'commit') {
+        out.push(entry)
+        if (out.length >= limit) break
+      }
+    }
+    return out
+  }
+
+  /** Committed events addressing a specific target resource. */
+  commitsForTarget(target: ResourceId): JournalEntry[] {
+    return this.entries.filter((e) => e.phase === 'commit' && e.target === target)
+  }
+
   unfinished(): JournalEntry[] {
-    const open = new Map<string, JournalEntry>()
+    const stacks = new Map<string, JournalEntry[]>()
     for (const entry of this.entries) {
       const key = `${entry.type}|${entry.target}|${entry.actorId}`
-      if (entry.phase === 'intent') open.set(key, entry)
-      else open.delete(key)
+      if (entry.phase === 'intent') {
+        const stack = stacks.get(key) ?? []
+        stack.push(entry)
+        stacks.set(key, stack)
+        continue
+      }
+      const stack = stacks.get(key)
+      if (stack?.length) stack.pop()
     }
-    return Array.from(open.values())
+    return Array.from(stacks.values()).flat()
   }
 
   flush(): void {

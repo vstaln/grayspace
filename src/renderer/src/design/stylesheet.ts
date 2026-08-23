@@ -22,7 +22,7 @@ function toCustomProperties(tokens: ThemeTokens): Record<string, string> {
 }
 
 /**
- * The custom properties Tailwind's theme reads. Both themes are emitted once and
+ * The custom properties UnoCSS's theme reads. Both themes are emitted once and
  * swapped by the `data-translucent` attribute the ThemeProvider sets, so
  * switching themes stays a single attribute write with no restyle pass in JS.
  */
@@ -36,16 +36,17 @@ const tokenSheet: Sheet = {
   ':root[data-translucent]': toCustomProperties(translucentTokens)
 }
 
-/** Resets and document-level defaults. Lowest precedence, as in Tailwind. */
+/** Document-level defaults. Lives in a cascade layer, so utilities beat it —
+ *  the same precedence the Tailwind preflight had before the UnoCSS switch. */
 const baseLayer: Sheet = {
   '*': { boxSizing: 'border-box', margin: 0, padding: 0 },
   'html, body, #root': { height: '100%', overflow: 'hidden' },
   body: {
-    fontFamily: 'var(--font-sans)',
+    fontFamily: 'var(--tok-font-sans)',
     WebkitUserSelect: 'none',
     userSelect: 'none',
-    color: 'var(--color-text)',
-    background: 'var(--color-bg)'
+    color: 'var(--tok-color-text)',
+    background: 'var(--tok-color-bg)'
   },
   // Native controls (date pickers, scrollbars, autofill) follow the dark
   // theme instead of flashing the OS light defaults (AUD-09).
@@ -95,7 +96,7 @@ const componentsLayer: Sheet = {
     color: palette.white,
     boxShadow: 'none',
     'html[data-translucent] &': {
-      background: 'var(--color-accent-soft)',
+      background: 'var(--tok-color-accent-soft)',
       borderColor: hairline.railActiveGlassBorder,
       color: palette.white,
       boxShadow: 'none'
@@ -103,15 +104,17 @@ const componentsLayer: Sheet = {
   },
 
   '.desktop-surface': {
-    background: 'var(--color-bg)',
+    background: 'var(--tok-color-bg)',
     'html[data-translucent] &': {
       backgroundImage: 'none',
-      backgroundColor: 'rgba(10, 10, 12, 0.5)',
+      // Blur alone, no black veil — the frosted blur keeps the canvas legible
+      // without washing out what's showing through it.
+      backgroundColor: 'transparent',
       backdropFilter: frost.surface,
       WebkitBackdropFilter: frost.surface
     },
-    // The photo theme is the one translucent theme with something worth looking
-    // at behind the canvas, so it drops the frosting the glass theme applies.
+    // The photo theme is the one translucent theme, and it has something worth
+    // looking at behind the canvas, so it drops the generic frosting above.
     "html[data-theme='photo'] &": {
       backgroundColor: 'transparent',
       backdropFilter: 'none',
@@ -135,16 +138,19 @@ const componentsLayer: Sheet = {
     backgroundSize: 'cover',
     backgroundRepeat: 'no-repeat',
     pointerEvents: 'none',
-    // Dim is a separate layer so changing it never re-decodes the image.
+    // Both knobs are user-controlled from Settings → Appearance: `--wallpaper-blur`
+    // softens the picture, `--wallpaper-dim` lays a black veil over it. The slight
+    // scale-up keeps blur sampling from pulling in the (sharp) element edge as a
+    // visible ring.
+    filter: 'blur(calc(var(--wallpaper-blur, 0.4) * 32px))',
+    transform: 'scale(1.08)',
+    // The dim veil lives on a pseudo-element so it sits above the image but
+    // under everything else; default 0 keeps an untouched photo untouched.
     '&::after': {
-      content: "''",
+      content: '""',
       position: 'absolute',
       inset: 0,
-      background: '#000000',
-      // A 45% black veil made vivid wallpapers look nearly monochrome. Keep
-      // the user's dim setting, but apply it more gently so the canvas remains
-      // readable without washing the image's colour out.
-      opacity: 'calc(var(--wallpaper-dim, 0.45) * 0.68)'
+      backgroundColor: 'rgba(0, 0, 0, var(--wallpaper-dim, 0))'
     }
   },
 
@@ -157,6 +163,10 @@ const componentsLayer: Sheet = {
     // widget bodies still need native touch scroll inside their own bounds.
     touchAction: 'pan-x pan-y',
     '&.is-active': { boxShadow: `0 0 0 1px ${hairline.active}` },
+    // A terminal the cursor is dragging a Check widget's wire over — the same
+    // bluish-white the wire itself glows, so the highlighted target reads as
+    // "this is what the thread would land on" (CANV connect-drag).
+    '&.connect-target-active': { boxShadow: '0 0 0 2px rgba(223, 231, 255, 0.9)' },
     // Keyboard focus (Tab onto the frame) gets a visible ring so the user can
     // tell whether arrows will move the widget or pan the canvas (CANV-14).
     '&:focus-visible': {
@@ -169,7 +179,19 @@ const componentsLayer: Sheet = {
       WebkitBackdropFilter: frost.shell,
       boxShadow: `0 0 0 1px ${hairline.glassSoft}`
     },
-    'html[data-translucent] &.is-active': { boxShadow: `0 0 0 1px ${hairline.activeGlass}` }
+    'html[data-translucent] &.is-active': { boxShadow: `0 0 0 1px ${hairline.activeGlass}` },
+    // A terminal is a text surface, not a window onto the wallpaper: it keeps
+    // one opaque fill in every theme. The explicit translucent-theme rule is
+    // required to out-rank `html[data-translucent] .widget-shell` above.
+    '&.is-terminal': { background: palette.terminalSolid },
+    'html[data-translucent] &.is-terminal': {
+      background: palette.terminalSolid,
+      backdropFilter: 'none',
+      WebkitBackdropFilter: 'none'
+    },
+    // One flat slab: the header drops its own graphite coat and its underline
+    // hairline, so frame, header and terminal body are a single tone.
+    '&.is-terminal .widget-header-shell': { background: 'transparent', boxShadow: 'none' }
   },
 
   '.widget-header-shell': {
@@ -182,47 +204,6 @@ const componentsLayer: Sheet = {
     'button::after': { content: "''", position: 'absolute', inset: '-3px', borderRadius: 'inherit' }
   },
 
-  '.chat-fab-shell': {
-    background: palette.offWhite,
-    '&:hover': { background: palette.white },
-    'html[data-translucent] &': { background: palette.offWhite }
-  },
-
-  // Frosted at every theme, not just glass/photo: the panel docks to the full
-  // window height and reads better with the canvas showing faintly through.
-  '.chat-panel-shell': {
-    background: palette.graphite,
-    backdropFilter: frost.chat,
-    WebkitBackdropFilter: frost.chat,
-    boxShadow: `-1px 0 0 ${hairline.soft}`,
-    'html[data-translucent] &': {
-      background: palette.graphite,
-      backdropFilter: frost.board,
-      WebkitBackdropFilter: frost.board
-    }
-  },
-
-  // The composer sits inside the already-frosted chat panel, so it only needs a
-  // faint lift to read as a raised card — a second dark fill would stack toward
-  // opaque and lose the wallpaper showing through.
-  '.composer-shell': { background: palette.surfaceLift },
-
-  // A band of highlight sweeping through otherwise-dim text — the same "is
-  // typing" cue Claude/ChatGPT/Grok use instead of a spinner, because it reads
-  // at a glance without pulling focus the way a moving dot does.
-  '.thinking-shimmer': {
-    backgroundImage: `linear-gradient(90deg, ${hairline.active} 0%, ${palette.white} 50%, ${hairline.active} 100%)`,
-    backgroundSize: '200% 100%',
-    backgroundClip: 'text',
-    WebkitBackgroundClip: 'text',
-    color: 'transparent',
-    animation: 'shimmer 1.6s linear infinite'
-  },
-  '@keyframes shimmer': {
-    from: { backgroundPosition: '150% 0' },
-    to: { backgroundPosition: '-50% 0' }
-  },
-
   // P3-221: honour the OS-level reduced-motion preference.
   '@media (prefers-reduced-motion: reduce)': {
     '*, *::before, *::after': {
@@ -230,32 +211,42 @@ const componentsLayer: Sheet = {
       animationIterationCount: '1 !important',
       transitionDuration: '0.01ms !important'
     },
-    '.thinking-dot': { animation: 'none' },
-    '.thinking-shimmer': { animation: 'none', backgroundImage: 'none', color: hairline.active },
     '.conn-flare-dot, .conn-idle-dot': { display: 'none' }
   },
 
-  '.brain-graph-surface': { background: 'var(--color-bg)' },
+  /*
+   * Entrance for modal surfaces (Task Board, file preview): a quiet fade plus
+   * a 95%-scale settle. Replaces the `animate-in fade-in zoom-in-95` classes
+   * from tailwindcss-animate — that plugin is not installed, so those class
+   * names never generated any CSS and the panels simply popped in with no
+   * transition at all.
+   */
+  '.pop-in': { animation: 'pop-in 200ms ease-out' },
+  '@keyframes pop-in': {
+    from: { opacity: 0, transform: 'scale(0.95)' },
+    to: { opacity: 1, transform: 'scale(1)' }
+  },
+
+  /* Indeterminate progress strip shown while a browser page is loading. */
+  '.load-bar': { animation: 'load-bar-slide 1.1s ease-in-out infinite' },
+  '@keyframes load-bar-slide': {
+    from: { transform: 'translateX(-100%)' },
+    to: { transform: 'translateX(400%)' }
+  },
 
   '.term-shell': {
-    background: palette.terminalGlass,
+    // The terminal's frame (.widget-shell.is-terminal) is fully opaque in every
+    // theme, so this wrapper stays clear — no fill and no frosting of its own;
+    // the wallpaper can no longer show through the body.
     '& .xterm': { height: '100%' },
-    // xterm paints its own background on a canvas that CSS can't reach — see
-    // TerminalWidget.tsx's xtermTheme, kept in sync with `terminalGlass`. These
-    // wrapper divs just stay out of the way so the shell's fill shows through.
+    // xterm paints its own background on a canvas CSS can't reach — see
+    // TerminalWidget.tsx's xtermTheme, which uses the frame's exact
+    // `terminalSolid`. These wrapper divs just stay out of the way.
     '& .xterm, & .xterm-screen, & .xterm-viewport': { background: 'transparent !important' },
-    '& .xterm-viewport::-webkit-scrollbar': { width: '10px' },
-    '& .xterm-viewport::-webkit-scrollbar-track': { background: 'transparent' },
-    '& .xterm-viewport::-webkit-scrollbar-thumb': {
-      border: '3px solid transparent',
-      borderRadius: '6px',
-      background: palette.scrollThumb,
-      backgroundClip: 'padding-box'
-    },
-    '& .xterm-viewport::-webkit-scrollbar-thumb:hover': {
-      background: palette.scrollThumbHover,
-      backgroundClip: 'padding-box'
-    }
+    // Scrolling stays fully functional (wheel/trackpad) — only the visible
+    // scrollbar track/thumb is hidden, so nothing overlaps the terminal text.
+    '& .xterm-viewport::-webkit-scrollbar': { width: '0px' },
+    '& .xterm-viewport': { scrollbarWidth: 'none' }
   },
 
   // The lit cable between an agent's terminal and the one it opened. A thin
@@ -287,6 +278,14 @@ const componentsLayer: Sheet = {
   '.conn-idle-dot': {
     filter: 'drop-shadow(0 0 3px rgba(200,215,255,0.75))'
   },
+  // The wire mid-drag, before it has landed on a terminal — dashed so it
+  // reads as "not committed yet" next to the solid resting threads above.
+  '.conn-draft-thread': {
+    stroke: 'rgba(223, 231, 255, 0.8)',
+    strokeWidth: 1.6,
+    strokeDasharray: '5 4',
+    vectorEffect: 'non-scaling-stroke'
+  },
   // Kanban lanes keep a faint colour identity per status — a low-alpha tint over
   // the flat fill rather than a gradient, so they stay legible without glowing.
   '.lane-blue': { background: lanes.blue.fill, borderColor: lanes.blue.border },
@@ -310,11 +309,11 @@ const componentsLayer: Sheet = {
 }
 
 /**
- * The whole app stylesheet. Layer names are the ones Tailwind already declares,
- * so these rules keep exactly the precedence they had as hand-written CSS —
- * utilities still win over components, and components over base.
+ * The whole app stylesheet. The `@layer base` block keeps document defaults in
+ * a real cascade layer, so the (unlayered) UnoCSS utilities still win over
+ * them, while unlayered app rules win over everything.
  *
- * `:focus-visible` is deliberately left unlayered: it has to beat Tailwind's
+ * `:focus-visible` is deliberately left unlayered: it has to beat Uno's
  * `outline-none` utility (P3-215).
  */
 export const appStylesheet: Sheet = {
@@ -325,11 +324,12 @@ export const appStylesheet: Sheet = {
   // the control — it read as unstyled browser chrome. Keyboard users still get
   // a clear ring; it just belongs to this app now.
   ':focus-visible': { outline: '1px solid rgba(255,255,255,0.38)', outlineOffset: '1px', borderRadius: '10px' },
-  // Text surfaces that already show focus themselves get no ring at all: the
-  // note's body border lightens, the chat composer's card border lifts, and a
-  // second ring on top of that is noise. Higher specificity than the bare
-  // `:focus-visible` above, so these win without needing `!important`.
-  '.composer-shell textarea:focus-visible': { outline: 'none' },
-  '.note-surface :is(input, textarea):focus-visible': { outline: 'none' },
+  // Text fields already show focus themselves — every styled input/textarea in
+  // the app switches its own border color on focus — so the generic ring on
+  // top of that just doubled the outline into a floating oval around the
+  // control. Higher specificity than the bare `:focus-visible` above, so this
+  // wins without needing `!important`. Buttons and other controls with no
+  // self-drawn focus state keep the ring.
+  ':is(input, textarea):focus-visible': { outline: 'none' },
   '@layer components': componentsLayer
 }

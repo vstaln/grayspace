@@ -1,9 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Connection, Widget } from '../types'
+import { Connection, Point, Widget } from '../types'
 
 interface Props {
   connections: Connection[]
   widgets: Widget[]
+  /** A wire still being dragged from `fromId` to the live cursor position — drawn
+   *  dashed and un-flared since it isn't a real link until the pointer is released. */
+  draft?: { fromId: string; point: Point } | null
 }
 
 /** Anchor point: the middle of a widget's header, in world coordinates. */
@@ -38,17 +41,13 @@ const FLARE_MS = 1600
  * a dot along the curve once; every link keeps a faint, slow shimmer after
  * that so a canvas full of terminals still reads as a tree.
  */
-export default function ConnectionsLayer({ connections, widgets }: Props): React.JSX.Element {
+function ConnectionsLayer({ connections, widgets, draft }: Props): React.JSX.Element {
   const byId = useMemo(() => new Map(widgets.map((w) => [w.id, w])), [widgets])
+  const draftFrom = draft ? byId.get(draft.fromId) : undefined
 
   return (
-    <svg className="pointer-events-none absolute inset-0 overflow-visible" style={{ width: 1, height: 1 }}>
+    <svg aria-hidden className="pointer-events-none absolute inset-0 overflow-visible" style={{ width: 1, height: 1 }}>
       <defs>
-        <linearGradient id="conn-glow" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor="var(--conn-color, #dfe7ff)" stopOpacity="0" />
-          <stop offset="50%" stopColor="var(--conn-color, #dfe7ff)" stopOpacity="0.9" />
-          <stop offset="100%" stopColor="var(--conn-color, #dfe7ff)" stopOpacity="0" />
-        </linearGradient>
         <filter id="conn-blur" x="-60%" y="-60%" width="220%" height="220%">
           <feGaussianBlur stdDeviation="2.2" />
         </filter>
@@ -60,9 +59,18 @@ export default function ConnectionsLayer({ connections, widgets }: Props): React
         const { d } = arcPath(anchor(from), anchor(to))
         return <ConnectionArc key={c.id} d={d} bornAt={c.bornAt} />
       })}
+      {draftFrom && (
+        <path
+          d={arcPath(anchor(draftFrom), draft!.point).d}
+          className="conn-draft-thread"
+          fill="none"
+        />
+      )}
     </svg>
   )
 }
+
+export default React.memo(ConnectionsLayer)
 
 function ConnectionArc({ d, bornAt }: { d: string; bornAt: number }): React.JSX.Element {
   // Local timer rather than a prop computed by the parent: the flare has to
@@ -83,18 +91,18 @@ function ConnectionArc({ d, bornAt }: { d: string; bornAt: number }): React.JSX.
       <path d={d} className="conn-thread" fill="none" />
       {/* The glow pass — wider, blurred, brighter while fresh. */}
       <path d={d} className="conn-glow" fill="none" filter="url(#conn-blur)" />
-      {/* A single point of light travelling the arc once on arrival. */}
+      {/* A single point of light travelling the arc once on arrival. Finite
+          animations only: an `repeatCount="indefinite"` shimmer here used to
+          keep the compositor animating every link on the canvas forever, a
+          constant GPU/CPU tax for decoration nobody watches after the first
+          second (PERF-conn-idle). The resting thread below carries the
+          relationship once the flare has played. */}
       {fresh && (
         <circle r="3.2" className="conn-flare-dot" fill="#ffffff">
           <animateMotion dur="1.1s" begin="0s" fill="freeze" path={d} keyPoints="0;1" keyTimes="0;1" calcMode="spline" keySplines="0.22 0.61 0.36 1" />
           <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.08;0.75;1" dur="1.1s" fill="freeze" />
         </circle>
       )}
-      {/* The slow ambient shimmer that keeps an old link from looking dead. */}
-      <circle r="2" className="conn-idle-dot" fill="#ffffff" opacity="0.85">
-        <animateMotion dur="3.2s" repeatCount="indefinite" path={d} keyPoints="0;1" keyTimes="0;1" calcMode="linear" />
-        <animate attributeName="opacity" values="0;0.9;0.9;0" keyTimes="0;0.15;0.85;1" dur="3.2s" repeatCount="indefinite" />
-      </circle>
     </g>
   )
 }

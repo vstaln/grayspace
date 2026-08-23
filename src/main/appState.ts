@@ -1,13 +1,19 @@
-import { app, safeStorage } from 'electron'
+import * as electron from 'electron'
 import { EventEmitter } from 'events'
 import { basename, join } from 'path'
-import { readStoreJson, writeJsonAtomic } from './storage'
+import { readStoreJson, writeJsonAtomic } from './storage.ts'
+import { getUserDataDir } from './userData.ts'
+import { notifyCanvasWorkspaceChanged } from './canvasState.ts'
+
+const safeStorage = (electron as unknown as { safeStorage?: typeof electron.safeStorage }).safeStorage
 
 /** How a note body addresses another note. Switchable from the settings menu. */
 export type LinkSyntax = 'wiki' | 'dollar' | 'both'
 
 /** `lead` sees and edits the whole board; `member` works inside their own tasks. */
 export type UserRole = 'member' | 'lead'
+
+export type UserPlan = 'free' | 'plus'
 
 export interface RecentDir {
   path: string
@@ -20,16 +26,24 @@ export interface RecentDir {
 export interface AppSettings {
   linkSyntax: LinkSyntax
   role: UserRole
+  plan?: UserPlan
   /** Shown as the assignee on kanban cards the human takes. */
   userName: string
   /** Absolute path of the wallpaper copied into userData; unset means no photo yet. */
   backgroundImage?: string
   /** 0–90 % of black laid over the wallpaper so widgets stay readable on bright photos. */
   backgroundDim: number
-  /** Key for the free-tier OpenRouter models in the chat panel; unset until the user pastes one. */
-  openRouterApiKey?: string
-  /** Encrypted form of `openRouterApiKey` on disk (safeStorage); never sent to the renderer. */
-  openRouterApiKeyEnc?: string
+  /** 0–90 % Gaussian blur applied to the wallpaper so widgets stay readable on busy photos. */
+  backgroundBlur: number
+  /** Telegram bot token, kept encrypted at rest. */
+  telegramBotToken?: string
+  telegramBotTokenEnc?: string
+  /** Only this Telegram user ID may inject text into a terminal. */
+  telegramUserId?: string
+  /** Legacy alias for telegramUserId. */
+  telegramChatId?: string
+  /** Terminal receiving authenticated incoming integration messages. */
+  targetTerminalId?: string
   /**
    * Model the built-in assistant plans with. Separate from whatever the chat
    * panel is set to: a chat turn and an autonomous run have different needs,
@@ -37,11 +51,45 @@ export interface AppSettings {
    * time a cheap chat model produced a bad plan.
    */
   assistantModel?: string
+  localModel: LocalModelSettings
 }
 
-export type SettingsPatch = Partial<Omit<AppSettings, 'backgroundImage' | 'openRouterApiKey'>> & {
+export interface LocalModelSettings {
+  enabled: boolean
+  /** `llama-server.exe` from a llama.cpp release. */
+  serverBin: string
+  modelPath: string
+  /** Vision projector; without it the model is text-only. */
+  mmprojPath?: string
+  contextSize: number
+  /** 99 means "every layer on the GPU"; lowering it trades speed for VRAM. */
+  gpuLayers: number
+  /**
+   * Unload after this long with nothing in flight, freeing the GPU. 0 keeps
+   * the model resident once loaded.
+   */
+  idleTimeoutMs: number
+  /** Vision encoder on the GPU. Off by default — it costs ~0.67 GB rarely used. */
+  offloadVision: boolean
+}
+
+export type SettingsPatch = Partial<
+  Omit<
+    AppSettings,
+    | 'backgroundImage'
+    | 'telegramBotToken'
+    | 'telegramUserId'
+    | 'telegramChatId'
+    | 'targetTerminalId'
+    | 'localModel'
+  >
+> & {
   backgroundImage?: string | null
-  openRouterApiKey?: string | null
+  telegramBotToken?: string | null
+  telegramUserId?: string | null
+  telegramChatId?: string | null
+  targetTerminalId?: string | null
+  localModel?: Partial<LocalModelSettings>
 }
 
 export interface AppStateShape {
@@ -52,16 +100,34 @@ export interface AppStateShape {
 
 const DEFAULT_SETTINGS: AppSettings = {
   linkSyntax: 'both',
-  role: 'member',
+  role: 'lead',
+  plan: 'free',
   userName: 'you',
-  backgroundDim: 45
+  backgroundDim: 45,
+  backgroundBlur: 40,
+  localModel: {
+    // Portable defaults: off until the user points at a real llama-server and
+    // model. Machine-specific paths never ship as defaults — a missing binary
+    // would otherwise spam the assistant with "не найден" on every warm-up.
+    enabled: false,
+    serverBin: '',
+    modelPath: '',
+    mmprojPath: '',
+    contextSize: 32_768,
+    gpuLayers: 99,
+    idleTimeoutMs: 5 * 60_000,
+    offloadVision: false
+  }
 }
+
 const MAX_RECENT = 12
+/** Non-secret stand-in returned to the renderer when a real key is stored. */
+const SECRET_MASK = '••••••••'
 
 /** Best-effort secret encryption; returns null when the platform has no keychain. */
 function encryptSecret(value: string): string | null {
   try {
-    if (safeStorage.isEncryptionAvailable()) {
+    if (safeStorage && typeof safeStorage.isEncryptionAvailable === 'function' && safeStorage.isEncryptionAvailable()) {
       return safeStorage.encryptString(value).toString('base64')
     }
   } catch {
@@ -72,10 +138,13 @@ function encryptSecret(value: string): string | null {
 
 function decryptSecret(encoded: string): string | null {
   try {
-    return safeStorage.decryptString(Buffer.from(encoded, 'base64'))
+    if (safeStorage && typeof safeStorage.decryptString === 'function') {
+      return safeStorage.decryptString(Buffer.from(encoded, 'base64'))
+    }
   } catch {
     return null
   }
+  return null
 }
 
 /**
@@ -85,11 +154,14 @@ function decryptSecret(encoded: string): string | null {
 export class AppState extends EventEmitter {
   private state: AppStateShape = { recent: [], settings: { ...DEFAULT_SETTINGS } }
   private loaded = false
-  private get file(): string { return join(app.getPath('userData'), 'workspace-state.json') }
+  private get file(): string { return join(getUserDataDir(), 'workspace-state.json') }
 
   get(): AppStateShape {
     this.ensure()
-    const { openRouterApiKeyEnc: _enc, ...settings } = this.state.settings
+    const {
+      telegramBotTokenEnc: _telegramTokenEnc,
+      ...settings
+    } = this.state.settings
     return {
       workspaceDir: this.state.workspaceDir,
       recent: this.sortedRecent(),
@@ -105,21 +177,40 @@ export class AppState extends EventEmitter {
   get settings(): AppSettings {
     this.ensure()
     // Ciphertext is internal to this class; callers only ever see the key.
-    const { openRouterApiKeyEnc: _enc, ...settings } = this.state.settings
+    const {
+      telegramBotTokenEnc: _telegramTokenEnc,
+      ...settings
+    } = this.state.settings
     return settings
+  }
+
+  /**
+   * Settings safe to hand the renderer: secrets are replaced with a non-empty
+   * mask so `Boolean(key)` still works in the UI without exposing the secret.
+   * Main-process callers that need the real key use {@link settings}.
+   */
+  publicSettings(): AppSettings {
+    const s = this.settings
+    return {
+      ...s,
+      telegramBotToken: s.telegramBotToken ? SECRET_MASK : undefined
+    }
   }
 
   /** Switching folders records the previous choice so it can be reopened in one click. */
   setWorkspaceDir(dir: string | undefined): void {
     this.ensure()
-    this.state.workspaceDir = dir || undefined
-    if (dir) {
-      const existing = this.state.recent.find(r => r.path === dir)
+    const nextDir = dir || undefined
+    if (this.state.workspaceDir === nextDir) return
+    this.state.workspaceDir = nextDir
+    if (nextDir) {
+      const existing = this.state.recent.find(r => r.path === nextDir)
       if (existing) existing.lastOpenedAt = Date.now()
-      else this.state.recent.push({ path: dir, name: basename(dir) || dir, pinned: false, lastOpenedAt: Date.now() })
+      else this.state.recent.push({ path: nextDir, name: basename(nextDir) || nextDir, pinned: false, lastOpenedAt: Date.now() })
       this.trim()
     }
     this.commit()
+    notifyCanvasWorkspaceChanged(nextDir)
   }
 
   togglePin(path: string): void {
@@ -141,6 +232,7 @@ export class AppState extends EventEmitter {
     if (patch.linkSyntax && ['wiki', 'dollar', 'both'].includes(patch.linkSyntax))
       this.state.settings.linkSyntax = patch.linkSyntax
     if (patch.role && ['member', 'lead'].includes(patch.role)) this.state.settings.role = patch.role
+    if (patch.plan && ['free', 'plus'].includes(patch.plan)) this.state.settings.plan = patch.plan
     if (typeof patch.assistantModel === 'string')
       this.state.settings.assistantModel = patch.assistantModel.trim() || undefined
     if (typeof patch.userName === 'string' && patch.userName.trim())
@@ -149,26 +241,52 @@ export class AppState extends EventEmitter {
       this.state.settings.backgroundImage = patch.backgroundImage || undefined
     if (typeof patch.backgroundDim === 'number' && Number.isFinite(patch.backgroundDim))
       this.state.settings.backgroundDim = Math.min(90, Math.max(0, Math.round(patch.backgroundDim)))
-    if ('openRouterApiKey' in patch) {
-      const value = patch.openRouterApiKey?.trim() || undefined
-      if (value) {
-        const encrypted = encryptSecret(value)
-        if (encrypted) {
-          this.state.settings.openRouterApiKeyEnc = encrypted
-          delete this.state.settings.openRouterApiKey
-        } else {
-          // No keychain on this platform — store plainly rather than lose the key.
-          this.state.settings.openRouterApiKey = value
-          delete this.state.settings.openRouterApiKeyEnc
-        }
-      } else {
-        delete this.state.settings.openRouterApiKey
-        delete this.state.settings.openRouterApiKeyEnc
-      }
+    if (typeof patch.backgroundBlur === 'number' && Number.isFinite(patch.backgroundBlur))
+      this.state.settings.backgroundBlur = Math.min(90, Math.max(0, Math.round(patch.backgroundBlur)))
+    if ('telegramBotToken' in patch)
+      this.setSecret('telegramBotToken', 'telegramBotTokenEnc', patch.telegramBotToken)
+    if ('telegramUserId' in patch) {
+      const cleaned = cleanId(patch.telegramUserId)
+      this.state.settings.telegramUserId = cleaned
+      this.state.settings.telegramChatId = cleaned
+    } else if ('telegramChatId' in patch) {
+      const cleaned = cleanId(patch.telegramChatId)
+      this.state.settings.telegramUserId = cleaned
+      this.state.settings.telegramChatId = cleaned
+    }
+    if ('targetTerminalId' in patch) this.state.settings.targetTerminalId = cleanId(patch.targetTerminalId)
+    if (patch.localModel && typeof patch.localModel === 'object') {
+      // A nested merge, not a replace — a caller flipping just `enabled` must
+      // not blank out the paths sitting next to it.
+      this.state.settings.localModel = { ...this.state.settings.localModel, ...patch.localModel }
     }
     this.commit()
-    const { openRouterApiKeyEnc: _enc, ...settings } = this.state.settings
-    return settings
+    return this.publicSettings()
+  }
+
+  /** Encrypts a secret setting at rest, or drops both its forms when cleared. */
+  private setSecret(
+    plainKey: 'telegramBotToken',
+    encKey: 'telegramBotTokenEnc',
+    raw: string | null | undefined
+  ): void {
+    const value = raw?.trim() || undefined
+    if (!value) {
+      delete this.state.settings[plainKey]
+      delete this.state.settings[encKey]
+      return
+    }
+    // A form that re-saves the redacted mask must not overwrite the real key.
+    if (value === SECRET_MASK || /^•+$/.test(value)) return
+    const encrypted = encryptSecret(value)
+    if (encrypted) {
+      this.state.settings[encKey] = encrypted
+      delete this.state.settings[plainKey]
+    } else {
+      // No keychain on this platform — store plainly rather than lose the key.
+      this.state.settings[plainKey] = value
+      delete this.state.settings[encKey]
+    }
   }
 
   /** Pinned first, then most recently opened. */
@@ -187,9 +305,12 @@ export class AppState extends EventEmitter {
 
   private ensure(): void {
     if (this.loaded) return
-    this.loaded = true
     // Older builds wrote `{ workspaceDir }` only — missing fields fall back to defaults.
+    // Loaded is only flagged once the read succeeded: a transient EBUSY/EACCES
+    // (antivirus lock) must not leave the app running on empty defaults for
+    // the whole session — readStoreJson throws in that case.
     const raw = readStoreJson<Partial<AppStateShape>>(this.file, {})
+    this.loaded = true
     this.state = {
       workspaceDir: typeof raw.workspaceDir === 'string' ? raw.workspaceDir : undefined,
       recent: Array.isArray(raw.recent)
@@ -202,19 +323,37 @@ export class AppState extends EventEmitter {
         : [],
       settings: { ...DEFAULT_SETTINGS, ...(raw.settings || {}) }
     }
+    // A shallow merge above would let a state file from before `localModel`
+    // grew its newest field (or one saved with only a couple of keys patched)
+    // silently drop the rest of the defaults instead of filling the gaps.
+    this.state.settings.localModel = { ...DEFAULT_SETTINGS.localModel, ...(raw.settings?.localModel || {}) }
     // A state file written before wallpapers existed (or hand-edited) can carry a
-    // non-numeric dim, which would otherwise reach the renderer as a broken alpha.
+    // non-numeric dim/blur, which would otherwise reach the renderer broken.
     if (!Number.isFinite(this.state.settings.backgroundDim))
       this.state.settings.backgroundDim = DEFAULT_SETTINGS.backgroundDim
+    if (!Number.isFinite(this.state.settings.backgroundBlur))
+      this.state.settings.backgroundBlur = DEFAULT_SETTINGS.backgroundBlur
+    if (!this.state.settings.telegramUserId && this.state.settings.telegramChatId) {
+      this.state.settings.telegramUserId = this.state.settings.telegramChatId
+    } else if (!this.state.settings.telegramChatId && this.state.settings.telegramUserId) {
+      this.state.settings.telegramChatId = this.state.settings.telegramUserId
+    }
     // Decrypt a stored key (and migrate an older plaintext key to the encrypted
     // field when the platform can encrypt it) so only ciphertext touches disk.
-    if (this.state.settings.openRouterApiKeyEnc) {
-      this.state.settings.openRouterApiKey = decryptSecret(this.state.settings.openRouterApiKeyEnc) || undefined
-    } else if (this.state.settings.openRouterApiKey) {
-      const encrypted = encryptSecret(this.state.settings.openRouterApiKey)
+    this.decryptOrMigrate('telegramBotToken', 'telegramBotTokenEnc')
+  }
+
+  private decryptOrMigrate(
+    plainKey: 'telegramBotToken',
+    encKey: 'telegramBotTokenEnc'
+  ): void {
+    if (this.state.settings[encKey]) {
+      this.state.settings[plainKey] = decryptSecret(this.state.settings[encKey] as string) || undefined
+    } else if (this.state.settings[plainKey]) {
+      const encrypted = encryptSecret(this.state.settings[plainKey] as string)
       if (encrypted) {
-        this.state.settings.openRouterApiKeyEnc = encrypted
-        delete this.state.settings.openRouterApiKey
+        this.state.settings[encKey] = encrypted
+        delete this.state.settings[plainKey]
         this.commit()
       }
     }
@@ -222,10 +361,34 @@ export class AppState extends EventEmitter {
 
   private commit(): void {
     try {
-      writeJsonAtomic(this.file, this.state)
-    } catch {
-      /* a read-only profile must not take the app down */
+      writeJsonAtomic(this.file, { ...this.state, settings: this.settingsForDisk() })
+    } catch (err) {
+      // A read-only profile must not take the app down, but total silence
+      // would hide a state file that stopped persisting (every setting change
+      // would look saved in the UI and be gone after a restart).
+      console.error('failed to persist workspace state', err)
     }
     this.emit('change', this.get())
   }
+
+  /**
+   * `ensure()` decrypts a stored key into its plaintext field purely so
+   * `.settings` has something in-memory to hand callers — without this, that
+   * plaintext copy would ride along on the very next unrelated `commit()`
+   * (opening a folder, toggling a pin) and land on disk next to its own
+   * ciphertext, silently defeating the encryption after the first save.
+   * Dropped only when the ciphertext exists; the no-keychain fallback still
+   * stores the key in plaintext on purpose (see `setSecret`), and that copy
+   * has to survive a restart to be worth anything.
+   */
+  private settingsForDisk(): AppSettings {
+    const settings = { ...this.state.settings }
+    if (settings.telegramBotTokenEnc) delete settings.telegramBotToken
+    return settings
+  }
+}
+
+function cleanId(value: unknown): string | undefined {
+  const id = typeof value === 'string' ? value.trim().slice(0, 128) : ''
+  return id || undefined
 }

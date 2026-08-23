@@ -1,0 +1,1 @@
+C:\Users\user\Desktop\Orcspace\native\canvas-core\target\x86_64-pc-windows-msvc\release\orcspace_canvas_core.dll: C:\Users\user\Desktop\Orcspace\native\canvas-core\build.rs C:\Users\user\Desktop\Orcspace\native\canvas-core\src\lib.rs

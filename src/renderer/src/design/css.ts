@@ -53,9 +53,24 @@ function serializeBlock(selector: string, rules: StyleRules): string {
 
     if (isRules(value)) {
       if (key.startsWith('@keyframes')) nested.push(serializeKeyframes(key, value))
-      // A nested at-rule re-states the current selector inside itself.
       else if (key.startsWith('@')) nested.push(`${key}{${serializeBlock(selector, value)}}`)
-      else nested.push(serializeBlock(key.includes('&') ? key.replace(/&/g, selector) : `${selector} ${key}`, value))
+      else {
+        const expanded = key.includes('&')
+          ? key
+              .split(',')
+              .map((part) =>
+                selector
+                  .split(',')
+                  .map((sel) => part.trim().replace(/&/g, sel.trim()))
+                  .join(', ')
+              )
+              .join(', ')
+          : selector
+              .split(',')
+              .map((sel) => `${sel.trim()} ${key.trim()}`)
+              .join(', ')
+        nested.push(serializeBlock(expanded, value))
+      }
       continue
     }
 

@@ -1,17 +1,32 @@
-import { app } from 'electron'
+import * as electron from 'electron'
 import { EventEmitter } from 'events'
-import { join } from 'path'
-import { readStoreJson, writeJsonAtomic } from './storage'
-import { VersionRegistry } from './core/index.ts'
+import * as fs from 'fs'
+import { dirname, join } from 'path'
+import { createHash } from 'crypto'
+import { createRequire } from 'module'
+import { fileURLToPath } from 'url'
+import { readStoreJson, writeJsonAtomic, writeJsonAtomicAsync } from './storage.ts'
+import { getUserDataDir } from './userData.ts'
+import {
+  VersionRegistry,
+  fold,
+  rewind as rewindHelper,
+  blame as blameHelper,
+  fork as forkHelper,
+  type JournalEntry,
+  type ResourceId
+} from './core/index.ts'
 
-/**
- * Bumped whenever the persisted shape changes; {@link migrate} brings older
- * files forward. Without this every release that touches the widget shape
- * silently breaks workspaces saved by the previous one.
- */
-export const CANVAS_SCHEMA_VERSION = 2
+const electronApp = (electron as unknown as { app?: { isPackaged?: boolean } }).app
+const moduleDir = typeof __dirname === 'string' ? __dirname : dirname(fileURLToPath(import.meta.url))
 
-export type WidgetKind = 'terminal' | 'note' | 'git-status' | 'timer' | 'schedule' | 'board' | 'planner'
+/** Bumped when the on-disk canvas shape gains fields (widgets, version, …). */
+export const CANVAS_SCHEMA_VERSION = 3
+
+/** Snapshot cache interval for event sourcing. */
+export const CANVAS_SNAPSHOT_INTERVAL = 50
+
+export type WidgetKind = 'terminal' | 'note' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser'
 
 export interface CanvasWidget {
   id: string
@@ -23,7 +38,6 @@ export interface CanvasWidget {
   w: number
   h: number
   z: number
-  minimized?: boolean
   maximized?: boolean
   /** Optimistic-concurrency version, owned by the Command Bus. */
   version: number
@@ -48,11 +62,19 @@ export interface CanvasCamera {
 }
 
 export interface CanvasSnapshot {
+  snapshotSeq?: number
   schemaVersion: number
   widgets: CanvasWidget[]
   camera: CanvasCamera
   strokes: CanvasStroke[]
   /** Version of the canvas itself (camera + strokes), not of any widget. */
+  version: number
+}
+
+export interface CanvasDataState {
+  widgets: Map<string, CanvasWidget>
+  camera: CanvasCamera
+  strokes: CanvasStroke[]
   version: number
 }
 
@@ -62,11 +84,38 @@ const MAX_WIDGETS = 200
 /** The single canvas object camera and stroke commands address. */
 export const CANVAS_TARGET_ID = 'main'
 
+const EMPTY_WORKSPACE_SLOT = '__no-workspace__'
+type WorkspaceChangeListener = (dir: string | undefined) => void
+let workspaceChangeListener: WorkspaceChangeListener | null = null
+
+/** AppState uses this bridge so changing the active folder also changes the canvas. */
+export function registerCanvasWorkspaceListener(listener: WorkspaceChangeListener): void {
+  workspaceChangeListener = listener
+}
+
+export function notifyCanvasWorkspaceChanged(dir: string | undefined): void {
+  workspaceChangeListener?.(dir)
+}
+
 const isNum = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 
-const WIDGET_KINDS = new Set<string>(['terminal', 'note', 'git-status', 'timer', 'schedule', 'board', 'planner'])
+type NativeCanvasCore = { sanitizeStrokes(value: unknown): unknown }
+const nativeCanvasCore = (() => {
+  try {
+    const require = createRequire(import.meta.url)
+    const nativeDir = electronApp?.isPackaged
+      ? join(process.resourcesPath, 'native', 'canvas-core')
+      : join(moduleDir, '../../native/canvas-core')
+    return require(nativeDir) as NativeCanvasCore
+  } catch (error) {
+    console.warn('[native] canvas-core unavailable; using the TypeScript canvas sanitizer fallback.', error)
+    return null
+  }
+})()
 
-function sanitizeWidget(value: unknown): CanvasWidget | null {
+const WIDGET_KINDS = new Set<string>(['terminal', 'note', 'timer', 'board', 'planner', 'files', 'sys-monitor', 'browser'])
+
+export function sanitizeWidget(value: unknown): CanvasWidget | null {
   const w = value as Record<string, unknown>
   if (!w || typeof w.id !== 'string' || typeof w.title !== 'string') return null
   if (!isNum(w.x) || !isNum(w.y) || !isNum(w.w) || !isNum(w.h) || !isNum(w.z)) return null
@@ -81,14 +130,13 @@ function sanitizeWidget(value: unknown): CanvasWidget | null {
     w: w.w,
     h: w.h,
     z: w.z,
-    minimized: w.minimized === true,
     maximized: w.maximized === true,
     version: isNum(w.version) && w.version > 0 ? w.version : 1,
     updatedAt: isNum(w.updatedAt) ? w.updatedAt : Date.now()
   }
 }
 
-function sanitizeStrokes(value: unknown): CanvasStroke[] {
+export function sanitizeStrokesJs(value: unknown): CanvasStroke[] {
   if (!Array.isArray(value)) return []
   const strokes: CanvasStroke[] = []
   let points = 0
@@ -99,7 +147,14 @@ function sanitizeStrokes(value: unknown): CanvasStroke[] {
     for (const p of s.points) {
       const point = p as Record<string, unknown>
       if (point && isNum(point.x) && isNum(point.y)) {
-        pts.push({ x: point.x, y: point.y })
+        // `+ 0` folds -0 to +0. The native path (canvas-core's Rust sanitizer)
+        // can never tell the two apart: napi-rs converts an incoming JS number
+        // to serde_json::Number through an integer fast path first, and
+        // `-0.0 as u32` is 0 — the sign is gone before our Rust code ever sees
+        // the point. Matching that here isn't working around a bug so much as
+        // keeping both sanitizers' *output* the one thing they've always
+        // promised to agree on; -0 and +0 draw the same pixel either way.
+        pts.push({ x: point.x + 0, y: point.y + 0 })
         if (pts.length >= 10_000) break
       }
     }
@@ -111,6 +166,30 @@ function sanitizeStrokes(value: unknown): CanvasStroke[] {
   return strokes
 }
 
+export function sanitizeStrokesNative(value: unknown): CanvasStroke[] | null {
+  if (!nativeCanvasCore) return null
+  try {
+    return nativeCanvasCore.sanitizeStrokes(value) as CanvasStroke[]
+  } catch (error) {
+    console.warn('[native] canvas-core call failed; using the TypeScript canvas sanitizer fallback.', error)
+    return null
+  }
+}
+
+function sanitizeStrokes(value: unknown): CanvasStroke[] {
+  return sanitizeStrokesNative(value) ?? sanitizeStrokesJs(value)
+}
+
+function strokesShapeMatch(current: CanvasStroke[], incoming: unknown): boolean {
+  if (!Array.isArray(incoming) || incoming.length !== current.length) return false
+  for (let i = 0; i < current.length; i += 1) {
+    const raw = incoming[i] as { id?: unknown; color?: unknown; points?: unknown } | null
+    if (!raw || raw.id !== current[i].id || raw.color !== current[i].color) return false
+    if (!Array.isArray(raw.points) || raw.points.length !== current[i].points.length) return false
+  }
+  return true
+}
+
 function sanitizeCamera(value: unknown): CanvasCamera {
   const c = value as Record<string, unknown> | undefined
   if (!c || !isNum(c.x) || !isNum(c.y) || !isNum(c.zoom)) return { x: 0, y: 0, zoom: 1 }
@@ -120,10 +199,7 @@ function sanitizeCamera(value: unknown): CanvasCamera {
 /**
  * Canvas layout (widgets, camera, strokes).
  *
- * Every mutating method on this class is called from exactly one place — the
- * command handlers in `commands/canvas.ts` — and never from a transport. The
- * store's job is to hold sanitised state, keep each widget's version in step
- * with the bus, and get it to disk; deciding *who* may change it is the bus's.
+ * Event sourced: state = fold(events), JSON file acts as snapshot cache.
  */
 export class CanvasStore extends EventEmitter {
   private widgets = new Map<string, CanvasWidget>()
@@ -131,18 +207,309 @@ export class CanvasStore extends EventEmitter {
   private strokes: CanvasStroke[] = []
   private loaded = false
   private saveTimer: ReturnType<typeof setTimeout> | null = null
-  /**
-   * Version each widget was at the last time the renderer wrote it. Read by
-   * {@link importFromRenderer} to tell "the window is echoing back its own
-   * work" apart from "somebody else wrote this in between".
-   */
+  private writeChain: Promise<void> = Promise.resolve()
+  private writeSeq = 0
+  private syncFlushSeq = 0
   private readonly rendererBaseline = new Map<string, number>()
-  /** Widget versions live here; the canvas's own version is tracked separately. */
+  private snapshotSeq = 0
+  private eventsSinceSnapshot = 0
   readonly widgetVersions = new VersionRegistry('widget')
   readonly canvasVersions = new VersionRegistry('canvas')
 
+  private workspaceDir: string | undefined
+
+  get activeWorkspaceDir(): string | undefined {
+    this.ensure()
+    return this.workspaceDir
+  }
+
+  constructor() {
+    super()
+    registerCanvasWorkspaceListener((dir) => this.switchWorkspace(dir))
+  }
+
   private get file(): string {
-    return join(app.getPath('userData'), 'workspace-canvas.json')
+    const slot = this.workspaceSlot(this.workspaceDir ?? this.readActiveWorkspaceDir())
+    return join(getUserDataDir(), `workspace-canvas-${slot}.json`)
+  }
+
+  private workspaceSlot(dir: string | undefined): string {
+    if (!dir) return EMPTY_WORKSPACE_SLOT
+    return createHash('sha256').update(dir).digest('hex').slice(0, 32)
+  }
+
+  private readActiveWorkspaceDir(): string | undefined {
+    const raw = readStoreJson<Record<string, unknown>>(
+      join(getUserDataDir(), 'workspace-state.json'),
+      {}
+    )
+    return typeof raw.workspaceDir === 'string' && raw.workspaceDir ? raw.workspaceDir : undefined
+  }
+
+  private switchWorkspace(dir: string | undefined): void {
+    if (this.workspaceDir === dir && this.loaded) return
+    if (this.loaded) this.flush()
+    this.workspaceDir = dir
+    this.loaded = false
+    for (const id of this.widgets.keys()) this.widgetVersions.forget(id)
+    this.canvasVersions.forget(CANVAS_TARGET_ID)
+    this.widgets.clear()
+    this.camera = { x: 0, y: 0, zoom: 1 }
+    this.strokes = []
+    this.rendererBaseline.clear()
+    const snapshot = this.load()
+    this.emit('change', snapshot)
+  }
+
+  // ---- Event sourcing: Reducer --------------------------------------------
+
+  /**
+   * Pure state reduction: state = reduce(state, event).
+   */
+  static reduce(state: CanvasDataState, event: JournalEntry): CanvasDataState {
+    if (event.phase !== 'commit') return state
+    const nextWidgets = new Map(state.widgets)
+    let nextCamera = { ...state.camera }
+    let nextStrokes = [...state.strokes]
+    let nextVersion = state.version
+    const payload = (event.payload ?? {}) as Record<string, unknown>
+    const targetId = event.target.startsWith('widget:') ? event.target.slice('widget:'.length) : event.target
+
+    if (event.type === 'widget.create') {
+      const widget = sanitizeWidget({
+        ...payload,
+        id: targetId === 'new' ? (payload.id as string) || `widget-${event.at}-${event.seq}` : targetId,
+        version: event.version ?? 1,
+        updatedAt: event.at
+      })
+      if (widget) nextWidgets.set(widget.id, widget)
+    } else if (event.type === 'widget.update') {
+      const existing = nextWidgets.get(targetId)
+      if (existing) {
+        const merged = sanitizeWidget({
+          ...existing,
+          ...payload,
+          id: targetId,
+          version: event.version ?? existing.version + 1,
+          updatedAt: event.at
+        })
+        if (merged) nextWidgets.set(targetId, merged)
+      }
+    } else if (event.type === 'widget.remove') {
+      nextWidgets.delete(targetId)
+    } else if (event.type === 'canvas.camera') {
+      nextCamera = sanitizeCamera(payload)
+      nextVersion = event.version ?? nextVersion + 1
+    } else if (event.type === 'canvas.strokes') {
+      nextStrokes = sanitizeStrokes(payload.strokes)
+      nextVersion = event.version ?? nextVersion + 1
+    } else if (event.type === 'canvas.import') {
+      if (Array.isArray(payload.widgets)) {
+        for (const w of payload.widgets) {
+          const widget = sanitizeWidget(w)
+          if (widget) nextWidgets.set(widget.id, widget)
+        }
+      }
+      if (payload.camera !== undefined) nextCamera = sanitizeCamera(payload.camera)
+      if (payload.strokes !== undefined) nextStrokes = sanitizeStrokes(payload.strokes)
+      nextVersion = event.version ?? nextVersion + 1
+    }
+
+    return {
+      widgets: nextWidgets,
+      camera: nextCamera,
+      strokes: nextStrokes,
+      version: nextVersion
+    }
+  }
+
+  /**
+   * Applies an event to this store instance using the reducer.
+   */
+  applyEvent(event: JournalEntry): void {
+    if (event.phase !== 'commit') return
+    const current: CanvasDataState = {
+      widgets: this.widgets,
+      camera: this.camera,
+      strokes: this.strokes,
+      version: this.canvasVersions.current(CANVAS_TARGET_ID)
+    }
+    const nextState = CanvasStore.reduce(current, event)
+    this.widgets.clear()
+    for (const [k, v] of nextState.widgets.entries()) {
+      this.widgets.set(k, v)
+    }
+    this.camera = nextState.camera
+    this.strokes = nextState.strokes
+
+    if (typeof event.version === 'number') {
+      if (event.target.startsWith('widget:')) {
+        const id = event.target.slice('widget:'.length)
+        if (event.type === 'widget.remove') this.widgetVersions.forget(id)
+        else this.widgetVersions.seed([{ id, version: event.version }])
+      } else if (event.target.startsWith('canvas:')) {
+        this.canvasVersions.seed([{ id: CANVAS_TARGET_ID, version: event.version }])
+      }
+    }
+    if (event.seq > this.snapshotSeq) {
+      this.snapshotSeq = event.seq
+    }
+    this.eventsSinceSnapshot += 1
+    if (this.eventsSinceSnapshot >= CANVAS_SNAPSHOT_INTERVAL) {
+      this.flush()
+    }
+  }
+
+  foldEvents(events: Iterable<JournalEntry>, initialState?: CanvasDataState): CanvasDataState {
+    const start: CanvasDataState = initialState ?? {
+      widgets: new Map(),
+      camera: { x: 0, y: 0, zoom: 1 },
+      strokes: [],
+      version: 1
+    }
+    return fold(events, CanvasStore.reduce, start)
+  }
+
+  // ---- Loading & Snapshot Cache -------------------------------------------
+
+  private ensure(tailEvents?: JournalEntry[]): void {
+    if (this.loaded) return
+    const workspaceDir = this.workspaceDir ?? this.readActiveWorkspaceDir()
+    this.workspaceDir = workspaceDir
+    // Only mark as loaded once the read succeeded: a transient EBUSY/EACCES
+    // (antivirus, backup tool) must not leave the store looking "empty"
+    // for the rest of the session. readStoreJson throws in that case.
+    const raw = readStoreJson<Record<string, unknown>>(this.file, {})
+    const legacyFile = join(getUserDataDir(), 'workspace-canvas.json')
+    const alreadyMigrated = (() => {
+      try {
+        return fs.existsSync(`${legacyFile}.migrated`)
+      } catch {
+        return false
+      }
+    })()
+    // Both reads happen before the loaded flag flips: a transient EBUSY on the
+    // legacy file must not leave an "empty" canvas whose next flush() would
+    // overwrite the real snapshot.
+    const legacy = Object.keys(raw).length === 0 && !alreadyMigrated
+      ? readStoreJson<Record<string, unknown>>(legacyFile, {})
+      : {}
+    this.loaded = true
+    const source = Object.keys(legacy).length > 0 ? legacy : raw
+    const data = migrate(source)
+    for (const entry of data.widgets) {
+      const widget = sanitizeWidget(entry)
+      if (widget) this.widgets.set(widget.id, widget)
+      if (this.widgets.size >= MAX_WIDGETS) break
+    }
+    this.snapshotSeq = Number(raw.snapshotSeq) || 0
+    this.widgetVersions.seed(this.widgets.values())
+    for (const widget of this.widgets.values()) this.rendererBaseline.set(widget.id, widget.version)
+    this.camera = sanitizeCamera(data.camera)
+    this.strokes = sanitizeStrokes(data.strokes)
+    const persisted = isNum(data.version) && data.version > 0 ? data.version : 1
+    this.canvasVersions.seed([{ id: CANVAS_TARGET_ID, version: persisted }])
+
+    // Replay NDJSON journal tail if provided
+    if (tailEvents && tailEvents.length > 0) {
+      const tailToApply = tailEvents.filter((e) => e.seq > this.snapshotSeq && e.phase === 'commit')
+      if (tailToApply.length > 0) {
+        const replayed = this.foldEvents(tailToApply, {
+          widgets: this.widgets,
+          camera: this.camera,
+          strokes: this.strokes,
+          version: this.canvasVersions.current(CANVAS_TARGET_ID)
+        })
+        this.widgets.clear()
+        for (const [k, v] of replayed.widgets.entries()) {
+          this.widgets.set(k, v)
+        }
+        this.camera = replayed.camera
+        this.strokes = replayed.strokes
+        this.widgetVersions.seed(this.widgets.values())
+        this.canvasVersions.seed([{ id: CANVAS_TARGET_ID, version: replayed.version }])
+        this.snapshotSeq = Math.max(this.snapshotSeq, ...tailToApply.map((e) => e.seq))
+      }
+    }
+
+    if (Object.keys(legacy).length > 0) {
+      this.flush()
+      try {
+        fs.renameSync(legacyFile, `${legacyFile}.migrated`)
+      } catch (err) {
+        console.error(`failed to retire legacy canvas file ${legacyFile}`, err)
+      }
+    }
+  }
+
+  loadWithTail(tailEvents: JournalEntry[]): void {
+    this.loaded = false
+    this.widgets.clear()
+    this.ensure(tailEvents)
+  }
+
+  // ---- Event Sourcing Free Features: rewind, blame, replay, fork -----------
+
+  rewind(targetSeq: number, events: Iterable<JournalEntry> = []): CanvasSnapshot {
+    this.ensure()
+    const rewoundState = rewindHelper(
+      targetSeq,
+      events,
+      CanvasStore.reduce,
+      {
+        snapshotSeq: 0,
+        state: {
+          widgets: new Map<string, CanvasWidget>(),
+          camera: { x: 0, y: 0, zoom: 1 },
+          strokes: [],
+          version: 1
+        }
+      }
+    )
+    return {
+      snapshotSeq: targetSeq,
+      schemaVersion: CANVAS_SCHEMA_VERSION,
+      widgets: Array.from(rewoundState.widgets.values()),
+      camera: { ...rewoundState.camera },
+      strokes: rewoundState.strokes,
+      version: rewoundState.version
+    }
+  }
+
+  blame(target: ResourceId, events: Iterable<JournalEntry> = []): JournalEntry[] {
+    return blameHelper(target, events)
+  }
+
+  replay(events: Iterable<JournalEntry>, fromState?: CanvasDataState): CanvasSnapshot {
+    const start: CanvasDataState = fromState ?? {
+      widgets: new Map(),
+      camera: { x: 0, y: 0, zoom: 1 },
+      strokes: [],
+      version: 1
+    }
+    const state = fold(events, CanvasStore.reduce, start)
+    return {
+      schemaVersion: CANVAS_SCHEMA_VERSION,
+      widgets: Array.from(state.widgets.values()),
+      camera: { ...state.camera },
+      strokes: state.strokes,
+      version: state.version
+    }
+  }
+
+  fork(forkId: string, atSeq?: number, events?: Iterable<JournalEntry>): CanvasSnapshot {
+    this.ensure()
+    if (typeof atSeq === 'number' && events) {
+      return this.rewind(atSeq, events)
+    }
+    const forkedWidgets = forkHelper(forkId, this.widgets)
+    return {
+      schemaVersion: CANVAS_SCHEMA_VERSION,
+      widgets: Array.from(forkedWidgets.values()),
+      camera: { ...this.camera },
+      strokes: this.strokes.slice(),
+      version: this.canvasVersions.current(CANVAS_TARGET_ID)
+    }
   }
 
   // ---- reads --------------------------------------------------------------
@@ -152,118 +519,143 @@ export class CanvasStore extends EventEmitter {
     return this.snapshot()
   }
 
-  snapshot(): CanvasSnapshot {
+  snapshot(overlayId?: string): CanvasSnapshot {
     this.ensure()
+    const rawWidgets = Array.from(this.widgets.values())
+    const widgets = overlayId && this.widgetVersions.hasOverlay(overlayId)
+      ? rawWidgets.map((w) => ({ ...w, version: this.widgetVersions.current(w.id, overlayId) }))
+      : rawWidgets
     return {
+      snapshotSeq: this.snapshotSeq,
       schemaVersion: CANVAS_SCHEMA_VERSION,
-      widgets: Array.from(this.widgets.values()),
+      widgets,
       camera: { ...this.camera },
       strokes: this.strokes,
-      version: this.canvasVersions.current(CANVAS_TARGET_ID)
+      version: this.canvasVersions.current(CANVAS_TARGET_ID, overlayId)
     }
   }
 
-  widget(id: string): CanvasWidget | undefined {
+  widget(id: string, overlayId?: string): CanvasWidget | undefined {
     this.ensure()
-    return this.widgets.get(id)
+    const w = this.widgets.get(id)
+    if (!w) return undefined
+    if (overlayId && this.widgetVersions.hasOverlay(overlayId)) {
+      return { ...w, version: this.widgetVersions.current(id, overlayId) }
+    }
+    return w
   }
 
-  listWidgets(): CanvasWidget[] {
+  listWidgets(overlayId?: string): CanvasWidget[] {
     this.ensure()
-    return Array.from(this.widgets.values())
+    const rawWidgets = Array.from(this.widgets.values())
+    if (overlayId && this.widgetVersions.hasOverlay(overlayId)) {
+      return rawWidgets.map((w) => ({ ...w, version: this.widgetVersions.current(w.id, overlayId) }))
+    }
+    return rawWidgets
   }
 
   // ---- writes (command handlers only) -------------------------------------
 
-  /** Creates or replaces a widget wholesale; returns the stored copy. */
-  putWidget(input: Omit<CanvasWidget, 'version' | 'updatedAt'>): CanvasWidget {
+  putWidget(input: Omit<CanvasWidget, 'version' | 'updatedAt'>, overlayId?: string): CanvasWidget {
     this.ensure()
     if (!this.widgets.has(input.id) && this.widgets.size >= MAX_WIDGETS) {
       throw new Error(`the canvas is full (${MAX_WIDGETS} widgets)`)
     }
     const widget = sanitizeWidget({ ...input, version: 1, updatedAt: Date.now() })
     if (!widget) throw new Error('malformed widget')
-    widget.version = this.widgetVersions.bump(widget.id)
+    widget.version = this.widgetVersions.bump(widget.id, overlayId)
     this.widgets.set(widget.id, widget)
+    this.eventsSinceSnapshot += 1
     this.changed()
     return widget
   }
 
-  patchWidget(id: string, patch: Partial<Omit<CanvasWidget, 'id' | 'version'>>): CanvasWidget {
+  patchWidget(id: string, patch: Partial<Omit<CanvasWidget, 'id' | 'version'>>, overlayId?: string): CanvasWidget {
     this.ensure()
     const current = this.widgets.get(id)
     if (!current) throw new Error(`widget ${id} not found`)
     const merged = sanitizeWidget({ ...current, ...patch, id, version: current.version, updatedAt: Date.now() })
     if (!merged) throw new Error('malformed widget patch')
-    merged.version = this.widgetVersions.bump(id)
+    merged.version = this.widgetVersions.bump(id, overlayId)
     this.widgets.set(id, merged)
+    this.eventsSinceSnapshot += 1
     this.changed()
     return merged
   }
 
-  removeWidget(id: string): boolean {
+  patchWidgets(
+    patches: Array<{ id: string; patch: Partial<Omit<CanvasWidget, 'id' | 'version'>> }>,
+    overlayId?: string
+  ): CanvasWidget[] {
+    this.ensure()
+    const updated: CanvasWidget[] = []
+    for (const { id, patch } of patches) {
+      const current = this.widgets.get(id)
+      if (!current) continue
+      const merged = sanitizeWidget({ ...current, ...patch, id, version: current.version, updatedAt: Date.now() })
+      if (merged) {
+        merged.version = this.widgetVersions.bump(id, overlayId)
+        this.widgets.set(id, merged)
+        updated.push(merged)
+      }
+    }
+    if (updated.length > 0) {
+      this.eventsSinceSnapshot += updated.length
+      this.changed()
+    }
+    return updated
+  }
+
+  removeWidget(id: string, overlayId?: string): boolean {
     this.ensure()
     if (!this.widgets.delete(id)) return false
-    this.widgetVersions.forget(id)
+    this.widgetVersions.forget(id, overlayId)
+    this.rendererBaseline.delete(id)
+    this.eventsSinceSnapshot += 1
     this.changed()
     return true
   }
 
-  setCamera(camera: unknown): CanvasCamera {
+  setCamera(camera: unknown, overlayId?: string): CanvasCamera {
     this.ensure()
     this.camera = sanitizeCamera(camera)
-    this.canvasVersions.bump(CANVAS_TARGET_ID)
+    this.canvasVersions.bump(CANVAS_TARGET_ID, overlayId)
+    this.eventsSinceSnapshot += 1
     this.changed()
     return { ...this.camera }
   }
 
-  setStrokes(strokes: unknown): CanvasStroke[] {
+  setStrokes(strokes: unknown, overlayId?: string): CanvasStroke[] {
     this.ensure()
     this.strokes = sanitizeStrokes(strokes)
-    this.canvasVersions.bump(CANVAS_TARGET_ID)
+    this.canvasVersions.bump(CANVAS_TARGET_ID, overlayId)
+    this.eventsSinceSnapshot += 1
     this.changed()
     return this.strokes
   }
 
-  /**
-   * Bulk write from the renderer, which owns the live layout while the user
-   * drags things around.
-   *
-   * It is a *merge*, not a replace, and the distinction is what stops the UI's
-   * periodic save from silently undoing concurrent work. The rule is stated in
-   * terms of {@link rendererBaseline} — the version each widget was at when
-   * this window last wrote it:
-   *
-   * - version unchanged since that baseline → only the renderer has touched
-   *   this widget, so its copy wins;
-   * - version moved on → somebody else (an agent, the assistant) wrote it
-   *   after the window last read it, and their write is kept;
-   * - present in the store but absent from the payload → deleted in the UI,
-   *   *unless* the window never knew about it, which is exactly the case for a
-   *   widget an agent created moments ago.
-   */
-  importFromRenderer(input: { widgets?: unknown; camera?: unknown; strokes?: unknown }): {
+  importFromRenderer(input: { widgets?: unknown; camera?: unknown; strokes?: unknown }, overlayId?: string): {
     applied: number
     skipped: number
     removed: number
+    removedWidgets: Array<{ id: string; kind?: WidgetKind }>
   } {
     this.ensure()
     let applied = 0
     let skipped = 0
 
-    const incoming = Array.isArray(input.widgets) ? input.widgets : []
+    const incoming = Array.isArray(input.widgets) ? input.widgets : null
     const seen = new Set<string>()
-    for (const raw of incoming.slice(0, MAX_WIDGETS)) {
+    for (const raw of (incoming ?? []).slice(0, MAX_WIDGETS)) {
       const widget = sanitizeWidget(raw)
       if (!widget) continue
       seen.add(widget.id)
       const current = this.widgets.get(widget.id)
-      const baseline = this.rendererBaseline.get(widget.id)
-      if (current && baseline !== undefined && current.version !== baseline) {
+      if (current && widget.version !== current.version) {
         skipped += 1
         continue
       }
-      widget.version = this.widgetVersions.bump(widget.id)
+      widget.version = this.widgetVersions.bump(widget.id, overlayId)
       widget.updatedAt = Date.now()
       this.widgets.set(widget.id, widget)
       this.rendererBaseline.set(widget.id, widget.version)
@@ -271,52 +663,68 @@ export class CanvasStore extends EventEmitter {
     }
 
     let removed = 0
-    for (const id of Array.from(this.widgets.keys())) {
-      if (seen.has(id) || !this.rendererBaseline.has(id)) continue
-      this.widgets.delete(id)
-      this.widgetVersions.forget(id)
-      this.rendererBaseline.delete(id)
-      removed += 1
+    const removedWidgets: Array<{ id: string; kind?: WidgetKind }> = []
+    if (incoming) {
+      for (const id of Array.from(this.widgets.keys())) {
+        if (seen.has(id) || !this.rendererBaseline.has(id)) continue
+        const gone = this.widgets.get(id)
+        removedWidgets.push({ id, kind: gone?.kind })
+        this.widgets.delete(id)
+        this.widgetVersions.forget(id, overlayId)
+        this.rendererBaseline.delete(id)
+        removed += 1
+      }
     }
 
-    if (input.camera !== undefined) this.camera = sanitizeCamera(input.camera)
-    if (input.strokes !== undefined) this.strokes = sanitizeStrokes(input.strokes)
-    this.canvasVersions.bump(CANVAS_TARGET_ID)
+    let layoutChanged = false
+    if (input.camera !== undefined) {
+      const next = sanitizeCamera(input.camera)
+      if (next.x !== this.camera.x || next.y !== this.camera.y || next.zoom !== this.camera.zoom) {
+        this.camera = next
+        layoutChanged = true
+      }
+    }
+    if (input.strokes !== undefined && !strokesShapeMatch(this.strokes, input.strokes)) {
+      this.strokes = sanitizeStrokes(input.strokes)
+      layoutChanged = true
+    }
+    if (applied === 0 && removed === 0 && !layoutChanged) {
+      return { applied, skipped, removed, removedWidgets }
+    }
+    if (layoutChanged) this.canvasVersions.bump(CANVAS_TARGET_ID, overlayId)
+    this.eventsSinceSnapshot += 1
     this.changed()
-    return { applied, skipped, removed }
+    return { applied, skipped, removed, removedWidgets }
   }
 
   // ---- persistence --------------------------------------------------------
-
-  private ensure(): void {
-    if (this.loaded) return
-    this.loaded = true
-    const raw = readStoreJson<Record<string, unknown>>(this.file, {})
-    const data = migrate(raw)
-    for (const entry of data.widgets) {
-      const widget = sanitizeWidget(entry)
-      if (widget) this.widgets.set(widget.id, widget)
-      if (this.widgets.size >= MAX_WIDGETS) break
-    }
-    this.widgetVersions.seed(this.widgets.values())
-    // The window loads exactly this snapshot on startup, so these versions are
-    // its baseline: a widget missing from its first save was deleted by the
-    // user, not created behind its back.
-    for (const widget of this.widgets.values()) this.rendererBaseline.set(widget.id, widget.version)
-    this.camera = sanitizeCamera(data.camera)
-    this.strokes = sanitizeStrokes(data.strokes)
-    // The canvas object starts at version 1 rather than 0 so a client that has
-    // read it can send a matching baseVersion straight away.
-    this.canvasVersions.bump(CANVAS_TARGET_ID)
-  }
 
   private changed(): void {
     this.emit('change', this.snapshot())
     if (this.saveTimer !== null) clearTimeout(this.saveTimer)
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null
-      this.flush()
+      this.flushAsync()
     }, 400)
+    this.saveTimer.unref?.()
+  }
+
+  private snapshotForPersist(): {
+    snapshotSeq: number
+    schemaVersion: number
+    widgets: CanvasWidget[]
+    camera: CanvasCamera
+    strokes: CanvasStroke[]
+    version: number
+  } {
+    return {
+      snapshotSeq: this.snapshotSeq,
+      schemaVersion: CANVAS_SCHEMA_VERSION,
+      widgets: Array.from(this.widgets.values()),
+      camera: this.camera,
+      strokes: this.strokes,
+      version: this.canvasVersions.current(CANVAS_TARGET_ID)
+    }
   }
 
   private flush(): void {
@@ -324,17 +732,56 @@ export class CanvasStore extends EventEmitter {
       clearTimeout(this.saveTimer)
       this.saveTimer = null
     }
+    if (!this.loaded) return
     try {
-      writeJsonAtomic(this.file, {
-        schemaVersion: CANVAS_SCHEMA_VERSION,
-        widgets: Array.from(this.widgets.values()),
-        camera: this.camera,
-        strokes: this.strokes
-      })
+      writeJsonAtomic(this.file, this.snapshotForPersist())
+      // A synchronous write is the newest state; queued async writes captured
+      // before it are now redundant and must not rename over it.
+      this.syncFlushSeq = this.writeSeq
+      this.eventsSinceSnapshot = 0
     } catch (err) {
-      // Layout persistence is best-effort; a read-only profile must not crash.
       console.error('failed to persist canvas layout', err)
     }
+  }
+
+  private flushAsync(): void {
+    if (!this.loaded) return
+    this.writeSeq += 1
+    const seq = this.writeSeq
+    const snapshot = this.snapshotForPersist()
+    // Serialize async writes to the same file: two atomic writes left in
+    // flight can rename in the wrong order and leave an OLDER snapshot on
+    // disk, losing the newest change (two saves close together, e.g. while
+    // dragging a widget and immediately closing a window).
+    this.writeChain = this.writeChain
+      .catch(() => {
+        // A failed write must not strand the chain.
+      })
+      .then(async (): Promise<boolean> => {
+        // A sync flush (workspace switch, shutdown) already wrote a newer
+        // snapshot — this queued copy is redundant, skip it.
+        if (seq <= this.syncFlushSeq) return false
+        await writeJsonAtomicAsync(this.file, snapshot)
+        return true
+      })
+      .then((wrote) => {
+        if (!wrote) return
+        // An in-flight rename cannot be aborted: if a sync flush landed while
+        // this write was running, the older snapshot may have won the race.
+        // Memory still holds the newest state — put it back on disk.
+        if (this.syncFlushSeq >= seq) {
+          try {
+            writeJsonAtomic(this.file, this.snapshotForPersist())
+            this.eventsSinceSnapshot = 0
+          } catch (err) {
+            console.error('failed to persist canvas layout', err)
+          }
+        }
+      })
+      .catch((err: unknown) => {
+        console.error('failed to persist canvas layout', err)
+      })
+    this.eventsSinceSnapshot = 0
   }
 
   dispose(): void {
@@ -342,22 +789,24 @@ export class CanvasStore extends EventEmitter {
   }
 }
 
-/**
- * Brings an older canvas file forward. v1 had no schema marker and no widget
- * versions — the fields are filled in rather than the file being discarded,
- * because a user's layout is not worth losing over a format bump.
- */
-function migrate(raw: Record<string, unknown>): { widgets: unknown[]; camera: unknown; strokes: unknown } {
+function migrate(
+  raw: Record<string, unknown>
+): { widgets: unknown[]; camera: unknown; strokes: unknown; version?: unknown } {
   const version = Number(raw.schemaVersion) || 1
   const widgets = Array.isArray(raw.widgets) ? raw.widgets : []
-  if (version >= CANVAS_SCHEMA_VERSION) return { widgets, camera: raw.camera, strokes: raw.strokes }
+  if (version >= CANVAS_SCHEMA_VERSION) {
+    return { widgets, camera: raw.camera, strokes: raw.strokes, version: raw.version }
+  }
   const now = Date.now()
   return {
-    widgets: widgets.map((w) => ({ ...(w as object), version: 1, updatedAt: now })),
+    widgets:
+      version < 2
+        ? widgets.map((w) => ({ ...(w as object), version: 1, updatedAt: now }))
+        : widgets,
     camera: raw.camera,
-    strokes: raw.strokes
+    strokes: raw.strokes,
+    version: raw.version
   }
 }
 
-/** Kept for the transitional period while callers move to {@link CanvasStore}. */
 export { CanvasStore as CanvasState }

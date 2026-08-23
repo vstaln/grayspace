@@ -1,11 +1,16 @@
-import { ActorRegistry } from './actors.ts'
+﻿import { ActorRegistry } from './actors.ts'
 import { CommandBus } from './bus.ts'
+import { ContentAddressedStore } from './cas.ts'
 import { Journal, type JournalSink } from './journal.ts'
+import { ProjectionManager } from './projections.ts'
+import type { JournalEntry } from './types.ts'
 import { LockManager } from './locks.ts'
 
 export { ActorRegistry, ACTOR_TTL_MS } from './actors.ts'
 export { CommandBus } from './bus.ts'
-export { Journal } from './journal.ts'
+export { ContentAddressedStore, type CasStats } from './cas.ts'
+export { IdempotencyCache, type IdempotencyRecord } from './idempotency.ts'
+export { Journal, GENESIS_HASH, computeEntryHash } from './journal.ts'
 export type { JournalSink, JournalOptions } from './journal.ts'
 export {
   LockManager,
@@ -14,8 +19,35 @@ export {
   MAX_LOCK_TTL_MS,
   type ResourceLock
 } from './locks.ts'
+export { MigrationRunner, type Migration, type MigrationResult } from './migrations.ts'
+export {
+  ProjectionManager,
+  type ResourceSummary,
+  type ActorSummary,
+  type ActivityDigest
+} from './projections.ts'
+export { ActorRateLimiter, PriorityCommandQueue, type QueuedTask } from './queue.ts'
+export { MetricsRegistry, type MetricsSnapshot, type TimingStats } from './metrics.ts'
 export { fileResource, isResourceId, parseResource, resourceId } from './resources.ts'
+export {
+  validatePayload,
+  definitionToMcpTool,
+  type CommandDefinition,
+  type CommandPayloadSchema,
+  type FieldSchema,
+  type McpToolDescriptor
+} from './schema.ts'
 export { VersionRegistry, stamp, type Versioned } from './versioned.ts'
+export { ShadowOverlay, OverlayManager, type OverlayRecord } from './overlay.ts'
+export {
+  fold,
+  replay,
+  rewind,
+  blame,
+  fork,
+  type EventReducer,
+  type StoreSnapshot
+} from './events.ts'
 export * from './types.ts'
 
 export interface Core {
@@ -23,25 +55,33 @@ export interface Core {
   locks: LockManager
   journal: Journal
   bus: CommandBus
+  projections: ProjectionManager
+  cas: ContentAddressedStore
   /** Releases the locks of every actor that has gone quiet. */
   sweepDeadActors(): void
   dispose(): void
 }
 
 /**
- * Wires the three core components together. Everything else in the app —
+ * Wires the core components together. Everything else in the app —
  * stores, transports, the assistant — takes this object and nothing else.
- *
- * Note what is *not* here: any call to restore locks. Locks are in-memory by
- * construction, so a fresh process starts with every resource free, which is
- * the correct state after a restart killed every process that held one.
  */
-export function createCore(options: { sink?: JournalSink; startSeq?: number; now?: () => number } = {}): Core {
+export function createCore(
+  options: {
+    sink?: JournalSink
+    startSeq?: number
+    now?: () => number
+    seed?: readonly JournalEntry[]
+    casRootDir?: string
+  } = {}
+): Core {
   const now = options.now ?? Date.now
   const actors = new ActorRegistry(now)
   const locks = new LockManager({ now })
-  const journal = new Journal({ sink: options.sink, startSeq: options.startSeq, now })
+  const journal = new Journal({ sink: options.sink, startSeq: options.startSeq, now, seed: options.seed })
   const bus = new CommandBus({ actors, locks, journal, now })
+  const projections = new ProjectionManager(journal, { now })
+  const cas = new ContentAddressedStore({ rootDir: options.casRootDir })
 
   // The system actor exists so internal maintenance (migrations, recovery,
   // shutdown flushes) is attributable in the journal like everything else,
@@ -62,6 +102,8 @@ export function createCore(options: { sink?: JournalSink; startSeq?: number; now
     locks,
     journal,
     bus,
+    projections,
+    cas,
     sweepDeadActors,
     dispose(): void {
       clearInterval(heartbeat)

@@ -1,7 +1,11 @@
-import React from 'react'
-import KanbanBoard from './KanbanBoard'
+import React, { Suspense, lazy } from 'react'
 import { useCoordination } from '../hooks/useCoordination'
 import { useConfirm } from './ConfirmDialog'
+
+// Same async chunk App's full-screen board uses. A static import here would
+// drag KanbanBoard back into the startup bundle and defeat the split
+// (PERF-lazy-surfaces).
+const KanbanBoard = lazy(() => import('./KanbanBoard'))
 
 /**
  * The kanban board as a canvas widget: draggable, resizable and left open
@@ -16,28 +20,26 @@ export default function BoardWidget(): React.JSX.Element {
   const confirm = useConfirm()
 
   return (
-    <KanbanBoard
+    <Suspense fallback={null}>
+      <KanbanBoard
       embedded
       snapshot={coordination.snapshot}
-      onCreate={(title, brief) => void coordination.createTask(title, brief)}
-      onMove={(id, state) => void coordination.moveTask(id, state)}
-      onDelete={(id) => {
-        void confirm('Удалить задачу? Действие необратимо.', { danger: true, confirmLabel: 'Удалить' }).then((ok) => {
-          if (ok) void coordination.deleteTask(id)
-        })
-      }}
+      onCreate={(title, brief) => coordination.createTask(title, brief)}
+      onMove={(id, state) => coordination.moveTask(id, state)}
+      onDelete={(id) => coordination.deleteTask(id)}
       onResetManager={() => {
-        void confirm('Сбросить роль руководителя? Любой агент сможет занять её заново.').then((ok) => {
-          if (ok) void coordination.resetManager()
+        return confirm('Reset lead role? Any agent will be able to claim it again.').then((ok) => {
+          return ok ? coordination.resetManager() : { ok: true }
         })
       }}
       onReleaseLocks={() => {
-        void confirm('Снять все блокировки ресурсов?').then((ok) => {
-          if (ok) void coordination.releaseLocks()
+        return confirm('Release all file locks?').then((ok) => {
+          return ok ? coordination.releaseLocks() : { ok: true }
         })
       }}
       // The widget frame owns closing; the board's own button is hidden.
       onClose={() => undefined}
-    />
+      />
+    </Suspense>
   )
 }

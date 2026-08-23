@@ -1,44 +1,151 @@
-import { execFileSync } from 'child_process'
+import { execFile } from 'child_process'
 
 /**
  * Kills every process whose ancestry (through Win32_Process ParentProcessId)
- * chains back to `rootPid` — including detached ones that survived a plain
- * tree kill. Runs after a short settle delay so the sweep only sees true
- * survivors, and is fully best-effort: no survivors, no PowerShell, or a race
- * with the tree kill all resolve to nothing. No-op on non-Windows.
+ * chains back to a root pid — including detached ones that survived a plain
+ * tree kill. No-op on non-Windows, and fully best-effort throughout: no
+ * survivors, no PowerShell, or a race with the tree kill all resolve to
+ * nothing.
+ *
+ * Two things happen per call:
+ *
+ *  1. `taskkill /T /F`, immediately. This is native, costs a few milliseconds,
+ *     and already handles the overwhelmingly common case — the shell and its
+ *     ordinary children.
+ *  2. A deep sweep for detached survivors (`Start-Process`, a new console
+ *     session) whose ancestry still chains back to the root on Windows but
+ *     which `taskkill /T` no longer reaches.
+ *
+ * Step 2 is the expensive one: PowerShell startup plus a WMI walk of the whole
+ * process table, together roughly half a second of CPU. Running it per closed
+ * terminal is what made closing two or three shells in a row stall the app, so
+ * sweeps are *coalesced*: every root requested inside the debounce window is
+ * swept by one PowerShell run, and consecutive sweeps are spaced by a cooldown.
+ * Closing five terminals now costs one sweep instead of five.
  */
-export function killProcessTree(rootPid: number | undefined, settleMs = 300): void {
-  if (process.platform !== 'win32' || !rootPid || !Number.isInteger(rootPid)) return
-  setTimeout(() => {
-    const script = [
-      `$root = ${rootPid}`,
-      '$snap = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId',
-      '$parents = @{}',
-      'foreach ($p in $snap) { $parents[[int]$p.ProcessId] = [int]$p.ParentProcessId }',
-      '$kill = @()',
-      'foreach ($p in $snap) {',
-      '  $cur = [int]$p.ProcessId',
-      '  $depth = 0',
-      '  while ($cur -gt 0 -and $depth -lt 64) {',
-      '    if ($cur -eq $root) { $kill += [int]$p.ProcessId; break }',
-      '    if (-not $parents.ContainsKey($cur)) { break }',
-      '    $cur = $parents[$cur]',
-      '    $depth += 1',
-      '  }',
-      '}',
-      '$kill | Sort-Object -Unique | Where-Object { $_ -ne $root } | ForEach-Object {',
-      '  taskkill /PID $_ /T /F 2>$null | Out-Null',
-      '}'
-    ].join('\n')
-    try {
-      // -EncodedCommand avoids every quoting/escaping hazard in the script.
-      const encoded = Buffer.from(script, 'utf16le').toString('base64')
-      execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
-        windowsHide: true,
-        timeout: 10_000
-      })
-    } catch {
-      /* best-effort: nothing left to kill, or the sweep itself failed */
-    }
-  }, settleMs)
+
+/** Roots waiting to be swept, with the instant each was still known to be ours. */
+const pendingRoots = new Map<number, number>()
+let sweepTimer: ReturnType<typeof setTimeout> | null = null
+let sweepInFlight = false
+let lastSweepEndedAt = 0
+
+/** How long to gather roots before sweeping — also the settle delay of old. */
+const SWEEP_DEBOUNCE_MS = 1_200
+/** Minimum quiet time between two sweeps, so a burst of closes cannot chain them. */
+const SWEEP_COOLDOWN_MS = 4_000
+/** A single sweep covers at most this many roots; beyond that the script grows for no gain. */
+const MAX_ROOTS_PER_SWEEP = 32
+
+export function killProcessTree(rootPid: number | undefined, settleMs = SWEEP_DEBOUNCE_MS): void {
+  if (process.platform !== 'win32' || !rootPid || !Number.isInteger(rootPid) || rootPid <= 0) return
+
+  // Fast path: kill the immediate tree with native taskkill.exe (very low overhead).
+  try {
+    execFile('taskkill', ['/PID', String(rootPid), '/T', '/F'], { windowsHide: true }, () => {})
+  } catch {
+    /* process may already be gone */
+  }
+
+  // Capture the instant we still know this pid is *ours*. By the time the sweep
+  // runs a recycled pid would have a newer CreationDate — the script skips it.
+  if (!pendingRoots.has(rootPid)) {
+    if (pendingRoots.size >= MAX_ROOTS_PER_SWEEP) return
+    pendingRoots.set(rootPid, Date.now())
+  }
+  scheduleSweep(settleMs)
+}
+
+function scheduleSweep(settleMs: number): void {
+  if (sweepTimer !== null || sweepInFlight) return
+  const sinceLast = Date.now() - lastSweepEndedAt
+  const wait = Math.max(settleMs, SWEEP_COOLDOWN_MS - sinceLast)
+  sweepTimer = setTimeout(runSweep, wait)
+  sweepTimer.unref?.()
+}
+
+function runSweep(): void {
+  sweepTimer = null
+  if (sweepInFlight || pendingRoots.size === 0) return
+  const roots = Array.from(pendingRoots, ([pid, requestedAt]) => ({ pid, requestedAt }))
+  pendingRoots.clear()
+  sweepInFlight = true
+
+  const finish = (): void => {
+    sweepInFlight = false
+    lastSweepEndedAt = Date.now()
+    // Roots that arrived while this sweep was running still need one.
+    if (pendingRoots.size > 0) scheduleSweep(SWEEP_DEBOUNCE_MS)
+  }
+
+  try {
+    const encoded = Buffer.from(buildSweepScript(roots), 'utf16le').toString('base64')
+    execFile(
+      'powershell',
+      ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+      { windowsHide: true, timeout: 15_000 },
+      finish
+    )
+  } catch {
+    finish()
+  }
+}
+
+/** Roots still queued for the next sweep. Exported for tests. */
+export function pendingSweepRoots(): number[] {
+  return Array.from(pendingRoots.keys())
+}
+
+/**
+ * The PowerShell body, with the pid-reuse guard inlined per root.
+ *
+ * Exported for tests. Accepts either a single root (the historical shape) or
+ * the batch a coalesced sweep actually runs.
+ */
+export function buildSweepScript(
+  roots: number | Array<{ pid: number; requestedAt: number }>,
+  notCreatedAfterMs?: number
+): string {
+  const list =
+    typeof roots === 'number' ? [{ pid: roots, requestedAt: notCreatedAfterMs ?? Date.now() }] : roots
+  const rootLiterals = list.map((r) => `@{ pid = ${r.pid}; notAfter = [int64]${r.requestedAt} }`)
+  return [
+    `$requested = @(${rootLiterals.join(', ')})`,
+    // Asking for only the three properties the walk needs keeps WMI from
+    // materialising ~50 fields per process, which is most of the query's cost.
+    '$snap = Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate -ErrorAction SilentlyContinue',
+    'if (-not $snap) { return }',
+    '$parents = @{}',
+    '$created = @{}',
+    'foreach ($p in $snap) {',
+    '  $pid_ = [int]$p.ProcessId',
+    '  $parents[$pid_] = [int]$p.ParentProcessId',
+    '  if ($p.CreationDate) { $created[$pid_] = [int64]([DateTimeOffset]::new($p.CreationDate.ToUniversalTime()).ToUnixTimeMilliseconds()) }',
+    '}',
+    // A pid the OS recycled after the close request belongs to someone else now.
+    '$roots = @{}',
+    'foreach ($r in $requested) {',
+    '  $rp = [int]$r.pid',
+    '  if ($created.ContainsKey($rp) -and $created[$rp] -gt $r.notAfter) { continue }',
+    '  $roots[$rp] = $true',
+    '}',
+    'if ($roots.Count -eq 0) { return }',
+    '$kill = @()',
+    'foreach ($p in $snap) {',
+    '  $cur = [int]$p.ProcessId',
+    '  $depth = 0',
+    '  while ($cur -gt 0 -and $depth -lt 64) {',
+    '    if ($roots.ContainsKey($cur)) { $kill += [int]$p.ProcessId; break }',
+    '    if (-not $parents.ContainsKey($cur)) { break }',
+    '    $cur = $parents[$cur]',
+    '    $depth += 1',
+    '  }',
+    '}',
+    // Roots are included: the fast-path taskkill is best-effort and may have
+    // failed (EPERM, transient), leaving the root shell alive while its
+    // descendants die. A repeat /F against an already-dead pid costs nothing.
+    '$kill | Sort-Object -Unique | ForEach-Object {',
+    '  taskkill /PID $_ /T /F 2>$null | Out-Null',
+    '}'
+  ].join('\n')
 }

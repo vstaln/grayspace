@@ -8,10 +8,26 @@ import React from 'react'
  * stray tag in a reply executable in the renderer.
  */
 
-/** Inline `code` and **bold** within a single line. */
+/** http(s) only — never javascript: or relative app schemes from model text. */
+function safeHref(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    return parsed.href
+  } catch {
+    return null
+  }
+}
+
+function emitOpenNote(title: string): void {
+  if (typeof window === 'undefined' || !title) return
+  window.dispatchEvent(new CustomEvent('orcspace:open-note', { detail: title }))
+}
+
+/** Inline `code`, [[wikilinks]], [links](url), and **bold** within a single line. */
 function renderInline(text: string, key: string): React.ReactNode[] {
   const out: React.ReactNode[] = []
-  // Inline code is split out first so its contents are never re-parsed as bold.
+  // Inline code is split out first so its contents are never re-parsed as bold/links.
   text.split(/(`[^`\n]+`)/g).forEach((part, i) => {
     if (part.length > 1 && part.startsWith('`') && part.endsWith('`')) {
       out.push(
@@ -24,17 +40,74 @@ function renderInline(text: string, key: string): React.ReactNode[] {
       )
       return
     }
-    part.split(/(\*\*[^*\n]+\*\*)/g).forEach((chunk, j) => {
-      if (!chunk) return
-      if (chunk.length > 4 && chunk.startsWith('**') && chunk.endsWith('**')) {
+    // Wikilinks and standard links before bold
+    part.split(/(\[\[[^\]\n]+\]\]|\[[^\]]+\]\([^)\s]+\))/g).forEach((segment, s) => {
+      const wiki = /^\[\[([^\]\n]+)\]\]$/.exec(segment)
+      if (wiki) {
+        const title = wiki[1].split('|')[0].trim()
         out.push(
-          <strong key={`${key}-b${i}-${j}`} className="font-semibold text-white">
-            {chunk.slice(2, -2)}
-          </strong>
+          <button
+            key={`${key}-w${i}-${s}`}
+            type="button"
+            className="inline-flex items-center gap-0.5 rounded bg-accent/10 px-1 py-[0.5px] font-medium text-accent hover:bg-accent/20"
+            title={`Open note: ${title}`}
+            onClick={() => emitOpenNote(title)}
+          >
+            [[{wiki[1]}]]
+          </button>
         )
-      } else {
-        out.push(<React.Fragment key={`${key}-t${i}-${j}`}>{chunk}</React.Fragment>)
+        return
       }
+
+      const link = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(segment)
+      if (link) {
+        const href = safeHref(link[2])
+        if (href) {
+          out.push(
+            <a
+              key={`${key}-a${i}-${s}`}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent"
+            >
+              {link[1]}
+            </a>
+          )
+          return
+        }
+        out.push(<React.Fragment key={`${key}-al${i}-${s}`}>{segment}</React.Fragment>)
+        return
+      }
+      segment.split(/(\*\*[^*\n]+\*\*)/g).forEach((chunk, j) => {
+        if (!chunk) return
+        if (chunk.length > 4 && chunk.startsWith('**') && chunk.endsWith('**')) {
+          out.push(
+            <strong key={`${key}-b${i}-${s}-${j}`} className="font-semibold text-text">
+              {chunk.slice(2, -2)}
+            </strong>
+          )
+        } else {
+          // Dollar note references: $Title-With-Hyphens
+          chunk.split(/(\$[\p{L}\p{N}_\-]+)/u).forEach((atom, k) => {
+            if (atom.startsWith('$') && atom.length > 1) {
+              out.push(
+                <button
+                  key={`${key}-d${i}-${s}-${j}-${k}`}
+                  type="button"
+                  className="rounded bg-accent/10 px-1 py-[0.5px] font-mono text-[0.9em] text-accent hover:bg-accent/20"
+                  title={`Open note: ${atom.slice(1)}`}
+                  onClick={() => emitOpenNote(atom.slice(1))}
+                >
+                  {atom}
+                </button>
+              )
+            } else if (atom) {
+              out.push(<React.Fragment key={`${key}-t${i}-${s}-${j}-${k}`}>{atom}</React.Fragment>)
+            }
+          })
+        }
+      })
     })
   })
   return out
@@ -84,10 +157,20 @@ export function Markdown({ text }: { text: string }): React.JSX.Element {
     const heading = /^(#{1,4})\s+(.*)$/.exec(line)
     if (heading) {
       flushParagraph()
+      const level = heading[1].length as 1 | 2 | 3 | 4
+      const sizes: Record<number, string> = {
+        1: 'text-[17px]',
+        2: 'text-[15.5px]',
+        3: 'text-[13.5px]',
+        4: 'text-[12.5px]'
+      }
+      // One tag per level so a `#` title and a `####` subheading keep their
+      // hierarchy instead of all rendering as the same `<h3>`.
+      const Tag = `h${level}` as React.ElementType
       blocks.push(
-        <h3 key={`h${blocks.length}`} className="pt-1 text-[13.5px] font-semibold text-white">
+        <Tag key={`h${blocks.length}`} className={`pt-1 font-semibold text-text ${sizes[level]}`}>
           {renderInline(heading[2], `h${blocks.length}`)}
-        </h3>
+        </Tag>
       )
       continue
     }

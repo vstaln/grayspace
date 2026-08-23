@@ -1,12 +1,13 @@
-import type { BrainStore } from '../brain'
-import type { CanvasStore } from '../canvasState'
-import type { CoordinationStore } from '../coordination'
+import type { BrainStore } from '../brain.ts'
+import type { CanvasStore } from '../canvasState.ts'
+import type { CoordinationStore } from '../coordination.ts'
 import type { PlannerStore } from '../plannerStore.ts'
-import type { TerminalManager } from '../terminals'
-import type { TerminalSnapshots } from '../terminalSnapshots'
+import type { TerminalManager } from '../terminals.ts'
+import type { TerminalSnapshots } from '../terminalSnapshots.ts'
 import type { Core } from '../core/index.ts'
 import { registerBoardCommands } from './board.ts'
 import { registerCanvasCommands } from './canvas.ts'
+import { registerFileCommands } from './files.ts'
 import { registerGitCommands } from './git.ts'
 import { registerNoteCommands } from './notes.ts'
 import { registerPlannerCommands } from './planner.ts'
@@ -61,6 +62,7 @@ export function registerCommands(deps: CommandDeps): { git: { status(): Promise<
   registerBoardCommands(deps)
   registerPlannerCommands(deps)
   registerTerminalCommands(deps)
+  registerFileCommands(deps)
   return { git: registerGitCommands(deps) }
 }
 

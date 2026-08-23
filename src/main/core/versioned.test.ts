@@ -49,6 +49,7 @@ describe('resource ids', () => {
 
   test('two spellings of one path normalise to the same lock key', () => {
     assert.equal(fileResource('c:\\src\\a.ts'), fileResource('C:/src/a.ts'))
+    assert.equal(fileResource('C:/Src/A.ts'), fileResource('C:/src/a.ts'))
     assert.equal(fileResource('src/a/'), fileResource('src/a'))
   })
 

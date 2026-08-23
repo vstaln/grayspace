@@ -25,16 +25,25 @@ const ConfirmContext = createContext<Confirm>(async () => false)
  */
 export function ConfirmProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const [pending, setPending] = useState<PendingConfirm | null>(null)
+  const pendingRef = useRef<PendingConfirm | null>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(dialogRef, pending !== null)
 
   const confirm = useCallback<Confirm>(
-    (message, options) => new Promise((resolve) => setPending({ message, resolve, ...options })),
+    (message, options) => {
+      pendingRef.current?.resolve(false)
+      return new Promise((resolve) => {
+        const next = { message, resolve, ...options }
+        pendingRef.current = next
+        setPending(next)
+      })
+    },
     []
   )
 
   const settle = (value: boolean): void => {
     pending?.resolve(value)
+    pendingRef.current = null
     setPending(null)
   }
 
@@ -43,7 +52,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
       {children}
       {pending && (
         <div
-          className="fixed inset-0 z-[20000] grid place-items-center bg-black/50"
+          className="fixed inset-0 z-[20000] grid place-items-center bg-black/50 p-3"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) settle(false)
           }}
@@ -52,8 +61,8 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
             ref={dialogRef}
             role="alertdialog"
             aria-modal="true"
-            aria-label={pending.title || 'Подтверждение'}
-            className="w-[340px] rounded-[10px] border border-line bg-bg-panel p-4 shadow-2xl glass:bg-bg-panel/90 glass:backdrop-blur-2xl"
+            aria-label={pending.title || 'Confirmation'}
+            className="max-h-[calc(100vh-24px)] w-full max-w-[340px] overflow-auto rounded-[10px] border border-line bg-bg-panel p-4 shadow-2xl glass:bg-bg-panel/90 glass:backdrop-blur-2xl"
             onKeyDown={(e) => {
               // Otherwise Escape also bubbles to whatever full-screen panel
               // this dialog is stacked on top of (e.g. Second Brain) and
@@ -64,25 +73,29 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
               }
             }}
           >
-            {pending.title && <h2 className="mb-1.5 text-[13px] font-semibold text-text">{pending.title}</h2>}
-            <p className="text-[12.5px] leading-relaxed text-text-dim">{pending.message}</p>
+            {pending.title && (
+              <h2 className="mb-1.5 truncate text-[13px] font-semibold text-text">{pending.title}</h2>
+            )}
+            <p className="max-h-[40vh] overflow-auto text-[12.5px] leading-relaxed break-words text-text-dim">
+              {pending.message}
+            </p>
             <div className="mt-4 flex justify-end gap-2">
               <button
                 autoFocus
-                className="rounded-[10px] border border-line-soft px-3 py-1.5 text-[12px] text-text-dim transition-colors hover:border-line hover:text-text"
+                className="rounded-[10px] border border-line-soft px-3 py-1.5 text-[12px] text-text-dim transition-colors duration-150 hover:border-line hover:text-text"
                 onClick={() => settle(false)}
               >
-                {pending.cancelLabel || 'Отмена'}
+                {pending.cancelLabel || 'Cancel'}
               </button>
               <button
                 className={
                   pending.danger
-                    ? 'rounded-[10px] border border-danger/30 bg-danger/12 px-3 py-1.5 text-[12px] text-danger transition-colors hover:bg-danger/20'
-                    : 'rounded-[10px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-bg transition-opacity hover:opacity-90'
+                    ? 'rounded-[10px] border border-danger/30 bg-danger/12 px-3 py-1.5 text-[12px] text-danger transition-colors duration-150 hover:bg-danger/20'
+                    : 'rounded-[10px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-bg transition-opacity duration-150 hover:opacity-90'
                 }
                 onClick={() => settle(true)}
               >
-                {pending.confirmLabel || 'Подтвердить'}
+                {pending.confirmLabel || 'Confirm'}
               </button>
             </div>
           </div>

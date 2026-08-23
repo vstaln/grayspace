@@ -8,8 +8,13 @@ const FOCUSABLE =
  * Shift+Tab are confined to `container`, focus moves into the panel when it
  * opens, and is restored to whatever had focus before when it closes.
  */
-export function useFocusTrap(container: React.RefObject<HTMLElement | null>, active: boolean): void {
+export function useFocusTrap(
+  container: React.RefObject<HTMLElement | null>,
+  active: boolean,
+  options?: { containOnly?: boolean }
+): void {
   const restoreRef = useRef<HTMLElement | null>(null)
+  const containOnly = options?.containOnly === true
 
   useEffect(() => {
     if (!active) return
@@ -27,21 +32,26 @@ export function useFocusTrap(container: React.RefObject<HTMLElement | null>, act
       const first = items[0]
       const last = items[items.length - 1]
       const current = document.activeElement
-      const outside = !(current instanceof Node && root.contains(current))
-      if (e.shiftKey && (current === first || outside)) {
+      const inside = current instanceof Node && root.contains(current)
+      // Side panels (chat) must not yank Tab out of a terminal. Real dialogs
+      // still pull focus back when it has escaped the overlay.
+      if (containOnly && !inside) return
+      if (e.shiftKey && (current === first || !inside)) {
         e.preventDefault()
         last.focus()
-      } else if (!e.shiftKey && (current === last || outside)) {
+      } else if (!e.shiftKey && (current === last || !inside)) {
         e.preventDefault()
         first.focus()
       }
     }
 
     window.addEventListener('keydown', onKeyDown, true)
-    focusable()[0]?.focus()
+    if (!containOnly) focusable()[0]?.focus()
     return () => {
       window.removeEventListener('keydown', onKeyDown, true)
-      restoreRef.current?.focus()
+      if (restoreRef.current && document.body.contains(restoreRef.current)) {
+        restoreRef.current.focus()
+      }
     }
-  }, [active, container])
+  }, [active, container, containOnly])
 }

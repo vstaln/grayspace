@@ -1,7 +1,10 @@
-import { app, clipboard } from 'electron'
+import * as electron from 'electron'
 import { createHash } from 'crypto'
+
+const clipboard = (electron as unknown as { clipboard?: typeof electron.clipboard }).clipboard
 import * as fs from 'fs'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'path'
+import { getUserDataDir } from './userData.ts'
 
 /** A picture that now lives in the app's own store, addressable by absolute path. */
 export interface MediaFile {
@@ -16,8 +19,9 @@ const MIME_BY_EXT: Record<string, string> = {
   gif: 'image/gif',
   webp: 'image/webp',
   avif: 'image/avif',
-  bmp: 'image/bmp',
-  svg: 'image/svg+xml'
+  bmp: 'image/bmp'
+  // SVG deliberately omitted: a data:image/svg+xml URL can carry inline script
+  // and runs with the page origin when used as <img> src in some contexts.
 }
 
 export const IMAGE_EXTENSIONS = Object.keys(MIME_BY_EXT)
@@ -30,7 +34,7 @@ export const MAX_MEDIA_BYTES = 24 * 1024 * 1024
  * the temp dir the way clipboard-to-terminal paths do — they live in userData.
  */
 export function mediaDir(): string {
-  return join(app.getPath('userData'), 'media')
+  return join(getUserDataDir(), 'media')
 }
 
 /**
@@ -38,7 +42,7 @@ export function mediaDir(): string {
  * file, and re-pasting after a restart resolves to the copy already on disk.
  */
 export function saveBytes(bytes: Buffer, ext: string): MediaFile {
-  if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('Р¤Р°Р№Р» Р±РѕР»СЊС€Рµ 24 РњР‘')
+  if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('File larger than 24 MB')
   const safeExt = MIME_BY_EXT[ext.replace(/^\./, '').toLowerCase()] ? ext.replace(/^\./, '').toLowerCase() : 'png'
   const digest = createHash('sha1').update(bytes).digest('hex').slice(0, 16)
   const dir = mediaDir()
@@ -52,17 +56,19 @@ export function saveBytes(bytes: Buffer, ext: string): MediaFile {
 
 /** Copies a picture the user already has on disk into the store. */
 export function importFile(source: string): MediaFile {
+  if (!isLocalPath(source)) throw new Error('UNC and remote paths are not allowed')
   const bytes = fs.readFileSync(source)
-  if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('Файл больше 24 МБ')
+  if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('File larger than 24 MB')
   return saveBytes(bytes, extname(source))
 }
 
 /** The clipboard's bitmap, or null when it holds no image at all. */
 export function saveClipboardImage(): MediaFile | null {
+  if (!clipboard) return null
   const image = clipboard.readImage()
   if (image.isEmpty()) return null
   const bytes = image.toPNG()
-  if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('Р¤Р°Р№Р» Р±РѕР»СЊС€Рµ 24 РњР‘')
+  if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('File larger than 24 MB')
   return saveBytes(bytes, 'png')
 }
 
@@ -115,7 +121,7 @@ export async function dataUrl(path: string): Promise<string | null> {
  * the only places this app itself ever writes pictures.
  */
 async function authorizedMediaPath(path: string): Promise<string | null> {
-  const userData = app.getPath('userData')
+  const userData = getUserDataDir()
   try {
     const root = await fs.promises.realpath(userData)
     const candidate = await fs.promises.realpath(resolve(path))

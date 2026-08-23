@@ -1,16 +1,16 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 
-export type ThemeName = 'dark' | 'glass' | 'photo'
+export type ThemeName = 'dark' | 'photo'
 
 const STORAGE_KEY = 'workspace-theme'
 export const THEMES: { id: ThemeName; label: string; hint: string }[] = [
-  { id: 'dark', label: 'Тёмная', hint: 'Непрозрачный фон' },
-  { id: 'glass', label: 'Стеклянная', hint: 'Полупрозрачные панели поверх рабочего стола' },
-  { id: 'photo', label: 'Фото', hint: 'Своё изображение с настраиваемым затемнением' }
+  { id: 'dark', label: 'Dark', hint: 'Opaque canvas' },
+  { id: 'photo', label: 'Photo', hint: 'Custom wallpaper with adjustable blur & dim' }
 ]
 
-/** `glass` and `photo` both put panels on a blurred, semi-opaque surface. */
-const TRANSLUCENT: ThemeName[] = ['glass', 'photo']
+/** `photo` floats panels on a blurred, semi-opaque surface over the real
+ *  desktop showing through the transparent window. */
+const TRANSLUCENT: ThemeName[] = ['photo']
 
 function readStoredTheme(): ThemeName {
   const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null
@@ -25,6 +25,9 @@ interface ThemeValue {
   /** 0–90: percent of black laid over the wallpaper. */
   dim: number
   setDim: (dim: number) => void
+  /** 0–90: percent of Gaussian blur applied to the wallpaper. */
+  blur: number
+  setBlur: (blur: number) => void
   pickBackground: () => Promise<string | null>
   clearBackground: () => void
   /** Set when the last pick failed, so the settings menu can explain why. */
@@ -37,6 +40,8 @@ const ThemeContext = createContext<ThemeValue>({
   background: null,
   dim: 45,
   setDim: () => {},
+  blur: 40,
+  setBlur: () => {},
   pickBackground: async () => null,
   clearBackground: () => {},
   error: null
@@ -47,6 +52,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
   const [theme, setTheme] = useState<ThemeName>(readStoredTheme)
   const [background, setBackground] = useState<string | null>(null)
   const [dim, setDimState] = useState(45)
+  const [blur, setBlurState] = useState(40)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -61,9 +67,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
   // The wallpaper and its dim live in the main process (they outgrow localStorage
   // and must survive a cache clear), so they are loaded once on mount.
   useEffect(() => {
-    // Tolerate an older main process (a stale dev build with no wallpaper IPC):
-    // the theme still works, it just has nothing to show.
-    void window.api.settings.get().then((s) => setDimState(s.backgroundDim ?? 45), () => {})
+    void window.api.settings.get().then(
+      (s) => {
+        setDimState(s.backgroundDim ?? 45)
+        setBlurState(s.backgroundBlur ?? 40)
+      },
+      () => {}
+    )
     void window.api.settings.getBackground().then(setBackground, () => setBackground(null))
   }, [])
 
@@ -76,18 +86,35 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
     setDimState(clamped)
     if (dimTimerRef.current !== null) clearTimeout(dimTimerRef.current)
     dimTimerRef.current = window.setTimeout(() => {
-      void window.api.settings.set({ backgroundDim: clamped })
+      void window.api.settings.set({ backgroundDim: clamped }).catch(() => setError('Failed to save dimming level'))
     }, 300)
   }, [])
+  const blurTimerRef = useRef<number | null>(null)
   useEffect(
     () => () => {
       if (dimTimerRef.current !== null) clearTimeout(dimTimerRef.current)
+      if (blurTimerRef.current !== null) clearTimeout(blurTimerRef.current)
     },
     []
   )
 
+  const setBlur = useCallback((next: number): void => {
+    const clamped = Math.min(90, Math.max(0, Math.round(next)))
+    setBlurState(clamped)
+    if (blurTimerRef.current !== null) clearTimeout(blurTimerRef.current)
+    blurTimerRef.current = window.setTimeout(() => {
+      void window.api.settings.set({ backgroundBlur: clamped }).catch(() => setError('Failed to save blur level'))
+    }, 300)
+  }, [])
+
   const pickBackground = useCallback(async (): Promise<string | null> => {
-    const result = await window.api.settings.pickBackground()
+    let result: { dataUrl?: string | null; error?: string }
+    try {
+      result = await window.api.settings.pickBackground()
+    } catch (err) {
+      setError(`Failed to pick background: ${err instanceof Error ? err.message : String(err)}`)
+      return null
+    }
     if (result.error) {
       setError(result.error)
       return null
@@ -100,15 +127,19 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
     return next
   }, [])
 
-  const clearBackground = useCallback((): void => {
+  const clearBackground = useCallback(async (): Promise<void> => {
     setError(null)
-    setBackground(null)
-    void window.api.settings.clearBackground()
+    try {
+      await window.api.settings.clearBackground()
+      setBackground(null)
+    } catch (err) {
+      setError(`Failed to remove background: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }, [])
 
   return (
     <ThemeContext.Provider
-      value={{ theme, setTheme, background, dim, setDim, pickBackground, clearBackground, error }}
+      value={{ theme, setTheme, background, dim, setDim, blur, setBlur, pickBackground, clearBackground, error }}
     >
       {children}
     </ThemeContext.Provider>

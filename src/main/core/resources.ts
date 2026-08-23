@@ -29,7 +29,12 @@ export function resourceId(scheme: ResourceScheme, id: string): ResourceId {
  */
 export function fileResource(path: string): ResourceId {
   const unified = path.replace(/\\/g, '/').replace(/\/+$/, '')
-  const normalized = /^[a-z]:\//i.test(unified) ? unified[0].toUpperCase() + unified.slice(1) : unified
+  const withDrive = /^[a-z]:\//i.test(unified) ? unified[0].toUpperCase() + unified.slice(1) : unified
+  // Windows paths are case-insensitive; keep the drive letter capitalised and
+  // fold the rest so C:/Src/a.ts and C:/src/a.ts cannot be locked separately.
+  const slash = withDrive.indexOf('/')
+  const normalized =
+    slash >= 0 ? withDrive.slice(0, slash + 1) + withDrive.slice(slash + 1).toLowerCase() : withDrive.toLowerCase()
   return resourceId('file', normalized)
 }
 

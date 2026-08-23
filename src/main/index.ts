@@ -1,24 +1,53 @@
+// Loaded before every other import: `config.ts` and others read `process.env`
+// at import time, so this has to run first or a `.env` value would arrive one
+// tick too late for them to see it.
+import { config as loadEnvFile } from 'dotenv'
+loadEnvFile()
+
 import { app, shell, BrowserWindow, Menu } from 'electron'
-import { join } from 'path'
+import * as fs from 'fs'
+import { dirname, join } from 'path'
+import { pathToFileURL } from 'url'
 import { APP_TITLE } from './config'
 import { CoordinationStore } from './coordination'
 import { TerminalManager } from './terminals'
+import { TerminalStreamBatcher } from './terminalBatcher'
 import { startControlServer } from './controlServer'
-import { isMcpRunning, startMcpServer, stopMcpServer } from './mcpProcess'
-import { registerIpc, focusedTerminalId, originTerminalId, forgetTerminalOrigin } from './ipc'
+import { isMcpRunning, mcpStatus, restartMcpServer, startMcpServer, stopMcpServer } from './mcpProcess'
+import { clearRuntimePresence, writeRuntimePresence } from './runtimePresence'
+import { registerIpc, focusedTerminalId, originTerminalId, forgetTerminalOrigin, USER_ACTOR_ID, isTerminalMounted, clearMountedTerminals } from './ipc'
 import { BrainStore } from './brain'
 import { AppState } from './appState'
 import { CanvasStore } from './canvasState'
 import { PlannerStore } from './plannerStore.ts'
-import { ensureCodexGlobalConfig, syncProjectGrokConfig, syncProjectMcpConfig, syncProjectOpencodeConfig } from './mcpAutoConfig'
+import { ensureCodexGlobalConfig, syncClineConfig, syncGlobalAntigravityConfig, syncGlobalWindsurfConfig, syncProjectAntigravityConfig, syncProjectCursorConfig, syncProjectGrokConfig, syncProjectMcpConfig, syncProjectOpencodeConfig } from './mcpAutoConfig'
 import { createCore } from './core/index.ts'
 import { FileJournalSink, readJournalTail } from './journalSink'
 import { registerCommands } from './commands/index.ts'
-import { createAssistant } from './assistant/index.ts'
 import { TerminalSnapshots } from './terminalSnapshots'
+import { TelegramBot } from './telegramBot.ts'
+import { NotificationManager } from './notifications.ts'
+import { isLocalPath } from './media.ts'
 import { join as joinPath } from 'path'
 
+/**
+ * Session the Browser pane's tabs share. Persistent so logins survive a
+ * restart, and separate from the app session so a visited page can never read
+ * the workspace's own cookies.
+ */
+const BROWSER_PARTITION = 'persist:orcspace-browser'
+
 let mainWindow: BrowserWindow | null = null
+let controlServer: { close(): void } | null = null
+
+/**
+ * Best-effort config syncs must never reject out of the startup path — a
+ * failure to touch a config file on disk is a log line, not an unhandled
+ * promise rejection.
+ */
+function fire(promise: Promise<void>): void {
+  void promise.catch((err) => console.error('config sync failed', err))
+}
 
 /**
  * The unified core, built before anything that writes state exists. Every
@@ -26,15 +55,22 @@ let mainWindow: BrowserWindow | null = null
  * and every transport below only translates requests into commands.
  */
 const journalFile = joinPath(app.getPath('userData'), 'command-journal.ndjson')
+const journalTail = readJournalTail(journalFile)
 const core = createCore({
   sink: new FileJournalSink({ file: journalFile }),
-  startSeq: readJournalTail(journalFile, 1).lastSeq
+  startSeq: journalTail.lastSeq,
+  seed: journalTail.entries
 })
 
 const terminals = new TerminalManager()
+// A build log or an agent streaming tokens can emit hundreds of pty chunks a
+// second; forwarding each straight over IPC starves the renderer's event
+// loop faster than it can paint. Consolidate into at most one IPC message
+// per animation frame instead (PERF-terminal-ipc).
+const terminalBatcher = new TerminalStreamBatcher()
 /** cwd + title + capped scrollback per terminal, so a restart keeps the context. */
 const snapshots = new TerminalSnapshots()
-const coordination = new CoordinationStore(core.locks)
+const coordination = new CoordinationStore(core.locks, (id) => core.actors.isAlive(id))
 /** Persisted folders + settings; the brain reads the link syntax from here. */
 const state = new AppState()
 const brain = new BrainStore(() => state.settings.linkSyntax)
@@ -42,6 +78,8 @@ const brain = new BrainStore(() => state.settings.linkSyntax)
 const canvas = new CanvasStore()
 /** The planner's outline — a day plan distinct from the delegable task board. */
 const planner = new PlannerStore()
+const telegram = new TelegramBot(state, core, canvas)
+const notifications = new NotificationManager(telegram)
 
 /**
  * The app owns two fixed loopback ports and one state file. A second copy would
@@ -50,11 +88,24 @@ const planner = new PlannerStore()
  */
 const hasInstanceLock = app.requestSingleInstanceLock()
 if (!hasInstanceLock) {
-  app.quit()
+  // exit(), not quit(): the loser has never loaded stores, and before-quit
+  // flush() would write empty planner/board/canvas over the live instance.
+  app.exit(0)
 }
 
 function send(channel: string, ...args: unknown[]): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args)
+}
+
+function publishPresence(): void {
+  try {
+    writeRuntimePresence({
+      mcpRunning: isMcpRunning(),
+      workspaceDir: state.workspaceDir ?? null
+    })
+  } catch (err) {
+    console.error('failed to write runtime presence', err)
+  }
 }
 
 function focusMainWindow(): void {
@@ -70,13 +121,13 @@ function createWindow(): void {
     height: 900,
     minWidth: 800,
     minHeight: 560,
-    show: false,
-    // The renderer owns the title bar; glass mode uses the native transparent
-    // surface so the desktop can show through without a blur filter.
-    frame: false,
-    transparent: true,
-    hasShadow: false,
-    backgroundColor: '#00000000',
+    show: true,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: false,
+    autoHideMenuBar: true,
+    transparent: false,
+    hasShadow: true,
+    backgroundColor: '#0e0e11',
     title: APP_TITLE,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -85,11 +136,27 @@ function createWindow(): void {
       // only uses contextBridge/ipcRenderer, which work sandboxed (SEC-005).
       sandbox: true,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // The Browser pane hosts real web pages in <webview> guests. They render
+      // in their own processes with their own preferences, pinned below by
+      // `will-attach-webview`, so the app renderer keeps its own hardening.
+      webviewTag: true
     }
   })
 
-  mainWindow.on('ready-to-show', () => mainWindow?.show())
+  mainWindow.show()
+  mainWindow.focus()
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show()
+    mainWindow?.focus()
+  })
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  })
   mainWindow.on('maximize', () => send('window:onMaximizeChange', true))
   mainWindow.on('unmaximize', () => send('window:onMaximizeChange', false))
   // Without this the reference outlives the window and every later `send`
@@ -103,12 +170,52 @@ function createWindow(): void {
     try {
       const protocol = new URL(url).protocol
       if (protocol === 'https:' || protocol === 'http:' || protocol === 'mailto:') {
-        void shell.openExternal(url)
+        // No handler for the scheme (or a policy block) rejects the promise.
+        shell.openExternal(url).catch((err) => {
+          console.warn('failed to open external url', url, err)
+        })
       }
     } catch {
       /* an unparsable url is not worth opening */
     }
     return { action: 'deny' }
+  })
+  const allowRendererNavigation = (url: string): boolean => {
+    if (process.env['ELECTRON_RENDERER_URL']) {
+      try {
+        return new URL(url).origin === new URL(process.env['ELECTRON_RENDERER_URL']).origin
+      } catch {
+        return false
+      }
+    }
+    return url === pathToFileURL(join(__dirname, '../renderer/index.html')).href
+  }
+  const guardNavigation = (event: Electron.Event, url: string): void => {
+    if (allowRendererNavigation(url)) return
+    event.preventDefault()
+    try {
+      const protocol = new URL(url).protocol
+      if (protocol === 'https:' || protocol === 'http:' || protocol === 'mailto:') void shell.openExternal(url)
+    } catch {
+      /* malformed and privileged schemes stay blocked */
+    }
+  }
+  mainWindow.webContents.on('will-navigate', guardNavigation)
+  mainWindow.webContents.on('will-redirect', guardNavigation)
+
+  // A <webview> shows pages nobody vetted, so its privileges are decided here
+  // and not read from whatever attributes the renderer happened to set: no
+  // preload, no node, sandbox and web security on (SEC-005).
+  mainWindow.webContents.on('will-attach-webview', (_event, webPreferences, params) => {
+    delete webPreferences.preload
+    webPreferences.nodeIntegration = false
+    webPreferences.nodeIntegrationInSubFrames = false
+    webPreferences.contextIsolation = true
+    webPreferences.sandbox = true
+    webPreferences.webSecurity = true
+    // Guests live in the browser pane's own partition — never the app session,
+    // whose cookies belong to the workspace's own services.
+    params.partition = BROWSER_PARTITION
   })
 
   // The application menu's edit accelerators (Ctrl+C/X/A/Z) win over the
@@ -124,41 +231,131 @@ function createWindow(): void {
       const signal = { c: '\x03', a: '\x01', z: '\x1a', x: '\x18' }[input.key.toLowerCase()]
       if (signal) {
         event.preventDefault()
-        terminals.write(focusedId, signal)
+        // Through the bus, like every other keystroke, so an agent holding the
+        // terminal's lock keeps SIGINT from interleaving with its command (P4).
+        void core.bus.submit({
+          actorId: USER_ACTOR_ID,
+          type: 'terminal.input',
+          target: `terminal:${focusedId}`,
+          payload: { data: signal }
+        }).catch(() => {
+          // Keystroke lost to queue backpressure is better than an unhandled
+          // rejection from the input event handler.
+        })
       }
     }
   })
 
-  // A crashed renderer cannot dispose its widgets, so its PTYs (and any shell
-  // children) would otherwise outlive the window until the app exits. Tear the
-  // terminals down the moment the renderer dies instead.
+  // Keep PTYs across a renderer crash/reload so Claude Code and other long
+  // sessions reconnect when the window comes back. They are still torn down
+  // on app quit (before-quit / window-all-closed).
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     console.error('renderer process gone', details.reason, details.exitCode)
-    terminals.disposeAll()
+    clearMountedTerminals()
   })
 
   if (process.env['ELECTRON_RENDERER_URL']) {
-    void mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']).catch((err) => {
+      // A failed load otherwise dies as a silent unhandled rejection and the
+      // window stays blank with no trace of why.
+      console.error('failed to load the renderer URL', err)
+    })
   } else {
-    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html')).catch((err) => {
+      console.error('failed to load the built renderer', err)
+    })
   }
 }
 
 // Pipe terminal and coordination activity to the renderer so widgets and the
-// kanban board stay in sync with whatever agents are doing over MCP.
-terminals.on('data', (id: string, chunk: string) => send('terminal:onData', id, chunk))
-terminals.on('exit', (id: string, code: number) => send('terminal:onExit', id, code))
-coordination.on('change', (snapshot) => send('coordination:onChange', snapshot))
+// kanban board stay in sync with whatever agents are doing over MCP. Output is
+// only forwarded for terminals whose widget is actually mounted — a detached
+// shell (workspace switch, renderer gone) must not flood the window with bytes
+// nothing is rendering (P7).
+terminals.on('data', (id: string, chunk: string) => {
+  terminalBatcher.push(id, chunk)
+})
+terminalBatcher.on('batch', (id: string, chunk: string) => {
+  if (isTerminalMounted(id)) send('terminal:onData', id, chunk)
+})
+terminals.on('exit', (id: string, code: number) => {
+  // Flush first: a batch still sitting in the 16ms window would otherwise be
+  // able to arrive after (and render below) the exit notice below it.
+  terminalBatcher.flush(id)
+  send('terminal:onExit', id, code)
+})
+// Persist scrollback whenever a shell is actually torn down (app quit, explicit
+// close). Folder switches no longer release — those reconnect to the live pty.
+// Async: this fires on every terminal the user closes, interactively, so it
+// must not block the window on a disk write (see TerminalSnapshots.saveAsync).
+// The quit path saves durably and synchronously instead — see snapshotTerminals.
+terminals.on(
+  'release',
+  (info: { id: string; title: string; cwd: string; scrollback: string }) => {
+    // before-quit has already saved every live terminal durably by the time
+    // disposeAll() fires these releases — a second save here would truncate
+    // the just-written scrollback asynchronously during teardown.
+    if (shuttingDown) return
+    snapshots.saveAsync({
+      id: info.id,
+      title: info.title,
+      cwd: info.cwd,
+      scrollback: info.scrollback
+    })
+  }
+)
+coordination.on('change', (snapshot) => {
+  send('coordination:onChange', snapshot)
+  notifications.handleCoordinationChange(snapshot)
+})
 planner.on('change', (items) => send('planner:onChange', items))
 // MCP/assistant canvas commands are applied in the main process. Broadcast the
 // resulting snapshot so a rename or move is visible immediately in the open
 // renderer instead of only after the next restart.
 canvas.on('change', (snapshot) => send('canvas:onChange', snapshot))
 
+/**
+ * A second launch may carry a folder path (shortcut, file association, or
+ * `OrcSpace.exe C:\project`). Open it in the running instance instead of
+ * dropping the argv on the floor.
+ */
+function handleSecondInstanceArgs(argv: string[]): void {
+  focusMainWindow()
+  // Electron's own switches and the exe path sit first; real paths are later.
+  const candidates = argv
+    .slice(1)
+    .filter((arg) => arg && !arg.startsWith('-') && !arg.includes('electron') && arg !== '.')
+  for (const candidate of candidates) {
+    try {
+      // Same UNC guard as workspace:open-recent — existsSync on a network
+      // path would make the main process initiate an SMB connection.
+      if (!isLocalPath(candidate)) continue
+      if (!fs.existsSync(candidate)) continue
+      const stat = fs.statSync(candidate)
+      const dir = stat.isDirectory() ? candidate : dirname(candidate)
+      if (!fs.existsSync(dir)) continue
+      state.setWorkspaceDir(dir)
+      fire(syncProjectMcpConfig(dir))
+      fire(syncProjectOpencodeConfig(dir))
+      fire(syncProjectGrokConfig(dir))
+      fire(syncProjectCursorConfig(dir))
+      fire(syncGlobalWindsurfConfig())
+      fire(syncClineConfig())
+      send('workspace:onDirChange', dir)
+      return
+    } catch {
+      /* try the next arg */
+    }
+  }
+}
+
 if (hasInstanceLock) {
-  app.on('second-instance', focusMainWindow)
+  app.on('second-instance', (_event, argv) => handleSecondInstanceArgs(argv))
 
   app.whenReady().then(() => {
+    if (process.platform === 'win32') {
+      app.setAppUserModelId('com.orcspace.app')
+    }
     // On Windows/Linux, Ctrl+C/V/X/A/Z are wired through the application menu's
     // accelerators, not raw keydown handling — with no Menu at all (this window
     // is frame:false and never shows one), those keys reach focused text areas
@@ -168,18 +365,28 @@ if (hasInstanceLock) {
 
     // Codex has no per-project config, only this one global file — register the
     // workspace server there once so any `codex` run anywhere already sees it.
-    void ensureCodexGlobalConfig()
+    fire(ensureCodexGlobalConfig())
+    fire(syncGlobalAntigravityConfig())
     // Claude Code reads `.mcp.json` from its cwd, so the equivalent for
     // it is per-project: whichever folder is already open when the app starts.
     // opencode reads its own `opencode.json` from the cwd the same way.
     if (state.workspaceDir) {
-      void syncProjectMcpConfig(state.workspaceDir)
-      void syncProjectOpencodeConfig(state.workspaceDir)
-      syncProjectGrokConfig(state.workspaceDir)
+      fire(syncProjectMcpConfig(state.workspaceDir))
+      fire(syncProjectOpencodeConfig(state.workspaceDir))
+      fire(syncProjectGrokConfig(state.workspaceDir))
+      fire(syncProjectCursorConfig(state.workspaceDir))
+      fire(syncProjectAntigravityConfig(state.workspaceDir))
+      fire(syncGlobalWindsurfConfig())
+      fire(syncClineConfig())
     }
 
     // Keep the rail's folder list live whenever the persisted state moves.
-    state.on('change', (next) => send('workspace:onRecentChange', next.recent))
+    state.on('change', (next) => {
+      send('workspace:onRecentChange', next.recent)
+      send('settings:onChange', state.publicSettings())
+      publishPresence()
+    })
+    brain.on('change', (snapshot) => send('brain:onChange', snapshot))
 
     // Handlers first: a transport that submits a command before its handler
     // exists gets `unknown_command`, and the window is created below.
@@ -198,30 +405,9 @@ if (hasInstanceLock) {
       defaultCwd: () => state.workspaceDir
     })
 
-    // The assistant is built last, on top of a finished core — it registers
-    // its checkpoint command on the same bus and writes as an ordinary actor.
-    const assistant = createAssistant({
-      core,
-      brain,
-      canvas,
-      board: coordination,
-      terminals,
-      apiKey: () => state.settings.openRouterApiKey || undefined,
-      model: () => state.settings.assistantModel || undefined,
-      workspaceDir: () => state.workspaceDir
-    })
-    assistant.on('run', (run) => send('assistant:onRun', run))
-    assistant.on('step', (run) => send('assistant:onRun', run))
-    assistant.on('finished', (run) => send('assistant:onRun', run))
-    // Runs interrupted by a restart come back parked at the human gate rather
-    // than resuming unattended.
-    for (const run of assistant.recover(readJournalTail(journalFile).entries)) {
-      console.log(`recovered assistant run ${run.runId} — waiting for the human`)
-    }
-
     registerIpc({
       core,
-      assistant,
+      telegram,
       terminals,
       coordination,
       planner,
@@ -231,13 +417,20 @@ if (hasInstanceLock) {
       getWindow: () => mainWindow,
       getWorkspaceDir: () => state.workspaceDir,
       setWorkspaceDir: (dir) => {
+        const previous = state.workspaceDir
         state.setWorkspaceDir(dir)
+        if ((dir || undefined) === previous) return
         // A terminal opened right after picking a folder should already see the
         // workspace's MCP tools, not just ones opened on a later restart.
         if (dir) {
-          void syncProjectMcpConfig(dir)
-          void syncProjectOpencodeConfig(dir)
-          syncProjectGrokConfig(dir)
+          fire(syncProjectMcpConfig(dir))
+          fire(syncProjectOpencodeConfig(dir))
+          fire(syncProjectGrokConfig(dir))
+          fire(syncProjectCursorConfig(dir))
+          fire(syncProjectAntigravityConfig(dir))
+          fire(syncGlobalWindsurfConfig())
+          fire(syncGlobalAntigravityConfig())
+          fire(syncClineConfig())
         }
         send('workspace:onDirChange', dir ?? null)
       }
@@ -245,57 +438,110 @@ if (hasInstanceLock) {
 
     createWindow()
 
-    startControlServer({
+    telegram.on('status', (status) => send('integrations:telegram:onStatusChange', status))
+    telegram.refresh()
+
+    controlServer = startControlServer({
       core,
       terminals,
       coordination,
       planner,
       brain,
       canvas,
+      state,
       defaultCwd: () => state.workspaceDir,
-      mcpRunning: isMcpRunning
+      mcpRunning: isMcpRunning,
+      mcpStatus,
+      restartMcp: restartMcpServer
     })
 
-    startMcpServer()
+    publishPresence()
+
+    startMcpServer((status) => {
+      send('mcp:onStatusChange', status)
+      publishPresence()
+    })
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
       else focusMainWindow()
     })
   })
+  .catch((err) => {
+    // Every startup step above is individually best-effort, but a synchronous
+    // throw anywhere in the chain would otherwise surface only as an unhandled
+    // rejection: no window, servers half-up, and nothing in the log.
+    console.error('app startup failed', err)
+  })
 }
+
+// `target="_blank"` and `window.open` inside a browser tab become another tab in
+// the pane instead of a real popup window: the pane keeps every page inside the
+// hardened guest preferences above, and a page cannot spawn bare chrome.
+app.on('web-contents-created', (_event, contents) => {
+  if (contents.getType() !== 'webview') return
+  contents.setWindowOpenHandler(({ url }) => {
+    try {
+      const protocol = new URL(url).protocol
+      if (protocol === 'https:' || protocol === 'http:') send('browser:onOpenTab', url)
+    } catch {
+      /* an unparsable url is not worth a tab */
+    }
+    return { action: 'deny' }
+  })
+})
 
 app.on('window-all-closed', () => {
   // macOS apps conventionally stay resident with no windows; every other
   // platform expects closing the last window to end the process.
+  // Cleanup lives only in `before-quit`: disposing PTYs here first made
+  // snapshotTerminals() see an empty list and prune every saved scrollback.
   if (process.platform === 'darwin') return
-  terminals.disposeAll()
-  stopMcpServer()
   app.quit()
 })
 
 /**
  * Saves what every live terminal had on screen, and drops snapshots for ones
- * no widget refers to any more. Called before the PTYs are killed — after
- * that the scrollback is gone with them.
+ * no widget refers to any more. Must run while PTYs are still listed — after
+ * disposeAll the live set is empty and prune() would wipe every saved screen.
  */
 function snapshotTerminals(): void {
   const live = new Set<string>()
   for (const info of terminals.list()) {
     live.add(info.id)
+    // Durable: the process is about to be torn down, so this has to block
+    // until the bytes are actually on disk rather than racing Electron's exit.
     snapshots.save({
       id: info.id,
       title: info.title,
       cwd: info.cwd,
-      scrollback: terminals.readOutput(info.id) ?? ''
+      scrollback: terminals.fullOutput(info.id) ?? ''
     })
   }
   snapshots.prune(live)
+  // prune()'s forget() calls debounce the index rewrite; force it out now so
+  // a stale snapshot's removal isn't lost to the app actually quitting first.
+  snapshots.flushNow()
 }
 
+let shuttingDown = false
+
 app.on('before-quit', () => {
+  if (shuttingDown) return
+  shuttingDown = true
   snapshotTerminals()
+  // disposeAll() below re-emits `release` per terminal; saveAsync must not
+  // re-truncate what snapshotTerminals() just wrote.
+  snapshots.beginShutdown()
+  try {
+    controlServer?.close()
+  } catch {
+    /* already closed */
+  }
+  controlServer = null
+  clearRuntimePresence()
   terminals.disposeAll()
+  telegram.stop()
   stopMcpServer()
   // Debounced stores (PERF-004/005): whatever was pending must reach disk
   // before the process dies.
@@ -304,4 +550,26 @@ app.on('before-quit', () => {
   planner.dispose()
   canvas.dispose()
   core.dispose()
+})
+
+// Graceful shutdown on OS signals: go through app.quit() so before-quit
+// snapshots live PTYs, flushes stores, then tears them down. Emitting
+// before-quit alone used to leave Electron running with dead shells.
+process.on('SIGINT', () => {
+  app.quit()
+})
+process.on('SIGTERM', () => {
+  app.quit()
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason)
+  // Do not throw – crashing the process would lose the journal and snapshots.
+})
+// A synchronous throw inside an Electron event handler (before-input-event,
+// web-contents-created, a pty callback) would otherwise take the whole main
+// process down. Same policy as unhandledRejection: log it, stay alive — the
+// failing operation's own caller is where recovery belongs, and quitting here
+// would lose the journal and snapshots before-quit has not written yet.
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception:', err)
 })

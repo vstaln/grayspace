@@ -17,3 +17,19 @@ desktop.ini
 *.bak
 *.corrupt-*
 .workspace/
+
+# Secrets for local dev — never committed. See main/index.ts's dotenv load.
+.env
+.env.local
+
+# Agent client configs the app writes into the workspace on startup
+# (mcpAutoConfig.ts). They embed this installation's control token, which is
+# what opens shells and drives the command bus — same trust level as .env.
+# Both files are regenerated automatically, so ignoring them loses nothing.
+.mcp.json
+opencode.json
+
+# Playwright E2E output
+test-results/
+playwright-report/
+playwright/.cache/

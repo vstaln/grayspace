@@ -21,19 +21,78 @@ export default function TimerWidget(): React.JSX.Element {
   const [running, setRunning] = useState(false)
   const deadline = useRef<number>(0)
   const rang = useRef(false)
+  const titleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // A minimized timer's body is display:none; ticking (and re-rendering) 5×/s
+  // for a number nobody can see is pure waste. Time is kept as a deadline, so
+  // skipped ticks lose nothing — the next visible tick recomputes from the
+  // clock (PERF-timer-gate).
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    return () => {
+      if (titleTimerRef.current !== null) {
+        clearTimeout(titleTimerRef.current)
+        titleTimerRef.current = null
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (!running) return
-    const tick = (): void => setRemaining(deadline.current - Date.now())
+    const tick = (): void => {
+      // Hidden (minimized) widget: skip the state write entirely while time
+      // remains — the ring check below must still run so the notification
+      // fires on time even while nobody is watching the digits.
+      const visible = rootRef.current?.offsetParent != null
+      const left = deadline.current - Date.now()
+      if (visible) setRemaining(left)
+      else if (left > 0) return
+      // Ring once when the countdown crosses zero — the widget keeps counting
+      // up after that, so without this gate it would re-fire every 200ms.
+      if (left <= 0 && !rang.current) {
+        rang.current = true
+        try {
+          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            new Notification('OrcSpace', { body: 'Timer finished' })
+          }
+        } catch {
+          /* notifications are optional chrome */
+        }
+        try {
+          window.dispatchEvent(new CustomEvent('orcspace:title-flash', { detail: '⏱ Timer finished' }))
+          const previous = document.title
+          document.title = '⏱ Timer — OrcSpace'
+          if (titleTimerRef.current !== null) clearTimeout(titleTimerRef.current)
+          titleTimerRef.current = setTimeout(() => {
+            titleTimerRef.current = null
+            // Only restore if nothing replaced the flash title meanwhile —
+            // a second timer ringing sets the same title, and restoring over
+            // it (or over an app-set title) would clobber the wrong value.
+            if (document.title === '⏱ Timer — OrcSpace') document.title = previous
+          }, 4000)
+        } catch {
+          /* ignore */
+        }
+      }
+    }
     tick()
     const timer = setInterval(tick, 200)
     return () => clearInterval(timer)
   }, [running])
 
   const start = (): void => {
-    deadline.current = Date.now() + Math.max(remaining, 1000)
+    const base = remaining <= 0 ? Math.max(totalMs, 1000) : remaining
+    deadline.current = Date.now() + base
     rang.current = false
     setRunning(true)
+    // Best-effort: ask once so the ring can use a system notification later.
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        void Notification.requestPermission()
+      }
+    } catch {
+      /* ignore */
+    }
   }
 
   const pause = (): void => {
@@ -55,7 +114,7 @@ export default function TimerWidget(): React.JSX.Element {
   const progress = totalMs > 0 ? Math.min(1, Math.max(0, remaining / totalMs)) : 0
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-3">
+    <div ref={rootRef} className="flex h-full flex-col items-center justify-center gap-3 p-3">
       <div
         className={`font-mono text-[34px] leading-none tabular-nums ${over ? 'text-danger' : 'text-text'}`}
         role="timer"
@@ -65,42 +124,45 @@ export default function TimerWidget(): React.JSX.Element {
         {format(shown)}
       </div>
 
-      <div className="h-1 w-full overflow-hidden rounded-full bg-white/[0.08]">
+      <div className="h-1 w-full overflow-hidden rounded-full bg-bg-hover" aria-hidden>
         <div
-          className={`h-full rounded-full transition-[width] duration-200 ${over ? 'bg-danger' : 'bg-white/70'}`}
+          className={`h-full rounded-full transition-[width] duration-200 ease-out ${over ? 'bg-danger' : 'bg-accent/70'}`}
           style={{ width: `${progress * 100}%` }}
         />
       </div>
 
       <div className="flex items-center gap-1.5">
         <button
-          className="flex items-center gap-1.5 rounded-[10px] border border-line bg-white/[0.03] px-3 py-1.5 text-[12px] text-text hover:bg-bg-hover"
+          className="flex items-center gap-1.5 rounded-[10px] border border-line bg-bg-hover/40 px-3 py-1.5 text-[12px] text-text transition-colors duration-150 hover:bg-bg-hover"
           onClick={() => (running ? pause() : start())}
+          aria-label={running ? 'Pause' : 'Start'}
         >
           {running ? <Pause size={13} /> : <Play size={13} />}
-          {running ? 'Пауза' : 'Старт'}
+          {running ? 'Pause' : 'Start'}
         </button>
         <button
-          className="grid h-8 w-8 place-items-center rounded-[10px] border border-line bg-white/[0.03] text-text-dim hover:bg-bg-hover hover:text-text"
-          title="Сбросить"
+          className="grid h-8 w-8 place-items-center rounded-[10px] border border-line bg-bg-hover/40 text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text"
+          title="Reset"
+          aria-label="Reset timer"
           onClick={() => reset()}
         >
           <RotateCcw size={13} />
         </button>
       </div>
 
-      <div className="flex gap-1">
+      <div className="flex flex-wrap justify-center gap-1" role="group" aria-label="Presets">
         {PRESETS.map((min) => (
           <button
             key={min}
-            className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ${
+            className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-colors duration-150 ${
               totalMs === min * 60_000
-                ? 'border-white/40 text-text'
+                ? 'border-line text-text'
                 : 'border-line-soft text-text-faint hover:text-text-dim'
             }`}
+            aria-pressed={totalMs === min * 60_000}
             onClick={() => reset(min * 60_000)}
           >
-            {min}м
+            {min}m
           </button>
         ))}
       </div>
@@ -113,6 +175,6 @@ function format(ms: number): string {
   const h = Math.floor(total / 3600)
   const m = Math.floor((total % 3600) / 60)
   const s = total % 60
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }

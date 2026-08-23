@@ -1,17 +1,19 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Copy, Minus, Pencil, Square, X } from 'lucide-react'
+import { Maximize2, Minimize2, Pencil, X } from 'lucide-react'
 import ClaudeIcon from './ClaudeIcon'
 import CodexIcon from './CodexIcon'
 import GrokIcon from './GrokIcon'
 import AntigravityIcon from './AntigravityIcon'
+import OpenCodeIcon from './OpenCodeIcon'
 import TerminalWidget from './TerminalWidget'
 import NoteWidget from './NoteWidget'
-import GitStatusWidget from './GitStatusWidget'
 import TimerWidget from './TimerWidget'
-import ScheduleWidget from './ScheduleWidget'
 import PlannerWidget from './PlannerWidget'
 import BoardWidget from './BoardWidget'
+import FilesWidget from './FilesWidget'
+import SysMonitorWidget from './SysMonitorWidget'
+import BrowserWidget from './BrowserWidget'
 import { RESIZE_HANDLES, ResizeDir, Widget } from '../types'
 
 interface Props {
@@ -25,19 +27,24 @@ interface Props {
   onStartEditing: () => void
   onRename: (title: string) => void
   onCancelEditing: () => void
-  onToggleMinimize: () => void
   onToggleMaximize: () => void
   onClose: () => void
+  /** Natural process exit, not the user's close button — must not re-prompt
+   *  "process will be terminated" about a process that is already dead. */
+  onProcessExit: () => void
   onKeyDown: (e: React.KeyboardEvent) => void
   workspaceDir?: string | null
 }
 
 const AGENTS = [
-  { id: 'antigravity', label: 'Antigravity', command: 'agy\r', Icon: AntigravityIcon },
-  { id: 'claude', label: 'Claude', command: 'claude\r', Icon: ClaudeIcon },
-  { id: 'codex', label: 'Codex', command: 'codex\r', Icon: CodexIcon },
-  { id: 'grok', label: 'Grok', command: 'grok\r', Icon: GrokIcon }
+  { id: 'antigravity', label: 'Antigravity', command: 'agy', Icon: AntigravityIcon },
+  { id: 'claude', label: 'Claude', command: 'claude', Icon: ClaudeIcon },
+  { id: 'codex', label: 'Codex', command: 'codex', Icon: CodexIcon },
+  { id: 'opencode', label: 'OpenCode', command: 'opencode', Icon: OpenCodeIcon },
+  { id: 'grok', label: 'Grok', command: 'grok', Icon: GrokIcon }
 ] as const
+
+let cachedSubmit = typeof navigator !== 'undefined' && /windows/i.test(navigator.userAgent) ? '\r\n' : '\r'
 
 /** Absolute positioning + cursor per edge/corner of the resizable frame. */
 const HANDLE_CLASS: Record<ResizeDir, string> = {
@@ -51,7 +58,7 @@ const HANDLE_CLASS: Record<ResizeDir, string> = {
   sw: 'bottom-0 left-0 h-3.5 w-3.5 cursor-nesw-resize z-20'
 }
 
-const WidgetFrame = React.memo(function WidgetFrame({
+function WidgetFrame({
   widget,
   active,
   editing,
@@ -62,9 +69,9 @@ const WidgetFrame = React.memo(function WidgetFrame({
   onStartEditing,
   onRename,
   onCancelEditing,
-  onToggleMinimize,
   onToggleMaximize,
   onClose,
+  onProcessExit,
   onKeyDown,
   workspaceDir
 }: Props): React.JSX.Element {
@@ -79,7 +86,7 @@ const WidgetFrame = React.memo(function WidgetFrame({
   const launchAgent = (): void => {
     setAgentLaunchError(null)
     void window.api.terminal
-      .write(widget.id, agent.command)
+      .write(widget.id, `${agent.command}${cachedSubmit}`)
       .then((result) => {
         if (result && 'error' in result) setAgentLaunchError(result.error)
       })
@@ -97,7 +104,20 @@ const WidgetFrame = React.memo(function WidgetFrame({
       left: Math.max(4, Math.min(rect.right - width, window.innerWidth - width - 4)),
       top: rect.bottom + 4
     })
-  }, [agentMenuOpen])
+    // The widget can move/resize while the menu is open; recompute the anchor
+    // against its live rect instead of keeping a stale position.
+  }, [agentMenuOpen, widget.x, widget.y])
+
+  // Terminal-only affordance (user request): double-click flips the shell to
+  // fullscreen and back. Scoped so nothing else breaks: the title keeps its
+  // double-click rename, buttons stay single-click, and a double-click that
+  // just picked a word out of the scrollback (xterm selection) never toggles.
+  const onTerminalDoubleClick = (e: React.MouseEvent): void => {
+    const target = e.target as HTMLElement
+    if (target.closest('button, input, [data-testid="widget-title"]')) return
+    if (window.getSelection()?.toString()) return
+    onToggleMaximize()
+  }
 
   useEffect(() => {
     if (!agentMenuOpen) return
@@ -107,11 +127,22 @@ const WidgetFrame = React.memo(function WidgetFrame({
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') setAgentMenuOpen(false)
     }
+    // Panning/zooming the canvas moves the button on screen without firing a
+    // mousedown (wheel-pan, ctrl/cmd+wheel zoom) and without changing
+    // widget.x/widget.y (only camera.x/y/zoom do), so the position effect
+    // above never reruns — the portal-rendered menu was left stuck at its old
+    // screen coordinates, adrift from the button that opened it. Simplest fix
+    // matching the click-outside/Escape behaviour above: a wheel while the
+    // menu is open just closes it instead of trying to keep it glued to a
+    // button whose canvas may have just moved out from under it.
+    const onWheel = (): void => setAgentMenuOpen(false)
     window.addEventListener('mousedown', onDown)
     window.addEventListener('keydown', onKey)
+    window.addEventListener('wheel', onWheel, { passive: true })
     return () => {
       window.removeEventListener('mousedown', onDown)
       window.removeEventListener('keydown', onKey)
+      window.removeEventListener('wheel', onWheel)
     }
   }, [agentMenuOpen])
 
@@ -119,10 +150,21 @@ const WidgetFrame = React.memo(function WidgetFrame({
     <div
       className={[
         'widget-shell widget absolute flex flex-col overflow-hidden rounded-[10px]',
+        isTerminal ? 'is-terminal' : '',
         active ? 'is-active' : ''
       ].join(' ')}
       style={style}
       data-testid={`widget-${widget.kind ?? 'terminal'}-${widget.id}`}
+      // The camera keeps its hands off a wheel tick that started inside a
+      // widget by looking at the event target (App's onWheel checks for this
+      // very attribute) — never by stopping propagation here. React delegates
+      // its listeners to the root container, so a synthetic stopPropagation in
+      // this frame also calls stopPropagation() on the *native* event while it
+      // is still being dispatched at the root, above every widget. That killed
+      // the tick before it could reach any native listener further down —
+      // xterm's own wheel/mouse-report handlers and TerminalWidget's scrollback
+      // handler among them — so no terminal could be scrolled at all.
+      data-canvas-scroll-lock="true"
       onPointerDown={onFocus}
       // P3-219: the frame is a keyboard stop — arrows move it, Alt+arrows
       // resize it, Delete closes it (handled in App's onFrameKey).
@@ -134,6 +176,7 @@ const WidgetFrame = React.memo(function WidgetFrame({
       <div
         className="widget-header-shell flex h-[34px] flex-none cursor-grab items-center gap-1 py-0 pr-0 pl-2.5 active:cursor-grabbing"
         onPointerDown={onHeaderPointerDown}
+        onDoubleClick={isTerminal ? onTerminalDoubleClick : undefined}
       >
         {editing ? (
           <input
@@ -148,7 +191,12 @@ const WidgetFrame = React.memo(function WidgetFrame({
             }}
           />
         ) : (
-          <span className="min-w-0 flex-1 truncate text-xs text-text" data-testid="widget-title" onDoubleClick={onStartEditing}>
+          <span
+            className="min-w-0 flex-1 truncate text-xs text-text"
+            data-testid="widget-title"
+            onDoubleClick={onStartEditing}
+            title={`${widget.title} — double-click to rename`}
+          >
             {widget.title}
           </span>
         )}
@@ -157,14 +205,15 @@ const WidgetFrame = React.memo(function WidgetFrame({
             className="grid h-6 w-6 place-items-center rounded-[10px] text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
             onClick={launchAgent}
             data-testid="widget-launch-agent"
-            title={`Запустить ${agent.label}`}
-            aria-label={`Запустить ${agent.label}`}
+            title={`Launch ${agent.label}`}
+            aria-label={`Launch ${agent.label}`}
           >
             <agent.Icon size={13} />
           </button>
         )}
         {isTerminal && agentLaunchError && (
           <span
+            role="alert"
             className="absolute top-[34px] right-2 z-[60] max-w-[70%] truncate rounded-[8px] border border-danger/40 bg-bg-panel px-2 py-1 text-[10px] text-danger shadow-lg"
             title={agentLaunchError}
           >
@@ -173,15 +222,15 @@ const WidgetFrame = React.memo(function WidgetFrame({
         )}
         {isTerminal && (
           <div className="relative" ref={agentMenuRef}>
-<button
-            className="grid h-6 w-6 place-items-center rounded-[10px] text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
-            onClick={() => setAgentMenuOpen((v) => !v)}
-            data-testid="widget-agent-menu"
-            title="Выбрать агента"
-            aria-label="Выбрать агента"
-            aria-haspopup="menu"
-            aria-expanded={agentMenuOpen}
-          >
+            <button
+              className="grid h-6 w-6 place-items-center rounded-[10px] text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
+              onClick={() => setAgentMenuOpen((v) => !v)}
+              data-testid="widget-agent-menu"
+              title="Select Agent"
+              aria-label="Select Agent"
+              aria-haspopup="menu"
+              aria-expanded={agentMenuOpen}
+            >
               <Pencil size={11} strokeWidth={1.5} />
             </button>
             {agentMenuOpen &&
@@ -189,7 +238,7 @@ const WidgetFrame = React.memo(function WidgetFrame({
               createPortal(
                 <div
                   role="menu"
-                  aria-label="Агент"
+                  aria-label="Agent"
                   className="fixed z-[9800] flex min-w-[150px] flex-col overflow-hidden rounded-[10px] border border-line-soft bg-bg-panel py-1 shadow-lg"
                   style={{ left: menuPos.left, top: menuPos.top, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
                   onMouseDown={(e) => e.stopPropagation()}
@@ -220,8 +269,8 @@ const WidgetFrame = React.memo(function WidgetFrame({
             className="grid h-6 w-6 place-items-center rounded-[10px] text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
             onClick={onStartEditing}
             data-testid="widget-rename"
-            title="Переименовать"
-            aria-label="Переименовать"
+            title="Rename"
+            aria-label="Rename"
           >
             <Pencil size={11} strokeWidth={1.5} />
           </button>
@@ -229,38 +278,36 @@ const WidgetFrame = React.memo(function WidgetFrame({
         <div className="ml-1 flex h-[34px] flex-none items-center">
           <button
             className="grid h-full w-8 place-items-center text-text-dim outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
-            onClick={onToggleMinimize}
-            data-testid="widget-minimize"
-            title={widget.minimized ? 'Развернуть' : 'Свернуть'}
-            aria-label={widget.minimized ? 'Развернуть' : 'Свернуть'}
-          >
-            <Minus size={13} />
-          </button>
-          <button
-            className="grid h-full w-8 place-items-center text-text-dim outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
             onClick={onToggleMaximize}
             data-testid="widget-maximize"
-            title={widget.maximized ? 'Восстановить' : 'На весь холст'}
-            aria-label={widget.maximized ? 'Восстановить' : 'На весь холст'}
+            title={widget.maximized ? 'Restore' : 'Maximize'}
+            aria-label={widget.maximized ? 'Restore' : 'Maximize'}
           >
-            {widget.maximized ? <Copy size={13} /> : <Square size={13} />}
+            {widget.maximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
           </button>
           <button
             className="grid h-full w-8 place-items-center rounded-tr-[10px] text-text-dim outline-none transition-colors duration-150 hover:bg-[#e04343] hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
             onClick={onClose}
             data-testid="widget-close"
-            title="Закрыть"
-            aria-label="Закрыть"
+            title="Close"
+            aria-label="Close"
           >
             <X size={13} />
           </button>
         </div>
       </div>
-      <div className={`widget-body min-h-0 flex-1 bg-transparent ${widget.minimized ? 'hidden' : ''}`}>
-        <WidgetBody widget={widget} workspaceDir={workspaceDir} onProcessExit={onClose} />
+      <div
+        className="widget-body min-h-0 flex-1 bg-transparent"
+        onDoubleClick={isTerminal ? onTerminalDoubleClick : undefined}
+      >
+        <WidgetBody
+          widget={widget}
+          workspaceDir={workspaceDir}
+          onProcessExit={onProcessExit ?? onClose}
+          onTitle={onRename}
+        />
       </div>
-      {!widget.minimized &&
-        !widget.maximized &&
+      {!widget.maximized &&
         RESIZE_HANDLES.map((dir) => (
           <div
             key={dir}
@@ -270,7 +317,7 @@ const WidgetFrame = React.memo(function WidgetFrame({
         ))}
     </div>
   )
-})
+}
 
 /**
  * Which component fills the frame. A terminal is the fallback rather than an
@@ -280,32 +327,54 @@ const WidgetFrame = React.memo(function WidgetFrame({
 function WidgetBody({
   widget,
   workspaceDir,
-  onProcessExit
+  onProcessExit,
+  onTitle
 }: {
   widget: Widget
   workspaceDir?: string | null
   onProcessExit: () => void
+  onTitle?: (title: string) => void
 }): React.JSX.Element {
   switch (widget.kind) {
     case 'note':
       return widget.noteId ? (
-        <NoteWidget noteId={widget.noteId} workspaceDir={workspaceDir} />
+        <NoteWidget noteId={widget.noteId} workspaceDir={workspaceDir} onTitle={onTitle} />
       ) : (
-        <div className="grid h-full place-items-center text-[13px] text-text-faint">Заметка не привязана</div>
+        <div className="grid h-full place-items-center text-[13px] text-text-faint">Note not attached</div>
       )
-    case 'git-status':
-      return <GitStatusWidget />
     case 'timer':
       return <TimerWidget />
-    case 'schedule':
-      return <ScheduleWidget />
     case 'planner':
       return <PlannerWidget />
     case 'board':
       return <BoardWidget />
+    case 'files':
+      return <FilesWidget workspaceDir={workspaceDir} />
+    case 'sys-monitor':
+      return <SysMonitorWidget />
+    case 'browser':
+      return <BrowserWidget />
     default:
       return <TerminalWidget id={widget.id} onProcessExit={onProcessExit} />
   }
 }
 
-export default WidgetFrame
+function areWidgetFramePropsEqual(prev: Props, next: Props): boolean {
+  return (
+    prev.widget === next.widget &&
+    prev.active === next.active &&
+    prev.editing === next.editing &&
+    prev.workspaceDir === next.workspaceDir &&
+    prev.style?.left === next.style?.left &&
+    prev.style?.top === next.style?.top &&
+    prev.style?.right === next.style?.right &&
+    prev.style?.bottom === next.style?.bottom &&
+    prev.style?.width === next.style?.width &&
+    prev.style?.height === next.style?.height &&
+    prev.style?.zIndex === next.style?.zIndex &&
+    prev.style?.transform === next.style?.transform
+  )
+}
+
+export default React.memo(WidgetFrame, areWidgetFramePropsEqual)
+

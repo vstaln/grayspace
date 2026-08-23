@@ -66,23 +66,10 @@ export function registerBuiltinWidgets(): void {
     commands: ['note.create', 'note.update', 'note.delete', 'widget.update', 'widget.remove']
   })
   registerWidgetType({
-    kind: 'git-status',
-    label: 'Repository',
-    defaultSize: { w: 320, h: 220 },
-    contended: true,
-    commands: ['git.refresh', 'git.commit', 'widget.update', 'widget.remove']
-  })
-  registerWidgetType({
     kind: 'timer',
     label: 'Timer',
     defaultSize: { w: 300, h: 220 },
     commands: ['widget.update', 'widget.remove']
-  })
-  registerWidgetType({
-    kind: 'schedule',
-    label: 'Scheduled tasks',
-    defaultSize: { w: 400, h: 320 },
-    commands: ['task.create', 'task.update', 'widget.update', 'widget.remove']
   })
   registerWidgetType({
     kind: 'board',
@@ -93,7 +80,25 @@ export function registerBuiltinWidgets(): void {
   registerWidgetType({
     kind: 'planner',
     label: 'Planner',
-    defaultSize: { w: 360, h: 440 },
-    commands: ['plan.create', 'plan.update', 'plan.delete', 'widget.update', 'widget.remove']
+    defaultSize: { w: 420, h: 520 },
+    commands: ['plan.create', 'plan.update', 'plan.toggle', 'plan.delete', 'widget.update', 'widget.remove']
+  })
+  registerWidgetType({
+    kind: 'files',
+    label: 'Files',
+    defaultSize: { w: 580, h: 480 },
+    commands: ['widget.update', 'widget.remove']
+  })
+  registerWidgetType({
+    kind: 'sys-monitor',
+    label: 'System Monitor',
+    defaultSize: { w: 440, h: 380 },
+    commands: ['widget.update', 'widget.remove']
+  })
+  registerWidgetType({
+    kind: 'browser',
+    label: 'Browser',
+    defaultSize: { w: 720, h: 480 },
+    commands: ['widget.update', 'widget.remove']
   })
 }

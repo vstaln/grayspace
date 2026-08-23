@@ -1,0 +1,1 @@
+{"kind": "fn", "name": "sanitizeStrokes", "js_doc": "/**\n * Sanitizes the JSON-shaped canvas strokes without changing their public shape.\n * Invalid entries/points are discarded; valid strokes need at least two points.\n */\n", "def": "function sanitizeStrokes(value: any): any"}

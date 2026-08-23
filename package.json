@@ -7,9 +7,12 @@
   "scripts": {
     "build:mcp": "npm --prefix ../Orcspace-mcp install --no-fund --no-audit && npm --prefix ../Orcspace-mcp run build",
     "predev": "npm run build:mcp",
-    "dev": "electron-vite dev",
+    "dev": "npm run build:native && electron-vite dev",
     "prebuild": "npm run build:mcp",
-    "build": "electron-vite build",
+    "build:native": "node native/build.mjs",
+    "build": "npm run build:native && electron-vite build",
+    "stage:mcp": "node scripts/stage-mcp.mjs",
+    "predist": "npm run build:mcp",
     "prestart": "npm run build:mcp",
     "start": "electron-vite preview",
     "reset": "node scripts/reset.mjs",
@@ -17,21 +20,92 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "typecheck:e2e": "tsc --noEmit -p e2e/tsconfig.json",
     "website": "npx serve website -l 5173",
-    "dist": "npm run build && electron-builder --win nsis"
+    "dist": "npm run build && npm run stage:mcp && electron-builder --win",
+    "dist:mac": "npm run build && npm run stage:mcp && electron-builder --mac",
+    "smoke": "node scripts/smoke.mjs",
+    "pretest:e2e": "npm run build",
+    "test:e2e": "playwright test --project=local",
+    "test:e2e:ui": "playwright test --project=local --ui",
+    "test:e2e:ci": "playwright test --project=ci"
   },
   "build": {
     "appId": "com.orcspace.app",
     "productName": "OrcSpace",
     "npmRebuild": false,
     "files": [
-      "out/**/*"
+      "out/**/*",
+      "!**/node_modules/@homebridge/node-pty-prebuilt-multiarch/prebuilds/{linux-arm,linux-arm64,linux-ia32,linux-x64}/**/*",
+      "!**/node_modules/@homebridge/node-pty-prebuilt-multiarch/third_party/conpty/*/win10-arm64/**/*",
+      "!**/node_modules/@homebridge/node-pty-prebuilt-multiarch/build/**/*.{iobj,ipdb,tlog,pdb,exp,lib,lastbuildstate}",
+      "!**/node_modules/@homebridge/node-pty-prebuilt-multiarch/deps/**/*",
+      "!**/node_modules/@homebridge/node-pty-prebuilt-multiarch/src/**/*",
+      "!**/node_modules/@homebridge/node-pty-prebuilt-multiarch/scripts/**/*"
+    ],
+    "asarUnpack": [
+      "**/node_modules/@homebridge/node-pty-prebuilt-multiarch/**/*"
+    ],
+    "electronLanguages": [
+      "en-US",
+      "ru"
+    ],
+    "compression": "maximum",
+    "extraResources": [
+      {
+        "from": ".staging/mcp",
+        "to": "mcp",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "native/canvas-core",
+        "to": "native/canvas-core",
+        "filter": [
+          "loader.cjs",
+          "package.json",
+          "*.d.ts",
+          "*.node"
+        ]
+      },
+      {
+        "from": "native/brain-core",
+        "to": "native/brain-core",
+        "filter": [
+          "loader.cjs",
+          "package.json",
+          "*.d.ts",
+          "*.node"
+        ]
+      },
+      {
+        "from": "native/storage-core",
+        "to": "native/storage-core",
+        "filter": [
+          "loader.cjs",
+          "package.json",
+          "*.d.ts",
+          "*.node"
+        ]
+      }
     ],
     "directories": {
       "output": "dist"
     },
     "win": {
-      "target": "nsis"
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -42,10 +116,11 @@
   },
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "0.13.1",
-    "lucide-react": "^1.28.0"
+    "dotenv": "^17.4.2"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.3",
+    "@napi-rs/cli": "^3.4.0",
+    "@playwright/test": "^1.62.1",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
@@ -53,12 +128,14 @@
     "electron": "^43.3.0",
     "electron-builder": "^25.1.8",
     "electron-vite": "^3.1.0",
+    "lucide-react": "^1.28.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
+    "unocss": "^66.8.1",
     "vite": "^6.0.0",
     "xterm": "^5.3.0",
-    "xterm-addon-fit": "^0.8.0"
+    "xterm-addon-fit": "^0.8.0",
+    "xterm-addon-webgl": "^0.16.0"
   }
 }

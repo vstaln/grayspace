@@ -21,30 +21,49 @@ export function registerGitCommands({ core, defaultCwd }: CommandDeps): {
   const { bus } = core
   let cached: GitStatus | null = null
 
-  bus.register<Record<string, never>, GitStatus>('git.refresh', {
+  bus.registerDefinition<Record<string, never>, GitStatus>({
+    type: 'git.refresh',
+    description: 'Read the working tree status of the open project.',
+    targetScheme: 'git',
     // Reading status contends with nothing; blocking it while an agent holds
     // the repo would hide exactly the state the user wants to watch.
     requiresLock: false,
     ignoreVersion: true,
-    apply: async () => {
-      cached = await readGitStatus(defaultCwd())
-      return cached
+    payloadSchema: { type: 'object', properties: {} },
+    handler: {
+      apply: async () => {
+        cached = await readGitStatus(defaultCwd())
+        return cached
+      }
     }
   })
 
-  bus.register<{ message?: string }, { hash: string }>('git.commit', {
+  bus.registerDefinition<{ message?: string }, { hash: string }>({
+    type: 'git.commit',
+    description: 'Stage everything and create a commit on the open repository.',
+    targetScheme: 'git',
     ignoreVersion: true,
-    apply: async ({ command }) => {
-      const cwd = defaultCwd()
-      if (!cwd) throw new CommandError('invalid', 'no project folder is open')
-      const message = String(command.payload?.message ?? '').trim()
-      if (!message) throw new CommandError('invalid', 'a commit message is required')
-      try {
-        const result = await commitAll(cwd, message)
-        cached = await readGitStatus(cwd)
-        return result
-      } catch (err) {
-        throw new CommandError('failed', String((err as { stderr?: string }).stderr || (err as Error).message))
+    payloadSchema: {
+      type: 'object',
+      required: ['message'],
+      properties: { message: { type: 'string', description: 'Commit message' } }
+    },
+    handler: {
+      apply: async ({ command, signal }) => {
+        const cwd = defaultCwd()
+        if (!cwd) throw new CommandError('invalid', 'no project folder is open')
+        if (signal?.aborted) throw new CommandError('cancelled', 'commit cancelled before it started')
+        const message = String(command.payload?.message ?? '').trim()
+        if (!message) throw new CommandError('invalid', 'a commit message is required')
+        try {
+          const result = await commitAll(cwd, message)
+          // The commit itself cannot be un-run once git accepted it; only the
+          // post-commit status refresh is skippable.
+          cached = await readGitStatus(cwd)
+          return result
+        } catch (err) {
+          throw new CommandError('failed', String((err as { stderr?: string }).stderr || (err as Error).message))
+        }
       }
     }
   })

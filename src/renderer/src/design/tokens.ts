@@ -1,7 +1,7 @@
 /**
  * Every design value the app uses, in one typed place. Nothing here is a CSS
  * file: these objects are compiled to custom properties at start-up (see
- * `theme.ts`), and Tailwind's utilities read those properties by name, so a
+ * `theme.ts`), and UnoCSS utilities read those properties by name, so a
  * colour is changed here and nowhere else.
  */
 
@@ -9,16 +9,13 @@
 export const palette = {
   /** The one surface fill every floating shell uses, at 60% over its backdrop. */
   graphite: 'rgba(18, 18, 20, 0.6)',
-  /** Same graphite fill as header and widget frame so terminal body matches header. */
-  terminalGlass: 'rgba(18, 18, 20, 0.6)',
-  /**
-   * A raised surface *inside* an already-frosted shell (the chat composer). A
-   * white lift rather than another dark fill: stacking graphite on graphite just
-   * compounds toward opaque, while this stays see-through and reads as raised.
-   */
-  surfaceLift: 'rgba(255, 255, 255, 0.045)',
+  /** `graphite` without the alpha: a terminal is one flat slab — frame,
+   *  header and xterm body all paint exactly this colour in every theme.
+   *  Handed to xterm as `theme.background` too (see TerminalWidget.tsx's
+   *  `xtermTheme`); OSC 11 strips the alpha, so TUI dark-bg detection still
+   *  reads it as dark. */
+  terminalSolid: '#121214',
   white: '#ffffff',
-  offWhite: '#f2f2f3',
   /** Fallback behind the photo theme when no picture is set (P2-207). */
   wallpaperBase: '#101013',
   scrollThumb: '#4a4a52',
@@ -41,7 +38,6 @@ export const hairline = {
 export const frost = {
   shell: 'blur(28px) saturate(160%)',
   surface: 'blur(40px) saturate(150%)',
-  chat: 'blur(26px) saturate(140%)',
   board: 'blur(30px) saturate(160%)'
 } as const
 
@@ -54,7 +50,7 @@ export const lanes = {
 } as const
 
 /**
- * Named values Tailwind exposes as utilities (`bg-bg-raise`, `text-text-dim`,
+ * Named values UnoCSS exposes as utilities (`bg-bg-raise`, `text-text-dim`,
  * `border-line`, …). The key is the utility suffix; the value is what the
  * custom property resolves to.
  */
@@ -95,7 +91,7 @@ export const darkTokens: ThemeTokens = {
   colorOk: '#6fd39a'
 }
 
-/** Translucent themes (`glass`, `photo`) sit over a blurred backdrop, so the
+/** The translucent theme (`photo`) sits over a blurred backdrop, so the
  *  base goes fully black and the text/lines lift slightly to stay readable. */
 export const translucentTokens: ThemeTokens = {
   ...darkTokens,
@@ -121,7 +117,7 @@ export const geometry = {
   railWidth: '56px'
 } as const
 
-/** `colorBgRaise` → `--tok-color-bg-raise`, the name Tailwind's theme reads. */
+/** `colorBgRaise` → `--tok-color-bg-raise`, the name UnoCSS's theme reads. */
 export function toCustomProperty(token: keyof ThemeTokens): string {
   return `--tok-${token.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`
 }

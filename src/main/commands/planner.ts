@@ -1,5 +1,5 @@
 import type { PlanItem } from '../plannerStore.ts'
-import { CommandError, parseResource } from '../core/index.ts'
+import { CommandError, parseResource, type CommandPayloadSchema } from '../core/index.ts'
 import type { CommandDeps } from './index.ts'
 
 function planIdOf(target: string): string {
@@ -11,6 +11,7 @@ function planIdOf(target: string): string {
 interface PlanCreatePayload {
   title?: string
   note?: string
+  project?: string
   day?: string
   time?: string
 }
@@ -18,39 +19,82 @@ interface PlanCreatePayload {
 interface PlanUpdatePayload {
   title?: string
   note?: string
+  project?: string | null
   day?: string | null
   time?: string | null
   done?: boolean
   order?: number
 }
 
-/**
- * The planner's outline: a flat list any actor may add lines to and check off,
- * addressed one item at a time so two writers editing different lines never
- * collide on the same lock the way a single "the whole list" resource would.
- */
+const PLAN_FIELDS: CommandPayloadSchema['properties'] = {
+  title: { type: 'string', description: 'Checklist line text' },
+  note: { type: 'string', description: 'Longer note under the line' },
+  project: { type: 'string', description: 'Optional group label (e.g. a release)' },
+  day: { type: 'string', description: 'Day YYYY-MM-DD; omit for the undated inbox' },
+  time: { type: 'string', description: 'Time HH:MM' }
+}
+
 export function registerPlannerCommands({ core, planner }: CommandDeps): void {
   const { bus } = core
 
   bus.registerVersions('plan', planner.versions)
 
-  bus.register<PlanCreatePayload, PlanItem>('plan.create', {
+  bus.registerDefinition<PlanCreatePayload, PlanItem>({
+    type: 'plan.create',
+    description: 'Add a line to the day planner.',
+    targetScheme: 'plan',
     ignoreVersion: true,
-    apply: ({ command, actor }) => {
-      const p = command.payload ?? {}
-      return planner.createItem({ ...p, createdBy: actor.id })
+    payloadSchema: { type: 'object', properties: PLAN_FIELDS },
+    handler: {
+      apply: ({ command, actor }) => {
+        const p = command.payload ?? {}
+        return planner.createItem({ ...p, createdBy: actor.id })
+      }
     }
   })
 
-  bus.register<PlanUpdatePayload, PlanItem>('plan.update', {
-    apply: ({ command }) => planner.updateItem(planIdOf(command.target), command.payload ?? {})
+  bus.registerDefinition<PlanUpdatePayload, PlanItem>({
+    type: 'plan.update',
+    description:
+      'Update a planner line (text, day/time, done, order). Pass null for day/project/time to clear them.',
+    targetScheme: 'plan',
+    payloadSchema: {
+      type: 'object',
+      properties: { ...PLAN_FIELDS, done: { type: 'boolean' }, order: { type: 'number' } }
+    },
+    handler: {
+      apply: ({ command }) => planner.updateItem(planIdOf(command.target), command.payload ?? {})
+    }
   })
 
-  bus.register<Record<string, never>, { id: string }>('plan.delete', {
-    apply: ({ command }) => {
-      const id = planIdOf(command.target)
-      planner.deleteItem(id)
-      return { id }
+  /** Dedicated check/uncheck — same store field as plan.update done, clearer for agents. */
+  bus.registerDefinition<{ done?: boolean }, PlanItem>({
+    type: 'plan.toggle',
+    description: 'Check or uncheck a planner line. Omit `done` to flip the current value.',
+    targetScheme: 'plan',
+    payloadSchema: {
+      type: 'object',
+      properties: { done: { type: 'boolean', description: 'true = check as done, false = reopen' } }
+    },
+    handler: {
+      apply: ({ command }) => {
+        const done = command.payload?.done
+        return planner.toggleItem(planIdOf(command.target), typeof done === 'boolean' ? done : undefined)
+      }
+    }
+  })
+
+  bus.registerDefinition<Record<string, never>, { id: string }>({
+    type: 'plan.delete',
+    description: 'Delete a planner line.',
+    targetScheme: 'plan',
+    payloadSchema: { type: 'object', properties: {} },
+    handler: {
+      apply: ({ command }) => {
+        const id = planIdOf(command.target)
+        planner.deleteItem(id)
+        return { id }
+      }
     }
   })
 }

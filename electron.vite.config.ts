@@ -1,7 +1,7 @@
 import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
+import uno from 'unocss/vite'
 
 export default defineConfig({
   main: {
@@ -21,7 +21,7 @@ export default defineConfig({
         '@renderer': resolve('src/renderer/src')
       }
     },
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), uno()],
     // PERF-006: the renderer used to ship as one 1.05 MiB chunk. Split the
     // heavy terminal runtime and the framework out so first paint does not
     // parse and compile everything at once.

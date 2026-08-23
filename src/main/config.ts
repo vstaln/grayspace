@@ -8,8 +8,13 @@ export const APP_TITLE = 'OrcSpace'
  */
 export const MCP_SERVER_NAME = 'orcspace'
 
-export const CONTROL_PORT = Number(process.env.WORKSPACE_CONTROL_PORT || 47932)
-export const MCP_PORT = Number(process.env.WORKSPACE_MCP_PORT || 47940)
+function configuredPort(value: string | undefined, fallback: number): number {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65_535 ? parsed : fallback
+}
+
+export const CONTROL_PORT = configuredPort(process.env.WORKSPACE_CONTROL_PORT, 47932)
+export const MCP_PORT = configuredPort(process.env.WORKSPACE_MCP_PORT, 47940)
 
 /**
  * The endpoint MCP clients attach to; also what the config panel copies.

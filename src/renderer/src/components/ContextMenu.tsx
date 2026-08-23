@@ -1,22 +1,26 @@
-import React, { useLayoutEffect, useRef, useState } from 'react'
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { Cpu, FileText, FolderOpen, Globe, ListTodo, Terminal, Timer } from 'lucide-react'
 import { Point } from '../types'
 
 interface Props {
   at: Point
   onPickTerminal: () => void
+  onPickFiles: () => void
+  onPickSysMonitor: () => void
   onPickNote: () => void
-  onPickGit: () => void
   onPickTimer: () => void
-  onPickSchedule: () => void
   onPickPlanner: () => void
-  onOpenBoard: () => void
-  onOpenAssistant: () => void
+  onPickBrowser: () => void
   onClose: () => void
 }
 
 interface Item {
+  /** Stable slug used for the data-testid (E2E locators must not key off localized labels). */
+  id: string
   label: string
   hint: string
+  icon: React.ReactNode
   onSelect: () => void
   /** `panel` items open over the canvas rather than placing a widget on it. */
   group?: 'widget' | 'panel'
@@ -25,31 +29,82 @@ interface Item {
 export default function ContextMenu({
   at,
   onPickTerminal,
+  onPickFiles,
+  onPickSysMonitor,
   onPickNote,
-  onPickGit,
   onPickTimer,
-  onPickSchedule,
   onPickPlanner,
-  onOpenBoard,
-  onOpenAssistant,
+  onPickBrowser,
   onClose
 }: Props): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState(at)
+  const [selectedIndex, setSelectedIndex] = useState(0)
 
   // Widgets that land on the canvas first, then the panels that open over it —
-  // the divider between the two groups is what keeps a seven-item menu
-  // scannable instead of a wall of equivalent-looking choices.
-  const items: Item[] = [
-    { label: 'Терминал', hint: 'Оболочка в рабочей папке', onSelect: onPickTerminal },
-    { label: 'Заметка', hint: 'Мысль или фрагмент знаний на холсте', onSelect: onPickNote },
-    { label: 'Репозиторий', hint: 'Ветка, изменения, коммит', onSelect: onPickGit },
-    { label: 'Таймер', hint: 'Обратный отсчёт для одного дела', onSelect: onPickTimer },
-    { label: 'Запланированные задачи', hint: 'Всё со сроком, ближайшее сверху', onSelect: onPickSchedule },
-    { label: 'Планер', hint: 'Пункты плана на день, без срока и доски', onSelect: onPickPlanner },
-    { label: 'Доска задач', hint: 'Задачи для вас и агентов, прямо на холсте', onSelect: onOpenBoard },
-    { label: 'Ассистент', hint: 'Выполнит цель шаг за шагом', onSelect: onOpenAssistant, group: 'panel' }
-  ]
+  // the divider between the two groups is what keeps the menu scannable.
+  const items: Item[] = useMemo(
+    () => [
+      {
+        id: 'terminal',
+        label: 'Terminal',
+        hint: 'Shell in current workspace',
+        icon: <Terminal size={15} className="text-accent" />,
+        onSelect: onPickTerminal
+      },
+      {
+        id: 'files',
+        label: 'Files',
+        hint: 'Browse workspace files and folders',
+        icon: <FolderOpen size={15} className="text-accent" />,
+        onSelect: onPickFiles
+      },
+      {
+        id: 'sys-monitor',
+        label: 'System Monitor',
+        hint: 'CPU, RAM & process statistics',
+        icon: <Cpu size={15} className="text-accent" />,
+        onSelect: onPickSysMonitor
+      },
+      {
+        id: 'note',
+        label: 'Note',
+        hint: 'Knowledge snippet or thought on canvas',
+        icon: <FileText size={15} className="text-accent" />,
+        onSelect: onPickNote
+      },
+      {
+        id: 'timer',
+        label: 'Timer',
+        hint: 'Countdown or stopwatch for deep work',
+        icon: <Timer size={15} className="text-accent" />,
+        onSelect: onPickTimer
+      },
+      {
+        id: 'planner',
+        label: 'Planner',
+        hint: 'Daily agenda checklist and plan',
+        icon: <ListTodo size={15} className="text-accent" />,
+        onSelect: onPickPlanner
+      },
+      {
+        id: 'browser',
+        label: 'Browser',
+        hint: 'Embedded web page pinned to the canvas',
+        icon: <Globe size={15} className="text-accent" />,
+        onSelect: onPickBrowser
+      }
+    ],
+    [
+      onPickTerminal,
+      onPickFiles,
+      onPickSysMonitor,
+      onPickNote,
+      onPickTimer,
+      onPickPlanner,
+      onPickBrowser
+    ]
+  )
 
   // Nudge the menu back on-screen once its real size is known.
   useLayoutEffect(() => {
@@ -60,7 +115,7 @@ export default function ContextMenu({
       x: Math.max(4, Math.min(at.x, window.innerWidth - rect.width - 4)),
       y: Math.max(4, Math.min(at.y, window.innerHeight - rect.height - 4))
     })
-  }, [at])
+  }, [at, items.length])
 
   useLayoutEffect(() => {
     const onDown = (e: MouseEvent): void => {
@@ -70,86 +125,79 @@ export default function ContextMenu({
     return () => window.removeEventListener('mousedown', onDown)
   }, [onClose])
 
-  // P3-216: land focus on the first item so arrow keys work immediately.
+  // Focus the menu immediately so arrow keys work without an extra click.
   useLayoutEffect(() => {
-    ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
+    ref.current?.focus()
   }, [])
 
-  const focusItemAt = (index: number): void => {
-    const el = ref.current
-    if (!el) return
-    const nodes = el.querySelectorAll<HTMLElement>('[role="menuitem"]')
-    if (index < 0) index = nodes.length - 1
-    nodes[index % nodes.length]?.focus()
-  }
-
-  const onKeyDown = (e: React.KeyboardEvent, index: number): void => {
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault()
-        focusItemAt(index + 1)
-        break
-      case 'ArrowUp':
-        e.preventDefault()
-        focusItemAt(index - 1)
-        break
-      case 'Home':
-        e.preventDefault()
-        focusItemAt(0)
-        break
-      case 'End':
-        e.preventDefault()
-        focusItemAt(items.length - 1)
-        break
-      case 'Enter':
-      case ' ':
-        e.preventDefault()
-        items[index].onSelect()
-        break
-      case 'Escape':
-        e.preventDefault()
-        e.stopPropagation()
-        onClose()
-        break
-      case 'Tab':
-        e.preventDefault()
-        onClose()
-        break
-    }
-  }
-
-  return (
+  return createPortal(
     <div
       ref={ref}
       role="menu"
-      aria-label="Контекстное меню"
-      className="fixed z-[10000] min-w-[230px] rounded-[10px] border border-line bg-bg-panel p-1.5 shadow-2xl glass:bg-bg-panel/85 glass:backdrop-blur-2xl glass:backdrop-saturate-150"
+      aria-label="Context Menu"
+      tabIndex={-1}
+      aria-activedescendant={items[selectedIndex] ? `cm-item-${items[selectedIndex].id}` : undefined}
+      className="fixed z-[10000] w-[260px] max-w-[calc(100vw-16px)] rounded-[12px] border border-line bg-bg-panel p-2 shadow-2xl glass:bg-bg-panel/90 glass:backdrop-blur-2xl glass:backdrop-saturate-150 select-none"
       style={{ left: pos.x, top: pos.y }}
+      onMouseDown={(e) => {
+        // Prevent pan / stroke triggers on canvas below
+        e.stopPropagation()
+      }}
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
           e.preventDefault()
           e.stopPropagation()
           onClose()
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault()
+          setSelectedIndex((prev) => (prev + 1) % items.length)
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault()
+          setSelectedIndex((prev) => (prev - 1 + items.length) % items.length)
+        } else if (e.key === 'Enter') {
+          e.preventDefault()
+          items[selectedIndex]?.onSelect()
         }
       }}
     >
-      <div className="px-2.5 pt-1.5 pb-2 text-[10px] tracking-wider text-text-faint uppercase">Добавить</div>
-      {items.map((item, i) => (
-        <div
-          key={item.label}
-          {...(item.group === 'panel' && items[i - 1]?.group !== 'panel'
-            ? { style: { marginTop: 6, paddingTop: 8, borderTop: '1px solid var(--color-line-soft)' } }
-            : {})}
-          role="menuitem"
-          tabIndex={-1}
-          className="cursor-pointer rounded-[10px] px-2.5 py-1.5 hover:bg-bg-hover focus:bg-bg-hover"
-          onClick={item.onSelect}
-          onKeyDown={(e) => onKeyDown(e, i)}
-        >
-          <div className="text-xs text-text">{item.label}</div>
-          <div className="mt-0.5 text-[10px] text-text-faint">{item.hint}</div>
-        </div>
-      ))}
-    </div>
+      <div className="px-2 pt-1 pb-2 text-[10px] font-semibold tracking-wider text-text-faint uppercase">
+        Add to Canvas
+      </div>
+
+      {/* Items List */}
+      <div className="max-h-[360px] space-y-0.5 overflow-y-auto">
+        {items.map((item, i) => {
+          const isSelected = i === selectedIndex
+          const isPanelGroupStart = item.group === 'panel' && items[i - 1]?.group !== 'panel'
+
+          return (
+            <div
+              key={item.id}
+              id={`cm-item-${item.id}`}
+              role="menuitem"
+              tabIndex={-1}
+              data-testid={`cm-${item.id}`}
+              aria-label={`${item.label} — ${item.hint}`}
+              onMouseEnter={() => setSelectedIndex(i)}
+              onClick={item.onSelect}
+              className={`group flex cursor-pointer items-center gap-2.5 rounded-[9px] px-2.5 py-1.5 transition-colors duration-100 ${
+                isSelected ? 'bg-bg-hover text-text' : 'text-text-dim hover:bg-bg-hover hover:text-text'
+              } ${isPanelGroupStart ? 'mt-1.5 border-t border-line-soft pt-2' : ''}`}
+            >
+              <div className="flex-none transition-transform duration-100 group-hover:scale-110">
+                {item.icon}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className={`truncate text-xs ${isSelected ? 'font-medium text-text' : 'text-text'}`}>
+                  {item.label}
+                </div>
+                <div className="truncate text-[10px] text-text-faint">{item.hint}</div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>,
+    document.body
   )
 }

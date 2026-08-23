@@ -1,14 +1,29 @@
-import { app } from 'electron'
-import { EventEmitter } from 'events'
+﻿import { EventEmitter } from 'events'
 import { join } from 'path'
-import { readStoreJson, writeJsonAtomic } from './storage'
-import { CommandError, fileResource, VersionRegistry, type LockManager, type ResourceLock } from './core/index.ts'
+import { readStoreJson, writeJsonAtomic } from './storage.ts'
+import { getUserDataDir } from './userData.ts'
+import {
+  CommandError,
+  fileResource,
+  VersionRegistry,
+  fold,
+  rewind as rewindHelper,
+  blame as blameHelper,
+  fork as forkHelper,
+  type JournalEntry,
+  type LockManager,
+  type ResourceId,
+  type ResourceLock
+} from './core/index.ts'
 
 export const TASK_STATES = ['backlog', 'queued', 'in_progress', 'review', 'done', 'cancelled'] as const
 export type TaskState = (typeof TASK_STATES)[number]
 
 /** Bumped whenever the persisted board shape changes. */
 export const BOARD_SCHEMA_VERSION = 2
+
+/** Snapshot cache interval for event sourcing. */
+export const BOARD_SNAPSHOT_INTERVAL = 50
 
 /** Marks tasks the human added from the kanban board rather than an agent. */
 export const USER_AUTHOR = 'user'
@@ -33,14 +48,17 @@ export interface Task {
   version: number
 }
 
+export interface BoardState {
+  tasks: Map<string, Task>
+  manager: string | null
+  managerSeenAt: number | null
+}
+
 export interface CoordinationSnapshot {
   managerId: string | null
   tasks: Task[]
   /**
-   * Live resource locks, read straight from the core lock manager. The board
-   * no longer keeps a lock table of its own: a card is a unit of work, not a
-   * thing that can be held, and pretending otherwise is what let two agents
-   * with different cards edit the same file.
+   * Live resource locks, read straight from the core lock manager.
    */
   locks: ResourceLock[]
 }
@@ -53,63 +71,259 @@ const MANAGER_TTL = 15 * 60_000
 /**
  * The board: who is coordinating, and what work exists.
  *
- * Mutating methods here are called only from the command handlers in
- * `commands/board.ts`. File reservations are delegated to the core
- * {@link LockManager} — this class decides *which* resources a claimed task
- * needs, and the lock manager decides whether they are available.
+ * Event sourced: state = fold(events), JSON file acts as snapshot cache.
  */
 export class CoordinationStore extends EventEmitter {
   private manager: string | null = null
-  /** Last time the manager did something as manager; drives {@link MANAGER_TTL}. */
   private managerSeenAt: number | null = null
   private readonly tasks = new Map<string, Task>()
   private readonly locks: LockManager
+  private readonly isActorAlive: ((actorId: string) => boolean) | null
   private counter = 0
   private loaded = false
   private persistTimer: ReturnType<typeof setTimeout> | null = null
+  private snapshotSeq = 0
+  private eventsSinceSnapshot = 0
   readonly versions = new VersionRegistry('task')
 
-  constructor(locks: LockManager) {
+  constructor(locks: LockManager, isActorAlive?: (actorId: string) => boolean) {
     super()
     this.locks = locks
+    this.isActorAlive = isActorAlive ?? null
   }
 
   private get file(): string {
-    return join(app.getPath('userData'), 'workspace-board.json')
+    return join(getUserDataDir(), 'workspace-board.json')
+  }
+
+  // ---- Event sourcing: Reducer --------------------------------------------
+
+  /**
+   * Pure state reduction: state = reduce(state, event).
+   */
+  static reduce(state: BoardState, event: JournalEntry): BoardState {
+    if (event.phase !== 'commit') return state
+    const nextTasks = new Map(state.tasks)
+    let nextManager = state.manager
+    let nextManagerSeenAt = state.managerSeenAt
+    const payload = (event.payload ?? {}) as Record<string, unknown>
+    const targetId = event.target.startsWith('task:') ? event.target.slice('task:'.length) : event.target
+
+    if (event.type === 'task.create') {
+      const task = reviveTask({
+        id: targetId === 'new' ? (payload.id as string) || `task-${event.at}-${event.seq}` : targetId,
+        title: payload.title,
+        brief: payload.brief,
+        files: payload.files,
+        state: payload.state,
+        createdBy: event.actorId,
+        assignee: payload.assignee,
+        tags: payload.tags,
+        dueAt: payload.dueAt,
+        maxSteps: payload.maxSteps,
+        maxReviewIterations: payload.maxReviewIterations,
+        createdAt: event.at,
+        updatedAt: event.at,
+        version: event.version ?? 1
+      })
+      if (task) nextTasks.set(task.id, task)
+      if (event.actorId === nextManager) nextManagerSeenAt = event.at
+    } else if (event.type === 'task.update') {
+      const existing = nextTasks.get(targetId)
+      if (existing) {
+        const updated = { ...existing }
+        if (typeof payload.title === 'string' && payload.title.trim()) updated.title = payload.title.trim().slice(0, 200)
+        if (typeof payload.brief === 'string') updated.brief = payload.brief.slice(0, 8_000)
+        if (payload.tags !== undefined) updated.tags = normalizeTags(payload.tags)
+        if (payload.dueAt !== undefined) updated.dueAt = payload.dueAt === null ? undefined : normalizeDue(payload.dueAt)
+        if (payload.assignee !== undefined) {
+          updated.assignee = typeof payload.assignee === 'string' && payload.assignee.trim() ? payload.assignee.trim() : undefined
+        }
+        if (typeof payload.state === 'string' && (TASK_STATES as readonly string[]).includes(payload.state)) {
+          updated.state = payload.state as TaskState
+        }
+        updated.updatedAt = event.at
+        updated.version = event.version ?? existing.version + 1
+        nextTasks.set(targetId, updated)
+      }
+      if (event.actorId === nextManager) nextManagerSeenAt = event.at
+    } else if (event.type === 'task.claim') {
+      const existing = nextTasks.get(targetId)
+      if (existing) {
+        nextTasks.set(targetId, {
+          ...existing,
+          assignee: event.actorId,
+          state: 'in_progress',
+          updatedAt: event.at,
+          version: event.version ?? existing.version + 1
+        })
+      }
+    } else if (event.type === 'task.delete') {
+      nextTasks.delete(targetId)
+    } else if (event.type === 'manager.claim') {
+      nextManager = event.actorId
+      nextManagerSeenAt = event.at
+    } else if (event.type === 'manager.release') {
+      nextManager = null
+      nextManagerSeenAt = null
+    }
+
+    return {
+      tasks: nextTasks,
+      manager: nextManager,
+      managerSeenAt: nextManagerSeenAt
+    }
   }
 
   /**
-   * Tasks and the manager claim outlive the process; locks deliberately do
-   * not. Anything that was holding a file when the app died is gone, so the
-   * board comes back with every resource free and `in_progress` cards whose
-   * worker never returns fall back to `queued` on the first prune.
+   * Applies an event to this store instance using the reducer.
    */
-  private ensure(): void {
+  applyEvent(event: JournalEntry): void {
+    if (event.phase !== 'commit') return
+    const current: BoardState = {
+      tasks: this.tasks,
+      manager: this.manager,
+      managerSeenAt: this.managerSeenAt
+    }
+    const nextState = CoordinationStore.reduce(current, event)
+    this.tasks.clear()
+    for (const [k, v] of nextState.tasks.entries()) {
+      this.tasks.set(k, v)
+    }
+    this.manager = nextState.manager
+    this.managerSeenAt = nextState.managerSeenAt
+
+    if (typeof event.version === 'number' && event.target.startsWith('task:')) {
+      const id = event.target.slice('task:'.length)
+      if (event.type === 'task.delete') {
+        this.versions.forget(id)
+      } else {
+        this.versions.seed([{ id, version: event.version }])
+      }
+    }
+    if (event.seq > this.snapshotSeq) {
+      this.snapshotSeq = event.seq
+    }
+    this.eventsSinceSnapshot += 1
+    if (this.eventsSinceSnapshot >= BOARD_SNAPSHOT_INTERVAL) {
+      this.flush()
+    }
+  }
+
+  /**
+   * Folds historical events into state.
+   */
+  foldEvents(events: Iterable<JournalEntry>, initialState?: BoardState): BoardState {
+    const start: BoardState = initialState ?? { tasks: new Map(), manager: null, managerSeenAt: null }
+    return fold(events, CoordinationStore.reduce, start)
+  }
+
+  // ---- Loading & Snapshot Cache -------------------------------------------
+
+  private ensure(tailEvents?: JournalEntry[]): void {
     if (this.loaded) return
-    this.loaded = true
+    // Loaded only after the read succeeded: a transient EBUSY/EACCES must not
+    // leave an empty board whose next flush() overwrites the real snapshot.
     const raw = readStoreJson<Record<string, unknown>>(this.file, {})
+    this.loaded = true
     const tasks = Array.isArray(raw.tasks) ? raw.tasks : []
     for (const entry of tasks) {
       const task = reviveTask(entry)
       if (task) this.tasks.set(task.id, task)
     }
+    this.snapshotSeq = Number(raw.snapshotSeq) || 0
     this.versions.seed(this.tasks.values())
     const seenAt = Number(raw.managerSeenAt) || 0
     if (typeof raw.managerId === 'string' && raw.managerId && Date.now() - seenAt < MANAGER_TTL) {
       this.manager = raw.managerId
       this.managerSeenAt = seenAt
     }
-    // Every task that was in flight when the process died has lost its locks
-    // along with the worker holding them.
+
+    // Replay NDJSON journal tail if provided
+    if (tailEvents && tailEvents.length > 0) {
+      const tailToApply = tailEvents.filter((e) => e.seq > this.snapshotSeq && e.phase === 'commit')
+      if (tailToApply.length > 0) {
+        const replayed = this.foldEvents(tailToApply, {
+          tasks: this.tasks,
+          manager: this.manager,
+          managerSeenAt: this.managerSeenAt
+        })
+        this.tasks.clear()
+        for (const [k, v] of replayed.tasks.entries()) {
+          this.tasks.set(k, v)
+        }
+        this.manager = replayed.manager
+        this.managerSeenAt = replayed.managerSeenAt
+        this.versions.seed(this.tasks.values())
+        this.snapshotSeq = Math.max(this.snapshotSeq, ...tailToApply.map((e) => e.seq))
+      }
+    }
+
+    let resetInFlight = false
     for (const task of this.tasks.values()) {
       if (task.state !== 'in_progress') continue
       task.state = 'queued'
       task.assignee = undefined
+      resetInFlight = true
     }
     this.pruneStale()
+    if (resetInFlight) this.schedulePersist()
   }
 
-  /** Live update now, disk write on a short debounce. */
+  loadWithTail(tailEvents: JournalEntry[]): void {
+    this.loaded = false
+    this.tasks.clear()
+    this.manager = null
+    this.managerSeenAt = null
+    this.ensure(tailEvents)
+  }
+
+  // ---- Event Sourcing Free Features: rewind, blame, replay, fork -----------
+
+  rewind(targetSeq: number, events: Iterable<JournalEntry> = []): CoordinationSnapshot {
+    this.ensure()
+    const rewoundState = rewindHelper(
+      targetSeq,
+      events,
+      CoordinationStore.reduce,
+      { snapshotSeq: 0, state: { tasks: new Map<string, Task>(), manager: null, managerSeenAt: null } }
+    )
+    return {
+      managerId: rewoundState.manager,
+      tasks: Array.from(rewoundState.tasks.values()).sort((a, b) => a.createdAt - b.createdAt),
+      locks: this.locks.list()
+    }
+  }
+
+  blame(target: ResourceId, events: Iterable<JournalEntry> = []): JournalEntry[] {
+    return blameHelper(target, events)
+  }
+
+  replay(events: Iterable<JournalEntry>, fromState?: BoardState): CoordinationSnapshot {
+    const start: BoardState = fromState ?? { tasks: new Map(), manager: null, managerSeenAt: null }
+    const state = fold(events, CoordinationStore.reduce, start)
+    return {
+      managerId: state.manager,
+      tasks: Array.from(state.tasks.values()).sort((a, b) => a.createdAt - b.createdAt),
+      locks: this.locks.list()
+    }
+  }
+
+  fork(forkId: string, atSeq?: number, events?: Iterable<JournalEntry>): CoordinationSnapshot {
+    this.ensure()
+    if (typeof atSeq === 'number' && events) {
+      return this.rewind(atSeq, events)
+    }
+    const forkedTasks = forkHelper(forkId, this.tasks)
+    return {
+      managerId: this.manager,
+      tasks: Array.from(forkedTasks.values()).sort((a, b) => a.createdAt - b.createdAt),
+      locks: this.locks.list()
+    }
+  }
+
+  // ---- Persistence --------------------------------------------------------
+
   private changed(): void {
     this.ensure()
     this.emit('change', this.snapshot())
@@ -122,6 +336,7 @@ export class CoordinationStore extends EventEmitter {
       this.persistTimer = null
       this.flush()
     }, 250)
+    this.persistTimer.unref?.()
   }
 
   private flush(): void {
@@ -129,24 +344,25 @@ export class CoordinationStore extends EventEmitter {
       clearTimeout(this.persistTimer)
       this.persistTimer = null
     }
+    if (!this.loaded) return
     try {
       writeJsonAtomic(this.file, {
+        snapshotSeq: this.snapshotSeq,
         schemaVersion: BOARD_SCHEMA_VERSION,
         tasks: Array.from(this.tasks.values()),
         managerId: this.manager,
         managerSeenAt: this.managerSeenAt
       })
+      this.eventsSinceSnapshot = 0
     } catch (err) {
       console.error('failed to persist task board', err)
     }
   }
 
-  /** Marks the manager as alive; called on every action it takes as manager. */
   private touchManager(agentId: string): void {
     if (agentId === this.manager) this.managerSeenAt = Date.now()
   }
 
-  /** Flushes any pending write; call from the app's shutdown path. */
   dispose(): void {
     this.flush()
   }
@@ -156,18 +372,21 @@ export class CoordinationStore extends EventEmitter {
     return `task-${Date.now()}-${this.counter}`
   }
 
-  /**
-   * Requeues tasks whose worker has lost the files it was holding (the locks
-   * expired with the agent), and frees a manager that has gone quiet.
-   */
   private pruneStale(): void {
     const now = Date.now()
     let mutated = false
     for (const task of this.tasks.values()) {
       if (task.state !== 'in_progress' || !task.assignee) continue
-      if (task.files.length === 0) continue
-      const stillHeld = task.files.some((path) => this.locks.isHeldBy(fileResource(path), task.assignee as string))
-      if (stillHeld) continue
+      const assignee = task.assignee
+      if (assignee === USER_AUTHOR || assignee === 'user') continue
+      if (task.files.length > 0) {
+        const stillHeld = task.files.some((path) => this.locks.isHeldBy(fileResource(path), assignee))
+        if (stillHeld) continue
+      } else if (this.isActorAlive?.(assignee)) {
+        continue
+      } else if (!this.isActorAlive) {
+        continue
+      }
       task.state = 'queued'
       task.assignee = undefined
       task.updatedAt = now
@@ -179,30 +398,38 @@ export class CoordinationStore extends EventEmitter {
       this.managerSeenAt = null
       mutated = true
     }
-    // Deferred: calling changed() here would re-enter snapshot() (which calls
-    // this method) while still inside it.
     if (mutated) {
       this.schedulePersist()
       queueMicrotask(() => this.emit('change', this.snapshot()))
     }
   }
 
-  snapshot(): CoordinationSnapshot {
+  snapshot(overlayId?: string): CoordinationSnapshot {
     this.ensure()
     this.pruneStale()
+    const rawTasks = Array.from(this.tasks.values())
+    const tasks = overlayId && this.versions.hasOverlay(overlayId)
+      ? rawTasks.map((t) => ({ ...t, version: this.versions.current(t.id, overlayId) }))
+      : rawTasks
     return {
       managerId: this.manager,
-      tasks: Array.from(this.tasks.values()).sort((a, b) => a.createdAt - b.createdAt),
+      tasks: tasks.sort((a, b) => a.createdAt - b.createdAt),
       locks: this.locks.list()
     }
   }
 
-  task(id: string): Task | undefined {
+  task(id: string, overlayId?: string): Task | undefined {
     this.ensure()
-    return this.tasks.get(id)
+    const task = this.tasks.get(id)
+    if (!task) return undefined
+    if (overlayId && this.versions.hasOverlay(overlayId)) {
+      return { ...task, version: this.versions.current(id, overlayId) }
+    }
+    return task
   }
 
   get managerId(): string | null {
+    this.ensure()
     return this.manager
   }
 
@@ -210,8 +437,11 @@ export class CoordinationStore extends EventEmitter {
     return typeof agentId === 'string' && agentId.length > 0 && agentId === this.manager
   }
 
-  claimManager(agentId: string): { managerId: string; role: 'manager' } {
+claimManager(agentId: string): { managerId: string; role: 'manager' } {
     this.ensure()
+    // A manager silent past MANAGER_TTL is presumed gone; prune first so its
+    // expired claim cannot block the next agent with "already assigned".
+    this.pruneStale()
     const id = agentId?.trim()
     if (!id) throw new CommandError('invalid', 'agentId is required')
     if (this.manager && this.manager !== id) {
@@ -219,6 +449,7 @@ export class CoordinationStore extends EventEmitter {
     }
     this.manager = id
     this.managerSeenAt = Date.now()
+    this.eventsSinceSnapshot += 1
     this.emit('change', this.snapshot())
     this.flush()
     return { managerId: id, role: 'manager' }
@@ -230,13 +461,14 @@ export class CoordinationStore extends EventEmitter {
     }
     this.manager = null
     this.managerSeenAt = null
+    this.eventsSinceSnapshot += 1
     this.changed()
   }
 
-  /** Operator escape hatch from the UI: drops the role no matter who holds it. */
   forceResetManager(): void {
     this.manager = null
     this.managerSeenAt = null
+    this.eventsSinceSnapshot += 1
     this.changed()
   }
 
@@ -251,9 +483,9 @@ export class CoordinationStore extends EventEmitter {
     tags?: unknown
     dueAt?: unknown
     assignee?: string
-  }): Task {
+  }, overlayId?: string): Task {
     this.ensure()
-    const title = input.title?.trim()
+    const title = input.title?.trim().slice(0, 200)
     if (!title) throw new CommandError('invalid', 'title is required')
     this.touchManager(input.createdBy)
     const now = Date.now()
@@ -261,8 +493,10 @@ export class CoordinationStore extends EventEmitter {
     const task: Task = {
       id,
       title,
-      brief: typeof input.brief === 'string' ? input.brief : '',
-      files: Array.isArray(input.files) ? input.files.filter((p): p is string => typeof p === 'string') : [],
+      brief: typeof input.brief === 'string' ? input.brief.slice(0, 8_000) : '',
+      files: Array.isArray(input.files)
+        ? input.files.filter((p): p is string => typeof p === 'string').slice(0, 50)
+        : [],
       state: input.state && TASK_STATES.includes(input.state) ? input.state : 'queued',
       createdBy: input.createdBy,
       assignee: typeof input.assignee === 'string' && input.assignee.trim() ? input.assignee.trim() : undefined,
@@ -272,29 +506,53 @@ export class CoordinationStore extends EventEmitter {
       maxReviewIterations: clamp(Number(input.maxReviewIterations) || 2, 1, 10),
       createdAt: now,
       updatedAt: now,
-      version: this.versions.bump(id)
+      version: this.versions.bump(id, overlayId)
     }
     this.tasks.set(task.id, task)
+    this.eventsSinceSnapshot += 1
     this.changed()
     return task
   }
 
-  /**
-   * Claiming reserves every file the task declared, through the real lock
-   * manager, atomically: if any of them is held by another actor the whole
-   * claim is rolled back. This is what makes `files` a reservation rather than
-   * a comment — and unlike the old per-task table, the reservation is on the
-   * same resources an agent's terminal commands are checked against.
-   */
-  claimTask(taskId: string, agentId: string): Task {
+  lockExtraFile(taskId: string, agentId: string, path: string, ttlMs?: number, overlayId?: string): ResourceLock {
+    this.ensure()
+    this.pruneStale()
+    const task = this.tasks.get(taskId)
+    if (!task) throw new CommandError('not_found', 'task not found')
+    const worker = agentId?.trim()
+    if (!worker) throw new CommandError('invalid', 'agentId is required')
+    if (!this.isManager(worker) && worker !== task.assignee) {
+      throw new CommandError('forbidden', 'only the manager or assigned worker may lock extra files')
+    }
+    if (task.state !== 'in_progress') {
+      throw new CommandError('conflict', 'task is not in progress', { task })
+    }
+    const filePath = path?.trim()
+    if (!filePath) throw new CommandError('invalid', 'path is required')
+    const resource = fileResource(filePath)
+    const lock = this.locks.acquire({
+      resource,
+      actorId: worker,
+      ttlMs: typeof ttlMs === 'number' ? ttlMs : TASK_LOCK_TTL_MS,
+      reason: `task ${taskId}`
+    })
+    if (!task.files.includes(filePath) && !task.files.some((f) => fileResource(f) === resource)) {
+      task.files = [...task.files, filePath]
+      task.updatedAt = Date.now()
+      task.version = this.versions.bump(task.id, overlayId)
+      this.eventsSinceSnapshot += 1
+      this.changed()
+    }
+    return lock
+  }
+
+  claimTask(taskId: string, agentId: string, overlayId?: string): Task {
     this.ensure()
     this.pruneStale()
     const task = this.tasks.get(taskId)
     if (!task) throw new CommandError('not_found', 'task not found')
     const worker = agentId?.trim()
     if (!worker || worker === this.manager) throw new CommandError('invalid', 'a worker agentId is required')
-    // Backlog counts as claimable: the board renders backlog and queued in one
-    // "To Do" column, so a card the user dragged there must stay pickable.
     if (task.state !== 'queued' && task.state !== 'backlog')
       throw new CommandError('conflict', 'task is not available', { task })
 
@@ -306,20 +564,29 @@ export class CoordinationStore extends EventEmitter {
         taken.push(resource)
       }
     } catch (err) {
-      for (const resource of taken) this.locks.release(resource, worker)
+      // Roll back what was taken; a failing release must not abort the loop
+      // and leak the remaining locks until their 10-minute TTL expires.
+      for (const resource of taken) {
+        try {
+          this.locks.release(resource, worker)
+        } catch {
+          /* TTL will reclaim it */
+        }
+      }
       throw err
     }
 
     task.assignee = worker
     task.state = 'in_progress'
     task.updatedAt = Date.now()
-    task.version = this.versions.bump(task.id)
-    this.emit('change', this.snapshot())
+    task.version = this.versions.bump(task.id, overlayId)
+    this.eventsSinceSnapshot += 1
+    this.emit('change', this.snapshot(overlayId))
     this.flush()
     return task
   }
 
-  updateTask(taskId: string, agentId: string, state: unknown): Task {
+  updateTask(taskId: string, agentId: string, state: unknown, overlayId?: string): Task {
     this.ensure()
     const task = this.tasks.get(taskId)
     if (!task) throw new CommandError('not_found', 'task not found')
@@ -327,15 +594,12 @@ export class CoordinationStore extends EventEmitter {
       throw new CommandError('forbidden', 'only the manager or assigned worker may update this task')
     }
     this.touchManager(agentId)
-    this.applyState(task, state)
+    this.applyState(task, state, overlayId)
+    this.eventsSinceSnapshot += 1
     this.changed()
     return task
   }
 
-  /**
-   * Board edits from the human. A `lead` may edit any card; a `member` may only
-   * touch cards they own — the same rule the UI renders, enforced here too.
-   */
   updateTaskAsUser(
     taskId: string,
     patch: {
@@ -346,7 +610,8 @@ export class CoordinationStore extends EventEmitter {
       dueAt?: unknown
       assignee?: string | null
     },
-    actor: { role: 'member' | 'lead'; name: string } = { role: 'lead', name: USER_AUTHOR }
+    actor: { role: 'member' | 'lead'; name: string } = { role: 'member', name: USER_AUTHOR },
+    overlayId?: string
   ): Task {
     this.ensure()
     const task = this.tasks.get(taskId)
@@ -356,32 +621,27 @@ export class CoordinationStore extends EventEmitter {
     if (actor.role !== 'lead' && patch.assignee !== undefined)
       throw new CommandError('forbidden', 'only the lead may reassign tasks')
 
-    if (patch.state !== undefined) this.applyState(task, patch.state)
-    if (typeof patch.title === 'string' && patch.title.trim()) task.title = patch.title.trim()
-    if (typeof patch.brief === 'string') task.brief = patch.brief
+    if (patch.state !== undefined) this.applyState(task, patch.state, overlayId)
+    if (typeof patch.title === 'string' && patch.title.trim()) task.title = patch.title.trim().slice(0, 200)
+    if (typeof patch.brief === 'string') task.brief = patch.brief.slice(0, 8_000)
     if (patch.tags !== undefined) task.tags = normalizeTags(patch.tags)
     if (patch.dueAt !== undefined) task.dueAt = patch.dueAt === null ? undefined : normalizeDue(patch.dueAt)
     if (patch.assignee !== undefined)
       task.assignee = typeof patch.assignee === 'string' && patch.assignee.trim() ? patch.assignee.trim() : undefined
     task.updatedAt = Date.now()
-    task.version = this.versions.bump(task.id)
+    task.version = this.versions.bump(task.id, overlayId)
+    this.eventsSinceSnapshot += 1
     this.changed()
     return task
   }
 
-  private applyState(task: Task, state: unknown): void {
+  private applyState(task: Task, state: unknown, overlayId?: string): void {
     if (typeof state === 'string' && (TASK_STATES as readonly string[]).includes(state)) {
       task.state = state as TaskState
       if (state === 'queued' || state === 'done' || state === 'cancelled') {
-        // Free the files the moment the card stops being worked on instead of
-        // waiting out the TTL — the next task queued behind this one (a very
-        // common shape for a hub file) doesn't have to sit idle for nothing.
         if (state === 'queued') task.assignee = undefined
         this.releaseTaskLocks(task)
       } else if (task.assignee) {
-        // Any state transition is a liveness signal from whoever is driving the
-        // task, so it resets the clock instead of the files going stale out
-        // from under a worker still mid-edit.
         for (const path of task.files) {
           const resource = fileResource(path)
           if (this.locks.isHeldBy(resource, task.assignee)) this.locks.renew(resource, task.assignee, TASK_LOCK_TTL_MS)
@@ -389,7 +649,7 @@ export class CoordinationStore extends EventEmitter {
       }
     }
     task.updatedAt = Date.now()
-    task.version = this.versions.bump(task.id)
+    task.version = this.versions.bump(task.id, overlayId)
   }
 
   private releaseTaskLocks(task: Task): void {
@@ -397,21 +657,20 @@ export class CoordinationStore extends EventEmitter {
     for (const path of task.files) {
       const resource = fileResource(path)
       const holder = this.locks.holder(resource)
-      // Only locks this task actually took are dropped: a file another actor
-      // has picked up since must not be yanked out from under it.
       if (holder && holder.reason === `task ${task.id}` && (!owner || holder.actorId === owner)) {
         this.locks.release(resource, holder.actorId)
       }
     }
   }
 
-  deleteTask(taskId: string): void {
+  deleteTask(taskId: string, overlayId?: string): void {
     this.ensure()
     const task = this.tasks.get(taskId)
     if (!task) throw new CommandError('not_found', 'task not found')
     this.releaseTaskLocks(task)
     this.tasks.delete(taskId)
-    this.versions.forget(taskId)
+    this.versions.forget(taskId, overlayId)
+    this.eventsSinceSnapshot += 1
     this.changed()
   }
 }
@@ -420,11 +679,6 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
-/**
- * Rebuilds one task from the persisted board, discarding anything malformed.
- * The file is plain JSON in the user's profile, so it has to be treated as
- * untrusted input rather than assumed to match the current shape.
- */
 function reviveTask(entry: unknown): Task | null {
   if (!entry || typeof entry !== 'object') return null
   const raw = entry as Record<string, unknown>
@@ -442,8 +696,6 @@ function reviveTask(entry: unknown): Task | null {
         ? (raw.state as TaskState)
         : 'queued',
     createdBy: typeof raw.createdBy === 'string' ? raw.createdBy : USER_AUTHOR,
-    // The assignee is kept even though that agent's process is gone: the name is
-    // the record of who last had the card, and the board lets the user move it.
     assignee: typeof raw.assignee === 'string' && raw.assignee.trim() ? raw.assignee.trim() : undefined,
     tags: normalizeTags(raw.tags),
     dueAt: normalizeDue(raw.dueAt),
@@ -451,8 +703,6 @@ function reviveTask(entry: unknown): Task | null {
     maxReviewIterations: clamp(Number(raw.maxReviewIterations) || 2, 1, 10),
     createdAt: Number(raw.createdAt) || now,
     updatedAt: Number(raw.updatedAt) || now,
-    // A board written before versions existed starts at 1 rather than 0, so a
-    // client that reads it can send a matching baseVersion immediately.
     version: Number(raw.version) > 0 ? Number(raw.version) : 1
   }
 }
@@ -467,7 +717,6 @@ function normalizeTags(value: unknown): string[] {
   return Array.from(seen).slice(0, 8)
 }
 
-/** Accepts an epoch ms number or a `YYYY-MM-DD` string from the date input. */
 function normalizeDue(value: unknown): number | undefined {
   if (value === null || value === undefined || value === '') return undefined
   const at = typeof value === 'number' ? value : Date.parse(String(value))
