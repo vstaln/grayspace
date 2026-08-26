@@ -16,7 +16,7 @@ import { TerminalManager } from '../terminals.ts'
 import { TerminalSnapshots } from '../terminalSnapshots.ts'
 import { registerCommands, NEW } from './index.ts'
 
-describe('Commands Integration вЂ” End-to-End Bus Execution', () => {
+describe('Commands Integration — End-to-End Bus Execution', () => {
   let core: Core
   let brain: BrainStore
   let canvas: CanvasStore

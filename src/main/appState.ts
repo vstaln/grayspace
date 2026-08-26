@@ -35,13 +35,6 @@ export interface AppSettings {
   backgroundDim: number
   /** 0–90 % Gaussian blur applied to the wallpaper so widgets stay readable on busy photos. */
   backgroundBlur: number
-  /** Telegram bot token, kept encrypted at rest. */
-  telegramBotToken?: string
-  telegramBotTokenEnc?: string
-  /** Only this Telegram user ID may inject text into a terminal. */
-  telegramUserId?: string
-  /** Legacy alias for telegramUserId. */
-  telegramChatId?: string
   /** Terminal receiving authenticated incoming integration messages. */
   targetTerminalId?: string
   /**
@@ -51,7 +44,14 @@ export interface AppSettings {
    * time a cheap chat model produced a bad plan.
    */
   assistantModel?: string
+  /** OpenRouter API key, encrypted at rest. */
+  openRouterApiKey?: string
+  openRouterApiKeyEnc?: string
+  /** OpenRouter model id, for example `deepseek/deepseek-r1:free`. */
+  openRouterModel?: string
   localModel: LocalModelSettings
+  /** Widget kinds shown in the canvas right-click menu. */
+  favoriteWidgets?: string[]
 }
 
 export interface LocalModelSettings {
@@ -77,18 +77,14 @@ export type SettingsPatch = Partial<
   Omit<
     AppSettings,
     | 'backgroundImage'
-    | 'telegramBotToken'
-    | 'telegramUserId'
-    | 'telegramChatId'
     | 'targetTerminalId'
+    | 'openRouterApiKey'
     | 'localModel'
   >
 > & {
   backgroundImage?: string | null
-  telegramBotToken?: string | null
-  telegramUserId?: string | null
-  telegramChatId?: string | null
   targetTerminalId?: string | null
+  openRouterApiKey?: string | null
   localModel?: Partial<LocalModelSettings>
 }
 
@@ -108,7 +104,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   localModel: {
     // Portable defaults: off until the user points at a real llama-server and
     // model. Machine-specific paths never ship as defaults — a missing binary
-    // would otherwise spam the assistant with "не найден" on every warm-up.
+    // would otherwise spam the assistant with "not found" on every warm-up.
     enabled: false,
     serverBin: '',
     modelPath: '',
@@ -117,7 +113,8 @@ const DEFAULT_SETTINGS: AppSettings = {
     gpuLayers: 99,
     idleTimeoutMs: 5 * 60_000,
     offloadVision: false
-  }
+  },
+  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'note', 'timer', 'planner', 'browser', 'links', 'music-player', 'id-generator']
 }
 
 const MAX_RECENT = 12
@@ -159,7 +156,7 @@ export class AppState extends EventEmitter {
   get(): AppStateShape {
     this.ensure()
     const {
-      telegramBotTokenEnc: _telegramTokenEnc,
+      openRouterApiKeyEnc: _openRouterApiKeyEnc,
       ...settings
     } = this.state.settings
     return {
@@ -178,7 +175,6 @@ export class AppState extends EventEmitter {
     this.ensure()
     // Ciphertext is internal to this class; callers only ever see the key.
     const {
-      telegramBotTokenEnc: _telegramTokenEnc,
       ...settings
     } = this.state.settings
     return settings
@@ -193,7 +189,7 @@ export class AppState extends EventEmitter {
     const s = this.settings
     return {
       ...s,
-      telegramBotToken: s.telegramBotToken ? SECRET_MASK : undefined
+      openRouterApiKey: s.openRouterApiKey ? SECRET_MASK : undefined
     }
   }
 
@@ -243,22 +239,19 @@ export class AppState extends EventEmitter {
       this.state.settings.backgroundDim = Math.min(90, Math.max(0, Math.round(patch.backgroundDim)))
     if (typeof patch.backgroundBlur === 'number' && Number.isFinite(patch.backgroundBlur))
       this.state.settings.backgroundBlur = Math.min(90, Math.max(0, Math.round(patch.backgroundBlur)))
-    if ('telegramBotToken' in patch)
-      this.setSecret('telegramBotToken', 'telegramBotTokenEnc', patch.telegramBotToken)
-    if ('telegramUserId' in patch) {
-      const cleaned = cleanId(patch.telegramUserId)
-      this.state.settings.telegramUserId = cleaned
-      this.state.settings.telegramChatId = cleaned
-    } else if ('telegramChatId' in patch) {
-      const cleaned = cleanId(patch.telegramChatId)
-      this.state.settings.telegramUserId = cleaned
-      this.state.settings.telegramChatId = cleaned
-    }
+    if ('openRouterApiKey' in patch)
+      this.setSecret('openRouterApiKey', 'openRouterApiKeyEnc', patch.openRouterApiKey)
+    if (typeof patch.openRouterModel === 'string')
+      this.state.settings.openRouterModel = patch.openRouterModel.trim().slice(0, 200) || undefined
     if ('targetTerminalId' in patch) this.state.settings.targetTerminalId = cleanId(patch.targetTerminalId)
     if (patch.localModel && typeof patch.localModel === 'object') {
       // A nested merge, not a replace — a caller flipping just `enabled` must
       // not blank out the paths sitting next to it.
       this.state.settings.localModel = { ...this.state.settings.localModel, ...patch.localModel }
+    }
+    if (Array.isArray(patch.favoriteWidgets)) {
+      const allowed = new Set(['terminal', 'note', 'timer', 'board', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'id-generator'])
+      this.state.settings.favoriteWidgets = [...new Set(patch.favoriteWidgets.filter((kind): kind is string => typeof kind === 'string' && allowed.has(kind)))].slice(0, 32)
     }
     this.commit()
     return this.publicSettings()
@@ -266,8 +259,8 @@ export class AppState extends EventEmitter {
 
   /** Encrypts a secret setting at rest, or drops both its forms when cleared. */
   private setSecret(
-    plainKey: 'telegramBotToken',
-    encKey: 'telegramBotTokenEnc',
+    plainKey: 'openRouterApiKey',
+    encKey: 'openRouterApiKeyEnc',
     raw: string | null | undefined
   ): void {
     const value = raw?.trim() || undefined
@@ -333,19 +326,14 @@ export class AppState extends EventEmitter {
       this.state.settings.backgroundDim = DEFAULT_SETTINGS.backgroundDim
     if (!Number.isFinite(this.state.settings.backgroundBlur))
       this.state.settings.backgroundBlur = DEFAULT_SETTINGS.backgroundBlur
-    if (!this.state.settings.telegramUserId && this.state.settings.telegramChatId) {
-      this.state.settings.telegramUserId = this.state.settings.telegramChatId
-    } else if (!this.state.settings.telegramChatId && this.state.settings.telegramUserId) {
-      this.state.settings.telegramChatId = this.state.settings.telegramUserId
-    }
     // Decrypt a stored key (and migrate an older plaintext key to the encrypted
     // field when the platform can encrypt it) so only ciphertext touches disk.
-    this.decryptOrMigrate('telegramBotToken', 'telegramBotTokenEnc')
+    this.decryptOrMigrate('openRouterApiKey', 'openRouterApiKeyEnc')
   }
 
   private decryptOrMigrate(
-    plainKey: 'telegramBotToken',
-    encKey: 'telegramBotTokenEnc'
+    plainKey: 'openRouterApiKey',
+    encKey: 'openRouterApiKeyEnc'
   ): void {
     if (this.state.settings[encKey]) {
       this.state.settings[plainKey] = decryptSecret(this.state.settings[encKey] as string) || undefined
@@ -383,7 +371,7 @@ export class AppState extends EventEmitter {
    */
   private settingsForDisk(): AppSettings {
     const settings = { ...this.state.settings }
-    if (settings.telegramBotTokenEnc) delete settings.telegramBotToken
+    if (settings.openRouterApiKeyEnc) delete settings.openRouterApiKey
     return settings
   }
 }

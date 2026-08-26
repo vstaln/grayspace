@@ -1,0 +1,15 @@
+# Скрипты запуска зависят от конца строки, а не от вкуса платформы.
+#
+# core.autocrlf=true на Windows-машине конвертирует всё в CRLF при checkout.
+# Для shell-скриптов это ломает shebang: macOS/Linux видят "/bin/bash\r" и
+# отвечают `bad interpreter: No such file or directory`. Здесь конец строки
+# закреплён явно, поэтому setup.command переживает клон на любой машине.
+#
+# Область намеренно узкая — только скрипты запуска, чтобы не переписывать
+# концы строк во всём репозитории.
+*.sh      text eol=lf
+*.command text eol=lf
+
+# cmd.exe, наоборот, требует CRLF: batch-файл с LF ломается на многострочных
+# конструкциях (if/for в блоках).
+*.bat     text eol=crlf

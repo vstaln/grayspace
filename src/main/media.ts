@@ -3,6 +3,7 @@ import { createHash } from 'crypto'
 
 const clipboard = (electron as unknown as { clipboard?: typeof electron.clipboard }).clipboard
 import * as fs from 'fs'
+import * as os from 'os'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { getUserDataDir } from './userData.ts'
 
@@ -31,7 +32,8 @@ export const MAX_MEDIA_BYTES = 24 * 1024 * 1024
 
 /**
  * Pasted pictures outlive the note that references them, so they cannot go to
- * the temp dir the way clipboard-to-terminal paths do — they live in userData.
+ * the temp dir the way clipboard-to-terminal paths do (see
+ * saveClipboardImageToScratch) — they live in userData.
  */
 export function mediaDir(): string {
   return join(getUserDataDir(), 'media')
@@ -70,6 +72,48 @@ export function saveClipboardImage(): MediaFile | null {
   const bytes = image.toPNG()
   if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('File larger than 24 MB')
   return saveBytes(bytes, 'png')
+}
+
+/** Where throwaway clipboard pictures land, outside the app's own storage. */
+export function scratchDir(): string {
+  return join(os.tmpdir(), 'orcspace-clipboard')
+}
+
+/** saveBytes' throwaway twin — same content addressing, temp dir instead. */
+export function saveBytesToScratch(bytes: Buffer, ext: string): MediaFile {
+  if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('File larger than 24 MB')
+  const safeExt = MIME_BY_EXT[ext.replace(/^\./, '').toLowerCase()] ? ext.replace(/^\./, '').toLowerCase() : 'png'
+  const dir = scratchDir()
+  fs.mkdirSync(dir, { recursive: true })
+  const digest = createHash('sha1').update(bytes).digest('hex').slice(0, 16)
+  const name = `${digest}.${safeExt}`
+  const path = join(dir, name)
+  if (!fs.existsSync(path)) fs.writeFileSync(path, bytes)
+  return { name, path }
+}
+
+/**
+ * Clipboard bitmap written to the OS temp dir instead of the app's media store.
+ *
+ * A picture pasted into a *terminal* is not content the app owns — it becomes
+ * an argument to some CLI and stops mattering the moment that command is done.
+ * Routing it through saveBytes() put every such screenshot in userData/media
+ * permanently, where nothing ever collects it and the app's own storage grows
+ * without bound. The temp dir is the right home: the OS reclaims it, and the
+ * path stays valid for as long as the command needs to read it.
+ *
+ * Notes are the opposite case and keep using saveBytes() — a note outlives the
+ * paste and must still resolve its picture after a restart.
+ */
+export function saveClipboardImageToScratch(): MediaFile | null {
+  if (!clipboard) return null
+  const image = clipboard.readImage()
+  if (image.isEmpty()) return null
+  const bytes = image.toPNG()
+  if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('File larger than 24 MB')
+  // Content-addressed like the durable store, so pasting the same screenshot
+  // twice reuses one file rather than filling the temp dir with copies.
+  return saveBytesToScratch(bytes, 'png')
 }
 
 /**

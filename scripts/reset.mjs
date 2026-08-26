@@ -10,10 +10,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-const PORT = Number(process.env.WORKSPACE_CONTROL_PORT || 47932)
+const PORT = Number(process.env.WORKSPACE_CONTROL_PORT || 20220)
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
   console.error(
-    `WORKSPACE_CONTROL_PORT должен быть номером порта 1–65535, получено: "${process.env.WORKSPACE_CONTROL_PORT}"`
+    `WORKSPACE_CONTROL_PORT must be a port number in 1-65535, got: "${process.env.WORKSPACE_CONTROL_PORT}"`
   )
   process.exit(1)
 }
@@ -39,7 +39,7 @@ function controlToken() {
 
 async function api(pathname, init) {
   const token = controlToken()
-  if (!token) throw new Error('control-token не найден — запустите OrcSpace хотя бы раз')
+  if (!token) throw new Error('control-token not found - run OrcSpace at least once')
   const res = await fetch(`${BASE}${pathname}`, {
     ...init,
     headers: { [TOKEN_HEADER]: token, 'Content-Type': 'application/json', ...(init?.headers || {}) }
@@ -51,19 +51,19 @@ async function main() {
   // An HTML error page or a 500 must not surface as "Unexpected token < in JSON".
   const statusRes = await api('/coordination/status')
   if (!statusRes.ok) {
-    console.error(`Не удалось получить статус координации: HTTP ${statusRes.status}: ${(await statusRes.text()).slice(0, 200)}`)
+    console.error(`Could not read the coordination status: HTTP ${statusRes.status}: ${(await statusRes.text()).slice(0, 200)}`)
     process.exit(1)
   }
   let status
   try {
     status = await statusRes.json()
   } catch {
-    console.error('Сервер управления вернул не-JSON ответ на /coordination/status.')
+    console.error('The control server returned a non-JSON response for /coordination/status.')
     process.exit(1)
   }
 
   if (!status.managerId) {
-    console.log('Руководитель и так не назначен.')
+    console.log('No manager is assigned.')
   } else {
     // The manager itself is the only agent the API lets release the role, so we
     // release it *as* that agent — this script stands in for the human operator.
@@ -72,10 +72,10 @@ async function main() {
       body: JSON.stringify({ agentId: status.managerId })
     })
     if (!res.ok) {
-      console.error('Не удалось сбросить руководителя:', await res.text())
+      console.error('Could not release the manager role:', await res.text())
       process.exit(1)
     }
-    console.log(`Роль руководителя снята с «${status.managerId}».`)
+    console.log(`Manager role released from "${status.managerId}".`)
   }
 
   if (wantLocks) {
@@ -84,7 +84,7 @@ async function main() {
       const body = await (await api('/locks')).json()
       locks = Array.isArray(body.locks) ? body.locks : []
     } catch (err) {
-      console.error('Не удалось получить список блокировок:', err.message)
+      console.error('Could not list the locks:', err.message)
       process.exit(1)
     }
     let released = 0
@@ -107,9 +107,9 @@ async function main() {
         failures.push(`${resource}: ${err.message || err}`)
       }
     }
-    console.log(`Снято блокировок файлов: ${released} из ${locks.length}.`)
+    console.log(`File locks released: ${released} of ${locks.length}.`)
     if (failures.length > 0) {
-      for (const failure of failures.slice(0, 10)) console.error(`Блокировка не снята: ${failure}`)
+      for (const failure of failures.slice(0, 10)) console.error(`Lock not released: ${failure}`)
       process.exitCode = 1
     }
   }

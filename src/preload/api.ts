@@ -108,16 +108,13 @@ export interface AppSettings {
   backgroundDim: number
   /** 0–90 % blur applied to the wallpaper. */
   backgroundBlur: number
-  /** Masked Telegram bot token; the plaintext token stays in the main process. */
-  telegramBotToken?: string
-  /** Allowed Telegram user ID. */
-  telegramUserId?: string
-  /** Legacy alias for telegramUserId. */
-  telegramChatId?: string
-  targetTerminalId?: string
   /** Model the built-in assistant plans with. */
   assistantModel?: string
+  /** Masked OpenRouter API key; plaintext stays in the main process. */
+  openRouterApiKey?: string
+  openRouterModel?: string
   localModel: LocalModelSettings
+  favoriteWidgets?: string[]
 }
 
 export interface SettingsApi {
@@ -131,9 +128,7 @@ export interface SettingsApi {
       >
     > & {
       backgroundImage?: string | null
-      telegramBotToken?: string | null
-      telegramUserId?: string | null
-      telegramChatId?: string | null
+      openRouterApiKey?: string | null
       localModel?: Partial<LocalModelSettings>
     }
   ): Promise<AppSettings>
@@ -159,31 +154,20 @@ export interface McpApi {
   onStatusChange(cb: (status: McpStatus) => void): () => void
 }
 
-export interface TelegramStatus {
-  state: 'disconnected' | 'connected' | 'error'
-  lastMessage?: string
-  error?: string
-}
-
-export interface TelegramApi {
-  getStatus(): Promise<TelegramStatus>
-  save(patch: {
-    telegramBotToken?: string | null
-    telegramUserId?: string | null
-    telegramChatId?: string | null
-    targetTerminalId?: string | null
-  }): Promise<TelegramStatus>
-  testSend(): Promise<{ ok: true } | { error: string }>
-  onStatusChange(cb: (status: TelegramStatus) => void): () => void
-}
-
 /** A picture copied into the app's own store, addressable by absolute path. */
 export interface MediaFile { name: string; path: string }
 
 export interface MediaApi {
   /** Saves the clipboard bitmap, or null when the clipboard holds no image. */
   saveClipboard(): Promise<MediaFile | null>
+  /**
+   * Same bitmap, written to the OS temp dir instead of the durable store — for
+   * a paste whose only job is to hand a path to a command (terminals).
+   */
+  saveClipboardScratch(): Promise<MediaFile | null>
   saveBytes(bytes: Uint8Array, ext: string): Promise<MediaFile | { error: string } | null>
+  /** saveBytes' throwaway twin, for the same terminal-paste case. */
+  saveBytesScratch(bytes: Uint8Array, ext: string): Promise<MediaFile | { error: string } | null>
   /** Reads an image back as a data URL; null when missing or not an image. */
   dataUrl(path: string): Promise<string | null>
 }
@@ -304,7 +288,7 @@ export interface BrainApi {
 export interface CanvasWidget {
   id: string
   title: string
-  kind?: 'terminal' | 'note' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser'
+  kind?: 'terminal' | 'note' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'id-generator'
   noteId?: string
   x: number
   y: number

@@ -18,7 +18,6 @@ import type {
   PlannerApi,
   SettingsApi,
   SystemApi,
-  TelegramApi,
   TerminalApi,
   WindowApi,
   WorkspaceApi
@@ -32,7 +31,6 @@ declare global {
       workspace: WorkspaceApi
       settings: SettingsApi
       mcp: McpApi
-      telegram: TelegramApi
       media: MediaApi
       coordination: CoordinationApi
       planner: PlannerApi

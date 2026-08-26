@@ -1,6 +1,6 @@
 ﻿import { EventEmitter } from 'events'
 import { join } from 'path'
-import { readStoreJson, writeJsonAtomic } from './storage.ts'
+import { readStoreJson, writeJsonAtomic, writeJsonAtomicAsync } from './storage.ts'
 import { getUserDataDir } from './userData.ts'
 import {
   CommandError,
@@ -84,6 +84,21 @@ export class CoordinationStore extends EventEmitter {
   private persistTimer: ReturnType<typeof setTimeout> | null = null
   private snapshotSeq = 0
   private eventsSinceSnapshot = 0
+  /**
+   * Async persistence plumbing (same pattern as CanvasStore): the debounced /
+   * interval flushes must not fsync on the Electron main thread, but two
+   * overlapping atomic writes could rename in the wrong order and leave an
+   * OLDER board file behind a newer one. Writes are chained, and a durable
+   * (shutdown) flush marks its seq so queued older copies skip themselves.
+   */
+  private writeChain: Promise<void> = Promise.resolve()
+  private writeSeq = 0
+  private syncFlushedSeq = 0
+  /** Bumped by every state mutation; invalidates the cached sorted snapshot. */
+  private boardRevision = 0
+  private sortedCache: { rev: number; tasks: Task[] } | null = null
+  /** Read-path prune throttle: agents poll /tasks far faster than claims rot. */
+  private lastReadPruneAt = 0
   readonly versions = new VersionRegistry('task')
 
   constructor(locks: LockManager, isActorAlive?: (actorId: string) => boolean) {
@@ -204,9 +219,12 @@ export class CoordinationStore extends EventEmitter {
     if (event.seq > this.snapshotSeq) {
       this.snapshotSeq = event.seq
     }
+    this.boardRevision += 1
     this.eventsSinceSnapshot += 1
     if (this.eventsSinceSnapshot >= BOARD_SNAPSHOT_INTERVAL) {
-      this.flush()
+      // Async: this fires from the journal write path, which runs on the main
+      // thread between keystrokes and pty chunks — never block it on a fsync.
+      this.flushAsync()
     }
   }
 
@@ -267,6 +285,7 @@ export class CoordinationStore extends EventEmitter {
       resetInFlight = true
     }
     this.pruneStale()
+    this.boardRevision += 1
     if (resetInFlight) this.schedulePersist()
   }
 
@@ -326,6 +345,7 @@ export class CoordinationStore extends EventEmitter {
 
   private changed(): void {
     this.ensure()
+    this.boardRevision += 1
     this.emit('change', this.snapshot())
     this.schedulePersist()
   }
@@ -334,11 +354,26 @@ export class CoordinationStore extends EventEmitter {
     if (this.persistTimer !== null) clearTimeout(this.persistTimer)
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null
-      this.flush()
+      this.flushAsync()
     }, 250)
     this.persistTimer.unref?.()
   }
 
+  /** The current board state as the on-disk snapshot payload. */
+  private payloadForPersist(): Record<string, unknown> {
+    return {
+      snapshotSeq: this.snapshotSeq,
+      schemaVersion: BOARD_SCHEMA_VERSION,
+      tasks: Array.from(this.tasks.values()),
+      managerId: this.manager,
+      managerSeenAt: this.managerSeenAt
+    }
+  }
+
+  /**
+   * Durable, blocking write. Shutdown only (`dispose` / before-quit): Electron
+   * must not tear the process down mid-rename, so here blocking is the point.
+   */
   private flush(): void {
     if (this.persistTimer !== null) {
       clearTimeout(this.persistTimer)
@@ -346,17 +381,52 @@ export class CoordinationStore extends EventEmitter {
     }
     if (!this.loaded) return
     try {
-      writeJsonAtomic(this.file, {
-        snapshotSeq: this.snapshotSeq,
-        schemaVersion: BOARD_SCHEMA_VERSION,
-        tasks: Array.from(this.tasks.values()),
-        managerId: this.manager,
-        managerSeenAt: this.managerSeenAt
-      })
+      writeJsonAtomic(this.file, this.payloadForPersist())
+      // The newest state is now on disk; queued async copies are stale.
+      this.syncFlushedSeq = this.writeSeq
       this.eventsSinceSnapshot = 0
     } catch (err) {
       console.error('failed to persist task board', err)
     }
+  }
+
+  /**
+   * The periodic write, off the event loop's critical path: no fsync on the
+   * main thread, same crash-safe temp+rename file as `flush`. Chained so two
+   * overlapping writes cannot rename an older snapshot over a newer one, and
+   * seq-guarded against racing a shutdown `flush` (PERF-board-async).
+   */
+  private flushAsync(): void {
+    if (!this.loaded) return
+    this.writeSeq += 1
+    const seq = this.writeSeq
+    const snapshot = this.payloadForPersist()
+    this.writeChain = this.writeChain
+      .catch(() => {
+        /* a failed write must not strand the chain */
+      })
+      .then(async () => {
+        // A durable flush landed after this copy was queued — it is newer.
+        if (seq <= this.syncFlushedSeq) return
+        try {
+          await writeJsonAtomicAsync(this.file, snapshot)
+        } catch (err) {
+          console.error('failed to persist task board', err)
+          return
+        }
+        // An in-flight rename cannot be aborted: if the shutdown flush ran
+        // while this write was executing, the older snapshot may have won.
+        // Memory holds the newest state — put it back on disk synchronously.
+        if (seq <= this.syncFlushedSeq) {
+          try {
+            writeJsonAtomic(this.file, this.payloadForPersist())
+            this.syncFlushedSeq = this.writeSeq
+          } catch (err) {
+            console.error('failed to persist task board', err)
+          }
+        }
+      })
+    this.eventsSinceSnapshot = 0
   }
 
   private touchManager(agentId: string): void {
@@ -399,6 +469,7 @@ export class CoordinationStore extends EventEmitter {
       mutated = true
     }
     if (mutated) {
+      this.boardRevision += 1
       this.schedulePersist()
       queueMicrotask(() => this.emit('change', this.snapshot()))
     }
@@ -406,14 +477,34 @@ export class CoordinationStore extends EventEmitter {
 
   snapshot(overlayId?: string): CoordinationSnapshot {
     this.ensure()
-    this.pruneStale()
-    const rawTasks = Array.from(this.tasks.values())
-    const tasks = overlayId && this.versions.hasOverlay(overlayId)
-      ? rawTasks.map((t) => ({ ...t, version: this.versions.current(t.id, overlayId) }))
-      : rawTasks
+    // pruneStale on every read made each status poll a potential write + an
+    // extra whole-board broadcast; agents poll /tasks in a tight loop. Claims
+    // only rot on the scale of minutes, so a read-path sweep at most every
+    // 2s is indistinguishable — mutators still prune eagerly.
+    const now = Date.now()
+    if (now - this.lastReadPruneAt >= 2_000) {
+      this.lastReadPruneAt = now
+      this.pruneStale()
+    }
+    let tasks: Task[]
+    if (!overlayId && this.sortedCache && this.sortedCache.rev === this.boardRevision) {
+      tasks = this.sortedCache.tasks
+    } else {
+      // One shared sorted array per revision: every poll between mutations
+      // reuses it instead of re-sorting the whole board (PERF-board-snapshot).
+      const sorted = Array.from(this.tasks.values()).sort((a, b) => a.createdAt - b.createdAt)
+      if (!overlayId) {
+        this.sortedCache = { rev: this.boardRevision, tasks: sorted }
+        tasks = sorted
+      } else if (this.versions.hasOverlay(overlayId)) {
+        tasks = sorted.map((t) => ({ ...t, version: this.versions.current(t.id, overlayId) }))
+      } else {
+        tasks = sorted
+      }
+    }
     return {
       managerId: this.manager,
-      tasks: tasks.sort((a, b) => a.createdAt - b.createdAt),
+      tasks,
       locks: this.locks.list()
     }
   }
@@ -449,9 +540,12 @@ claimManager(agentId: string): { managerId: string; role: 'manager' } {
     }
     this.manager = id
     this.managerSeenAt = Date.now()
+    this.boardRevision += 1
     this.eventsSinceSnapshot += 1
     this.emit('change', this.snapshot())
-    this.flush()
+    // Debounced, not synchronous: a manager claim is an interactive request,
+    // and the fsync'd board write does not belong on its critical path.
+    this.schedulePersist()
     return { managerId: id, role: 'manager' }
   }
 
@@ -580,9 +674,11 @@ claimManager(agentId: string): { managerId: string; role: 'manager' } {
     task.state = 'in_progress'
     task.updatedAt = Date.now()
     task.version = this.versions.bump(task.id, overlayId)
+    this.boardRevision += 1
     this.eventsSinceSnapshot += 1
     this.emit('change', this.snapshot(overlayId))
-    this.flush()
+    // Same as claimManager: debounce the disk write off the request path.
+    this.schedulePersist()
     return task
   }
 

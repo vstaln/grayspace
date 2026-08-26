@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { FileText, FolderOpen, KanbanSquare, Pin, Settings, Terminal, User, X } from 'lucide-react'
+import { CreditCard, FileText, FolderOpen, KanbanSquare, Palette, Pin, Settings, Terminal, User, UserRound, X } from 'lucide-react'
 import type { RecentDir, UserRole } from '../../../preload/index.d'
-import { TelegramIntegrationCard } from './TelegramIntegrationCard'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { THEMES, useTheme } from '../theme'
 import { useSettings } from '../hooks/useSettings'
@@ -86,6 +85,25 @@ const ROLES: { id: UserRole; label: string; hint: string }[] = [
   }
 ]
 
+const SETTINGS_TABS = [
+  { id: 'appearance' as const, label: 'Appearance', Icon: Palette },
+  { id: 'account' as const, label: 'Account', Icon: UserRound },
+  { id: 'plans' as const, label: 'Billing', Icon: CreditCard },
+]
+
+const FAVORITE_WIDGETS = [
+  ['terminal', 'Terminal', 'Shell in the current workspace'],
+  ['files', 'Files', 'Browse workspace files'],
+  ['sys-monitor', 'System Monitor', 'CPU, RAM and processes'],
+  ['note', 'Note', 'Quick notes on the canvas'],
+  ['timer', 'Timer', 'Countdown or stopwatch'],
+  ['planner', 'Planner', 'Daily agenda and checklist'],
+  ['browser', 'Browser', 'Embedded web page'],
+  ['links', 'Links', 'Saved links'],
+  ['music-player', 'Music Player', 'Stream YouTube, Yandex Music, Spotify or MP3 links'],
+  ['id-generator', 'ID Generator', 'Random identifiers']
+] as const
+
 function SettingsModal({
   workspaceDir,
   managerId
@@ -128,6 +146,17 @@ function SettingsModal({
     return () => window.removeEventListener('keydown', onKey, true)
   }, [open])
 
+  useEffect(() => {
+    const openAccount = (): void => {
+      setTab('account')
+      setOpen(true)
+    }
+    window.addEventListener('orcspace:open-account', openAccount)
+    return () => {
+      window.removeEventListener('orcspace:open-account', openAccount)
+    }
+  }, [])
+
   const saveAccount = async (): Promise<void> => {
     setBusy(true)
     try {
@@ -142,11 +171,15 @@ function SettingsModal({
     }
   }
 
+
   const dialog =
     open &&
+    // Portal layer sits above the rail (z-45000) and the Browser/Code panes
+    // (z-40000): this modal is opened from the rail in every view, so painting
+    // it beneath either made Settings/Account look dead there (UI-audit P0).
     createPortal(
-      <div
-        className="fixed top-10 inset-x-0 bottom-0 z-[30000] flex items-center justify-center p-6 backdrop-blur-sm"
+        <div
+          className="fixed top-10 inset-x-0 bottom-0 z-[50000] flex items-center justify-center p-6 backdrop-blur-sm"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         role="presentation"
         onMouseDown={(event) => {
@@ -164,20 +197,15 @@ function SettingsModal({
         >
           <nav className="flex flex-none gap-1 overflow-x-auto border-b border-line-soft bg-bg-raise/30 p-2 sm:block sm:w-44 sm:border-r sm:border-b-0 sm:p-3">
             <div className="hidden px-2 pb-4 text-sm font-semibold text-text sm:block">Settings</div>
-            {(
-              [
-                ['appearance', 'Appearance'],
-                ['account', 'Account'],
-                ['plans', 'Plans']
-              ] as const
-            ).map(([id, label]) => (
+            {SETTINGS_TABS.map(({ id, label, Icon }) => (
               <button
                 key={id}
                 data-testid={`settings-tab-${id}`}
                 aria-current={tab === id ? 'true' : undefined}
-                className={`flex-none rounded-[9px] px-2.5 py-2 text-left text-xs sm:mb-1 sm:w-full ${tab === id ? 'bg-bg-hover text-accent' : 'text-text-dim hover:bg-bg-hover hover:text-text'}`}
+                className={`flex flex-none items-center gap-2 rounded-[9px] px-2.5 py-2 text-left text-xs sm:mb-1 sm:w-full ${tab === id ? 'bg-bg-hover text-accent' : 'text-text-dim hover:bg-bg-hover hover:text-text'}`}
                 onClick={() => setTab(id)}
               >
+                <Icon size={14} strokeWidth={1.8} />
                 {label}
               </button>
             ))}
@@ -185,7 +213,7 @@ function SettingsModal({
           <main className="min-w-0 flex-1 overflow-auto p-5">
             <div className="mb-5 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-text">
-                {tab === 'appearance' ? 'Appearance' : tab === 'account' ? 'Account' : 'Plans'}
+                {tab === 'appearance' ? 'Appearance' : tab === 'account' ? 'Account' : 'Billing'}
               </h2>
               <button
                 className="rounded-[8px] p-1.5 text-text-dim hover:bg-bg-hover hover:text-text"
@@ -215,6 +243,29 @@ function SettingsModal({
                         <div className="mt-1 text-[10px] text-text-faint">{item.hint}</div>
                       </button>
                     ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-2 text-xs font-semibold text-text">Right-click menu</div>
+                  <p className="mb-2 text-[11px] leading-relaxed text-text-faint">
+                    Choose which widgets appear when you right-click the canvas.
+                  </p>
+                  <div className="space-y-1">
+                    {FAVORITE_WIDGETS.map(([id, label, hint]) => {
+                      const selected = (settings.favoriteWidgets ?? []).includes(id)
+                      return (
+                        <label key={id} className="flex cursor-pointer items-center gap-2 rounded-[8px] px-2 py-1.5 text-xs text-text hover:bg-bg-hover">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => void update({ favoriteWidgets: selected ? (settings.favoriteWidgets ?? []).filter((kind) => kind !== id) : [...(settings.favoriteWidgets ?? []), id] })}
+                            className="accent-accent"
+                          />
+                          <span className="min-w-0 flex-1">{label}</span>
+                          <span className="text-[10px] text-text-faint">{hint}</span>
+                        </label>
+                      )
+                    })}
                   </div>
                 </div>
                 <div>
@@ -393,12 +444,12 @@ function SettingsModal({
                       className={`rounded-[10px] border p-3 text-left transition-colors ${settings.plan === 'plus' ? 'border-[#38bdf8] bg-[#38bdf8]/15 shadow-sm ring-1 ring-[#38bdf8]/40' : 'border-line hover:bg-bg-hover'}`}
                       onClick={() => {
                         void update({ plan: 'plus' })
-                        setNotice('Welcome to OrcSpace Max! Verified badge activated.')
+                        setNotice('Welcome to OrcSpace Plus! Verified badge activated.')
                       }}
                     >
                       <div className="flex items-center justify-between">
                         <span className="flex items-center gap-1.5 text-xs font-medium text-text">
-                          OrcSpace Max ($1/mo)
+                          OrcSpace Plus ($9.99/mo)
                           <VerifiedBadge size={14} />
                         </span>
                         {settings.plan === 'plus' ? (
@@ -411,9 +462,6 @@ function SettingsModal({
                     </button>
                   </div>
                 </div>
-
-                {/* Telegram bridge */}
-                <TelegramIntegrationCard />
 
                 <div className="flex items-center gap-2 pt-1">
                   <button
@@ -443,6 +491,7 @@ function SettingsModal({
               </div>
             )}
 
+
             {tab === 'plans' && (
               <div className="max-w-xl space-y-4">
                 {/* Active Plan Status Banner with Quick Switcher */}
@@ -459,9 +508,9 @@ function SettingsModal({
                         <VerifiedBadge size={22} />
                         <div>
                           <div className="flex items-center gap-1.5 text-xs font-semibold text-text">
-                            OrcSpace Max Active
+                            OrcSpace Plus Active
                             <span className="rounded-full bg-[#38bdf8]/20 px-2 py-0.5 text-[10px] font-bold text-[#38bdf8]">
-                              $1 / mo
+                              $9.99 / mo
                             </span>
                           </div>
                           <p className="mt-0.5 text-[11px] text-text-dim">
@@ -473,7 +522,7 @@ function SettingsModal({
                       <div>
                         <div className="text-xs font-semibold text-text">Free Plan Active</div>
                         <p className="mt-0.5 text-[11px] text-text-faint">
-                          Click below to immediately select Free ($0) or OrcSpace Max ($1/mo).
+                          Click below to immediately select Free ($0) or OrcSpace Plus ($9.99/mo).
                         </p>
                       </div>
                     )}
@@ -503,11 +552,11 @@ function SettingsModal({
                       }`}
                       onClick={() => {
                         void update({ plan: 'plus' })
-                        setNotice('Welcome to OrcSpace Max! Verified badge activated.')
+                        setNotice('Welcome to OrcSpace Plus! Verified badge activated.')
                       }}
                     >
                       <VerifiedBadge size={13} />
-                      Max ($1/mo)
+                      Plus ($9.99/mo)
                     </button>
                   </div>
                 </section>
@@ -580,19 +629,19 @@ function SettingsModal({
                     </div>
                   </div>
 
-                  {/* OrcSpace Max Plan Card */}
+                  {/* OrcSpace Plus Plan Card */}
                   <div
                     role="button"
                     tabIndex={0}
                     onClick={() => {
                       void update({ plan: 'plus' })
-                      setNotice('Welcome to OrcSpace Max! Verified badge activated.')
+                      setNotice('Welcome to OrcSpace Plus! Verified badge activated.')
                     }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault()
                         void update({ plan: 'plus' })
-                        setNotice('Welcome to OrcSpace Max! Verified badge activated.')
+                        setNotice('Welcome to OrcSpace Plus! Verified badge activated.')
                       }
                     }}
                     className={`group relative cursor-pointer select-none flex flex-col justify-between rounded-[12px] border p-4 text-left transition-all ${
@@ -604,7 +653,7 @@ function SettingsModal({
                     <div>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5">
-                          <h3 className="text-sm font-semibold text-text">OrcSpace Max</h3>
+                          <h3 className="text-sm font-semibold text-text">OrcSpace Plus</h3>
                           <VerifiedBadge size={16} />
                         </div>
                         <span
@@ -614,12 +663,12 @@ function SettingsModal({
                               : 'bg-[#38bdf8]/20 text-[#38bdf8] group-hover:bg-[#38bdf8] group-hover:text-black'
                           }`}
                         >
-                          {settings.plan === 'plus' ? 'Active ✓' : 'Select ($1/mo)'}
+                          {settings.plan === 'plus' ? 'Active ✓' : 'Select ($9.99/mo)'}
                         </span>
                       </div>
                       <p className="mt-1 text-[11px] text-text-faint">Full orchestration power & verified status</p>
                       <div className="mt-3 flex items-baseline gap-1">
-                        <span className="text-2xl font-bold text-[#38bdf8]">$1</span>
+                        <span className="text-2xl font-bold text-[#38bdf8]">$9.99</span>
                         <span className="text-xs text-text-faint">/ month</span>
                       </div>
                       <ul className="mt-4 space-y-2 text-[11px] text-text">
@@ -649,7 +698,7 @@ function SettingsModal({
                           : 'bg-[#38bdf8]/80 text-black group-hover:bg-[#38bdf8]'
                       }`}
                     >
-                      {settings.plan === 'plus' ? 'Active Subscription ✓' : 'Subscribe for $1 / month'}
+                      {settings.plan === 'plus' ? 'Active Subscription ✓' : 'Subscribe for $9.99 / month'}
                     </div>
                   </div>
                 </div>
@@ -692,6 +741,7 @@ export default React.memo(function Sidebar({
   onToggleBrain,
   onPickDir
 }: Props): React.JSX.Element {
+  const { settings } = useSettings()
   const [recent, setRecent] = useState<RecentDir[]>([])
   const [foldersOpen, setFoldersOpen] = useState(false)
   const [foldersError, setFoldersError] = useState<string | null>(null)
@@ -699,6 +749,8 @@ export default React.memo(function Sidebar({
   const foldersMenuRef = useRef<HTMLDivElement>(null)
   useFocusTrap(foldersMenuRef, foldersOpen)
   const dirName = workspaceDir ? workspaceDir.split(/[\\/]/).filter(Boolean).pop() : null
+  const avatarName = settings.userName?.trim() || 'you'
+  const avatarInitials = avatarName.slice(0, 2).toUpperCase()
 
   // Remembered folders live in the main process, so mirror them live.
   useEffect(() => {
@@ -726,13 +778,36 @@ export default React.memo(function Sidebar({
   }, [foldersOpen])
 
   const open = async (path: string): Promise<void> => {
-    const result = await window.api.workspace.openRecent(path)
-    if (result && typeof result === 'object' && 'error' in result) {
-      setFoldersError(result.error)
-      return
+    // Both a bus `{ error }` reply and a rejected invoke (deleted folder,
+    // unreachable drive) must surface — an uncaught reject would only hit the
+    // global console handler and the menu would silently stay open.
+    try {
+      const result = await window.api.workspace.openRecent(path)
+      if (result && typeof result === 'object' && 'error' in result) {
+        setFoldersError(result.error)
+        return
+      }
+      setFoldersError(null)
+      setFoldersOpen(false)
+    } catch (err) {
+      setFoldersError(err instanceof Error ? err.message : String(err))
     }
-    setFoldersError(null)
-    setFoldersOpen(false)
+  }
+
+  const pinRecent = async (path: string): Promise<void> => {
+    try {
+      await window.api.workspace.pinRecent(path)
+    } catch (err) {
+      setFoldersError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const forgetRecent = async (path: string): Promise<void> => {
+    try {
+      await window.api.workspace.forgetRecent(path)
+    } catch (err) {
+      setFoldersError(err instanceof Error ? err.message : String(err))
+    }
   }
 
   const RAIL_ITEM_IDS = ['terminal', 'board', 'notes', 'folders'] as const
@@ -813,14 +888,14 @@ export default React.memo(function Sidebar({
                   <button
                     className={`flex-none rounded-[10px] p-1 text-text-faint hover:bg-bg-hover hover:text-text ${entry.pinned ? 'text-accent' : ''}`}
                     title={entry.pinned ? 'Unpin' : 'Pin'}
-                    onClick={() => void window.api.workspace.pinRecent(entry.path)}
+                    onClick={() => void pinRecent(entry.path)}
                   >
                     <Pin size={12} />
                   </button>
                   <button
                     className="flex-none rounded-[10px] p-1 text-text-faint hover:bg-bg-hover hover:text-text"
                     title="Remove from recent"
-                    onClick={() => void window.api.workspace.forgetRecent(entry.path)}
+                    onClick={() => void forgetRecent(entry.path)}
                   >
                     <X size={12} />
                   </button>
@@ -853,6 +928,22 @@ export default React.memo(function Sidebar({
       className="rail-shell rail relative z-[45000] flex w-rail flex-none flex-col items-center gap-1.5 border-r border-line pt-10 pb-2.5 glass:border-line-soft select-none"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
+      <button
+        type="button"
+        aria-label="Account"
+        title={`${avatarName} · Account`}
+        className={`group absolute bottom-[52px] grid h-9 w-9 place-items-center rounded-full p-[2px] transition-transform hover:scale-105 ${
+          settings.plan === 'plus'
+            ? 'bg-[#2563eb]'
+            : 'bg-line-soft'
+        }`}
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-account'))}
+      >
+        <span className="grid h-full w-full place-items-center rounded-full bg-bg-panel text-[10px] font-bold text-text">
+          {avatarInitials}
+        </span>
+      </button>
       <div className="flex-1" />
       <div className="flex flex-col gap-1.5">
         {order.map((id) => (

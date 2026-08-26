@@ -1,6 +1,6 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Cpu, FileText, FolderOpen, Globe, ListTodo, Terminal, Timer } from 'lucide-react'
+import { Clipboard, Cpu, FileText, Fingerprint, FolderOpen, Globe, ListTodo, Music2, Terminal, Timer } from 'lucide-react'
 import { Point } from '../types'
 
 interface Props {
@@ -12,6 +12,10 @@ interface Props {
   onPickTimer: () => void
   onPickPlanner: () => void
   onPickBrowser: () => void
+  onPickLinks: () => void
+  onPickMusicPlayer: () => void
+  onPickIdGenerator: () => void
+  favoriteWidgets: string[]
   onClose: () => void
 }
 
@@ -35,6 +39,10 @@ export default function ContextMenu({
   onPickTimer,
   onPickPlanner,
   onPickBrowser,
+  onPickLinks,
+  onPickMusicPlayer,
+  onPickIdGenerator,
+  favoriteWidgets,
   onClose
 }: Props): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
@@ -93,8 +101,25 @@ export default function ContextMenu({
         hint: 'Embedded web page pinned to the canvas',
         icon: <Globe size={15} className="text-accent" />,
         onSelect: onPickBrowser
+      },
+      {
+        id: 'links',
+        label: 'Links',
+        hint: 'Save links and copy them in one click',
+        icon: <Clipboard size={15} className="text-accent" />,
+        onSelect: onPickLinks
+      },
+      {
+        id: 'music-player',
+        label: 'Music Player',
+        hint: 'Stream YouTube, Yandex, Spotify or MP3 links',
+        icon: <Music2 size={15} className="text-accent" />,
+        onSelect: onPickMusicPlayer
+      },
+      {
+        id: 'id-generator', label: 'ID Generator', hint: 'Generate safe random identifiers', icon: <Fingerprint size={15} className="text-accent" />, onSelect: onPickIdGenerator
       }
-    ],
+    ].filter((item) => favoriteWidgets.includes(item.id)),
     [
       onPickTerminal,
       onPickFiles,
@@ -102,7 +127,11 @@ export default function ContextMenu({
       onPickNote,
       onPickTimer,
       onPickPlanner,
-      onPickBrowser
+      onPickBrowser,
+      onPickLinks,
+      onPickMusicPlayer,
+      onPickIdGenerator,
+      favoriteWidgets
     ]
   )
 
@@ -139,6 +168,13 @@ export default function ContextMenu({
       aria-activedescendant={items[selectedIndex] ? `cm-item-${items[selectedIndex].id}` : undefined}
       className="fixed z-[10000] w-[260px] max-w-[calc(100vw-16px)] rounded-[12px] border border-line bg-bg-panel p-2 shadow-2xl glass:bg-bg-panel/90 glass:backdrop-blur-2xl glass:backdrop-saturate-150 select-none"
       style={{ left: pos.x, top: pos.y }}
+      onPointerDown={(e) => {
+        // React portals bubble through the component tree: without this,
+        // pointerdown reaches <main> and draw/erase/pan gestures fire from
+        // clicks inside the menu (mousedown alone cannot stop it — it fires
+        // after pointerdown).
+        e.stopPropagation()
+      }}
       onMouseDown={(e) => {
         // Prevent pan / stroke triggers on canvas below
         e.stopPropagation()
@@ -150,10 +186,10 @@ export default function ContextMenu({
           onClose()
         } else if (e.key === 'ArrowDown') {
           e.preventDefault()
-          setSelectedIndex((prev) => (prev + 1) % items.length)
+          if (items.length) setSelectedIndex((prev) => (prev + 1) % items.length)
         } else if (e.key === 'ArrowUp') {
           e.preventDefault()
-          setSelectedIndex((prev) => (prev - 1 + items.length) % items.length)
+          if (items.length) setSelectedIndex((prev) => (prev - 1 + items.length) % items.length)
         } else if (e.key === 'Enter') {
           e.preventDefault()
           items[selectedIndex]?.onSelect()
@@ -166,6 +202,7 @@ export default function ContextMenu({
 
       {/* Items List */}
       <div className="max-h-[360px] space-y-0.5 overflow-y-auto">
+        {items.length === 0 && <div className="px-2.5 py-3 text-[11px] text-text-faint">No favorite widgets selected. Choose them in Settings.</div>}
         {items.map((item, i) => {
           const isSelected = i === selectedIndex
           const isPanelGroupStart = item.group === 'panel' && items[i - 1]?.group !== 'panel'

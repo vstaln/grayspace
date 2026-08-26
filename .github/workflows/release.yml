@@ -1,0 +1,102 @@
+name: Build installers
+
+# Produces the shippable installers for both desktop platforms.
+#
+# macOS is the reason this workflow exists: electron-builder cannot cross-build
+# a .dmg from Windows or Linux (it needs macOS-only tooling to lay out the disk
+# image and sign the bundle), so the only way to get a Mac installer without
+# owning a Mac is to run the build on a macOS runner.
+#
+# Artifacts are attached to the run — download them from the run's summary page.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      # One platform failing should still leave the other's installer available.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macos
+            script: dist:mac
+            # arm64 (Apple Silicon) and x64 (Intel) are both built; see the
+            # `mac.target` matrix in package.json.
+            artifacts: |
+              dist/*.dmg
+              dist/*.zip
+          - os: windows-latest
+            name: windows
+            script: dist
+            artifacts: |
+              dist/*.exe
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 24, not 22: `npm test` runs `node --test` straight over .ts files, which
+      # relies on native type stripping (unflagged from Node 23.6). On 22 the
+      # test step would fail to parse every test file.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # The three native crates are optional accelerations: native/build.mjs
+      # detects a missing toolchain and falls back to the TypeScript paths, so
+      # the build never fails for want of Rust. Installing it anyway means the
+      # shipped app gets the fast paths.
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Must precede the typecheck: tsconfig.node.json includes
+      # `Orcspace-mcp/src/**/*.ts`, and that package resolves its own zod and
+      # MCP SDK from its own node_modules. Typechecking before this step
+      # resolves them against the root's copies instead and fails on version
+      # skew in the tool signatures.
+      - name: Install and build the MCP server
+        run: npm run build:mcp
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build the installer
+        run: npm run ${{ matrix.script }}
+        env:
+          # Without a Developer ID certificate electron-builder would otherwise
+          # try (and fail) to sign. Unsigned is the honest outcome here; see the
+          # note in the job summary below about what that means for users.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Note what was produced
+        shell: bash
+        run: |
+          echo "### ${{ matrix.name }} installers" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -lh dist/*.dmg dist/*.zip dist/*.exe 2>/dev/null || true
+          ls -lh dist/*.dmg dist/*.zip dist/*.exe 2>/dev/null >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "These builds are **unsigned**." >> "$GITHUB_STEP_SUMMARY"
+          echo "macOS: the first launch needs a right-click → Open, or \`xattr -cr /Applications/OrcSpace.app\`." >> "$GITHUB_STEP_SUMMARY"
+          echo "Windows: SmartScreen shows 'More info → Run anyway' until the .exe builds reputation." >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orcspace-${{ matrix.name }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error
+          retention-days: 30

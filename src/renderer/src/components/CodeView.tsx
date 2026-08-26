@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Plus, X } from 'lucide-react'
+import { Maximize2, Plus, X } from 'lucide-react'
 import TerminalWidget from './TerminalWidget'
 import CodeLauncher, { CodeAgent } from './CodeLauncher'
 import { queueInitialCommand } from '../lib/pendingTerminalCommands'
@@ -21,49 +21,76 @@ interface Props {
   active: boolean
 }
 
-function SessionCard({
+const SessionCard = React.memo(function SessionCard({
   session,
   onClose,
   onFocus,
-  focusable
+  promotable,
+  style
 }: {
   session: Session
   onClose(): void
   onFocus?(): void
-  /** Only the featured-layout's small cards are clickable to swap in. */
-  focusable?: boolean
+  /** In the featured layout, the small cards can be swapped into the big slot. */
+  promotable?: boolean
+  style?: React.CSSProperties
 }): React.JSX.Element {
   return (
     <div
-      className={`flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[8px] border border-line-soft bg-bg-panel ${
-        focusable ? 'cursor-pointer transition-colors hover:border-line' : ''
-      }`}
-      onClick={focusable ? onFocus : undefined}
+      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[8px] border border-line-soft bg-bg-panel"
+      style={style}
     >
-      <div className="flex h-7 flex-none items-center justify-between gap-2 border-b border-line-soft px-2">
+      {/* Promotion lives on the header, never on the terminal below it: a click
+          in the body is how the user selects an agent's output to copy, and
+          swapping the layout out from under that selection is what made
+          copying from a small session impossible (CODE-03). */}
+      <div
+        className={`flex h-7 flex-none items-center justify-between gap-2 border-b border-line-soft px-2 ${
+          promotable ? 'cursor-pointer transition-colors hover:bg-bg-hover' : ''
+        }`}
+        onClick={promotable ? onFocus : undefined}
+        onDoubleClick={promotable ? onFocus : undefined}
+        title={promotable ? 'Click to expand this session' : undefined}
+      >
         <span className="flex items-center gap-1.5 truncate text-[11px] text-text-dim">
           <session.agent.Icon size={12} />
           {session.agent.label}
         </span>
-        <button
-          type="button"
-          aria-label="Close session"
-          title="Close session"
-          onClick={(e) => {
-            e.stopPropagation()
-            onClose()
-          }}
-          className="grid h-[18px] w-[18px] flex-none place-items-center rounded-[4px] text-text-faint transition-colors hover:bg-bg-hover hover:text-text"
-        >
-          <X size={11} strokeWidth={2.4} />
-        </button>
+        <div className="flex flex-none items-center gap-0.5">
+          {promotable && (
+            <button
+              type="button"
+              aria-label="Expand session"
+              title="Expand session"
+              onClick={(e) => {
+                e.stopPropagation()
+                onFocus?.()
+              }}
+              className="grid h-[18px] w-[18px] place-items-center rounded-[4px] text-text-faint transition-colors hover:bg-bg-hover hover:text-text"
+            >
+              <Maximize2 size={10} strokeWidth={2.4} />
+            </button>
+          )}
+          <button
+            type="button"
+            aria-label="Close session"
+            title="Close session"
+            onClick={(e) => {
+              e.stopPropagation()
+              onClose()
+            }}
+            className="grid h-[18px] w-[18px] place-items-center rounded-[4px] text-text-faint transition-colors hover:bg-bg-hover hover:text-text"
+          >
+            <X size={11} strokeWidth={2.4} />
+          </button>
+        </div>
       </div>
-      <div className={`min-h-0 flex-1 ${focusable ? 'pointer-events-none' : ''}`}>
+      <div className="min-h-0 flex-1">
         <TerminalWidget id={session.id} onProcessExit={onClose} />
       </div>
     </div>
   )
-}
+})
 
 export default function CodeView({ active }: Props): React.JSX.Element {
   const [sessions, setSessions] = useState<Session[]>([])
@@ -111,7 +138,24 @@ export default function CodeView({ active }: Props): React.JSX.Element {
   // the left with the other two stacked on the right reads better instead.
   const featured =
     sessions.length === 3 ? sessions.find((s) => s.id === featuredId) ?? sessions[0] : null
-  const others = featured ? sessions.filter((s) => s.id !== featured.id) : []
+
+  /**
+   * Grid placement per session. The featured layout is expressed purely as
+   * grid coordinates so every card keeps the same DOM parent and sibling order
+   * no matter which session is promoted.
+   *
+   * This matters far more than it looks: rendering the big and small slots as
+   * two separate flex containers meant promoting a session moved its node to a
+   * different parent, so React unmounted the TerminalWidget and mounted a new
+   * one. That tore down xterm, repainted the scrollback from the top and threw
+   * away the selection the user was about to copy (CODE-03).
+   */
+  const placementOf = (sessionId: string): React.CSSProperties => {
+    if (!featured) return {}
+    if (sessionId === featured.id) return { gridColumn: '1', gridRow: '1 / span 2' }
+    const rank = sessions.filter((s) => s.id !== featured.id).findIndex((s) => s.id === sessionId)
+    return { gridColumn: '2', gridRow: String(rank + 1) }
+  }
 
   return (
     <div
@@ -139,34 +183,32 @@ export default function CodeView({ active }: Props): React.JSX.Element {
         </button>
       </div>
 
-      {featured ? (
-        <div className="flex flex-1 gap-0 overflow-auto bg-bg-raise p-0">
-          <div className="flex min-h-0 min-w-0 flex-[2] flex-col">
-            <SessionCard session={featured} onClose={() => closeSession(featured.id)} />
+      {/* One grid for every layout — see placementOf() on why the featured
+          arrangement is coordinates rather than a second container. */}
+      <div
+        className="grid min-h-0 flex-1 gap-0 overflow-hidden bg-bg-raise p-0"
+        style={
+          featured
+            ? { gridTemplateColumns: '2fr 1fr', gridTemplateRows: 'repeat(2, minmax(0, 1fr))' }
+            : { gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gridAutoRows: 'minmax(0, 1fr)' }
+        }
+      >
+        {sessions.map((session) => (
+          <SessionCard
+            key={session.id}
+            session={session}
+            style={placementOf(session.id)}
+            onClose={() => closeSession(session.id)}
+            onFocus={() => setFeaturedId(session.id)}
+            promotable={Boolean(featured) && session.id !== featured?.id}
+          />
+        ))}
+        {sessions.length === 0 && (
+          <div className="grid place-items-center p-6 text-center text-[12px] text-text-faint">
+            No code sessions yet — press Launch to start one.
           </div>
-          <div className="flex min-h-0 w-0 flex-1 flex-col gap-0">
-            {others.map((session) => (
-              <div key={session.id} className="min-h-0 flex-1">
-                <SessionCard
-                  session={session}
-                  onClose={() => closeSession(session.id)}
-                  onFocus={() => setFeaturedId(session.id)}
-                  focusable
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div
-          className="grid flex-1 gap-0 overflow-auto bg-bg-raise p-0"
-          style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
-        >
-          {sessions.map((session) => (
-            <SessionCard key={session.id} session={session} onClose={() => closeSession(session.id)} />
-          ))}
-        </div>
-      )}
+        )}
+      </div>
 
       {launcherOpen && <CodeLauncher onClose={() => setLauncherOpen(false)} onLaunch={launch} />}
     </div>

@@ -110,14 +110,14 @@ export default React.memo(function BrowserWidget(): React.JSX.Element {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg-raise">
-      <div className="flex h-9 flex-none items-center gap-1 border-b border-line-soft bg-bg-panel px-1.5">
+      <div className="flex h-9 flex-none items-center gap-1 border-b border-white/10 bg-[#303236] px-2">
         <button
           type="button"
           aria-label="Back"
           title="Back"
           disabled={!canGoBack}
           onClick={() => viewRef.current?.goBack()}
-          className="grid h-[24px] w-[24px] flex-none place-items-center rounded-[6px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text disabled:pointer-events-none disabled:text-text-faint/50"
+          className="grid h-[24px] w-[24px] flex-none place-items-center rounded-full text-[#c0c1c3] transition-colors hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:text-[#777a7e]"
         >
           <ArrowLeft size={13} strokeWidth={2.1} />
         </button>
@@ -127,7 +127,7 @@ export default React.memo(function BrowserWidget(): React.JSX.Element {
           title="Forward"
           disabled={!canGoForward}
           onClick={() => viewRef.current?.goForward()}
-          className="grid h-[24px] w-[24px] flex-none place-items-center rounded-[6px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text disabled:pointer-events-none disabled:text-text-faint/50"
+          className="grid h-[24px] w-[24px] flex-none place-items-center rounded-full text-[#c0c1c3] transition-colors hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:text-[#777a7e]"
         >
           <ArrowRight size={13} strokeWidth={2.1} />
         </button>
@@ -136,7 +136,7 @@ export default React.memo(function BrowserWidget(): React.JSX.Element {
           aria-label={loading ? 'Stop' : 'Reload'}
           title={loading ? 'Stop' : 'Reload'}
           onClick={() => (loading ? viewRef.current?.stop() : viewRef.current?.reload())}
-          className="grid h-[24px] w-[24px] flex-none place-items-center rounded-[6px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+          className="grid h-[24px] w-[24px] flex-none place-items-center rounded-full text-[#c0c1c3] transition-colors hover:bg-white/10 hover:text-white"
         >
           {loading ? <X size={13} strokeWidth={2.1} /> : <RotateCw size={12} strokeWidth={2.1} />}
         </button>
@@ -168,7 +168,7 @@ export default React.memo(function BrowserWidget(): React.JSX.Element {
                 e.currentTarget.blur()
               }
             }}
-            className="h-[26px] w-full rounded-[7px] border border-line-soft bg-bg-raise px-2.5 text-[11.5px] text-text outline-none transition-colors placeholder:text-text-faint focus:border-line"
+            className="h-[26px] w-full rounded-full border border-white/10 bg-[#45484d] px-3 text-[11.5px] text-white outline-none transition-colors placeholder:text-[#b0b2b5] focus:border-white/25"
           />
         </form>
         {host && !editing && <span className="mx-1 flex-none truncate text-[10px] text-text-faint">{host}</span>}

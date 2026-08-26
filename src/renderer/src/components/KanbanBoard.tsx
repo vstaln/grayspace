@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { X } from 'lucide-react'
 import type { CoordinationSnapshot, Task, TaskState } from '../../../preload/index.d'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -42,8 +42,8 @@ export default function KanbanBoard({
   onCreate,
   onMove,
   onDelete,
-  onResetManager: _onResetManager,
-  onReleaseLocks: _onReleaseLocks,
+  onResetManager,
+  onReleaseLocks,
   onClose,
   embedded = false
 }: Props): React.JSX.Element {
@@ -54,11 +54,31 @@ export default function KanbanBoard({
   const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set())
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Serializes the header's maintenance actions (reset lead / release locks):
+  // both mutate shared coordination state, so they must not overlap.
+  const [maintenanceBusy, setMaintenanceBusy] = useState<'manager' | 'locks' | null>(null)
   const titleInputRef = useRef<HTMLInputElement>(null)
   const panelRef = useRef<HTMLElement>(null)
   const confirm = useConfirm()
 
   useFocusTrap(panelRef, !embedded)
+
+  const maintenance = async (kind: 'manager' | 'locks'): Promise<void> => {
+    if (maintenanceBusy) return
+    setMaintenanceBusy(kind)
+    try {
+      const result = kind === 'manager' ? await onResetManager() : await onReleaseLocks()
+      if (!result.ok) {
+        setError(result.error ?? (kind === 'manager' ? 'Manager reset failed' : 'Failed to release locks'))
+      } else {
+        setError(null)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setMaintenanceBusy(null)
+    }
+  }
 
   const effectiveTasks = React.useMemo(() => {
     return (snapshot?.tasks || []).map((t) => {
@@ -67,6 +87,29 @@ export default function KanbanBoard({
       return t
     })
   }, [snapshot?.tasks, optimisticOverrides])
+
+  // Once the authoritative snapshot agrees with an override — or the task is
+  // gone entirely — drop it. Overrides were only ever deleted on failure, so
+  // a surviving entry re-applied its stale state forever: any later move of
+  // that task by another actor (an agent, a second board) rendered THIS board
+  // stuck in the old column until reload (UI-audit P0). Pruning here cannot
+  // snap the card back mid-drag: with override === t.state both memo branches
+  // render identically.
+  useEffect(() => {
+    setOptimisticOverrides((prev) => {
+      const tasks = snapshot?.tasks ?? []
+      const live = new Set(tasks.map((t) => t.id))
+      let changed = false
+      const next = { ...prev }
+      for (const id of Object.keys(prev)) {
+        if (!live.has(id) || prev[id] === tasks.find((t) => t.id === id)?.state) {
+          delete next[id]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [snapshot])
 
   const run = async (id: string | null, action: () => Promise<{ ok: boolean; error?: string }>): Promise<void> => {
     if (id && busyIds.has(id)) return
@@ -160,10 +203,31 @@ export default function KanbanBoard({
     >
       <header className="flex min-h-[46px] items-center justify-between gap-3 border-b border-line-soft px-4">
         <h2 className="min-w-0 truncate text-[14px] font-medium text-text">Task Board</h2>
-        <div className="flex flex-none items-center gap-3">
+        <div className="flex flex-none items-center gap-2">
           <div className="text-[12px] text-text-dim tabular-nums">
             {doneTasks} <span className="text-text-faint">/ {totalTasks}</span>
           </div>
+          {/* Coordination maintenance. "Reset Lead" only makes sense while a
+              lead is actually claimed — hidden otherwise to keep the header
+              quiet on a fresh canvas (App supplies the confirm dialogs). */}
+          {snapshot?.managerId && (
+            <button
+              className="rounded-[8px] border border-line-soft px-2 py-1 text-[11px] text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text disabled:opacity-40"
+              disabled={maintenanceBusy !== null}
+              onClick={() => void maintenance('manager')}
+              title="Clear the current lead so any agent can claim the role again"
+            >
+              Reset Lead
+            </button>
+          )}
+          <button
+            className="rounded-[8px] border border-line-soft px-2 py-1 text-[11px] text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text disabled:opacity-40"
+            disabled={maintenanceBusy !== null}
+            onClick={() => void maintenance('locks')}
+            title="Force-release every file lock"
+          >
+            Release Locks
+          </button>
           <button
             className={`grid h-7 w-7 place-items-center rounded-[10px] text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text ${embedded ? 'hidden' : ''}`}
             onClick={onClose}

@@ -34,7 +34,10 @@ const WIDGET_DEFAULTS: Record<WidgetKind, { title: string; w: number; h: number 
   planner: { title: 'Planner', w: 420, h: 520 },
   files: { title: 'Files', w: 580, h: 480 },
   'sys-monitor': { title: 'System Monitor', w: 460, h: 380 },
-  browser: { title: 'Browser', w: 720, h: 480 }
+  browser: { title: 'Browser', w: 720, h: 480 },
+  links: { title: 'Links', w: 420, h: 360 },
+  'music-player': { title: 'Music Player', w: 460, h: 420 },
+  'id-generator': { title: 'ID Generator', w: 420, h: 360 }
 }
 
 const makeConnectionId = (): string => `conn-${Date.now()}-${++localCounter}`
@@ -361,20 +364,20 @@ export function useCanvas() {
     pendingDeletesRef.current.add(id)
     pendingCreatesRef.current.delete(id)
     widgetsDirtyRef.current = true
-    setWidgets((prev) => {
-      const target = prev.find((w) => w.id === id)
-      // Agent/control removal skips App.closeWidget, so kill the shell here
-      // when a terminal leaves the canvas permanently — otherwise park-on-detach
-      // would leave Claude sessions running with no widget to reclaim them.
-      if (target && (target.kind ?? 'terminal') === 'terminal') {
-        // An agent holding the terminal's lock makes this reject — expected,
-        // and the parked pty is reclaimed when the widget remounts.
-        window.api.terminal.dispose(id).catch((err) => {
-          console.warn(`terminal ${id} dispose deferred`, err)
-        })
-      }
-      return prev.filter((w) => w.id !== id)
-    })
+    // Resolve the target BEFORE dispatching: state updaters must stay pure
+    // (StrictMode/concurrent re-runs would fire terminal.dispose twice). The
+    // ref is render-synced, so it sees the same list the filter below removes
+    // from; a widget that exists only in a not-yet-committed updater has no
+    // live shell to dispose anyway.
+    const target = widgetsRef.current.find((w) => w.id === id)
+    if (target && (target.kind ?? 'terminal') === 'terminal') {
+      // An agent holding the terminal's lock makes this reject — expected,
+      // and the parked pty is reclaimed when the widget remounts.
+      window.api.terminal.dispose(id).catch((err) => {
+        console.warn(`terminal ${id} dispose deferred`, err)
+      })
+    }
+    setWidgets((prev) => prev.filter((w) => w.id !== id))
     // A link to or from a closed widget describes a connection that no longer
     // exists — leaving it drawn would point at empty canvas.
     setConnections((prev) => prev.filter((c) => c.from !== id && c.to !== id))
@@ -422,22 +425,9 @@ export function useCanvas() {
     [nextZ, updateWidget]
   )
 
-  /**
-   * Points a widget's wire manually at a target — a Check widget locking onto
-   * a terminal by dragging a connector rather than the auto "who spawned
-   * whom" arcs above. A widget wears only one manual link at a time, so
-   * rebinding replaces the old arc instead of stacking a new one on top.
-   */
-  const setBinding = useCallback((fromId: string, toId: string | null): void => {
-    setConnections((prev) => {
-      const kept = prev.filter((c) => c.from !== fromId)
-      return toId ? [...kept, { id: makeConnectionId(), from: fromId, to: toId, bornAt: Date.now() }] : kept
-    })
-  }, [])
-
-  /** Starts a new pencil stroke at a world point and returns its id to extend. */
-  // Pencil moves fire many times per frame. Batching into rAF keeps React from
-  // committing a full stroke-array rewrite on every pointer sample (PERF-draw).
+  /** Starts a new pencil stroke at a world point and returns its id to extend.
+   *  Pencil moves fire many times per frame. Batching into rAF keeps React from
+   *  committing a full stroke-array rewrite on every pointer sample (PERF-draw). */
   const strokeBatchRef = useRef<Map<string, Point[]>>(new Map())
   const strokeRafRef = useRef<number | null>(null)
   // Same treatment for the eraser (PERF-erase): one rebuild per frame, latest position wins.
@@ -486,8 +476,18 @@ export function useCanvas() {
     setStrokes([])
   }, [])
 
+  /** Drops a stroke outright — used when a pointer-down/up on the draw tool
+   *  never moved enough to count as an intentional line, so it doesn't leave
+   *  a stray dot behind (CANV-dot). */
+  const discardStroke = useCallback((id: string): void => {
+    strokeBatchRef.current.delete(id)
+    strokesDirtyRef.current = true
+    setStrokes((prev) => prev.filter((s) => s.id !== id))
+  }, [])
+
   /**
-   * Removes only the points within `radius` of a world point, splitting a
+   * Removes points within `radius` of a world point — directly, or via a
+   * segment drawn through them (see the hit-test below) — splitting a
    * stroke into whatever pieces remain on either side of the gap — dragging
    * the eraser over the middle of a line erases that middle, not the whole
    * line the way a single "clear" click used to.
@@ -513,17 +513,48 @@ export function useCanvas() {
       if (!pending) return
       setStrokes((prev) => {
         const next: Stroke[] = []
+        const near = (p: Point): boolean =>
+          Math.hypot(p.x - pending.point.x, p.y - pending.point.y) <= pending.worldRadius
+        // Ink is drawn BETWEEN samples (lineTo), so hit-testing stored points
+        // alone let the eraser sit dead-center of a long segment of a fast
+        // stroke and erase nothing. A point now also dies when an adjacent
+        // segment sweeps through the eraser footprint; dropping BOTH of its
+        // endpoints keeps the surviving pieces clear of the gap (UI-audit).
+        const crossesFootprint = (a: Point, b: Point): boolean => {
+          const dx = b.x - a.x
+          const dy = b.y - a.y
+          const lenSq = dx * dx + dy * dy
+          const t =
+            lenSq === 0
+              ? 0
+              : Math.max(0, Math.min(1, ((pending.point.x - a.x) * dx + (pending.point.y - a.y) * dy) / lenSq))
+          return Math.hypot(pending.point.x - (a.x + t * dx), pending.point.y - (a.y + t * dy)) <= pending.worldRadius
+        }
         for (const s of prev) {
-          let current: Point[] = []
-          for (const p of s.points) {
-            if (Math.hypot(p.x - pending.point.x, p.y - pending.point.y) <= pending.worldRadius) {
-              if (current.length > 0) next.push({ id: makeStrokeId(), points: current, color: s.color })
-              current = []
-            } else {
-              current.push(p)
+          const pts = s.points
+          const dead = new Array<boolean>(pts.length).fill(false)
+          for (let i = 0; i < pts.length; i++) {
+            if (near(pts[i])) {
+              dead[i] = true
+            } else if (i > 0 && !dead[i - 1] && crossesFootprint(pts[i - 1], pts[i])) {
+              dead[i] = true
+              dead[i - 1] = true
             }
           }
-          if (current.length > 0) next.push({ id: makeStrokeId(), points: current, color: s.color })
+          let current: Point[] = []
+          for (let i = 0; i < pts.length; i++) {
+            if (dead[i]) {
+              // A single leftover point renders nothing (StrokesLayer skips
+              // strokes under 2 points) but would still sit in state forever
+              // as a dead stroke — drop it instead of keeping that tail
+              // (CANV-dot).
+              if (current.length > 1) next.push({ id: makeStrokeId(), points: current, color: s.color })
+              current = []
+            } else {
+              current.push(pts[i])
+            }
+          }
+          if (current.length > 1) next.push({ id: makeStrokeId(), points: current, color: s.color })
         }
         return next
       })
@@ -582,10 +613,10 @@ export function useCanvas() {
     beginStroke,
     extendStroke,
     clearStrokes,
+    discardStroke,
     eraseAt,
     strokeColor,
     setStrokeColor,
-    connections,
-    setBinding
+    connections
   }
 }

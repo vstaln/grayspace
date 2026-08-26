@@ -4,9 +4,18 @@ dist/
 *.log
 .DS_Store
 
-# Build output of the bundled MCP server
-mcp-server/dist/
-mcp-server/node_modules/
+# Source bundles produced for handing the project to another machine — a build
+# output, not an input, and re-creatable at any time.
+OrcSpace-mac-source.zip
+
+# Rust / napi-rs build caches (native/*/target)
+native/*/target/
+
+# napi-rs renames the previous .node out of the way while relinking and leaves
+# the placeholder behind when the build is interrupted. They accumulate one per
+# aborted build and are never inputs to anything.
+native/*/..*.retired.tmp.*
+native/*/*.retired.tmp.*
 
 # Editor / OS noise
 .vscode/
@@ -18,6 +27,12 @@ desktop.ini
 *.corrupt-*
 .workspace/
 
+# The dev profile the app runs against (`dev.bat`). It holds the embedded
+# browser's real cookies and cache — including Google's location cookie — so
+# committing it would publish the developer's own browsing state.
+.dev-user-data/
+.staging/
+
 # Secrets for local dev — never committed. See main/index.ts's dotenv load.
 .env
 .env.local
@@ -25,9 +40,19 @@ desktop.ini
 # Agent client configs the app writes into the workspace on startup
 # (mcpAutoConfig.ts). They embed this installation's control token, which is
 # what opens shells and drives the command bus — same trust level as .env.
-# Both files are regenerated automatically, so ignoring them loses nothing.
+# Every one of them is regenerated automatically, so ignoring them loses
+# nothing. The list has to cover all of them: .mcp.json and opencode.json were
+# ignored while the Cursor/Grok/Gemini/agents copies stayed tracked, which put
+# a live token in the repository.
 .mcp.json
 opencode.json
+.agents/
+.cursor/
+.gemini/
+.grok/
+.kimi/
+.windsurf/
+.antigravity/
 
 # Playwright E2E output
 test-results/

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Activity,
+  ChevronDown,
   Cpu,
   HardDrive,
   Lock,
@@ -43,11 +44,14 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
   const [notice, setNotice] = useState<string | null>(null)
   const [refreshInterval, setRefreshInterval] = useState<number>(2000)
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const intervalMenuRef = useRef<HTMLDivElement>(null)
+  const [intervalMenuOpen, setIntervalMenuOpen] = useState(false)
   // Visibility gate for the polling loop below: a minimized widget's body is
   // display:none, which nulls offsetParent down the whole subtree. Polling
   // system stats nothing can see used to cost an IPC round-trip every 1–2s
   // per minimized monitor on the canvas (PERF-sysmon-gate).
   const rootRef = useRef<HTMLDivElement>(null)
+  const statsSeqRef = useRef(0)
   const confirm = useConfirm()
 
   const showNotice = useCallback((msg: string): void => {
@@ -60,8 +64,10 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
   }, [])
 
   const fetchStats = useCallback(async (): Promise<void> => {
+    const seq = ++statsSeqRef.current
     try {
       const res = await window.api.system.stats()
+      if (seq !== statsSeqRef.current) return
       if ('error' in res && res.error) {
         showNotice(res.error)
       } else {
@@ -73,6 +79,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
         })
       }
     } catch (err) {
+      if (seq !== statsSeqRef.current) return
       showNotice(err instanceof Error ? err.message : String(err))
     }
   }, [showNotice])
@@ -98,6 +105,15 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
       }
     }
   }, [paused, refreshInterval, fetchStats])
+
+  useEffect(() => {
+    if (!intervalMenuOpen) return
+    const onPointerDown = (event: PointerEvent): void => {
+      if (!intervalMenuRef.current?.contains(event.target as Node)) setIntervalMenuOpen(false)
+    }
+    window.addEventListener('pointerdown', onPointerDown)
+    return () => window.removeEventListener('pointerdown', onPointerDown)
+  }, [intervalMenuOpen])
 
   const handleReleaseLocks = async (): Promise<void> => {
     const ok = await confirm('Release all file locks?', {
@@ -148,21 +164,50 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
         </div>
 
         <div className="flex items-center gap-1">
-          <select
-            className="rounded-[6px] border border-line-soft bg-bg-hover/40 px-1.5 py-0.5 text-[10px] text-text-dim outline-none"
-            value={refreshInterval}
-            onChange={(e) => setRefreshInterval(Number(e.target.value))}
-            title="Refresh interval"
-            aria-label="Refresh interval"
-          >
-            <option value={1000}>1s</option>
-            <option value={2000}>2s</option>
-            <option value={5000}>5s</option>
-          </select>
+          <div className="relative" ref={intervalMenuRef}>
+            <button
+              className="flex h-7 items-center gap-1 rounded-[8px] border border-line-soft bg-bg-hover/35 px-2 text-[10px] text-text-dim outline-none transition-colors hover:border-line hover:bg-bg-hover hover:text-text focus-visible:ring-1 focus-visible:ring-accent/60"
+              onClick={() => setIntervalMenuOpen((open) => !open)}
+              title="Refresh interval"
+              aria-label="Refresh interval"
+              aria-haspopup="menu"
+              aria-expanded={intervalMenuOpen}
+            >
+              <span>{refreshInterval / 1000}s</span>
+              <ChevronDown size={11} className={intervalMenuOpen ? 'rotate-180 transition-transform' : 'transition-transform'} />
+            </button>
+            {intervalMenuOpen && (
+              <div
+                role="menu"
+                aria-label="Refresh interval"
+                className="absolute top-[calc(100%+4px)] right-0 z-20 min-w-[64px] overflow-hidden rounded-[8px] border border-line-soft bg-bg-panel py-1 shadow-lg"
+              >
+                {[1000, 2000, 5000].map((value) => (
+                  <button
+                    key={value}
+                    role="menuitemradio"
+                    aria-checked={refreshInterval === value}
+                    className={`flex w-full items-center justify-between px-2.5 py-1.5 text-left text-[10px] outline-none transition-colors hover:bg-bg-hover ${
+                      refreshInterval === value ? 'text-accent' : 'text-text-dim'
+                    }`}
+                    onClick={() => {
+                      setRefreshInterval(value)
+                      setIntervalMenuOpen(false)
+                    }}
+                  >
+                    {value / 1000}s
+                    {refreshInterval === value && <span className="ml-2 h-1.5 w-1.5 rounded-full bg-accent" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
           <button
-            className={`grid h-6 w-6 place-items-center rounded-[6px] transition-colors ${
-              paused ? 'text-accent hover:bg-bg-hover' : 'text-text-dim hover:bg-bg-hover hover:text-text'
+            className={`grid h-7 w-7 place-items-center rounded-[8px] border border-line-soft transition-colors ${
+              paused
+                ? 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/15'
+                : 'bg-bg-hover/35 text-text-dim hover:border-line hover:bg-bg-hover hover:text-text'
             }`}
             onClick={() => setPaused((p) => !p)}
             title={paused ? 'Resume monitoring' : 'Pause monitoring'}
@@ -172,7 +217,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
           </button>
 
           <button
-            className="grid h-6 w-6 place-items-center rounded-[6px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+            className="grid h-7 w-7 place-items-center rounded-[8px] border border-line-soft bg-bg-hover/35 text-text-dim transition-colors hover:border-line hover:bg-bg-hover hover:text-text"
             onClick={() => void fetchStats()}
             title="Refresh now"
             aria-label="Refresh stats"

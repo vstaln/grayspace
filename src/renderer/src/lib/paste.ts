@@ -13,16 +13,28 @@ const IMAGE_LINK = /!\[[^\]]*\]\(([^)]+)\)/g
  * `clipboardData` carrying nothing but an HTML fragment. Returns null when the
  * paste held no picture at all, so callers can fall through to plain text.
  */
-export async function saveImageFromPaste(event: ClipboardEvent): Promise<MediaFile | null> {
+export async function saveImageFromPaste(
+  event: ClipboardEvent,
+  /**
+   * `scratch` writes to the OS temp dir instead of the app's durable media
+   * store. Terminals pass it: the picture there is only ever a path handed to
+   * a command, so keeping it forever in userData just grows the app's storage
+   * with files nothing will ever read again.
+   */
+  options?: { scratch?: boolean }
+): Promise<MediaFile | null> {
+  const scratch = options?.scratch === true
   const file = Array.from(event.clipboardData?.files ?? []).find((f) => f.type.startsWith('image/'))
   if (file) {
     const bytes = new Uint8Array(await file.arrayBuffer())
     const ext = file.name.includes('.') ? file.name.split('.').pop()! : file.type.split('/')[1]
-    const saved = await window.api.media.saveBytes(bytes, ext)
+    const saved = scratch
+      ? await window.api.media.saveBytesScratch(bytes, ext)
+      : await window.api.media.saveBytes(bytes, ext)
     if (saved && 'path' in saved) return saved
     return null
   }
-  return window.api.media.saveClipboard()
+  return scratch ? window.api.media.saveClipboardScratch() : window.api.media.saveClipboard()
 }
 
 /** True when the paste carries a picture, so the caller should not treat it as text. */

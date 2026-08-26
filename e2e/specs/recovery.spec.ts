@@ -83,6 +83,14 @@ test.describe('recovery', () => {
     try {
       await waitForCanvas(ctx.page)
 
+      // task.update requires the manager role or the assignee; claim it up
+      // front so the writes below are legal (creates only need it when a
+      // manager already exists, updates always do).
+      const claim = await controlSend(ctx, 'POST', '/coordination/manager', {
+        agentId: 'race-agent'
+      })
+      expect(claim.status).toBe(200)
+
       // Ten writers hit the loopback API at once. Every command funnels
       // through the bus's single lane, so none may be dropped, duplicated,
       // or answered twice.

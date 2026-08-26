@@ -11,6 +11,20 @@
  */
 export const BROWSER_PARTITION = 'persist:orcspace-browser'
 
+/**
+ * Plain google.com — no `/ncr`.
+ *
+ * `/ncr` means "no country redirect": it pins every user to the generic
+ * google.com experience instead of letting Google send them to their own
+ * country's service. That was added to stop the build machine's country
+ * appearing in the footer, but it solved that by making the browser wrong for
+ * everyone else — a user in any other country got US-style results, language
+ * and currency, and no way to correct it.
+ *
+ * Without it Google resolves the country from the visitor's own IP address on
+ * their own machine, which is what makes search results, units and prices come
+ * back in the local currency wherever the app is actually installed.
+ */
 export const HOME_URL = 'https://www.google.com'
 
 /** Only the slice of Electron's WebviewTag this app drives, so the renderer
@@ -25,6 +39,7 @@ export interface Webview extends HTMLElement {
   stop(): void
   canGoBack(): boolean
   canGoForward(): boolean
+  executeJavaScript(code: string, userGesture?: boolean): Promise<unknown>
 }
 
 /**

@@ -1,11 +1,12 @@
 import * as electron from 'electron'
 import { EventEmitter } from 'events'
 import * as fs from 'fs'
+import { promises as fsp } from 'fs'
 import { dirname, join } from 'path'
 import { createRequire } from 'module'
 import { fileURLToPath } from 'url'
 import type { LinkSyntax } from './appState.ts'
-import { backupPath, readStoreJson, writeTextAtomic } from './storage.ts'
+import { backupPath, readStoreJson, writeTextAtomic, writeTextAtomicAsync } from './storage.ts'
 import { getUserDataDir } from './userData.ts'
 import {
   CommandError,
@@ -238,6 +239,15 @@ export class BrainStore extends EventEmitter {
   private saveTimer: ReturnType<typeof setTimeout> | null = null
   private dirty = new Set<string>()
   private purged = new Map<string, string | undefined>()
+  /**
+   * Notes/purges handed to the async writer but not confirmed written yet.
+   * `dispose()` folds them back into `dirty`/`purged` so shutdown can finish
+   * them durably instead of racing Electron's teardown (PERF-brain-async).
+   */
+  private readonly inFlightNotes = new Set<string>()
+  private readonly inFlightPurged = new Map<string, string | undefined>()
+  /** Serializes async note-file writes so two flushes cannot interleave. */
+  private writeChain: Promise<void> = Promise.resolve()
   private filenames = new Map<string, string>()
   private snapshotSeq = 0
   private eventsSinceSnapshot = 0
@@ -788,12 +798,105 @@ export class BrainStore extends EventEmitter {
     if (this.saveTimer !== null) clearTimeout(this.saveTimer)
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null
-      this.flush()
+      this.flushAsync()
     }, 500)
     this.saveTimer.unref?.()
   }
 
-  /** Writes now, cancelling any pending debounce. */
+  /**
+   * The periodic write: same per-note atomic files as `flush`, but off the
+   * event loop's critical path. An fsync per dirty note on the Electron main
+   * thread stalled IPC and pty handling every time the debounce fired while
+   * the disk was busy (PERF-brain-async). Batches are taken out of the pending
+   * queues up front and tracked as in-flight so `dispose()` can still finish
+   * them durably at shutdown.
+   */
+  private flushAsync(): void {
+    if (this.purged.size === 0 && this.dirty.size === 0) return
+    const purgedBatch = Array.from(this.purged.entries())
+    this.purged.clear()
+    const dirtyBatch = Array.from(this.dirty)
+    this.dirty.clear()
+    for (const [id, filename] of purgedBatch) this.inFlightPurged.set(id, filename)
+    for (const id of dirtyBatch) this.inFlightNotes.add(id)
+    // One write at a time: two overlapping flushes could rename or delete the
+    // same note file in the wrong order.
+    this.writeChain = this.writeChain.then(async () => {
+      try {
+        for (const [id, filename] of purgedBatch) {
+          await this.deletePurgedNote(id, filename)
+          this.inFlightPurged.delete(id)
+          this.filenames.delete(id)
+        }
+        for (const id of dirtyBatch) {
+          // Live fields are read at write time, so a rename or edit that
+          // landed while this batch sat queued is picked up instead of
+          // writing a stale snapshot over newer content.
+          const note = this.notes.find((entry) => entry.id === id)
+          if (!note) {
+            this.inFlightNotes.delete(id)
+            continue
+          }
+          const filename = noteFilename(note)
+          const oldFilename = this.filenames.get(id)
+          await writeTextAtomicAsync(join(this.notesDir, filename), serializeNote(note))
+          if (oldFilename && oldFilename !== filename) await this.deleteFilenameAsync(oldFilename)
+          this.filenames.set(id, filename)
+          this.inFlightNotes.delete(id)
+        }
+      } catch (err) {
+        console.error('failed to persist second brain', err)
+        // Whatever did not finish goes back in the queues: a later edit or
+        // the shutdown flush retries it, losing nothing but time.
+        for (const id of dirtyBatch) {
+          if (!this.inFlightNotes.has(id)) continue
+          this.inFlightNotes.delete(id)
+          this.dirty.add(id)
+        }
+        for (const [id, filename] of purgedBatch) {
+          if (!this.inFlightPurged.has(id)) continue
+          this.inFlightPurged.delete(id)
+          this.purged.set(id, filename)
+        }
+      }
+    })
+  }
+
+  /** Async twin of the purged-note branch of `flush()` (incl. the scan). */
+  private async deletePurgedNote(id: string, filename: string | undefined): Promise<void> {
+    if (filename) {
+      await this.deleteFilenameAsync(filename)
+      return
+    }
+    if (!fs.existsSync(this.notesDir)) return
+    // Fallback when we never learned the filename. A blind suffix match once
+    // deleted an unrelated note sharing the same 8-char tail — only remove
+    // files whose frontmatter id really is the purged one.
+    const claimedByLiveNotes = new Set<string>()
+    for (const note of this.notes) {
+      const fn = this.filenames.get(note.id)
+      if (fn) claimedByLiveNotes.add(fn)
+    }
+    let candidates: string[]
+    try {
+      candidates = (await fsp.readdir(this.notesDir)).filter((file) => file.endsWith(`-${id.slice(-8)}.md`))
+    } catch {
+      return
+    }
+    for (const candidate of candidates) {
+      if (claimedByLiveNotes.has(candidate)) continue
+      try {
+        const parsed = parseNote(await fsp.readFile(join(this.notesDir, candidate), 'utf8'))
+        if (parsed.id !== id) continue
+      } catch {
+        continue
+      }
+      await this.deleteFilenameAsync(candidate)
+    }
+  }
+
+  /** Writes now, cancelling any pending debounce. Shutdown path only — it
+   *  blocks until every byte is on disk, which is exactly what quitting wants. */
   private flush(): void {
     if (this.saveTimer !== null) {
       clearTimeout(this.saveTimer)
@@ -842,6 +945,18 @@ export class BrainStore extends EventEmitter {
     }
   }
 
+  private async deleteFilenameAsync(filename: string): Promise<void> {
+    const path = join(this.notesDir, filename)
+    try { await fsp.unlink(path) } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    }
+    // writeTextAtomic leaves a `.bak` sibling behind on overwrite (DI-006) —
+    // drop it together with the note itself.
+    try { await fsp.unlink(backupPath(path)) } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    }
+  }
+
   private deleteFilename(filename: string): void {
     const path = join(this.notesDir, filename)
     try { fs.unlinkSync(path) } catch (err) {
@@ -854,8 +969,20 @@ export class BrainStore extends EventEmitter {
     }
   }
 
-  /** Flushes any pending write; call from the app's shutdown path. */
+  /** Flushes any pending write durably; call from the app's shutdown path. */
   dispose(): void {
+    if (this.saveTimer !== null) {
+      clearTimeout(this.saveTimer)
+      this.saveTimer = null
+    }
+    // Work already handed to the async writer was not confirmed on disk;
+    // folding it back lets the synchronous flush below finish it for real.
+    for (const id of this.inFlightNotes) this.dirty.add(id)
+    this.inFlightNotes.clear()
+    for (const [id, filename] of this.inFlightPurged) {
+      if (!this.purged.has(id)) this.purged.set(id, filename)
+    }
+    this.inFlightPurged.clear()
     this.flush()
     this.removeAllListeners()
   }

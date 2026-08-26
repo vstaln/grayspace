@@ -39,10 +39,7 @@ function freePort(): Promise<number> {
  *
  * - `--user-data-dir` points at a throwaway profile: no real notes/board/state
  *   can leak in, and main's MCP auto-config sync is disabled for it.
- * - Free control + MCP ports per instance keep parallel runs from colliding
- *   with each other or with a developer's already-running app on 47932/47940.
- * - The MCP server child inherits the control token from the profile, so after
- *   the token file appears a test can speak MCP directly if it needs to.
+ * - One free backend port per instance keeps parallel runs isolated.
  */
 export async function launchOrcSpace(options?: { profileDir?: string }): Promise<OrcSpaceFixture> {
   const mainJs = path.join(appRoot, 'out', 'main', 'index.js')
@@ -54,14 +51,13 @@ export async function launchOrcSpace(options?: { profileDir?: string }): Promise
   // written by a previous instance is what this one boots from.
   const profileDir = options?.profileDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'orcspace-e2e-'))
   const controlPort = await freePort()
-  const mcpPort = await freePort()
+  const mcpPort = controlPort
 
   const app = await electron.launch({
     args: [mainJs, `--user-data-dir=${profileDir}`, '--disable-gpu'],
     env: {
       ...process.env,
       WORKSPACE_CONTROL_PORT: String(controlPort),
-      WORKSPACE_MCP_PORT: String(mcpPort)
     },
     timeout: 120_000
   })

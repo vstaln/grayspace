@@ -11,7 +11,6 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const executable = path.join(root, 'dist', 'win-unpacked', 'OrcSpace.exe')
 const requestedControlPort = process.env.WORKSPACE_CONTROL_PORT
-const requestedMcpPort = process.env.WORKSPACE_MCP_PORT
 const timeoutMs = Number(process.env.ORCSPACE_SMOKE_TIMEOUT_MS || 60_000)
 let userDataDir
 let child
@@ -41,7 +40,7 @@ function parsePort(value) {
 }
 
 const controlPort = parsePort(requestedControlPort) ?? await freePort()
-const mcpPort = parsePort(requestedMcpPort) ?? await freePort()
+const mcpPort = controlPort
 const controlUrl = `http://127.0.0.1:${controlPort}/health`
 const mcpUrl = `http://127.0.0.1:${mcpPort}/mcp`
 
@@ -59,7 +58,6 @@ child = spawn(executable, [`--user-data-dir=${userDataDir}`, '--disable-gpu'], {
   env: {
     ...process.env,
     WORKSPACE_CONTROL_PORT: String(controlPort),
-    WORKSPACE_MCP_PORT: String(mcpPort)
   }
 })
 

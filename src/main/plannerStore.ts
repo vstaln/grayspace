@@ -1,6 +1,6 @@
 ﻿import { EventEmitter } from 'events'
 import { join } from 'path'
-import { readStoreJson, writeJsonAtomic } from './storage.ts'
+import { readStoreJson, writeJsonAtomic, writeJsonAtomicAsync } from './storage.ts'
 import { getUserDataDir } from './userData.ts'
 import {
   CommandError,
@@ -65,6 +65,10 @@ export class PlannerStore extends EventEmitter {
   private persistTimer: ReturnType<typeof setTimeout> | null = null
   private snapshotSeq = 0
   private eventsSinceSnapshot = 0
+  /** Async-write plumbing — same crash-safe ordering as CoordinationStore. */
+  private writeChain: Promise<void> = Promise.resolve()
+  private writeSeq = 0
+  private syncFlushedSeq = 0
   readonly versions = new VersionRegistry('plan')
 
   private get file(): string {
@@ -156,7 +160,7 @@ export class PlannerStore extends EventEmitter {
     }
     this.eventsSinceSnapshot += 1
     if (this.eventsSinceSnapshot >= PLANNER_SNAPSHOT_INTERVAL) {
-      this.flush()
+      this.flushAsync()
     }
   }
 
@@ -255,11 +259,20 @@ export class PlannerStore extends EventEmitter {
     if (this.persistTimer !== null) clearTimeout(this.persistTimer)
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null
-      this.flush()
+      this.flushAsync()
     }, 250)
     this.persistTimer.unref?.()
   }
 
+  private payloadForPersist(): Record<string, unknown> {
+    return {
+      snapshotSeq: this.snapshotSeq,
+      schemaVersion: PLANNER_SCHEMA_VERSION,
+      items: Array.from(this.items.values())
+    }
+  }
+
+  /** Durable, blocking write. Shutdown only (`dispose`). */
   private flush(): void {
     if (this.persistTimer !== null) {
       clearTimeout(this.persistTimer)
@@ -267,15 +280,47 @@ export class PlannerStore extends EventEmitter {
     }
     if (!this.loaded) return
     try {
-      writeJsonAtomic(this.file, {
-        snapshotSeq: this.snapshotSeq,
-        schemaVersion: PLANNER_SCHEMA_VERSION,
-        items: Array.from(this.items.values())
-      })
+      writeJsonAtomic(this.file, this.payloadForPersist())
+      this.syncFlushedSeq = this.writeSeq
       this.eventsSinceSnapshot = 0
     } catch (err) {
       console.error('failed to persist planner', err)
     }
+  }
+
+  /**
+   * The periodic write, off the main thread (PERF-planner-async): the fsync in
+   * the synchronous twin stalls IPC and pty handling while a plan edit is
+   * still mid-flight in the UI. Chained + seq-guarded so an older async copy
+   * can never rename over the newer durable shutdown write.
+   */
+  private flushAsync(): void {
+    if (!this.loaded) return
+    this.writeSeq += 1
+    const seq = this.writeSeq
+    const snapshot = this.payloadForPersist()
+    this.writeChain = this.writeChain
+      .catch(() => {
+        /* a failed write must not strand the chain */
+      })
+      .then(async () => {
+        if (seq <= this.syncFlushedSeq) return
+        try {
+          await writeJsonAtomicAsync(this.file, snapshot)
+        } catch (err) {
+          console.error('failed to persist planner', err)
+          return
+        }
+        if (seq <= this.syncFlushedSeq) {
+          try {
+            writeJsonAtomic(this.file, this.payloadForPersist())
+            this.syncFlushedSeq = this.writeSeq
+          } catch (err) {
+            console.error('failed to persist planner', err)
+          }
+        }
+      })
+    this.eventsSinceSnapshot = 0
   }
 
   dispose(): void {

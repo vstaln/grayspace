@@ -82,12 +82,14 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
             <div className="mt-4 flex justify-end gap-2">
               <button
                 autoFocus
+                data-testid="confirm-cancel"
                 className="rounded-[10px] border border-line-soft px-3 py-1.5 text-[12px] text-text-dim transition-colors duration-150 hover:border-line hover:text-text"
                 onClick={() => settle(false)}
               >
                 {pending.cancelLabel || 'Cancel'}
               </button>
               <button
+                data-testid="confirm-accept"
                 className={
                   pending.danger
                     ? 'rounded-[10px] border border-danger/30 bg-danger/12 px-3 py-1.5 text-[12px] text-danger transition-colors duration-150 hover:bg-danger/20'

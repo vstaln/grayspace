@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const mcpRoot = path.resolve(appRoot, '..', 'Orcspace-mcp')
+const mcpRoot = path.join(appRoot, 'Orcspace-mcp')
 const stagingParent = path.join(appRoot, '.staging')
 const stagingRoot = path.join(stagingParent, 'mcp')
 const tempRoot = path.join(stagingParent, `.mcp-stage-${process.pid}-${Date.now()}`)

@@ -67,13 +67,13 @@ describe('netGuard - Loopback URL detection', () => {
 
 describe('netGuard - isLoopbackRequest', () => {
   test('accepts loopback host with no origin', () => {
-    assert.ok(isLoopbackRequest({ headers: { host: '127.0.0.1:47933' } }))
+    assert.ok(isLoopbackRequest({ headers: { host: '127.0.0.1:20220' } }))
   })
 
   test('accepts loopback host with loopback origin', () => {
     assert.ok(
       isLoopbackRequest({
-        headers: { host: '127.0.0.1:47933', origin: 'http://127.0.0.1:5174' }
+      headers: { host: '127.0.0.1:20220', origin: 'http://127.0.0.1:5174' }
       })
     )
   })
@@ -81,13 +81,13 @@ describe('netGuard - isLoopbackRequest', () => {
   test('rejects a non-loopback origin even on loopback host', () => {
     assert.ok(
       !isLoopbackRequest({
-        headers: { host: '127.0.0.1:47933', origin: 'https://evil.example' }
+      headers: { host: '127.0.0.1:20220', origin: 'https://evil.example' }
       })
     )
   })
 
   test('rejects Origin null (file:// / sandboxed iframe)', () => {
-    assert.ok(!isLoopbackRequest({ headers: { host: '127.0.0.1:47933', origin: 'null' } }))
+    assert.ok(!isLoopbackRequest({ headers: { host: '127.0.0.1:20220', origin: 'null' } }))
   })
 })
 

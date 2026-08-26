@@ -6,6 +6,7 @@ import 'xterm/css/xterm.css'
 import { ThemeName, useTheme } from '../theme'
 import { pasteHasImage, saveImageFromPaste } from '../lib/paste'
 import { takeInitialCommand } from '../lib/pendingTerminalCommands'
+import { IS_MAC } from '../lib/platform'
 import { palette } from '../design'
 
 /** Windows conpty wants CRLF for "Enter" to actually submit the line. */
@@ -126,9 +127,47 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
 
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true
-      if (event.altKey && event.key.toLowerCase() === 'v') {
-        void window.api.media.saveClipboard().then(writeImagePath).catch(() => {
-          term.write('\r\n\x1b[31m[Failed to save image]\x1b[0m\r\n')
+
+      // macOS clipboard chords. Control stays with the shell there (Ctrl+C is
+      // SIGINT, Ctrl+A is begin-of-line), so copy/paste/select ride Command the
+      // way they do in Terminal.app and iTerm.
+      if (IS_MAC && event.metaKey && !event.ctrlKey && !event.altKey) {
+        const key = event.key.toLowerCase()
+        // Cmd+C copies the selection, and falls through to the shell as SIGINT
+        // when there is nothing selected — exactly what iTerm does.
+        if (key === 'c' && !event.shiftKey) {
+          const selection = term.getSelection()
+          if (selection) {
+            void navigator.clipboard.writeText(selection).catch(() => {})
+            term.clearSelection()
+            return false
+          }
+          writePty('\x03')
+          return false
+        }
+        // Cmd+V is handled by the container's paste listener (which also covers
+        // images); swallowing it here would stop that event from ever firing.
+        if (key === 'v') return true
+        if (key === 'a' && !event.shiftKey) {
+          term.selectAll()
+          return false
+        }
+        if (key === 'k' && !event.shiftKey) {
+          // Cmd+K clears the screen, the macOS terminal convention.
+          term.clear()
+          return false
+        }
+      }
+
+      // AltGr on European layouts reports as Ctrl+Alt: an AltGr+V keystroke is
+      // a shell character, not a clipboard-image request — let it through
+      // instead of hijacking it (UI-audit). On macOS Option+V is a real glyph
+      // (√), so the image chord is Cmd+V's paste path there instead.
+      if (!IS_MAC && event.altKey && !event.ctrlKey && event.key.toLowerCase() === 'v') {
+        void window.api.media.saveClipboardScratch().then(writeImagePath).catch((err) => {
+          term.write(
+            `\r\n\x1b[31m[${err instanceof Error ? err.message : 'Failed to save image'}]\x1b[0m\r\n`
+          )
         })
         return false
       }
@@ -156,19 +195,23 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
         term.scrollLines(1)
         return false
       }
-      if (event.ctrlKey && event.shiftKey && event.key === 'ArrowUp') {
+      // Fast scrollback jumps. Command on macOS, Control elsewhere — on a Mac
+      // Ctrl+Shift+Arrow is a system text-selection chord, and Control there
+      // belongs to the shell in any case.
+      const fastScroll = IS_MAC ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
+      if (fastScroll && event.shiftKey && event.key === 'ArrowUp') {
         term.scrollLines(-5)
         return false
       }
-      if (event.ctrlKey && event.shiftKey && event.key === 'ArrowDown') {
+      if (fastScroll && event.shiftKey && event.key === 'ArrowDown') {
         term.scrollLines(5)
         return false
       }
-      if (event.ctrlKey && event.shiftKey && event.key === 'Home') {
+      if (fastScroll && event.shiftKey && event.key === 'Home') {
         term.scrollToTop()
         return false
       }
-      if (event.ctrlKey && event.shiftKey && event.key === 'End') {
+      if (fastScroll && event.shiftKey && event.key === 'End') {
         term.scrollToBottom()
         return false
       }
@@ -251,7 +294,10 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
         delta *= 200
       }
 
-      if (event.altKey || event.ctrlKey) {
+      // Accelerate on the "scroll faster" modifier. macOS reports a trackpad
+      // pinch as ctrlKey+wheel, so Control must not count there — a pinch would
+      // otherwise fling the scrollback four lines at a time.
+      if (event.altKey || (event.ctrlKey && !IS_MAC)) {
         delta *= 4
       }
 
@@ -271,16 +317,48 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
     const onPaste = (event: ClipboardEvent): void => {
       event.preventDefault()
       event.stopPropagation()
-      // Ctrl+V on a picture writes its path too, so the image case no longer
-      // depends on remembering Alt+V.
+      // Ctrl+V / Cmd+V on a picture writes its path too, so the image case no
+      // longer depends on remembering Alt+V.
       if (pasteHasImage(event)) {
-        void saveImageFromPaste(event)
+        void saveImageFromPaste(event, { scratch: true })
           .then(writeImagePath)
-          .catch(() => term.write('\r\n\x1b[31m[Failed to save image]\x1b[0m\r\n'))
+          .catch((err) =>
+            term.write(
+              `\r\n\x1b[31m[${err instanceof Error ? err.message : 'Failed to save image'}]\x1b[0m\r\n`
+            )
+          )
         return
       }
       const text = event.clipboardData?.getData('text/plain')
-      if (text) writePty(text.replace(/\r?\n/g, '\r'))
+      if (!text) {
+        // Nothing in the event's own payload. That is the normal shape of a
+        // macOS screenshot (Cmd+Shift+4) and of an image copied out of some
+        // apps: the bitmap reaches Electron's native clipboard but never gets
+        // exposed as a clipboardData item, so pasteHasImage() above cannot see
+        // it and an image paste would silently do nothing. Ask the native
+        // clipboard directly before giving up — this is what makes pasting a
+        // screenshot into a Code session work the same on macOS as on Windows.
+        void window.api.media
+          .saveClipboardScratch()
+          .then((image) => {
+            // Genuinely empty clipboard: stay silent rather than nagging.
+            if (image) writeImagePath(image)
+          })
+          .catch(() => {
+            /* nothing usable on the clipboard — a paste of nothing is not an error */
+          })
+        return
+      }
+      // term.paste(), not a raw pty write. Writing the text straight through
+      // dropped bracketed paste: the shell (and every TUI agent — Claude Code,
+      // Gemini CLI) saw a plain run of CRs and treated each pasted line as a
+      // submitted command, so pasting a code block ran it line by line instead
+      // of dropping it in as one block. term.paste() wraps the text in
+      // \x1b[200~ / \x1b[201~ whenever the app has bracketed paste on, falls
+      // back to the plain text when it doesn't, and normalises newlines either
+      // way. It reaches the pty through the same onData handler as typing, so
+      // the write still happens exactly once (TERM-paste-bracketed).
+      term.paste(text)
     }
     container.addEventListener('paste', onPaste, true)
 
@@ -293,13 +371,19 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
     void window.api.terminal.create(id, term.cols, term.rows).then((result) => {
       // The IPC request may finish after this React instance unmounted. Detach
       // parks the pty (does not kill it) so a remount can reconnect.
+      // Drain any queued launcher command either way — this mount can no
+      // longer deliver it, and leaving it would leak the module-level map.
       if (!mounted) {
+        takeInitialCommand(id)
         window.api.terminal.detach(id)
         return
       }
       if (!result || !('ok' in result) || !result.ok) {
         const err = result && 'error' in result ? result.error : undefined
         term.write(`\r\n\x1b[31m[Failed to launch terminal${err ? `: ${err}` : ''}]\x1b[0m\r\n`)
+        // No shell to type into — drain so a dead spawn doesn't leave the
+        // queued command in the map forever.
+        takeInitialCommand(id)
         return
       }
       if (result.scrollback) {
@@ -329,6 +413,8 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
         }
       }
     }).catch(() => {
+      // Same leak concern as the !ok branch: drain whatever was queued.
+      takeInitialCommand(id)
       if (mounted) term.write('\r\n\x1b[31m[Failed to launch terminal]\x1b[0m\r\n')
     })
 
@@ -340,7 +426,13 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
         resizeRaf = null
         if (!mounted || container.clientWidth === 0 || container.clientHeight === 0) return
         try {
+          // xterm can move the viewport when the number of rows changes. Keep
+          // a live chat pinned to the bottom across pane resizes, while
+          // respecting an intentional scrollback position.
+          const activeBuffer = term.buffer.active
+          const wasAtBottom = activeBuffer.viewportY >= activeBuffer.baseY
           fit.fit()
+          if (wasAtBottom) term.scrollToBottom()
         } catch (err) {
           // Ignore a resize queued for a node that has just been unmounted.
           console.warn('terminal resize skipped', err)

@@ -48,6 +48,18 @@ const baseLayer: Sheet = {
     color: 'var(--tok-color-text)',
     background: 'var(--tok-color-bg)'
   },
+  // The blanket `user-select: none` above is what keeps a drag on the canvas
+  // from painting a text selection across the whole shell — but it inherits
+  // into real content too, and on macOS (where selecting and copying text is a
+  // constant reflex) that reads as the app being broken. Hand selection back to
+  // everything that actually holds text: fields, editable regions, and anything
+  // opting in with `data-selectable`.
+  'input, textarea, [contenteditable="true"], [contenteditable=""], [data-selectable]': {
+    WebkitUserSelect: 'text',
+    userSelect: 'text',
+    // Chromium suppresses the OS selection colour under an inherited `none`.
+    cursor: 'auto'
+  },
   // Native controls (date pickers, scrollbars, autofill) follow the dark
   // theme instead of flashing the OS light defaults (AUD-09).
   ':root': { colorScheme: 'dark' },
@@ -234,6 +246,7 @@ const componentsLayer: Sheet = {
     to: { transform: 'translateX(400%)' }
   },
 
+
   '.term-shell': {
     // The terminal's frame (.widget-shell.is-terminal) is fully opaque in every
     // theme, so this wrapper stays clear — no fill and no frosting of its own;
@@ -277,14 +290,6 @@ const componentsLayer: Sheet = {
   },
   '.conn-idle-dot': {
     filter: 'drop-shadow(0 0 3px rgba(200,215,255,0.75))'
-  },
-  // The wire mid-drag, before it has landed on a terminal — dashed so it
-  // reads as "not committed yet" next to the solid resting threads above.
-  '.conn-draft-thread': {
-    stroke: 'rgba(223, 231, 255, 0.8)',
-    strokeWidth: 1.6,
-    strokeDasharray: '5 4',
-    vectorEffect: 'non-scaling-stroke'
   },
   // Kanban lanes keep a faint colour identity per status — a low-alpha tint over
   // the flat fill rather than a gradient, so they stay legible without glowing.

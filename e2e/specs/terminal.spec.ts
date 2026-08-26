@@ -46,7 +46,9 @@ test('a terminal spawns from the rail, runs a command, and closes for real', asy
 
   // Closing the widget disposes the shell: the terminal leaves the canvas and
   // disappears from the app's live terminal list.
+  // Closing a terminal asks first — the running process is about to be killed.
   await frame.getByTestId('widget-close').click()
+  await page.getByTestId('confirm-accept').click()
   await expect(terminalFrame(page)).toHaveCount(0)
   await expect
     .poll(async () => (await listTerminals(ctx)).some((t) => t.id === id), { timeout: 10_000 })

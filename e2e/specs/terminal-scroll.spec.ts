@@ -33,9 +33,9 @@ test.afterAll(async () => {
 test('the wheel scrolls terminal scrollback, even while a TUI tracks the mouse', async () => {
   const { page } = ctx
 
-  // Double-clicking empty canvas spawns a terminal there (the rail button the
-  // older specs click no longer carries a test id).
-  await page.getByTestId('canvas').dblclick({ position: { x: 420, y: 320 } })
+  // The rail's new-terminal button (double-click-to-spawn was removed by
+  // design — an empty canvas no longer creates widgets on click).
+  await page.getByTestId('rail-new-terminal').click()
   const id = await waitForTerminalShell(ctx, page)
 
   const frame = terminalFrame(page)
@@ -66,5 +66,14 @@ test('the wheel scrolls terminal scrollback, even while a TUI tracks the mouse',
   await expect.poll(async () => viewport.evaluate((el) => el.scrollTop)).toBeLessThan(bottom)
 
   await page.mouse.wheel(0, 400)
-  await expect.poll(async () => viewport.evaluate((el) => el.scrollTop)).toBe(bottom)
+  // Back at the bottom — measured live, not against the `bottom` snapshot
+  // taken above. The shell is still emitting (the powershell prompt returns
+  // after that snapshot), so the buffer can grow in between and the real
+  // bottom moves with it; comparing to the stale number made this assertion
+  // fail perhaps one run in three.
+  await expect
+    .poll(async () =>
+      viewport.evaluate((el) => Math.abs(el.scrollTop - (el.scrollHeight - el.clientHeight)) <= 1)
+    )
+    .toBe(true)
 })

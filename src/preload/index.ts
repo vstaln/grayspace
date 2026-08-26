@@ -32,8 +32,6 @@ import type {
   SystemStats,
   Task,
   TaskState,
-  TelegramApi,
-  TelegramStatus,
   TerminalApi,
   WindowApi,
   WorkspaceApi
@@ -93,8 +91,12 @@ const terminal: TerminalApi = {
 const media: MediaApi = {
   saveClipboard: (): Promise<MediaFile | null> =>
     ipcRenderer.invoke('media:save-clipboard'),
+  saveClipboardScratch: (): Promise<MediaFile | null> =>
+    ipcRenderer.invoke('media:save-clipboard-scratch'),
   saveBytes: (bytes: Uint8Array, ext: string): Promise<MediaFile | { error: string } | null> =>
     ipcRenderer.invoke('media:save-bytes', bytes, ext),
+  saveBytesScratch: (bytes: Uint8Array, ext: string): Promise<MediaFile | { error: string } | null> =>
+    ipcRenderer.invoke('media:save-bytes-scratch', bytes, ext),
   dataUrl: (path: string): Promise<string | null> => ipcRenderer.invoke('media:data-url', path)
 }
 
@@ -134,14 +136,6 @@ const mcp: McpApi = {
   restart: (): Promise<McpStatus> => ipcRenderer.invoke('mcp:restart'),
   onStatusChange: (cb: (status: McpStatus) => void): (() => void) =>
     onBroadcast('mcp:onStatusChange', cb)
-}
-
-const telegram: TelegramApi = {
-  getStatus: (): Promise<TelegramStatus> => ipcRenderer.invoke('integrations:telegram:getStatus'),
-  save: (patch: unknown): Promise<TelegramStatus> => ipcRenderer.invoke('integrations:telegram:save', patch),
-  testSend: (): Promise<{ ok: true } | { error: string }> => ipcRenderer.invoke('integrations:telegram:testSend'),
-  onStatusChange: (cb: (status: TelegramStatus) => void): (() => void) =>
-    onBroadcast('integrations:telegram:onStatusChange', cb)
 }
 
 const coordination: CoordinationApi = {
@@ -264,7 +258,6 @@ contextBridge.exposeInMainWorld('api', {
   workspace,
   settings,
   mcp,
-  telegram,
   media,
   coordination,
   planner,

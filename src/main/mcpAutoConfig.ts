@@ -347,15 +347,39 @@ export function syncGlobalWindsurfConfig(): Promise<void> {
   return syncJsonMcpConfig(file, 'serverUrl', { serverUrl: mcpUrl() }, file)
 }
 
+/** Kimi Code uses the same HTTP MCP shape. Keep both project and global config
+ * in sync so a newly installed client sees OrcSpace immediately. */
+export async function syncKimiConfig(dir?: string): Promise<void> {
+  const files = [
+    ...(dir ? [join(dir, '.kimi', 'mcp.json')] : []),
+    join(homedir(), '.kimi', 'mcp.json'),
+    join(homedir(), '.config', 'kimi', 'mcp.json')
+  ]
+  for (const file of files) {
+    await syncJsonMcpConfig(file, 'url', { url: mcpUrl(), type: 'streamableHttp' }, file)
+  }
+}
+
 /**
  * Cline's VS Code extension stores this JSON below VS Code's globalStorage.
  * Only installed Cline extensions are touched; OrcSpace does not create a
  * phantom extension directory on machines that do not have Cline installed.
  */
 export async function syncClineConfig(): Promise<void> {
-  if (process.platform !== 'win32') return
-  const appData = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming')
-  const roots = [join(appData, 'Code', 'User', 'globalStorage'), join(appData, 'Code - Insiders', 'User', 'globalStorage')]
+  const roots = process.platform === 'win32'
+    ? [
+        join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'Code', 'User', 'globalStorage'),
+        join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'Code - Insiders', 'User', 'globalStorage')
+      ]
+    : process.platform === 'darwin'
+      ? [
+          join(homedir(), 'Library', 'Application Support', 'Code', 'User', 'globalStorage'),
+          join(homedir(), 'Library', 'Application Support', 'Code - Insiders', 'User', 'globalStorage')
+        ]
+      : [
+          join(homedir(), '.config', 'Code', 'User', 'globalStorage'),
+          join(homedir(), '.config', 'Code - Insiders', 'User', 'globalStorage')
+        ]
   const extensionIds = ['saoudrizwan.claude-dev']
   for (const root of roots) {
     for (const extensionId of extensionIds) {

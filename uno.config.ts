@@ -6,7 +6,7 @@
  * the theme below only forwards those custom properties into utility names,
  * exactly like `tailwind.css` used to.
  *
- * The renderer keeps authoring utilities in JSX (`bg-bg-panel`, `text-xs`, вЂ¦);
+ * The renderer keeps authoring utilities in JSX (`bg-bg-panel`, `text-xs`, …);
  * nothing about the class vocabulary changes, only the engine that compiles it.
  */
 export default defineConfig({

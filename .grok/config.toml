@@ -1,4 +1,0 @@
-[mcp_servers.orcspace]
-url = "http://localhost:47940/mcp"
-http_headers = { "x-orcspace-token" = "7d028f14ac86a83ce12e0648dcf3466cc2b14c60c5ec37b4a53183d7eb118aef" }
-enabled = true

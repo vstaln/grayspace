@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AppSettings, McpStatus } from '../../../preload/index.d'
+import type { AppSettings } from '../../../preload/index.d'
 
 const DEFAULTS: AppSettings = {
   linkSyntax: 'both',
@@ -16,17 +16,17 @@ const DEFAULTS: AppSettings = {
     gpuLayers: 99,
     idleTimeoutMs: 5 * 60_000,
     offloadVision: false
-  }
+  },
+  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'note', 'timer', 'planner', 'browser', 'links', 'music-player', 'id-generator']
 }
 
 const PLAN_STORAGE_KEY = 'orcspace-user-plan'
+const FAVORITES_ALL_MIGRATION_KEY = 'orcspace-favorites-all-enabled'
 
 /** Reads persisted app settings and writes patches straight through to disk. */
 export function useSettings(): {
   settings: AppSettings
   update: (patch: Partial<AppSettings>) => Promise<void>
-  mcpStatus: McpStatus | null
-  restartMcp: () => Promise<void>
   /** Set when the last update() failed to persist, so UI can say so. */
   error: string | null
 } {
@@ -37,7 +37,6 @@ export function useSettings(): {
     } catch {}
     return DEFAULTS
   })
-  const [mcpStatus, setMcpStatus] = useState<McpStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   // The initial get() is in flight while onChange broadcasts and update()
   // calls can already be landing. Without a guard the stale fetch would
@@ -48,35 +47,40 @@ export function useSettings(): {
   useEffect(() => {
     const seq = ++initSeqRef.current
     const mergePlan = (s: AppSettings): AppSettings => {
+      const withDefaults = { ...DEFAULTS, ...s, favoriteWidgets: (s.favoriteWidgets ?? DEFAULTS.favoriteWidgets ?? []).filter((kind) => kind !== 'translator') }
       try {
         const localPlan = localStorage.getItem(PLAN_STORAGE_KEY) as 'free' | 'plus' | null
-        if (localPlan) return { ...s, plan: localPlan }
+        if (localPlan) return { ...withDefaults, plan: localPlan }
       } catch {}
-      return s
+      return withDefaults
     }
 
     void window.api.settings
       .get()
       .then((s) => {
         if (seq === initSeqRef.current) setSettings(mergePlan(s))
+        try {
+          if (!localStorage.getItem(FAVORITES_ALL_MIGRATION_KEY)) {
+            localStorage.setItem(FAVORITES_ALL_MIGRATION_KEY, '1')
+            void window.api.settings.set({ favoriteWidgets: DEFAULTS.favoriteWidgets })
+            setSettings((prev) => ({ ...prev, favoriteWidgets: DEFAULTS.favoriteWidgets }))
+          }
+        } catch {}
       })
       .catch((err) => console.warn('settings:get failed', err))
-    void window.api.mcp.getStatus().then(setMcpStatus).catch((err) => console.warn('mcp:getStatus failed', err))
     const offSettings = window.api.settings.onChange((s) => {
       initSeqRef.current += 1
       setSettings(mergePlan(s as AppSettings))
     })
-    const offMcp = window.api.mcp.onStatusChange(setMcpStatus)
     return () => {
       initSeqRef.current += 1
       offSettings()
-      offMcp()
     }
   }, [])
 
   const update = useCallback(async (patch: Partial<AppSettings>): Promise<void> => {
     // A mount-time get() still in flight must not overwrite this update.
-    initSeqRef.current += 1
+    const seq = ++initSeqRef.current
     setError(null)
     if (patch.plan) {
       try {
@@ -86,7 +90,7 @@ export function useSettings(): {
     setSettings((prev) => ({ ...prev, ...patch }))
     try {
       const next = (await window.api.settings.set(patch)) as AppSettings
-      if (next && typeof next === 'object') {
+      if (seq === initSeqRef.current && next && typeof next === 'object') {
         const localPlan = (localStorage.getItem(PLAN_STORAGE_KEY) as 'free' | 'plus' | null) || patch.plan
         setSettings({ ...next, ...(localPlan ? { plan: localPlan } : {}) })
       }
@@ -97,13 +101,5 @@ export function useSettings(): {
     }
   }, [])
 
-  const restartMcp = useCallback(async (): Promise<void> => {
-    try {
-      setMcpStatus(await window.api.mcp.restart())
-    } catch (err) {
-      console.error('Failed to restart MCP server:', err)
-    }
-  }, [])
-
-  return { settings, update, mcpStatus, restartMcp, error }
+  return { settings, update, error }
 }

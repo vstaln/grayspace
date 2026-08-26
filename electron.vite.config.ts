@@ -13,7 +13,7 @@ export default defineConfig({
   renderer: {
     server: {
       host: 'localhost',
-      port: 2222,
+      port: 20222,
       strictPort: true
     },
     resolve: {

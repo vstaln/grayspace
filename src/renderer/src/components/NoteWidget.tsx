@@ -3,6 +3,7 @@ import { Tag } from 'lucide-react'
 import type { BrainNote } from '../../../preload/index.d'
 import NoteAttachments from './NoteAttachments'
 import { insertAt, pasteHasImage, saveImageFromPaste } from '../lib/paste'
+import { shortcut } from '../lib/platform'
 import { frost, lanes, palette } from '../design'
 
 /**
@@ -20,6 +21,8 @@ export default function NoteWidget({
   const [note, setNote] = useState<BrainNote | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [state, setState] = useState<'saved' | 'saving' | 'dirty' | 'error'>('saved')
+  /** Why the last image paste produced nothing; cleared on the next attempt. */
+  const [pasteError, setPasteError] = useState<string | null>(null)
   const latest = useRef<BrainNote | null>(null)
   latest.current = note
   const dirtyRef = useRef(false)
@@ -50,7 +53,17 @@ export default function NoteWidget({
   }
   useEffect(() => {
     return () => {
-      if (titleSyncTimer.current !== null) clearTimeout(titleSyncTimer.current)
+      if (titleSyncTimer.current !== null) {
+        // The debounce never fired (widget closed within 500ms of typing, blur
+        // had no chance to run): flush the frame title now, otherwise it keeps
+        // showing the pre-edit title forever.
+        clearTimeout(titleSyncTimer.current)
+        titleSyncTimer.current = null
+        const pending = latest.current
+        if (pending && onTitleRef.current) {
+          onTitleRef.current(pending.title.trim() || 'Untitled')
+        }
+      }
     }
   }, [])
 
@@ -90,15 +103,38 @@ export default function NoteWidget({
     setState('dirty')
   }
 
+  // Serializes writes: a second brain.update scheduled while the first is
+  // still on the wire snapshots the same (not yet bumped) baseVersion and is
+  // guaranteed to be rejected as a conflict — surfacing a phantom "save error"
+  // while the editor text is actually intact. While a write is in flight, the
+  // next one waits and retries with the merged version.
+  const saveInFlightRef = useRef(false)
+
+  // A save is "pending" from the first keystroke until its reply lands — this
+  // pair (not raw `state`) gates the save effect below.
+  const pendingSave = state === 'dirty' || state === 'saving'
+
   useEffect(() => {
-    if (state !== 'dirty' || !latest.current) return
-    const timer = setTimeout(async () => {
+    // Gate on `pendingSave`, not raw `state`: flipping to 'saving' inside
+    // attempt() used to tear this effect down mid-flight (`state` was a dep),
+    // so the reply path was unreachable and the status stuck on "Saving…"
+    // forever (UI-audit P0).
+    if (!pendingSave || !latest.current) return
+    let disposed = false
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    const attempt = async (): Promise<void> => {
+      if (disposed) return
       // Snapshot at fire time, not schedule time: a save that completes while
       // this timer is pending merges a bumped version into `latest.current`, and
       // a snapshot captured earlier would carry a baseVersion the disk already
       // superseded (update rejected → edits stuck unsaved until the next key).
       const snapshot = latest.current
       if (!snapshot) return
+      if (saveInFlightRef.current) {
+        retryTimer = setTimeout(() => void attempt(), 250)
+        return
+      }
+      saveInFlightRef.current = true
       setState('saving')
       try {
         const result = await window.api.brain.update(snapshot.id, {
@@ -108,26 +144,36 @@ export default function NoteWidget({
           baseVersion: snapshot.version
         })
         // Bus failures return `{ error }` rather than throwing.
-        if (!result || 'error' in result) {
+        if (result && !('error' in result)) {
+          // Merge the authoritative version even when a keystroke re-ran the
+          // effect (`disposed`): dropping the bump would leave the next write
+          // a stale baseVersion, rejected as a conflict forever.
+          setNote((current) =>
+            current && current.id === result.id
+              ? { ...current, version: result.version, updatedAt: result.updatedAt }
+              : current
+          )
+          if (!disposed) setState((current) => (current === 'saving' ? 'saved' : current))
+        } else if (!disposed) {
           setState('error')
-          return
         }
-        setNote((current) =>
-          current && current.id === result.id
-            ? { ...current, version: result.version, updatedAt: result.updatedAt }
-            : current
-        )
-        setState((current) => (current === 'saving' ? 'saved' : current))
       } catch {
         // Keep the text in the editor; the next keystroke retries (P2-218).
-        setState('error')
+        if (!disposed) setState('error')
+      } finally {
+        saveInFlightRef.current = false
       }
-    }, 450)
-    return () => clearTimeout(timer)
+    }
+    const timer = setTimeout(() => void attempt(), 450)
+    return () => {
+      disposed = true
+      clearTimeout(timer)
+      if (retryTimer !== null) clearTimeout(retryTimer)
+    }
     // `version` is deliberately not a dep: a successful save merges a bumped
     // version into the note, and re-running the effect then would clear the
     // timer scheduled for keystrokes typed while that save was in flight.
-  }, [state, note?.title, note?.content, note?.tags])
+  }, [pendingSave, note?.title, note?.content, note?.tags])
 
   // Whether the last keystroke is still unpersisted; read at unmount time so a
   // close before the debounce fires cannot drop the final edit (DI-003).
@@ -158,6 +204,7 @@ export default function NoteWidget({
   const onPaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>): Promise<void> => {
     if (!pasteHasImage(e.nativeEvent)) return
     e.preventDefault()
+    setPasteError(null)
     const area = e.currentTarget
     const { selectionStart, selectionEnd, value } = area
     try {
@@ -171,8 +218,11 @@ export default function NoteWidget({
       )
       patch({ content: next })
       requestAnimationFrame(() => area.setSelectionRange(caret, caret))
-    } catch {
-      return
+    } catch (err) {
+      // Swallowing this left the picture silently missing: the paste was
+      // preventDefault()-ed, so nothing at all appeared and the user had no way
+      // to tell a 30 MB screenshot from a broken editor (P2-paste-feedback).
+      setPasteError(err instanceof Error ? err.message : 'Could not paste that image')
     }
   }
 
@@ -246,12 +296,21 @@ export default function NoteWidget({
         />
       </div>
 
+      {pasteError && (
+        <div
+          role="alert"
+          className="flex-none rounded-[8px] border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-[11px] text-danger"
+        >
+          {pasteError}
+        </div>
+      )}
+
       <textarea
         className="min-h-0 flex-1 resize-none rounded-[10px] border border-transparent bg-transparent p-2 -mx-2 text-[13px] leading-relaxed text-text outline-none transition-colors duration-200 placeholder:text-text-faint focus:border-line-soft"
         value={note.content}
         onChange={(e) => patch({ content: e.target.value })}
         onPaste={(e) => void onPaste(e)}
-        placeholder="Write your note… Paste images directly with Ctrl+V."
+        placeholder={`Write your note… Paste images directly with ${shortcut('V')}.`}
         aria-label="Note content"
       />
 

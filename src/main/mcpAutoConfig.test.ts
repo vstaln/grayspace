@@ -18,7 +18,7 @@ describe('mcpAutoConfig - probeUrl', () => {
   })
 
   it('returns false for non-loopback URL', async () => {
-    const result = await probeUrl('http://192.168.1.1:47940/mcp')
+    const result = await probeUrl('http://192.168.1.1:20220/mcp')
     assert.strictEqual(result, false)
   })
 

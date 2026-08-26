@@ -13,6 +13,8 @@ import StrokesLayer from './components/StrokesLayer'
 import ConnectionsLayer from './components/ConnectionsLayer'
 import { ThemeProvider, useTheme } from './theme'
 import { ConfirmProvider, useConfirm } from './components/ConfirmDialog'
+import { useSettings } from './hooks/useSettings'
+import { DRAW_CLICK_THRESHOLD_PX } from './lib/canvasMetrics'
 
 // Heavy surfaces behind a first-use gate are also code-split: their modules
 // (board UI, the brain editor with its link machinery, the browser pane) no
@@ -121,6 +123,7 @@ function Wallpaper(): React.JSX.Element | null {
 }
 
 function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
+  const { settings } = useSettings()
   const canvas = useCanvas()
   const {
     widgets,
@@ -182,7 +185,6 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
   editingRef.current = editingId
   const [boardOpen, setBoardOpen] = useState(false)
   const [brainOpen, setBrainOpen] = useState(false)
-  const [brainFocusTitle, setBrainFocusTitle] = useState<string | null>(null)
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null)
   const [isPanning, setIsPanning] = useState(false)
   const [canvasNotice, setCanvasNotice] = useState<string | null>(null)
@@ -208,17 +210,6 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
     return () => window.clearTimeout(timer)
   }, [canvasNotice])
 
-  useEffect(() => {
-    const onOpenNote = (event: Event): void => {
-      const title = (event as CustomEvent<string>).detail
-      if (typeof title !== 'string' || !title.trim()) return
-      setBrainFocusTitle(title.trim())
-      setBrainOpen(true)
-    }
-    window.addEventListener('orcspace:open-note', onOpenNote)
-    return () => window.removeEventListener('orcspace:open-note', onOpenNote)
-  }, [])
-
   // The title bar's Memory tab lives outside this component, so it can only
   // ask for the panel by event — mirrors `orcspace:open-board` below.
   useEffect(() => {
@@ -226,7 +217,9 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
       setBrainOpen((v) => !v)
     }
     window.addEventListener('orcspace:toggle-brain', onToggleBrain)
-    return () => window.removeEventListener('orcspace:toggle-brain', onToggleBrain)
+    return () => {
+      window.removeEventListener('orcspace:toggle-brain', onToggleBrain)
+    }
   }, [])
 
   // ...and it needs to know when that panel closes some other way (Escape,
@@ -279,6 +272,12 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
       setCanvasNotice('Canvas is full — close a widget before adding another.')
     }
   }, [canvas.addWidget, toWorld])
+
+  useEffect(() => {
+    const onNewTerminal = (): void => spawnTerminalAtCenter()
+    window.addEventListener('orcspace:new-terminal', onNewTerminal)
+    return () => window.removeEventListener('orcspace:new-terminal', onNewTerminal)
+  }, [spawnTerminalAtCenter])
 
   const placeWidget = useCallback(
     (kind: WidgetKind, point: Point): void => {
@@ -523,8 +522,25 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
 
     if (tool === 'draw' && e.button === 0) {
       e.preventDefault()
-      const strokeId = canvas.beginStroke(toWorld(e.clientX, e.clientY))
-      trackDrag((ev) => canvas.extendStroke(strokeId, toWorld(ev.clientX, ev.clientY)))
+      const startX = e.clientX
+      const startY = e.clientY
+      let moved = false
+      let strokeId: string | null = null
+      trackDrag(
+        (ev) => {
+          if (!moved) {
+            if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < DRAW_CLICK_THRESHOLD_PX) return
+            moved = true
+            strokeId = canvas.beginStroke(toWorld(startX, startY))
+          }
+          if (strokeId) canvas.extendStroke(strokeId, toWorld(ev.clientX, ev.clientY))
+        },
+        () => {
+          // A plain click never moved past the threshold — drop the stroke so
+          // it doesn't leave a stray dot on the canvas (CANV-dot).
+          if (!moved && strokeId) canvas.discardStroke(strokeId)
+        }
+      )
       return
     }
 
@@ -611,31 +627,41 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
     })
   }, [setCamera])
 
-  const onWheel = (e: React.WheelEvent): void => {
-    // Scroll events bubble from widgets and inner panels. Don't touch the
-    // camera when the user was scrolling inside any widget, panel, or menu.
-    if (
-      (e.target as HTMLElement).closest(
-        '.widget, .widget-shell, .widget-body, [data-canvas-scroll-lock], .board-shell, .rail, [role="dialog"], [role="menu"], input, textarea, select, .xterm, .term-shell, .term'
-      )
-    ) {
-      return
-    }
-    e.preventDefault()
+  // A native listener, not a React onWheel prop: React delegates wheel as a
+  // PASSIVE root listener, so preventDefault() inside the prop is a no-op and
+  // Ctrl+wheel / trackpad pinch would page-zoom the whole Electron window on
+  // top of the camera zoom while spamming console warnings every tick.
+  useEffect(() => {
+    const el = mainRef.current
+    if (!el) return
+    const handleWheel = (e: WheelEvent): void => {
+      // Scroll events bubble from widgets and inner panels. Don't touch the
+      // camera when the user was scrolling inside any widget, panel, or menu.
+      if (
+        (e.target as HTMLElement).closest(
+          '.widget, .widget-shell, .widget-body, [data-canvas-scroll-lock], .board-shell, .rail, [role="dialog"], [role="alertdialog"], [role="menu"], input, textarea, select, .xterm, .term-shell, .term'
+        )
+      ) {
+        return
+      }
+      e.preventDefault()
 
-    const rect = mainRef.current?.getBoundingClientRect()
-    const sx = e.clientX - (rect?.left ?? 0)
-    const sy = e.clientY - (rect?.top ?? 0)
+      const rect = mainRef.current?.getBoundingClientRect()
+      const sx = e.clientX - (rect?.left ?? 0)
+      const sy = e.clientY - (rect?.top ?? 0)
 
-    if (e.ctrlKey || e.metaKey) {
-      wheelStepsRef.current.push({ kind: 'zoom', sx, sy, deltaY: e.deltaY })
-    } else {
-      wheelStepsRef.current.push({ kind: 'pan', dx: e.deltaX, dy: e.deltaY })
+      if (e.ctrlKey || e.metaKey) {
+        wheelStepsRef.current.push({ kind: 'zoom', sx, sy, deltaY: e.deltaY })
+      } else {
+        wheelStepsRef.current.push({ kind: 'pan', dx: e.deltaX, dy: e.deltaY })
+      }
+      if (wheelRafRef.current === null) {
+        wheelRafRef.current = requestAnimationFrame(flushWheel)
+      }
     }
-    if (wheelRafRef.current === null) {
-      wheelRafRef.current = requestAnimationFrame(flushWheel)
-    }
-  }
+    el.addEventListener('wheel', handleWheel, { passive: false })
+    return () => el.removeEventListener('wheel', handleWheel)
+  }, [flushWheel])
 
   const onContextMenu = (e: React.MouseEvent): void => {
     e.preventDefault()
@@ -646,7 +672,6 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
   const openTasks = coordination.snapshot.tasks.filter(
     (t) => t.state !== 'done' && t.state !== 'cancelled'
   ).length
-  const visibleWidgets = useMemo(() => widgets.filter((w) => !w.maximized), [widgets])
 
   // Viewport culling (PERF-cull): far off-screen widgets don't get a
   // WidgetFrame at all — the DOM tree they'd otherwise cost is never built.
@@ -778,7 +803,6 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
         className="canvas-area relative flex-1 overflow-hidden select-none outline-none focus:outline-none"
         tabIndex={0}
         onPointerDown={onCanvasPointerDown}
-        onWheel={onWheel}
         onContextMenu={onContextMenu}
         onKeyDown={onCanvasKey}
         style={{
@@ -799,16 +823,12 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
           className="absolute inset-0 h-px w-px origin-top-left"
           style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})` }}
         >
-          <ConnectionsLayer connections={connections} widgets={visibleWidgets} />
+          {/* Full `widgets`, not the culled/maximize-filtered list: an arc
+              anchored to a maximized widget must still draw to its stored
+              position instead of vanishing with its endpoint. */}
+          <ConnectionsLayer connections={connections} widgets={widgets} />
         </div>
         <StrokesLayer strokes={strokes} camera={camera} width={mainSize.w} height={mainSize.h} />
-        {widgets.length === 0 && !menu && (
-          <div className="pointer-events-none absolute inset-0 grid place-items-center">
-            <p className="rounded-[10px] border border-line-soft bg-bg-panel/60 px-4 py-2 text-center text-xs text-text-faint">
-              Right-click to add widgets · new terminal button is on the left rail
-            </p>
-          </div>
-        )}
         {/* World layer for widget frames — same transform as the connections
             layer above. Painting order stays connections → ink → widgets. */}
         <div className="absolute inset-0 h-px w-px origin-top-left" style={worldTransform}>
@@ -857,6 +877,10 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
             onPickTimer={() => { placeWidget('timer', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickPlanner={() => { placeWidget('planner', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickBrowser={() => { placeWidget('browser', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onPickLinks={() => { placeWidget('links', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onPickMusicPlayer={() => { placeWidget('music-player', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onPickIdGenerator={() => { placeWidget('id-generator', toWorld(menu.x, menu.y)); setMenu(null) }}
+            favoriteWidgets={settings.favoriteWidgets ?? []}
             onClose={() => setMenu(null)}
           />
         )}
@@ -885,11 +909,7 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
         <Suspense fallback={null}>
           <SecondBrain
             workspaceDir={workspaceDir}
-            initialTitle={brainFocusTitle}
-            onClose={() => {
-              setBrainFocusTitle(null)
-              setBrainOpen(false)
-            }}
+            onClose={() => setBrainOpen(false)}
           />
         </Suspense>
       )}

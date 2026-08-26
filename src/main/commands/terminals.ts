@@ -135,7 +135,7 @@ export function registerTerminalCommands({
         const result = terminals.spawn(id, p.cols, p.rows, p.cwd || saved?.cwd || defaultCwd())
         // A failed spawn must fail the command, not be journaled as a success
         // with `{ok:false}` as the result data (AUD-10).
-        if (!result.ok) throw new CommandError('failed', result.error ?? 'не удалось запустить терминал')
+        if (!result.ok) throw new CommandError('failed', result.error ?? 'failed to start the terminal')
         if (result.reconnected) {
           return { ok: true, live: true, scrollback: terminals.fullOutput(id) ?? '' }
         }

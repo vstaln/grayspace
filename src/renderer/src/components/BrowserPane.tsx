@@ -125,7 +125,7 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
       aria-hidden={!active}
     >
       {/* Tab strip */}
-      <div role="tablist" aria-label="Browser tabs" className="flex h-9 flex-none items-end gap-1 overflow-x-auto border-b border-line-soft bg-bg-panel px-1.5">
+      <div role="tablist" aria-label="Browser tabs" className="flex h-9 flex-none items-end gap-1 overflow-x-auto border-b border-white/10 bg-[#292b2f] px-2">
         {tabs.map((tab) => {
           const host = hostOf(tab.url)
           const label = tab.title && tab.title !== 'New tab' ? tab.title : host || 'New tab'
@@ -155,16 +155,16 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
                 }
               }}
               title={tab.url}
-              className={`group flex h-[30px] min-w-[112px] max-w-[210px] flex-none cursor-pointer select-none items-center gap-1.5 rounded-t-[8px] border border-b-0 px-2 text-[12px] transition-colors ${
+              className={`group flex h-[27px] min-w-[112px] max-w-[210px] flex-none cursor-pointer select-none items-center gap-1.5 rounded-full border border-transparent px-3 text-[12px] transition-colors ${
                 isActive
-                  ? 'border-line-soft bg-bg-raise text-text'
-                  : 'border-transparent text-text-dim hover:bg-bg-hover hover:text-text'
+                  ? 'bg-[#45484d] text-white'
+                  : 'text-[#b8babd] hover:bg-[#36393e] hover:text-white'
               }`}
             >
               <span
-                className={`grid h-[15px] w-[15px] flex-none place-items-center rounded-[4px] text-[9px] font-semibold uppercase ${
-                  tab.loading ? 'bg-accent/20 text-accent' : 'bg-bg-hover text-text-dim'
-                }`}
+                  className={`grid h-[15px] w-[15px] flex-none place-items-center rounded-full text-[9px] font-semibold uppercase ${
+                    tab.loading ? 'bg-white/20 text-white' : 'bg-black/15 text-[#d0d1d3]'
+                  }`}
               >
                 {host.charAt(0) || '·'}
               </span>
@@ -176,7 +176,7 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
                   e.stopPropagation()
                   closeTab(tab.id)
                 }}
-                className="grid h-[16px] w-[16px] flex-none place-items-center rounded-[4px] text-text-faint opacity-0 transition-opacity hover:bg-bg-hover hover:text-text group-hover:opacity-100 group-focus-within:opacity-100"
+                className="grid h-[16px] w-[16px] flex-none place-items-center rounded-full text-[#aeb0b3] opacity-0 transition-opacity hover:bg-white/10 hover:text-white group-hover:opacity-100 group-focus-within:opacity-100"
               >
                 <X size={11} strokeWidth={2.4} />
               </button>
@@ -188,21 +188,21 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
           aria-label="New tab"
           title="New tab"
           onClick={() => openTab(HOME_URL)}
-          className="mb-1 grid h-[22px] w-[22px] flex-none place-items-center rounded-[6px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+          className="mb-1 grid h-[22px] w-[22px] flex-none place-items-center rounded-full text-[#b8babd] transition-colors hover:bg-[#36393e] hover:text-white"
         >
           <Plus size={14} strokeWidth={2.2} />
         </button>
       </div>
 
       {/* Navigation bar */}
-      <div className="flex h-10 flex-none items-center gap-1 border-b border-line-soft bg-bg-panel px-2">
+      <div className="flex h-10 flex-none items-center gap-1 border-b border-white/10 bg-[#303236] px-3">
         <button
           type="button"
           aria-label="Back"
           title="Back"
           disabled={!activeTab?.canGoBack}
           onClick={() => withActiveView((v) => v.goBack())}
-          className="grid h-[26px] w-[26px] flex-none place-items-center rounded-[6px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text disabled:pointer-events-none disabled:text-text-faint/50"
+          className="grid h-[27px] w-[27px] flex-none place-items-center rounded-full text-[#c0c1c3] transition-colors hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:text-[#777a7e]"
         >
           <ArrowLeft size={15} strokeWidth={2.1} />
         </button>
@@ -212,7 +212,7 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
           title="Forward"
           disabled={!activeTab?.canGoForward}
           onClick={() => withActiveView((v) => v.goForward())}
-          className="grid h-[26px] w-[26px] flex-none place-items-center rounded-[6px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text disabled:pointer-events-none disabled:text-text-faint/50"
+          className="grid h-[27px] w-[27px] flex-none place-items-center rounded-full text-[#c0c1c3] transition-colors hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:text-[#777a7e]"
         >
           <ArrowRight size={15} strokeWidth={2.1} />
         </button>
@@ -221,7 +221,7 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
           aria-label={activeTab?.loading ? 'Stop' : 'Reload'}
           title={activeTab?.loading ? 'Stop' : 'Reload'}
           onClick={() => withActiveView((v) => (activeTab?.loading ? v.stop() : v.reload()))}
-          className="grid h-[26px] w-[26px] flex-none place-items-center rounded-[6px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+          className="grid h-[27px] w-[27px] flex-none place-items-center rounded-full text-[#c0c1c3] transition-colors hover:bg-white/10 hover:text-white"
         >
           {activeTab?.loading ? <X size={15} strokeWidth={2.1} /> : <RotateCw size={14} strokeWidth={2.1} />}
         </button>
@@ -254,7 +254,7 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
                 e.currentTarget.blur()
               }
             }}
-            className="h-[28px] w-full rounded-[8px] border border-line-soft bg-bg-raise px-3 text-[12.5px] text-text outline-none transition-colors placeholder:text-text-faint focus:border-line"
+            className="h-[28px] w-full rounded-full border border-white/10 bg-[#45484d] px-3 text-[12.5px] text-white outline-none transition-colors placeholder:text-[#b0b2b5] focus:border-white/25"
           />
         </form>
       </div>

@@ -94,13 +94,21 @@ export default function DatePicker({
       setOpen(false)
     }
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key !== 'Escape') return
+      // Consume the Escape here, in the CAPTURE phase: without this the same
+      // keydown also reaches App's canvas chain and closed whatever panel sits
+      // under the picker (e.g. Esc over a planner date closed the Task Board
+      // behind it too). Bubble-phase stopPropagation cannot do that — App's
+      // own window listener may run first depending on registration order.
+      e.stopPropagation()
+      e.stopImmediatePropagation()
+      setOpen(false)
     }
     window.addEventListener('mousedown', onDown)
-    window.addEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
     return () => {
       window.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('keydown', onKey, true)
     }
   }, [open])
 
@@ -150,6 +158,10 @@ export default function DatePicker({
             aria-label="Choose date"
             className="fixed z-[9800] w-[264px] rounded-[12px] border border-line-soft bg-bg-panel p-2.5 shadow-2xl glass:bg-bg-panel/90 glass:backdrop-blur-2xl"
             style={{ left: pos.left, top: pos.top }}
+            // Portal bubbles through the widget tree to <main>: without this a
+            // click in the panel also triggers canvas draw/erase/pan gestures.
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
           >
             <div className="mb-1.5 flex items-center justify-between">
               <button

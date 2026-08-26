@@ -26,7 +26,7 @@ export const CANVAS_SCHEMA_VERSION = 3
 /** Snapshot cache interval for event sourcing. */
 export const CANVAS_SNAPSHOT_INTERVAL = 50
 
-export type WidgetKind = 'terminal' | 'note' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser'
+export type WidgetKind = 'terminal' | 'note' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'id-generator'
 
 export interface CanvasWidget {
   id: string
@@ -113,7 +113,7 @@ const nativeCanvasCore = (() => {
   }
 })()
 
-const WIDGET_KINDS = new Set<string>(['terminal', 'note', 'timer', 'board', 'planner', 'files', 'sys-monitor', 'browser'])
+const WIDGET_KINDS = new Set<string>(['terminal', 'note', 'timer', 'board', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'id-generator'])
 
 export function sanitizeWidget(value: unknown): CanvasWidget | null {
   const w = value as Record<string, unknown>
@@ -177,7 +177,11 @@ export function sanitizeStrokesNative(value: unknown): CanvasStroke[] | null {
 }
 
 function sanitizeStrokes(value: unknown): CanvasStroke[] {
-  return sanitizeStrokesNative(value) ?? sanitizeStrokesJs(value)
+  // Fresh/legacy canvas snapshots may omit `strokes`. Normalize before calling
+  // the native bridge: napi-rs cannot encode `undefined` as JSON and would
+  // otherwise throw on every first launch before falling back to JS.
+  const normalized = value ?? []
+  return sanitizeStrokesNative(normalized) ?? sanitizeStrokesJs(normalized)
 }
 
 function strokesShapeMatch(current: CanvasStroke[], incoming: unknown): boolean {

@@ -9,8 +9,6 @@ import type { BrainNote, LinkSyntax } from '../../../preload/index.d'
 
 interface Props {
   workspaceDir: string | null
-  /** Open or create this note title when the panel mounts or the title changes. */
-  initialTitle?: string | null
   onClose(): void
 }
 
@@ -25,7 +23,6 @@ function syntaxHint(syntax: LinkSyntax): React.ReactNode {
 
 export default function SecondBrain({
   workspaceDir,
-  initialTitle = null,
   onClose
 }: Props): React.JSX.Element {
   const { settings } = useSettings()
@@ -116,7 +113,11 @@ export default function SecondBrain({
     [notes, note]
   )
 
+  const creatingRef = useRef(false)
+
   const create = async (title = 'New Note', content = ''): Promise<void> => {
+    if (creatingRef.current) return
+    creatingRef.current = true
     setError(null)
     try {
       const created = await window.api.brain.create({
@@ -133,6 +134,8 @@ export default function SecondBrain({
       selectNote(created.id)
     } catch {
       setError('Failed to create note')
+    } finally {
+      creatingRef.current = false
     }
   }
 
@@ -204,17 +207,37 @@ export default function SecondBrain({
   const latestDirty = useRef(false)
 
   // Coalesce keystrokes into one write so typing never blocks on disk I/O.
+  // Writes are serialized: a second update scheduled while the first is still
+  // on the wire snapshots the same (not yet bumped) baseVersion and is
+  // guaranteed to be rejected as a conflict — a phantom "save error" while the
+  // editor text is intact. While a write is in flight the next one waits.
   const pending = useRef<BrainNote | null>(null)
   pending.current = note
+  const saveInFlightRef = useRef(false)
+  // A save is "pending" from the first keystroke until its reply lands — this
+  // pair (not raw `save`) gates the save effect below.
+  const pendingSave = save === 'dirty' || save === 'saving'
   useEffect(() => {
-    if (save !== 'dirty' || !pending.current) return
-    const timer = setTimeout(async () => {
+    // Gate on `pendingSave`, not raw `save`: flipping to 'saving' inside
+    // attempt() used to tear this effect down mid-flight (`save` was a dep),
+    // so the reply path was unreachable, the header stuck on "saving…" and
+    // the reload guard below stayed shut forever (UI-audit P0).
+    if (!pendingSave || !pending.current) return
+    let disposed = false
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    const attempt = async (): Promise<void> => {
+      if (disposed) return
       // Snapshot at fire time, not schedule time: a save that completes while
       // the timer is pending merges a bumped version into `pending.current`, and
       // a snapshot captured earlier would carry a baseVersion the disk already
       // superseded (update rejected → edits stuck unsaved until the next key).
       const snapshot = pending.current
       if (!snapshot) return
+      if (saveInFlightRef.current) {
+        retryTimer = setTimeout(() => void attempt(), 250)
+        return
+      }
+      saveInFlightRef.current = true
       setSave('saving')
       try {
         const result = await window.api.brain.update(snapshot.id, {
@@ -226,37 +249,46 @@ export default function SecondBrain({
           baseVersion: snapshot.version
         })
         // Bus failures return `{ error }` rather than throwing.
-        if (!result || 'error' in result) {
+        if (result && !('error' in result)) {
+          const { notes: fresh } = await window.api.brain.list()
+          // Keep server-derived fields (links, unresolved) without clobbering typing.
+          // Merged even when a keystroke re-ran the effect (`disposed`): dropping
+          // the bumped version would doom the next write to a baseVersion conflict.
+          setNotes((list) =>
+            list.map((n) => {
+              const server = fresh.find((f) => f.id === n.id)
+              return server
+                ? {
+                    ...n,
+                    links: server.links,
+                    unresolved: server.unresolved,
+                    updatedAt: server.updatedAt,
+                    version: server.version
+                  }
+                : n
+            })
+          )
+          if (!disposed) setSave((current) => (current === 'saving' ? 'saved' : current))
+        } else if (!disposed) {
           setSave('error')
-          return
         }
-        const { notes: fresh } = await window.api.brain.list()
-        // Keep server-derived fields (links, unresolved) without clobbering typing.
-        setNotes((list) =>
-          list.map((n) => {
-            const server = fresh.find((f) => f.id === n.id)
-            return server
-              ? {
-                  ...n,
-                  links: server.links,
-                  unresolved: server.unresolved,
-                  updatedAt: server.updatedAt,
-                  version: server.version
-                }
-              : n
-          })
-        )
-        setSave((current) => (current === 'saving' ? 'saved' : current))
       } catch {
         // The editor keeps the typed text; the next keystroke retries (P2-218).
-        setSave('error')
+        if (!disposed) setSave('error')
+      } finally {
+        saveInFlightRef.current = false
       }
-    }, 450)
-    return () => clearTimeout(timer)
+    }
+    const timer = setTimeout(() => void attempt(), 450)
+    return () => {
+      disposed = true
+      clearTimeout(timer)
+      if (retryTimer !== null) clearTimeout(retryTimer)
+    }
     // `version` is deliberately not a dep: a successful save merges a bumped
     // version into the note, and re-running the effect then would clear the
     // timer scheduled for keystrokes typed while that save was in flight.
-  }, [save, note?.title, note?.content, note?.tags, note?.folder, note?.color])
+  }, [pendingSave, note?.title, note?.content, note?.tags, note?.folder, note?.color])
 
   // Closing the panel while a keystroke is still pending must not drop the
   // last edit — flush it on unmount (DI-003).
@@ -322,21 +354,6 @@ export default function SecondBrain({
     }
     await create(title.trim())
   }
-
-  useEffect(() => {
-    const wanted = initialTitle?.trim()
-    if (!wanted) return
-    void reload().then((next) => {
-      const existing = next.find((n) => n.title.toLowerCase() === wanted.toLowerCase())
-      if (existing) {
-        setSelected(existing.id)
-        return
-      }
-      void create(wanted)
-    })
-    // Open only when the caller asks for a different title — not on every notes refresh.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialTitle])
 
   return (
     <section
@@ -571,6 +588,8 @@ function NoteEditor({
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [suggest, setSuggest] = useState<{ token: string; start: number; items: BrainNote[]; index: number } | null>(null)
   const [tagInput, setTagInput] = useState(() => (note.tags || []).join(', '))
+  /** Why the last image paste produced nothing; cleared on the next attempt. */
+  const [pasteError, setPasteError] = useState<string | null>(null)
   // A keystroke patches tags live, which would re-enter this effect and reset
   // the field to the trimmed/joined form — and an external brain change would
   // blank what the user is mid-typing. Leave the input alone while focused.
@@ -633,6 +652,7 @@ function NoteEditor({
   const onPaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>): Promise<void> => {
     if (!pasteHasImage(e.nativeEvent)) return
     e.preventDefault()
+    setPasteError(null)
     const area = e.currentTarget
     const { selectionStart, selectionEnd, value } = area
     try {
@@ -646,8 +666,10 @@ function NoteEditor({
       )
       onPatch({ content: next })
       requestAnimationFrame(() => area.setSelectionRange(caret, caret))
-    } catch {
-      return
+    } catch (err) {
+      // See NoteWidget's copy of this handler: a silent catch here meant an
+      // oversized paste looked exactly like a dead editor.
+      setPasteError(err instanceof Error ? err.message : 'Could not paste that image')
     }
   }
 
@@ -725,6 +747,14 @@ function NoteEditor({
           }
           aria-label="Note content"
         />
+        {pasteError && (
+          <div
+            role="alert"
+            className="absolute inset-x-2.5 top-2.5 z-20 rounded-[8px] border border-danger/30 bg-danger/12 px-2.5 py-1.5 text-[11px] text-danger shadow-lg"
+          >
+            {pasteError}
+          </div>
+        )}
         {suggest && (
           <div
             role="listbox"

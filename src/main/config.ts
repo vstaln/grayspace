@@ -13,17 +13,16 @@ function configuredPort(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65_535 ? parsed : fallback
 }
 
-export const CONTROL_PORT = configuredPort(process.env.WORKSPACE_CONTROL_PORT, 47932)
-export const MCP_PORT = configuredPort(process.env.WORKSPACE_MCP_PORT, 47940)
+export const CONTROL_PORT = configuredPort(process.env.WORKSPACE_CONTROL_PORT, 20220)
 
 /**
  * The endpoint MCP clients attach to; also what the config panel copies.
  * `localhost`, not a literal IP: the MCP server itself binds both loopback
- * addresses (see Orcspace-mcp/src/index.ts) precisely so this name always
+ * addresses (see the embedded Orcspace-mcp runtime) precisely so this name always
  * resolves to a listener no matter which address family a client prefers.
  */
-export function mcpUrl(port: number = MCP_PORT): string {
-  return `http://localhost:${port}/mcp`
+export function mcpUrl(): string {
+  return `http://localhost:${CONTROL_PORT}/mcp`
 }
 
 /** Keeps the per-terminal scrollback that agents can read back over HTTP bounded. */

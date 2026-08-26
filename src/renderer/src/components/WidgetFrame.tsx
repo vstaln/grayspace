@@ -14,6 +14,9 @@ import BoardWidget from './BoardWidget'
 import FilesWidget from './FilesWidget'
 import SysMonitorWidget from './SysMonitorWidget'
 import BrowserWidget from './BrowserWidget'
+import LinksWidget from './LinksWidget'
+import MusicPlayerWidget from './MusicPlayerWidget'
+import IdGeneratorWidget from './IdGeneratorWidget'
 import { RESIZE_HANDLES, ResizeDir, Widget } from '../types'
 
 interface Props {
@@ -43,6 +46,11 @@ const AGENTS = [
   { id: 'opencode', label: 'OpenCode', command: 'opencode', Icon: OpenCodeIcon },
   { id: 'grok', label: 'Grok', command: 'grok', Icon: GrokIcon }
 ] as const
+
+// A maximized widget is rendered in a different layer than a normal widget.
+// Keep the toolbar selection outside WidgetFrame so moving between those
+// layers cannot reset the selected agent to the first item in AGENTS.
+const agentSelectionByWidget = new Map<string, number>()
 
 let cachedSubmit = typeof navigator !== 'undefined' && /windows/i.test(navigator.userAgent) ? '\r\n' : '\r'
 
@@ -77,7 +85,7 @@ function WidgetFrame({
 }: Props): React.JSX.Element {
   const isTerminal = !widget.kind || widget.kind === 'terminal'
   const [agentMenuOpen, setAgentMenuOpen] = useState(false)
-  const [agentIdx, setAgentIdx] = useState(0)
+  const [agentIdx, setAgentIdx] = useState(() => agentSelectionByWidget.get(widget.id) ?? 0)
   const [agentLaunchError, setAgentLaunchError] = useState<string | null>(null)
   const agentMenuRef = useRef<HTMLDivElement>(null)
   const agent = AGENTS[agentIdx]
@@ -105,8 +113,9 @@ function WidgetFrame({
       top: rect.bottom + 4
     })
     // The widget can move/resize while the menu is open; recompute the anchor
-    // against its live rect instead of keeping a stale position.
-  }, [agentMenuOpen, widget.x, widget.y])
+    // against its live rect instead of keeping a stale position. Width moves
+    // the anchor's right edge, height its bottom — both belong here (UI-audit).
+  }, [agentMenuOpen, widget.x, widget.y, widget.w, widget.h])
 
   // Terminal-only affordance (user request): double-click flips the shell to
   // fullscreen and back. Scoped so nothing else breaks: the title keeps its
@@ -241,6 +250,10 @@ function WidgetFrame({
                   aria-label="Agent"
                   className="fixed z-[9800] flex min-w-[150px] flex-col overflow-hidden rounded-[10px] border border-line-soft bg-bg-panel py-1 shadow-lg"
                   style={{ left: menuPos.left, top: menuPos.top, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                  // Portal bubbles through the widget tree to <main>; stopping
+                  // only mousedown leaves pointerdown free to trigger the
+                  // canvas draw/erase/pan gestures beneath the menu.
+                  onPointerDown={(e) => e.stopPropagation()}
                   onMouseDown={(e) => e.stopPropagation()}
                 >
                   {AGENTS.map((a, i) => (
@@ -251,6 +264,7 @@ function WidgetFrame({
                         i === agentIdx ? 'text-text' : 'text-text-dim'
                       }`}
                       onClick={() => {
+                        agentSelectionByWidget.set(widget.id, i)
                         setAgentIdx(i)
                         setAgentMenuOpen(false)
                       }}
@@ -354,6 +368,12 @@ function WidgetBody({
       return <SysMonitorWidget />
     case 'browser':
       return <BrowserWidget />
+    case 'links':
+      return <LinksWidget widgetId={widget.id} />
+    case 'music-player':
+      return <MusicPlayerWidget widgetId={widget.id} />
+    case 'id-generator':
+      return <IdGeneratorWidget />
     default:
       return <TerminalWidget id={widget.id} onProcessExit={onProcessExit} />
   }

@@ -1,12 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Connection, Point, Widget } from '../types'
+import { Connection, Widget } from '../types'
 
 interface Props {
   connections: Connection[]
   widgets: Widget[]
-  /** A wire still being dragged from `fromId` to the live cursor position — drawn
-   *  dashed and un-flared since it isn't a real link until the pointer is released. */
-  draft?: { fromId: string; point: Point } | null
 }
 
 /** Anchor point: the middle of a widget's header, in world coordinates. */
@@ -41,9 +38,8 @@ const FLARE_MS = 1600
  * a dot along the curve once; every link keeps a faint, slow shimmer after
  * that so a canvas full of terminals still reads as a tree.
  */
-function ConnectionsLayer({ connections, widgets, draft }: Props): React.JSX.Element {
+function ConnectionsLayer({ connections, widgets }: Props): React.JSX.Element {
   const byId = useMemo(() => new Map(widgets.map((w) => [w.id, w])), [widgets])
-  const draftFrom = draft ? byId.get(draft.fromId) : undefined
 
   return (
     <svg aria-hidden className="pointer-events-none absolute inset-0 overflow-visible" style={{ width: 1, height: 1 }}>
@@ -59,13 +55,6 @@ function ConnectionsLayer({ connections, widgets, draft }: Props): React.JSX.Ele
         const { d } = arcPath(anchor(from), anchor(to))
         return <ConnectionArc key={c.id} d={d} bornAt={c.bornAt} />
       })}
-      {draftFrom && (
-        <path
-          d={arcPath(anchor(draftFrom), draft!.point).d}
-          className="conn-draft-thread"
-          fill="none"
-        />
-      )}
     </svg>
   )
 }

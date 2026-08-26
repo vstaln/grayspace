@@ -129,22 +129,6 @@ describe('IPC Handler Registration & Methods', () => {
     assert.ok(handlers.has('mcp:restart'), 'mcp:restart must be registered')
     assert.ok(handlers.has('planner:list'), 'planner:list must be registered')
     assert.ok(handlers.has('planner:toggle'), 'planner:toggle must be registered')
-    assert.ok(handlers.has('integrations:telegram:getStatus'))
-  })
-
-  test('disabled Telegram handler returns typed error shape, not ok:false', async () => {
-    const telegramStatus = handlers.get('integrations:telegram:getStatus')
-    const telegramSave = handlers.get('integrations:telegram:save')
-    const telegramSend = handlers.get('integrations:telegram:testSend')
-    assert.ok(telegramStatus && telegramSave && telegramSend)
-
-    const tgStatus = await telegramStatus()
-    assert.equal((tgStatus as { state: string }).state, 'error')
-    assert.ok((tgStatus as { error: string }).error)
-    assert.equal(((await telegramSave()) as { state: string }).state, 'error')
-    const tgSend = (await telegramSend()) as { error?: string; ok?: unknown }
-    assert.ok(tgSend.error)
-    assert.equal('ok' in tgSend, false)
   })
 
   test('terminal:write delegates to CommandBus and returns error for not running terminal', async () => {

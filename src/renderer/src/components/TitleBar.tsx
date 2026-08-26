@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Brain, Copy, GitBranch, Globe, LayoutGrid, Minus, Square, TerminalSquare, X } from 'lucide-react'
 import type { GitStatus } from '../../../preload/index.d'
+import { IS_MAC } from '../lib/platform'
 
 export type WorkView = 'canvas' | 'browser' | 'code'
 
@@ -35,7 +36,25 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
   const [maximized, setMaximized] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null)
+  const [gitOpen, setGitOpen] = useState(false)
   const [memoryOpen, setMemoryOpen] = useState(false)
+  const gitIslandRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!gitOpen) return
+    const onDown = (e: MouseEvent): void => {
+      if (gitIslandRef.current && !gitIslandRef.current.contains(e.target as Node)) setGitOpen(false)
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setGitOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [gitOpen])
 
   useEffect(() => {
     // On failure the default (restored window) is the safe assumption.
@@ -137,7 +156,15 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
   return (
     <div
       className="pointer-events-auto absolute inset-x-0 top-0 z-[50000] flex h-10 items-center px-2 bg-transparent select-none"
-      style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+      style={
+        {
+          WebkitAppRegion: 'drag',
+          // macOS draws its traffic lights inside this bar (the window is
+          // frameless but keeps them). Reserve the gutter they sit in so the
+          // left island never lands underneath close/minimise/zoom.
+          ...(IS_MAC ? { paddingLeft: 78 } : {})
+        } as React.CSSProperties
+      }
     >
       {/* Left island: transient status messages only. */}
       <div className="flex h-10 min-w-0 max-w-[340px] flex-none items-center gap-1.5" style={noDrag}>
@@ -203,11 +230,14 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
 
       {/* Right island: Git, then the window itself. */}
       <div className="flex h-10 flex-none items-center" style={noDrag}>
-        <div className={ISLAND}>
+        <div ref={gitIslandRef} className={`${ISLAND} relative`}>
           <button
             type="button"
             className={`${PILL} ${QUIET}`}
-            onClick={() => void refreshGit()}
+            onClick={() => {
+              setGitOpen((open) => !open)
+              void refreshGit()
+            }}
             title={
               gitStatus?.repo
                 ? `Git (${gitStatus.branch || 'HEAD'})\n${dirtyCount > 0 ? `${dirtyCount} changed file${dirtyCount > 1 ? 's' : ''}` : 'Working tree clean'}`
@@ -227,32 +257,87 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
             {dirtyCount > 0 && <span className="h-1.5 w-1.5 flex-none rounded-full bg-accent" />}
           </button>
 
-          <span className="mx-0.5 h-4 w-px flex-none bg-line-soft/80" />
+          {gitOpen && (
+            <div className="absolute right-2 top-[38px] z-[60000] w-[310px] rounded-[12px] border border-line-soft bg-bg-panel/95 p-3 text-left shadow-2xl glass:backdrop-blur-xl">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <span className="text-[12px] font-semibold text-text">Git status</span>
+                <button
+                  type="button"
+                  className="rounded-md px-1.5 py-0.5 text-[11px] text-text-dim hover:bg-bg-hover hover:text-text"
+                  onClick={() => void refreshGit()}
+                >
+                  Refresh
+                </button>
+              </div>
+              {!gitStatus ? (
+                <p className="text-[12px] text-text-dim">Checking repository…</p>
+              ) : !gitStatus.repo ? (
+                <div className="space-y-1 text-[12px]">
+                  <p className="text-text-dim">This workspace is not a Git repository.</p>
+                  {gitStatus.error && <p className="break-words text-accent">{gitStatus.error}</p>}
+                </div>
+              ) : (
+                <div className="space-y-2 text-[12px]">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="truncate font-medium text-text">{gitStatus.branch || 'HEAD'}</span>
+                    <span className="flex-none text-text-dim">{dirtyCount ? `${dirtyCount} changed` : 'clean'}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-text-dim">
+                    <span>Modified: {gitStatus.modified}</span>
+                    <span>Untracked: {gitStatus.untracked}</span>
+                    <span>Staged: {gitStatus.staged}</span>
+                    <span>Conflicts: {gitStatus.conflicted}</span>
+                    <span>Ahead: {gitStatus.ahead}</span>
+                    <span>Behind: {gitStatus.behind}</span>
+                  </div>
+                  {gitStatus.lastCommit && (
+                    <div className="border-t border-line-soft pt-2">
+                      <div className="text-[11px] text-text-faint">Last commit · {gitStatus.lastCommit.hash}</div>
+                      <div className="truncate text-text" title={gitStatus.lastCommit.subject}>{gitStatus.lastCommit.subject}</div>
+                    </div>
+                  )}
+                  <div className="truncate border-t border-line-soft pt-2 text-[10px] text-text-faint" title={gitStatus.root}>
+                    {gitStatus.root}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
-          <button
-            className={`${ICON} ${QUIET}`}
-            title="Minimize"
-            aria-label="Minimize"
-            onClick={() => window.api.window.minimize()}
-          >
-            <Minus size={14} strokeWidth={2.2} />
-          </button>
-          <button
-            className={`${ICON} ${QUIET}`}
-            title={maximized ? 'Restore' : 'Maximize'}
-            aria-label={maximized ? 'Restore' : 'Maximize'}
-            onClick={() => window.api.window.toggleMaximize()}
-          >
-            {maximized ? <Copy size={13} strokeWidth={2} /> : <Square size={13} strokeWidth={2} />}
-          </button>
-          <button
-            className={`${ICON} text-text-dim hover:bg-[#e04343] hover:text-white`}
-            title="Close"
-            aria-label="Close"
-            onClick={() => window.api.window.close()}
-          >
-            <X size={14} strokeWidth={2.2} />
-          </button>
+          {/* macOS renders its own traffic lights at the far left of this bar,
+              so a second set of window buttons on the right is both redundant
+              and non-native. Windows and Linux keep them — the frame is off and
+              they are the only way to minimise, maximise or close. */}
+          {!IS_MAC && (
+            <>
+              <span className="mx-0.5 h-4 w-px flex-none bg-line-soft/80" />
+
+              <button
+                className={`${ICON} ${QUIET}`}
+                title="Minimize"
+                aria-label="Minimize"
+                onClick={() => window.api.window.minimize()}
+              >
+                <Minus size={14} strokeWidth={2.2} />
+              </button>
+              <button
+                className={`${ICON} ${QUIET}`}
+                title={maximized ? 'Restore' : 'Maximize'}
+                aria-label={maximized ? 'Restore' : 'Maximize'}
+                onClick={() => window.api.window.toggleMaximize()}
+              >
+                {maximized ? <Copy size={13} strokeWidth={2} /> : <Square size={13} strokeWidth={2} />}
+              </button>
+              <button
+                className={`${ICON} text-text-dim hover:bg-[#e04343] hover:text-white`}
+                title="Close"
+                aria-label="Close"
+                onClick={() => window.api.window.close()}
+              >
+                <X size={14} strokeWidth={2.2} />
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

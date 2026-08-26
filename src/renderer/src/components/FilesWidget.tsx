@@ -17,6 +17,7 @@ import {
   Folder,
   FolderPlus,
   Music,
+  Pencil,
   RefreshCw,
   Search,
   Trash2,
@@ -111,6 +112,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
   const [renamingName, setRenamingName] = useState('')
   const renameCancelled = useRef(false)
+  const fsActionBusyRef = useRef(false)
   const previewRef = useRef<HTMLDivElement>(null)
   useFocusTrap(previewRef, Boolean(previewFile))
 
@@ -119,9 +121,17 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
   const dirSeq = useRef(0)
   const previewSeq = useRef(0)
 
-  // Sync workspace change
+  // Sync on WORKSPACE CHANGE only. Clamping here on every navigation used to
+  // fight the user: fs.list is not scoped to the workspace, so stepping above
+  // the root (← button / C: crumb) rendered fine and then this effect yanked
+  // the view back to the root — a visible bounce plus a second fs:list
+  // round-trip. Navigation stays free; only a real workspace switch clamps.
+  const lastWorkspaceRef = useRef<string | null | undefined>(undefined)
   useEffect(() => {
-    if (workspaceDir && (!currentPath || !isPathInside(currentPath, workspaceDir))) {
+    const changed = lastWorkspaceRef.current !== workspaceDir
+    lastWorkspaceRef.current = workspaceDir
+    if (!changed || !workspaceDir) return
+    if (!currentPath || !isPathInside(currentPath, workspaceDir)) {
       setCurrentPath(workspaceDir)
     }
   }, [workspaceDir, currentPath])
@@ -208,10 +218,12 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
 
   const handleCreate = async (): Promise<void> => {
     const name = newItemName.trim()
-    if (!name || !currentPath || !creatingType) return
+    if (!name || !currentPath || !creatingType || fsActionBusyRef.current) return
+    fsActionBusyRef.current = true
     const targetPath = joinChildPath(currentPath, name)
     if (!targetPath) {
       showNotice('Name cannot contain path separators or “..”')
+      fsActionBusyRef.current = false
       return
     }
     try {
@@ -236,7 +248,20 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
       }
     } catch (err) {
       showNotice(String(err))
+    } finally {
+      fsActionBusyRef.current = false
     }
+  }
+
+  /** Enters inline rename mode for an entry (UI-audit: the rename machinery
+   *  existed but nothing ever set `renamingPath`, so it was unreachable). */
+  const startRename = (entry: FileEntry): void => {
+    if (fsActionBusyRef.current) return
+    // Clear a flag left armed by an earlier Escape: the input unmounts without
+    // blurring, and a stale flag swallowed the next rename's Enter commit.
+    renameCancelled.current = false
+    setRenamingPath(entry.path)
+    setRenamingName(entry.name)
   }
 
   const handleRename = async (): Promise<void> => {
@@ -245,10 +270,12 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
       return
     }
     const name = renamingName.trim()
-    if (!name || !renamingPath || !currentPath) return
+    if (!name || !renamingPath || !currentPath || fsActionBusyRef.current) return
+    fsActionBusyRef.current = true
     const targetPath = joinChildPath(currentPath, name)
     if (!targetPath) {
       showNotice('Name cannot contain path separators or “..”')
+      fsActionBusyRef.current = false
       return
     }
     try {
@@ -263,6 +290,8 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
       }
     } catch (err) {
       showNotice(String(err))
+    } finally {
+      fsActionBusyRef.current = false
     }
   }
 
@@ -307,6 +336,11 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
         })
         if (note && !('error' in note)) {
           showNotice(`Created Note "${entry.name}" in Second Brain`)
+        } else {
+          // Bus failures resolve with `{ error }` instead of throwing — say so
+          // instead of leaving a click that visibly did nothing (UI-audit).
+          const reason = note && 'error' in note ? note.error : 'unknown error'
+          showNotice(`Failed to create note from file: ${reason}`)
         }
       }
     } catch {
@@ -590,6 +624,13 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                         >
                           <Copy size={12} />
                         </button>
+                        <button
+                          className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
+                          onClick={() => startRename(entry)}
+                          title="Rename"
+                        >
+                          <Pencil size={12} />
+                        </button>
                         {!entry.isDirectory && (
                           <button
                             className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
@@ -666,10 +707,12 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                 <button
                   className="flex items-center gap-1.5 rounded-[8px] border border-line px-2.5 py-1 text-xs text-text-dim hover:bg-bg-hover hover:text-text"
                   onClick={async () => {
-                    if (previewFile.content) {
+                    // `content` is falsy for a 0-byte file too — still copy and
+                    // confirm, otherwise the button feels dead (UI-audit).
+                    if (previewFile.content !== undefined) {
                       try {
                         await navigator.clipboard.writeText(previewFile.content)
-                        showNotice('Content copied')
+                        showNotice(previewFile.content ? 'Content copied' : 'File is empty — nothing to copy')
                       } catch (err) {
                         showNotice(`Copy failed: ${err instanceof Error ? err.message : String(err)}`)
                       }

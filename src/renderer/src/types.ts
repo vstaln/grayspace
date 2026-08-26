@@ -3,7 +3,7 @@
  * state (a PTY, a note in the brain); the rest render from state the app
  * already has, which is why they need no id of their own beyond the widget's.
  */
-export type WidgetKind = 'terminal' | 'note' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser'
+export type WidgetKind = 'terminal' | 'note' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'id-generator'
 
 export interface Widget {
   id: string
@@ -83,7 +83,3 @@ export const MIN_W = 280
 export const MIN_H = 160
 export const WIDGET_W = 680
 export const WIDGET_H = 420
-// Must match the widget header height in WidgetFrame (h-[34px]) — used to
-// offset the maximized widget's top inset so it sits flush under the chrome
-// (CANV-20).
-export const HEADER_H = 34

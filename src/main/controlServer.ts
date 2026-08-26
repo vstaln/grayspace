@@ -1,5 +1,6 @@
 import * as http from 'http'
-import { CONTROL_PORT, MCP_PORT, MCP_SERVER_NAME, mcpUrl } from './config'
+import { CONTROL_PORT, MCP_SERVER_NAME, mcpUrl } from './config'
+import { embeddedMcpRequest } from './embeddedMcp.ts'
 import { CoordinationStore, USER_AUTHOR } from './coordination'
 import { TerminalManager } from './terminals'
 import { BrainStore } from './brain'
@@ -94,6 +95,10 @@ export function startControlServer(deps: ControlDeps): http.Server {
     const url = new URL(req.url || '/', 'http://localhost')
     const parts = url.pathname.split('/').filter(Boolean)
     const method = req.method || 'GET'
+
+    // MCP owns the complete Streamable HTTP lifecycle on the same listener,
+    // including OPTIONS and unauthenticated transport-level rejection.
+    if (url.pathname === '/mcp') return embeddedMcpRequest(req, res)
 
     // Presence and CORS preflight OPTIONS are unauthenticated:
     if (method === 'OPTIONS') {
@@ -256,8 +261,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       app: 'orcspace',
       server: MCP_SERVER_NAME,
       controlPort: CONTROL_PORT,
-      mcpPort: MCP_PORT,
-      mcpUrl: mcpUrl(MCP_PORT),
+      mcpUrl: mcpUrl(),
       mcpRunning: deps.mcpRunning(),
       workspaceDir: deps.defaultCwd() ?? null,
       terminals: terminals.list().length,
@@ -266,7 +270,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     })
   }
 
-  // ---- snapshot (dashboard one-shot) --------------------------------------
+  // ---- snapshot (control one-shot, used by setup and tooling) ---------------
   if (method === 'GET' && parts[0] === 'snapshot') {
     const coord = coordination.snapshot()
     const plannerItems = planner.list()

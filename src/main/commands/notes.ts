@@ -22,7 +22,7 @@ const NOTE_PATCH_SCHEMA: CommandPayloadSchema = {
   type: 'object',
   properties: {
     title: { type: 'string', description: 'Note title' },
-    body: { type: 'string', description: 'Markdown body; $ExactTitle links connect notes' },
+    content: { type: 'string', description: 'Markdown body; $ExactTitle links connect notes' },
     tags: { type: 'array', items: { type: 'string' }, description: 'Shared tags wire notes into the graph' }
   }
 }
@@ -45,7 +45,7 @@ export function registerNoteCommands({ core, brain }: CommandDeps): void {
 
   bus.registerDefinition<Partial<BrainNote>, BrainNote>({
     type: 'note.update',
-    description: 'Patch a note (title, body, tags). Send baseVersion to avoid clobbering a concurrent editor.',
+    description: 'Patch a note (title, content, tags). Send baseVersion to avoid clobbering a concurrent editor.',
     targetScheme: 'note',
     payloadSchema: NOTE_PATCH_SCHEMA,
     handler: {

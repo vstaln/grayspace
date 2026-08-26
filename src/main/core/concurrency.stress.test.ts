@@ -57,7 +57,7 @@ function harness(options: { now?: () => number } = {}): {
   return { bus, locks, journal, actors, notes, entries }
 }
 
-describe('CommandBus вЂ” concurrency stress', () => {
+describe('CommandBus — concurrency stress', () => {
   test('concurrent writes to same resource are serialized', async () => {
     const { bus, notes } = harness()
     await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'initial' } })

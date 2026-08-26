@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import { Camera, Stroke } from '../types'
+import { DRAW_CLICK_THRESHOLD_PX } from '../lib/canvasMetrics'
 
 interface Props {
   strokes: Stroke[]
@@ -31,8 +32,17 @@ function StrokesLayer({ strokes, camera, width, height }: Props): React.JSX.Elem
     if (!ctx) return
 
     const dpr = window.devicePixelRatio || 1
-    canvas.width = width * dpr
-    canvas.height = height * dpr
+    // Assigning width/height reallocates the backing store and clears it, so it
+    // only happens when the size actually changed. Doing it unconditionally
+    // meant every pan and zoom frame threw away and re-created a full-viewport
+    // buffer — on a Retina display that is a 4x-pixel allocation per frame
+    // (PERF-ink-realloc).
+    const pixelWidth = Math.round(width * dpr)
+    const pixelHeight = Math.round(height * dpr)
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+      canvas.width = pixelWidth
+      canvas.height = pixelHeight
+    }
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, width, height)
@@ -48,6 +58,28 @@ function StrokesLayer({ strokes, camera, width, height }: Props): React.JSX.Elem
 
     for (const stroke of strokes) {
       if (stroke.points.length < 2) continue
+      // A pointer click can leave two identical samples behind when the
+      // pointer is released before the first animation-frame batch runs.
+      // Canvas renders that zero-length path as a stray dot/rectangle.
+      const firstPoint = stroke.points[0]
+      let moved = false
+      // Ignore tiny accidental marks, including stale marks restored from an
+      // earlier session. The bound mirrors the draw tool's persistence gate
+      // exactly (screen px / zoom = world px), so anything saved to disk also
+      // paints — a stricter filter here produced strokes that were persisted
+      // but never visible (UI-audit P1).
+      const minMovement = DRAW_CLICK_THRESHOLD_PX / zoom
+      const minMovementSquared = minMovement * minMovement
+      for (let i = 1; i < stroke.points.length; i += 1) {
+        const point = stroke.points[i]
+        const dx = point.x - firstPoint.x
+        const dy = point.y - firstPoint.y
+        if (dx * dx + dy * dy >= minMovementSquared) {
+          moved = true
+          break
+        }
+      }
+      if (!moved) continue
       ctx.strokeStyle = stroke.color
       ctx.beginPath()
       // Indexed walk, not `[first, ...rest]`: the spread copied every point of

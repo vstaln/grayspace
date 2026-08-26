@@ -20,13 +20,11 @@ import { BrainStore } from './brain'
 import { AppState } from './appState'
 import { CanvasStore } from './canvasState'
 import { PlannerStore } from './plannerStore.ts'
-import { ensureCodexGlobalConfig, syncClineConfig, syncGlobalAntigravityConfig, syncGlobalWindsurfConfig, syncProjectAntigravityConfig, syncProjectCursorConfig, syncProjectGrokConfig, syncProjectMcpConfig, syncProjectOpencodeConfig } from './mcpAutoConfig'
+import { ensureCodexGlobalConfig, syncClineConfig, syncGlobalAntigravityConfig, syncGlobalWindsurfConfig, syncKimiConfig, syncProjectAntigravityConfig, syncProjectCursorConfig, syncProjectGrokConfig, syncProjectMcpConfig, syncProjectOpencodeConfig } from './mcpAutoConfig'
 import { createCore } from './core/index.ts'
 import { FileJournalSink, readJournalTail } from './journalSink'
 import { registerCommands } from './commands/index.ts'
 import { TerminalSnapshots } from './terminalSnapshots'
-import { TelegramBot } from './telegramBot.ts'
-import { NotificationManager } from './notifications.ts'
 import { isLocalPath } from './media.ts'
 import { join as joinPath } from 'path'
 
@@ -36,6 +34,9 @@ import { join as joinPath } from 'path'
  * the workspace's own cookies.
  */
 const BROWSER_PARTITION = 'persist:orcspace-browser'
+
+/** macOS differs on menus, accelerators and window chrome — checked in all three. */
+const IS_MAC = process.platform === 'darwin'
 
 let mainWindow: BrowserWindow | null = null
 let controlServer: { close(): void } | null = null
@@ -78,8 +79,6 @@ const brain = new BrainStore(() => state.settings.linkSyntax)
 const canvas = new CanvasStore()
 /** The planner's outline — a day plan distinct from the delegable task board. */
 const planner = new PlannerStore()
-const telegram = new TelegramBot(state, core, canvas)
-const notifications = new NotificationManager(telegram)
 
 /**
  * The app owns two fixed loopback ports and one state file. A second copy would
@@ -90,6 +89,9 @@ const hasInstanceLock = app.requestSingleInstanceLock()
 if (!hasInstanceLock) {
   // exit(), not quit(): the loser has never loaded stores, and before-quit
   // flush() would write empty planner/board/canvas over the live instance.
+  // Log so a `npm run dev` that immediately exits isn't a mystery — setup.bat
+  // checks :20220 aliveness first, but a manual launch benefits from the hint.
+  console.log('Another OrcSpace instance is already running — handing off and exiting.')
   app.exit(0)
 }
 
@@ -124,6 +126,9 @@ function createWindow(): void {
     show: true,
     titleBarStyle: 'hidden',
     titleBarOverlay: false,
+    // macOS keeps its traffic lights on a frameless window: park them where the
+    // custom title bar leaves room, so they never sit on top of its controls.
+    ...(IS_MAC ? { trafficLightPosition: { x: 14, y: 13 } } : {}),
     autoHideMenuBar: true,
     transparent: false,
     hasShadow: true,
@@ -225,7 +230,12 @@ function createWindow(): void {
   // the menu keeps its normal behaviour everywhere else. Ctrl+V is left alone:
   // the paste accelerator lands in xterm's textarea, whose paste event is
   // already owned by the widget.
+  //
+  // macOS is exempt: there the edit accelerators are Cmd-based, so Ctrl+C never
+  // collides with them and xterm already writes \x03 itself. Intercepting here
+  // as well would send SIGINT twice for a single keystroke.
   mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (IS_MAC) return
     const focusedId = focusedTerminalId()
     if (focusedId && input.type === 'keyDown' && input.control && !input.alt && !input.meta) {
       const signal = { c: '\x03', a: '\x01', z: '\x1a', x: '\x18' }[input.key.toLowerCase()]
@@ -306,13 +316,46 @@ terminals.on(
 )
 coordination.on('change', (snapshot) => {
   send('coordination:onChange', snapshot)
-  notifications.handleCoordinationChange(snapshot)
 })
 planner.on('change', (items) => send('planner:onChange', items))
 // MCP/assistant canvas commands are applied in the main process. Broadcast the
 // resulting snapshot so a rename or move is visible immediately in the open
 // renderer instead of only after the next restart.
 canvas.on('change', (snapshot) => send('canvas:onChange', snapshot))
+
+/**
+ * Point every supported AI agent at this workspace's MCP server, in one call.
+ *
+ * The three places that open a workspace (startup, the folder picker, a second
+ * launch carrying a path) each used to inline their own list of syncs, and the
+ * lists had already drifted: the second-launch path never registered
+ * Antigravity, so opening a folder from a shortcut left that one agent unable
+ * to see the workspace while the other paths wired it up fine. One function
+ * means adding an agent is a single edit and no caller can fall behind again.
+ */
+function syncAgentConfigsFor(dir: string): void {
+  // Per-project: these agents read their config from the folder they run in.
+  fire(syncProjectMcpConfig(dir))
+  fire(syncProjectOpencodeConfig(dir))
+  fire(syncProjectGrokConfig(dir))
+  fire(syncProjectCursorConfig(dir))
+  fire(syncProjectAntigravityConfig(dir))
+  fire(syncKimiConfig(dir))
+  syncGlobalAgentConfigs()
+}
+
+/**
+ * The agents that keep a single config file rather than a per-project one.
+ * Split out because these still have to be written when no folder is open at
+ * all — otherwise a first run with no workspace leaves them unconfigured until
+ * the user happens to pick a folder.
+ */
+function syncGlobalAgentConfigs(): void {
+  fire(syncGlobalWindsurfConfig())
+  fire(syncGlobalAntigravityConfig())
+  fire(syncClineConfig())
+  fire(ensureCodexGlobalConfig())
+}
 
 /**
  * A second launch may carry a folder path (shortcut, file association, or
@@ -335,12 +378,7 @@ function handleSecondInstanceArgs(argv: string[]): void {
       const dir = stat.isDirectory() ? candidate : dirname(candidate)
       if (!fs.existsSync(dir)) continue
       state.setWorkspaceDir(dir)
-      fire(syncProjectMcpConfig(dir))
-      fire(syncProjectOpencodeConfig(dir))
-      fire(syncProjectGrokConfig(dir))
-      fire(syncProjectCursorConfig(dir))
-      fire(syncGlobalWindsurfConfig())
-      fire(syncClineConfig())
+      syncAgentConfigsFor(dir)
       send('workspace:onDirChange', dir)
       return
     } catch {
@@ -361,24 +399,46 @@ if (hasInstanceLock) {
     // is frame:false and never shows one), those keys reach focused text areas
     // as literal keystrokes instead of triggering the native paste/copy/cut.
     // `editMenu` registers the accelerators without ever rendering a menu bar.
-    Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'editMenu' }]))
+    //
+    // macOS always renders the menu bar, and it needs the real thing: without an
+    // app menu first, Cmd+Q / Cmd+H / About are simply missing, and macOS would
+    // promote whatever menu comes first into that slot. Window and View give
+    // back Cmd+M / Cmd+W / fullscreen, which a frameless window has no other
+    // affordance for.
+    Menu.setApplicationMenu(
+      Menu.buildFromTemplate(
+        IS_MAC
+          ? [
+              { role: 'appMenu' },
+              { role: 'editMenu' },
+              {
+                label: 'View',
+                submenu: [
+                  { role: 'reload' },
+                  { role: 'forceReload' },
+                  { role: 'toggleDevTools' },
+                  { type: 'separator' },
+                  { role: 'resetZoom' },
+                  { role: 'zoomIn' },
+                  { role: 'zoomOut' },
+                  { type: 'separator' },
+                  { role: 'togglefullscreen' }
+                ]
+              },
+              { role: 'windowMenu' }
+            ]
+          : [{ role: 'editMenu' }]
+      )
+    )
 
-    // Codex has no per-project config, only this one global file — register the
-    // workspace server there once so any `codex` run anywhere already sees it.
-    fire(ensureCodexGlobalConfig())
-    fire(syncGlobalAntigravityConfig())
-    // Claude Code reads `.mcp.json` from its cwd, so the equivalent for
-    // it is per-project: whichever folder is already open when the app starts.
+    // Codex, Windsurf, Cline and Antigravity each have one global config file —
+    // register the workspace server there whether or not a folder is open, so
+    // any `codex` run anywhere already sees it.
+    // Claude Code, by contrast, reads `.mcp.json` from its cwd, so the
+    // equivalent for it is per-project: whichever folder is open at startup.
     // opencode reads its own `opencode.json` from the cwd the same way.
-    if (state.workspaceDir) {
-      fire(syncProjectMcpConfig(state.workspaceDir))
-      fire(syncProjectOpencodeConfig(state.workspaceDir))
-      fire(syncProjectGrokConfig(state.workspaceDir))
-      fire(syncProjectCursorConfig(state.workspaceDir))
-      fire(syncProjectAntigravityConfig(state.workspaceDir))
-      fire(syncGlobalWindsurfConfig())
-      fire(syncClineConfig())
-    }
+    if (state.workspaceDir) syncAgentConfigsFor(state.workspaceDir)
+    else syncGlobalAgentConfigs()
 
     // Keep the rail's folder list live whenever the persisted state moves.
     state.on('change', (next) => {
@@ -407,7 +467,6 @@ if (hasInstanceLock) {
 
     registerIpc({
       core,
-      telegram,
       terminals,
       coordination,
       planner,
@@ -422,24 +481,13 @@ if (hasInstanceLock) {
         if ((dir || undefined) === previous) return
         // A terminal opened right after picking a folder should already see the
         // workspace's MCP tools, not just ones opened on a later restart.
-        if (dir) {
-          fire(syncProjectMcpConfig(dir))
-          fire(syncProjectOpencodeConfig(dir))
-          fire(syncProjectGrokConfig(dir))
-          fire(syncProjectCursorConfig(dir))
-          fire(syncProjectAntigravityConfig(dir))
-          fire(syncGlobalWindsurfConfig())
-          fire(syncGlobalAntigravityConfig())
-          fire(syncClineConfig())
-        }
+        if (dir) syncAgentConfigsFor(dir)
         send('workspace:onDirChange', dir ?? null)
       }
     })
 
     createWindow()
 
-    telegram.on('status', (status) => send('integrations:telegram:onStatusChange', status))
-    telegram.refresh()
 
     controlServer = startControlServer({
       core,
@@ -541,7 +589,6 @@ app.on('before-quit', () => {
   controlServer = null
   clearRuntimePresence()
   terminals.disposeAll()
-  telegram.stop()
   stopMcpServer()
   // Debounced stores (PERF-004/005): whatever was pending must reach disk
   // before the process dies.

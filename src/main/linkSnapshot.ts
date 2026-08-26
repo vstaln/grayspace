@@ -1,4 +1,4 @@
-import { CONTROL_PORT, MCP_PORT, mcpUrl } from './config.ts'
+import { CONTROL_PORT, mcpUrl } from './config.ts'
 
 export const APP_VERSION = '2.0.0'
 
@@ -8,6 +8,7 @@ export interface PresenceInfo {
   version: string
   pid: number
   controlPort: number
+  /** Deprecated compatibility field; it is always the same TCP port as controlPort. */
   mcpPort: number
   mcpUrl: string
   mcpRunning: boolean
@@ -55,7 +56,7 @@ export function buildPresence(input: {
     version: APP_VERSION,
     pid: input.pid ?? process.pid,
     controlPort: CONTROL_PORT,
-    mcpPort: MCP_PORT,
+    mcpPort: CONTROL_PORT,
     mcpUrl: mcpUrl(),
     mcpRunning: Boolean(input.mcpRunning),
     workspaceDir: input.workspaceDir ?? null
