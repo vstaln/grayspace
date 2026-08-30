@@ -36,6 +36,7 @@ export function isLoopbackHost(host: string): boolean {
   return (
     name === 'localhost' ||
     name === '127.0.0.1' ||
+    /^127(?:\.\d+){3}$/.test(name) ||
     name === '::1' ||
     name === '0:0:0:0:0:0:0:1'
   )

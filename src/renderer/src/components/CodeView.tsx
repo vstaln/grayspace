@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Maximize2, Plus, X } from 'lucide-react'
+import { Maximize2, Minimize2, Plus, X } from 'lucide-react'
 import TerminalWidget from './TerminalWidget'
 import CodeLauncher, { CodeAgent } from './CodeLauncher'
 import { queueInitialCommand } from '../lib/pendingTerminalCommands'
@@ -7,6 +7,7 @@ import { queueInitialCommand } from '../lib/pendingTerminalCommands'
 interface Session {
   id: string
   agent: CodeAgent
+  title?: string
 }
 
 let sessionCounter = 0
@@ -25,19 +26,28 @@ const SessionCard = React.memo(function SessionCard({
   session,
   onClose,
   onFocus,
+  onRename,
   promotable,
+  maximized,
+  onToggleMaximize,
   style
 }: {
   session: Session
   onClose(): void
   onFocus?(): void
+  onRename?(title: string): void
   /** In the featured layout, the small cards can be swapped into the big slot. */
   promotable?: boolean
+  maximized: boolean
+  onToggleMaximize(): void
   style?: React.CSSProperties
 }): React.JSX.Element {
+  const [editing, setEditing] = useState(false)
+  const displayTitle = session.title || session.agent.label
+
   return (
     <div
-      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[8px] border border-line-soft bg-bg-panel"
+      className={`flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[8px] border border-line-soft bg-bg-panel ${maximized ? 'absolute inset-0 z-20 rounded-none' : ''}`}
       style={style}
     >
       {/* Promotion lives on the header, never on the terminal below it: a click
@@ -46,31 +56,67 @@ const SessionCard = React.memo(function SessionCard({
           copying from a small session impossible (CODE-03). */}
       <div
         className={`flex h-7 flex-none items-center justify-between gap-2 border-b border-line-soft px-2 ${
-          promotable ? 'cursor-pointer transition-colors hover:bg-bg-hover' : ''
+          promotable && !editing ? 'cursor-pointer transition-colors hover:bg-bg-hover' : ''
         }`}
-        onClick={promotable ? onFocus : undefined}
-        onDoubleClick={promotable ? onFocus : undefined}
-        title={promotable ? 'Click to expand this session' : undefined}
+        onClick={promotable && !editing ? onFocus : undefined}
+        onDoubleClick={promotable && !editing ? onFocus : undefined}
+        title={promotable && !editing ? 'Click to expand this session' : undefined}
       >
-        <span className="flex items-center gap-1.5 truncate text-[11px] text-text-dim">
-          <session.agent.Icon size={12} />
-          {session.agent.label}
-        </span>
-        <div className="flex flex-none items-center gap-0.5">
-          {promotable && (
-            <button
-              type="button"
-              aria-label="Expand session"
-              title="Expand session"
-              onClick={(e) => {
-                e.stopPropagation()
-                onFocus?.()
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-[11px] text-text-dim">
+          <span className="flex-none">
+            <session.agent.Icon size={12} />
+          </span>
+          {editing ? (
+            <input
+              className="h-[20px] min-w-0 flex-1 appearance-none rounded bg-bg-raise px-1.5 text-[11px] text-text outline-none ring-1 ring-line focus:outline-none"
+              autoFocus
+              defaultValue={displayTitle}
+              onClick={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onBlur={(e) => {
+                setEditing(false)
+                const val = e.target.value.trim()
+                if (val && val !== displayTitle) {
+                  onRename?.(val)
+                }
               }}
-              className="grid h-[18px] w-[18px] place-items-center rounded-[4px] text-text-faint transition-colors hover:bg-bg-hover hover:text-text"
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.stopPropagation()
+                  setEditing(false)
+                }
+                if (e.key === 'Enter') {
+                  e.stopPropagation()
+                  ;(e.target as HTMLInputElement).blur()
+                }
+              }}
+            />
+          ) : (
+            <span
+              className="truncate cursor-text select-none hover:text-text"
+              title="Double-click to rename"
+              onDoubleClick={(e) => {
+                e.stopPropagation()
+                setEditing(true)
+              }}
             >
-              <Maximize2 size={10} strokeWidth={2.4} />
-            </button>
+              {displayTitle}
+            </span>
           )}
+        </div>
+        <div className="flex flex-none items-center gap-0.5">
+          <button
+            type="button"
+            aria-label={maximized ? 'Restore session' : 'Expand session'}
+            title={maximized ? 'Restore session' : 'Expand session'}
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggleMaximize()
+            }}
+            className="grid h-[18px] w-[18px] place-items-center rounded-[4px] text-text-faint transition-colors hover:bg-bg-hover hover:text-text"
+          >
+            {maximized ? <Minimize2 size={10} strokeWidth={2.4} /> : <Maximize2 size={10} strokeWidth={2.4} />}
+          </button>
           <button
             type="button"
             aria-label="Close session"
@@ -98,6 +144,7 @@ export default function CodeView({ active }: Props): React.JSX.Element {
   // Which session is the "big" one in the 3-session featured layout. Falls
   // back to the first session whenever this points at one that's gone.
   const [featuredId, setFeaturedId] = useState<string | null>(null)
+  const [maximizedId, setMaximizedId] = useState<string | null>(null)
   // Auto-open the launcher only on a hidden→visible transition, not on every
   // sessions-length change: otherwise closing the last session while looking
   // at this view would immediately pop the dialog back open over the empty
@@ -109,6 +156,17 @@ export default function CodeView({ active }: Props): React.JSX.Element {
     wasActiveRef.current = active
   }, [active, sessions.length])
 
+  useEffect(() => {
+    const offRename = window.api.control.onRenameWidget(({ id, title }) => {
+      setSessions((current) =>
+        current.map((s) => (s.id === id ? { ...s, title } : s))
+      )
+    })
+    return () => {
+      offRename()
+    }
+  }, [])
+
   const launch = useCallback((agent: CodeAgent, count: number): void => {
     const created: Session[] = []
     for (let i = 0; i < count; i++) {
@@ -118,15 +176,23 @@ export default function CodeView({ active }: Props): React.JSX.Element {
       // mount is what lets "launch" both create the terminal and start
       // the agent in it in one gesture.
       queueInitialCommand(id, agent.command)
-      created.push({ id, agent })
+      created.push({ id, agent, title: agent.label })
     }
     setSessions((current) => [...current, ...created])
+  }, [])
+
+  const renameSession = useCallback((id: string, title: string): void => {
+    setSessions((current) =>
+      current.map((s) => (s.id === id ? { ...s, title } : s))
+    )
+    window.api.terminal.setTitle?.(id, title).catch(() => {})
   }, [])
 
   const closeSession = useCallback((id: string): void => {
     // An agent holding the terminal's lock rejects the dispose — expected;
     // the rejection must not surface as an unhandled promise rejection.
     window.api.terminal.dispose(id).catch(() => {})
+    setMaximizedId((current) => (current === id ? null : current))
     setSessions((current) => current.filter((s) => s.id !== id))
   }, [])
 
@@ -186,7 +252,7 @@ export default function CodeView({ active }: Props): React.JSX.Element {
       {/* One grid for every layout — see placementOf() on why the featured
           arrangement is coordinates rather than a second container. */}
       <div
-        className="grid min-h-0 flex-1 gap-0 overflow-hidden bg-bg-raise p-0"
+        className="relative grid min-h-0 flex-1 gap-0 overflow-hidden bg-bg-raise p-0"
         style={
           featured
             ? { gridTemplateColumns: '2fr 1fr', gridTemplateRows: 'repeat(2, minmax(0, 1fr))' }
@@ -200,7 +266,10 @@ export default function CodeView({ active }: Props): React.JSX.Element {
             style={placementOf(session.id)}
             onClose={() => closeSession(session.id)}
             onFocus={() => setFeaturedId(session.id)}
+            onRename={(title) => renameSession(session.id, title)}
             promotable={Boolean(featured) && session.id !== featured?.id}
+            maximized={maximizedId === session.id}
+            onToggleMaximize={() => setMaximizedId((current) => (current === session.id ? null : session.id))}
           />
         ))}
         {sessions.length === 0 && (

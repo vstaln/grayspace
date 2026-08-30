@@ -7,16 +7,17 @@ import GrokIcon from './GrokIcon'
 import AntigravityIcon from './AntigravityIcon'
 import OpenCodeIcon from './OpenCodeIcon'
 import TerminalWidget from './TerminalWidget'
-import NoteWidget from './NoteWidget'
 import TimerWidget from './TimerWidget'
 import PlannerWidget from './PlannerWidget'
 import BoardWidget from './BoardWidget'
+import OrchestrationWidget from './OrchestrationWidget'
 import FilesWidget from './FilesWidget'
 import SysMonitorWidget from './SysMonitorWidget'
 import BrowserWidget from './BrowserWidget'
 import LinksWidget from './LinksWidget'
 import MusicPlayerWidget from './MusicPlayerWidget'
 import IdGeneratorWidget from './IdGeneratorWidget'
+import ErrorBoundary from './ErrorBoundary'
 import { RESIZE_HANDLES, ResizeDir, Widget } from '../types'
 
 interface Props {
@@ -84,6 +85,12 @@ function WidgetFrame({
   workspaceDir
 }: Props): React.JSX.Element {
   const isTerminal = !widget.kind || widget.kind === 'terminal'
+  // Renaming is only worth the header space for widgets that hold identifying
+  // content of their own — a terminal session or a note. The rest (Timer,
+  // Planner, Board, Files, System Monitor, Browser, Links, Music Player, ID
+  // Generator) are single-purpose utility panels whose default title already
+  // says what they are, so the pencil/double-click affordance was just clutter.
+  const canRename = isTerminal
   const [agentMenuOpen, setAgentMenuOpen] = useState(false)
   const [agentIdx, setAgentIdx] = useState(() => agentSelectionByWidget.get(widget.id) ?? 0)
   const [agentLaunchError, setAgentLaunchError] = useState<string | null>(null)
@@ -203,8 +210,8 @@ function WidgetFrame({
           <span
             className="min-w-0 flex-1 truncate text-xs text-text"
             data-testid="widget-title"
-            onDoubleClick={onStartEditing}
-            title={`${widget.title} — double-click to rename`}
+            onDoubleClick={canRename ? onStartEditing : undefined}
+            title={canRename ? `${widget.title} — double-click to rename` : widget.title}
           >
             {widget.title}
           </span>
@@ -278,7 +285,7 @@ function WidgetFrame({
               )}
           </div>
         )}
-        {!editing && !isTerminal && (
+        {!editing && !isTerminal && canRename && (
           <button
             className="grid h-6 w-6 place-items-center rounded-[10px] text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
             onClick={onStartEditing}
@@ -310,16 +317,15 @@ function WidgetFrame({
           </button>
         </div>
       </div>
-      <div
-        className="widget-body min-h-0 flex-1 bg-transparent"
-        onDoubleClick={isTerminal ? onTerminalDoubleClick : undefined}
-      >
-        <WidgetBody
-          widget={widget}
-          workspaceDir={workspaceDir}
-          onProcessExit={onProcessExit ?? onClose}
-          onTitle={onRename}
-        />
+      <div className="widget-body min-h-0 flex-1 bg-transparent">
+        <ErrorBoundary>
+          <WidgetBody
+            widget={widget}
+            workspaceDir={workspaceDir}
+            onProcessExit={onProcessExit ?? onClose}
+            onTitle={onRename}
+          />
+        </ErrorBoundary>
       </div>
       {!widget.maximized &&
         RESIZE_HANDLES.map((dir) => (
@@ -350,18 +356,14 @@ function WidgetBody({
   onTitle?: (title: string) => void
 }): React.JSX.Element {
   switch (widget.kind) {
-    case 'note':
-      return widget.noteId ? (
-        <NoteWidget noteId={widget.noteId} workspaceDir={workspaceDir} onTitle={onTitle} />
-      ) : (
-        <div className="grid h-full place-items-center text-[13px] text-text-faint">Note not attached</div>
-      )
     case 'timer':
       return <TimerWidget />
     case 'planner':
       return <PlannerWidget />
     case 'board':
       return <BoardWidget />
+    case 'orchestration':
+      return <OrchestrationWidget />
     case 'files':
       return <FilesWidget workspaceDir={workspaceDir} />
     case 'sys-monitor':

@@ -20,7 +20,7 @@ test('the shell starts and renders the canvas chrome', async () => {
   const { page } = ctx
 
   // Rail: every entry the user needs day to day.
-  for (const id of ['rail-new-terminal', 'rail-board', 'rail-notes', 'rail-folders', 'rail-settings']) {
+  for (const id of ['rail-board', 'rail-folders', 'rail-settings']) {
     await expect(page.getByTestId(id)).toBeVisible()
   }
   // Floating toolbar with the tool switcher.
@@ -36,7 +36,7 @@ test('the shell starts and renders the canvas chrome', async () => {
     const data = await (await fetch(`http://127.0.0.1:${ctx.controlPort}/health`, {
       headers: { 'x-orcspace-token': ctx.controlToken }
     })).json()
-    return data.mcpRunning === true && data.mcpUrl === `http://localhost:${ctx.controlPort}/mcp`
+    return data.ok === true && data.server === 'orcspace-control' && data.controlPort === ctx.controlPort
   }, { timeout: 20_000 }).toBe(true)
 })
 

@@ -6,13 +6,11 @@ import { app, dialog, ipcMain } from './shims.ts'
 import type { IpcDeps, SettingsPatch } from './types.ts'
 
 export function registerSettingsIpc(deps: IpcDeps): void {
-  const { state, brain } = deps
+  const { state } = deps
 
   ipcMain.handle('settings:get', () => state.publicSettings())
   ipcMain.handle('settings:set', (_e, patch: SettingsPatch) => {
     const next = state.patchSettings(patch ?? {})
-    // Link syntax drives the parser, so relink every note only when it changed.
-    if (patch && 'linkSyntax' in patch) brain.refresh()
     return next
   })
 
@@ -44,6 +42,9 @@ export function registerSettingsIpc(deps: IpcDeps): void {
       : await dialog.showOpenDialog(options)
     const source = result.canceled ? null : result.filePaths[0]
     if (!source) return { dataUrl: await backgroundDataUrl() }
+    if (!media.isLocalPath(source)) {
+      return { error: 'UNC and network paths are not allowed' }
+    }
 
     try {
       // Async variants throughout: the copy can be a full 24 MB, and a sync

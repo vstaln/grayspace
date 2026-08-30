@@ -11,8 +11,19 @@ export declare function sanitizeScrollback(text: string, limit: number): string
 
 /**
  * JS-facing entry point: looks synchronous but returns a `Promise` backed by
- * `AsyncTask`, so the JSON serialize + file write + fsync run off the
- * Node/Electron main thread and never block IPC, PTY output, or the
- * renderer's canvas.save round-trip.
+ * `AsyncTask`, so the file write + fsync + rename run off the Node/Electron
+ * main thread and never block IPC, PTY output, or the renderer's canvas.save
+ * round-trip.
+ *
+ * It takes the **already-serialized text**, not the object. The previous
+ * signature was `write_json_atomic(path, value: serde_json::Value)`, and that
+ * `Value` was materialized by napi on the JS thread *before* the AsyncTask
+ * was ever queued: converting one full canvas (200k stroke points) into a
+ * `serde_json::Value` tree blocked the main process for ~176 ms, against
+ * ~40 ms for V8's own `JSON.stringify` of the same object and ~10 ms for the
+ * write itself. The "off-thread" writer was the single largest main-thread
+ * stall on the autosave path. Handing Rust a `String` costs one UTF-16 → UTF-8
+ * copy and moves everything that actually touches the disk off-thread, which
+ * is what the crate was for.
  */
-export declare function writeJsonAtomic(path: string, value: any): Promise<unknown>
+export declare function writeTextAtomic(path: string, text: string, keepBackup: boolean): Promise<unknown>

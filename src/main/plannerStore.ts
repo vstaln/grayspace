@@ -1,4 +1,4 @@
-﻿import { EventEmitter } from 'events'
+import { EventEmitter } from 'events'
 import { join } from 'path'
 import { readStoreJson, writeJsonAtomic, writeJsonAtomicAsync } from './storage.ts'
 import { getUserDataDir } from './userData.ts'
@@ -14,7 +14,7 @@ import {
 } from './core/index.ts'
 
 /** Bumped whenever the persisted shape changes. */
-export const PLANNER_SCHEMA_VERSION = 1
+export const PLANNER_SCHEMA_VERSION = 2
 
 /** Snapshot cache taken every N committed events. */
 export const PLANNER_SNAPSHOT_INTERVAL = 50
@@ -43,6 +43,8 @@ export interface PlanItem {
   updatedAt: number
   /** Optimistic-concurrency version, owned by the Command Bus. */
   version: number
+  /** Absolute paths to attached photos (stored via media store). */
+  attachments?: string[]
 }
 
 export interface PlannerSnapshot {
@@ -94,6 +96,7 @@ export class PlannerStore extends EventEmitter {
         project: payload.project,
         day: payload.day,
         time: payload.time,
+        attachments: normalizeAttachments(payload.attachments),
         done: false,
         createdBy: event.actorId,
         order: Number(payload.order) || 0,
@@ -114,9 +117,15 @@ export class PlannerStore extends EventEmitter {
           time: payload.time !== undefined ? (payload.time === null ? undefined : normalizeTime(payload.time)) : existing.time,
           done: typeof payload.done === 'boolean' ? payload.done : existing.done,
           order: typeof payload.order === 'number' && Number.isFinite(payload.order) ? payload.order : existing.order,
+          attachments:
+            payload.attachments !== undefined
+              ? normalizeAttachments(payload.attachments)
+              : existing.attachments,
           updatedAt: event.at,
           version: event.version ?? existing.version + 1
         }
+        // Drop empty attachments to keep persisted JSON lean and old snapshots cache-friendly
+        if (updated.attachments && updated.attachments.length === 0) delete (updated as Partial<PlanItem>).attachments
         next.set(targetId, updated)
       }
     } else if (event.type === 'plan.toggle') {
@@ -363,19 +372,23 @@ export class PlannerStore extends EventEmitter {
   }
 
   createItem(input: {
+    id?: string
     title?: string
     note?: string
     project?: string
     day?: string
     time?: string
+    attachments?: string[]
     createdBy: string
+    done?: boolean
   }, overlayId?: string): PlanItem {
     this.ensure()
     const title = input.title?.trim().slice(0, 200)
     if (!title) throw new CommandError('invalid', 'title is required')
     const day = normalizeDay(input.day)
     const now = Date.now()
-    const id = this.nextId()
+    const id = (typeof input.id === 'string' && input.id.trim()) ? input.id.trim() : this.nextId()
+    const attachments = normalizeAttachments(input.attachments)
     const item: PlanItem = {
       id,
       title,
@@ -383,12 +396,13 @@ export class PlannerStore extends EventEmitter {
       project: normalizeProject(input.project),
       day,
       time: normalizeTime(input.time),
-      done: false,
+      done: input.done === true,
       createdBy: input.createdBy,
       order: this.nextOrder(day),
       createdAt: now,
       updatedAt: now,
-      version: this.versions.bump(id, overlayId)
+      version: this.versions.bump(id, overlayId),
+      ...(attachments && attachments.length ? { attachments } : {})
     }
     this.items.set(id, item)
     this.eventsSinceSnapshot += 1
@@ -406,6 +420,7 @@ export class PlannerStore extends EventEmitter {
       time?: string | null
       done?: boolean
       order?: number
+      attachments?: string[] | null
     },
     overlayId?: string
   ): PlanItem {
@@ -417,10 +432,19 @@ export class PlannerStore extends EventEmitter {
     if (patch.project !== undefined) {
       item.project = patch.project === null ? undefined : normalizeProject(patch.project)
     }
-    if (patch.day !== undefined) item.day = patch.day === null ? undefined : normalizeDay(patch.day)
-    if (patch.time !== undefined) item.time = patch.time === null ? undefined : normalizeTime(patch.time)
+    if (patch.day !== undefined) {
+      item.day = patch.day === null ? undefined : normalizeDay(patch.day)
+    }
+    if (patch.time !== undefined) {
+      item.time = patch.time === null ? undefined : normalizeTime(patch.time)
+    }
     if (typeof patch.done === 'boolean') item.done = patch.done
     if (typeof patch.order === 'number' && Number.isFinite(patch.order)) item.order = patch.order
+    if (patch.attachments !== undefined) {
+      const attachments = normalizeAttachments(patch.attachments)
+      if (attachments && attachments.length) item.attachments = attachments
+      else delete (item as Partial<PlanItem>).attachments
+    }
     item.updatedAt = Date.now()
     item.version = this.versions.bump(id, overlayId)
     this.eventsSinceSnapshot += 1
@@ -437,7 +461,7 @@ export class PlannerStore extends EventEmitter {
 
   deleteItem(id: string, overlayId?: string): void {
     this.ensure()
-    if (!this.items.has(id)) throw new CommandError('not_found', 'plan item not found')
+    if (!this.items.has(id)) return
     this.items.delete(id)
     this.versions.forget(id, overlayId)
     this.eventsSinceSnapshot += 1
@@ -520,11 +544,12 @@ function revive(entry: unknown): PlanItem | null {
   const title = typeof raw.title === 'string' ? raw.title.trim() : ''
   if (!id || !title) return null
   const now = Date.now()
+  const attachments = normalizeAttachments(raw.attachments) ?? normalizeAttachments(raw.image ? [raw.image] : undefined)
   return {
     id,
     title,
     note: typeof raw.note === 'string' ? raw.note : '',
-project: normalizeProject(raw.project),
+    project: normalizeProject(raw.project),
     day: safeDay(raw.day),
     time: safeTime(raw.time),
     done: raw.done === true,
@@ -532,7 +557,8 @@ project: normalizeProject(raw.project),
     order: Number.isFinite(raw.order) ? Number(raw.order) : 0,
     createdAt: Number(raw.createdAt) || now,
     updatedAt: Number(raw.updatedAt) || now,
-    version: Number(raw.version) > 0 ? Number(raw.version) : 1
+    version: Number(raw.version) > 0 ? Number(raw.version) : 1,
+    ...(attachments && attachments.length ? { attachments } : {})
   }
 }
 
@@ -540,4 +566,20 @@ function normalizeProject(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const next = value.trim().slice(0, 80)
   return next || undefined
+}
+
+function normalizeAttachments(value: unknown): string[] | undefined {
+  if (value === undefined || value === null) return undefined
+  if (!Array.isArray(value)) return undefined
+  const out: string[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'string') continue
+    const trimmed = entry.trim()
+    if (!trimmed) continue
+    // Cap path length to avoid persisting garbage; media store paths are well under this.
+    if (trimmed.length > 1024) continue
+    out.push(trimmed.slice(0, 1024))
+    if (out.length >= 12) break
+  }
+  return out.length ? out : undefined
 }

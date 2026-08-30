@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 // Every exposed module is typed against the same declarations the renderer
 // sees (`src/preload/api.ts`, re-exported via `index.d.ts`). Drift between the
@@ -7,8 +7,6 @@ import type { IpcRendererEvent } from 'electron'
 // to a value the renderer's own types could not describe.
 import type {
   AppSettings,
-  BrainApi,
-  BrainNote,
   BrowserApi,
   CanvasApi,
   CanvasSnapshot,
@@ -20,8 +18,9 @@ import type {
   FsListResult,
   GitApi,
   GitStatus,
-  McpApi,
-  McpStatus,
+  OrchestrationApi,
+  OrcMessage,
+  OrcSnapshot,
   MediaApi,
   MediaFile,
   PlanItem,
@@ -63,7 +62,8 @@ const windowControls: WindowApi = {
 
 const browser: BrowserApi = {
   /** Main relays a guest page's blocked popup here so the pane opens it as a tab. */
-  onOpenTab: (cb: (url: string) => void): (() => void) => onBroadcast('browser:onOpenTab', cb)
+  onOpenTab: (cb: (url: string) => void): (() => void) => onBroadcast('browser:onOpenTab', cb),
+  clearData: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('browser:clear-data')
 }
 
 const terminal: TerminalApi = {
@@ -82,6 +82,8 @@ const terminal: TerminalApi = {
   // the result, so the renderer could not tell a rejected dispose (an agent
   // holds the terminal's lock) from a succeeded one (P10).
   dispose: (id: string): Promise<unknown> => ipcRenderer.invoke('terminal:dispose', id),
+  setTitle: (id: string, title: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('terminal:set-title', id, title),
   detach: (id: string): void => ipcRenderer.send('terminal:detach', id),
   setFocused: (focused: boolean, id: string): void => ipcRenderer.send('terminal:focus', focused, id),
   onData: (id: string, cb: (data: string) => void): (() => void) => onScoped('terminal:onData', id, cb),
@@ -97,13 +99,16 @@ const media: MediaApi = {
     ipcRenderer.invoke('media:save-bytes', bytes, ext),
   saveBytesScratch: (bytes: Uint8Array, ext: string): Promise<MediaFile | { error: string } | null> =>
     ipcRenderer.invoke('media:save-bytes-scratch', bytes, ext),
-  dataUrl: (path: string): Promise<string | null> => ipcRenderer.invoke('media:data-url', path)
+  dataUrl: (path: string): Promise<string | null> => ipcRenderer.invoke('media:data-url', path),
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file)
 }
 
 const control: ControlApi = {
   onAddWidget: (cb: (payload: { id: string; title: string; from?: string | null }) => void): (() => void) =>
     onBroadcast('control:add-widget', cb),
-  onRemoveWidget: (cb: (id: string) => void): (() => void) => onBroadcast('control:remove-widget', cb)
+  onRemoveWidget: (cb: (id: string) => void): (() => void) => onBroadcast('control:remove-widget', cb),
+  onRenameWidget: (cb: (payload: { id: string; title: string }) => void): (() => void) =>
+    onBroadcast('control:rename-widget', cb)
 }
 
 const workspace: WorkspaceApi = {
@@ -130,12 +135,16 @@ const settings: SettingsApi = {
   onChange: (cb: (settings: AppSettings) => void): (() => void) => onBroadcast('settings:onChange', cb)
 }
 
-const mcp: McpApi = {
-  getStatus: (): Promise<McpStatus> => ipcRenderer.invoke('mcp:getStatus'),
-  getUrl: (): Promise<string> => ipcRenderer.invoke('mcp:getUrl'),
-  restart: (): Promise<McpStatus> => ipcRenderer.invoke('mcp:restart'),
-  onStatusChange: (cb: (status: McpStatus) => void): (() => void) =>
-    onBroadcast('mcp:onStatusChange', cb)
+const orchestration: OrchestrationApi = {
+  snapshot: (runId?: string): Promise<OrcSnapshot> => ipcRenderer.invoke('orchestration:snapshot', runId),
+  inbox: (runId?: string): Promise<OrcMessage[]> => ipcRenderer.invoke('orchestration:inbox', runId),
+  reply: (askId: string, body: string): Promise<unknown> => ipcRenderer.invoke('orchestration:reply', askId, body),
+  resolveGate: (gateId: string, resolution: string): Promise<unknown> =>
+    ipcRenderer.invoke('orchestration:resolve-gate', gateId, resolution),
+  account: (dispatchId: string, state: 'retained' | 'released', closeTerminal?: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('orchestration:account', dispatchId, state, closeTerminal),
+  closeRun: (runId: string): Promise<unknown> => ipcRenderer.invoke('orchestration:close-run', runId),
+  onChange: (cb: () => void): (() => void) => onBroadcast('orchestration:onChange', cb)
 }
 
 const coordination: CoordinationApi = {
@@ -181,6 +190,7 @@ const planner: PlannerApi = {
     project?: string
     day?: string
     time?: string
+    attachments?: string[]
   }): Promise<PlanItem | { error: string }> => ipcRenderer.invoke('planner:create', input),
   update: (
     id: string,
@@ -192,6 +202,7 @@ const planner: PlannerApi = {
       time?: string | null
       done?: boolean
       order?: number
+      attachments?: string[] | null
       baseVersion?: number
     }
   ): Promise<PlanItem | { error: string }> => ipcRenderer.invoke('planner:update', id, patch),
@@ -213,18 +224,6 @@ const canvas: CanvasApi = {
   ): Promise<{ applied: number; skipped: number; removed: number } | { error: string }> =>
     ipcRenderer.invoke('canvas:save', snapshot),
   onChange: (cb: (snapshot: CanvasSnapshot) => void): (() => void) => onBroadcast('canvas:onChange', cb)
-}
-
-const brain: BrainApi = {
-  list: (): Promise<{ notes: BrainNote[] }> => ipcRenderer.invoke('brain:list'),
-  get: (id: string): Promise<BrainNote | null> => ipcRenderer.invoke('brain:get', id),
-  create: (input: unknown): Promise<BrainNote | { error: string }> => ipcRenderer.invoke('brain:create', input),
-  update: (id: string, patch: unknown): Promise<BrainNote | { error: string; code?: string }> => ipcRenderer.invoke('brain:update', id, patch),
-  delete: (id: string): Promise<void | { error: string }> => ipcRenderer.invoke('brain:delete', id),
-  trash: (): Promise<BrainNote[]> => ipcRenderer.invoke('brain:trash'),
-  restore: (id: string): Promise<BrainNote | { error: string }> => ipcRenderer.invoke('brain:restore', id),
-  purge: (id: string): Promise<void | { error: string }> => ipcRenderer.invoke('brain:purge', id),
-  onChange: (cb: (snapshot: { notes: BrainNote[] }) => void): (() => void) => onBroadcast('brain:onChange', cb)
 }
 
 const fs: FsApi = {
@@ -257,11 +256,10 @@ contextBridge.exposeInMainWorld('api', {
   control,
   workspace,
   settings,
-  mcp,
   media,
   coordination,
+  orchestration,
   planner,
-  brain,
   canvas,
   git,
   fs,

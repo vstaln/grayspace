@@ -1,20 +1,12 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, RotateCw, X } from 'lucide-react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { ArrowLeft, ArrowRight, Lock, RotateCw, Search, X } from 'lucide-react'
 import { BROWSER_PARTITION, HOME_URL, hostOf, toNavigationUrl, type Webview } from '../lib/browserShared'
 
-/**
- * One embedded page living on the canvas, distinct from the full-screen
- * Browser view (BrowserPane): a widget instance is a single tab pinned to a
- * spot on the board, useful for keeping a doc or dashboard visible alongside
- * terminals rather than switching views to see it. Guests share the pane's
- * session (BROWSER_PARTITION), so logins carry over either way.
- */
 export default React.memo(function BrowserWidget(): React.JSX.Element {
   const [url, setUrl] = useState(HOME_URL)
   const [address, setAddress] = useState(HOME_URL)
   const [editing, setEditing] = useState(false)
   const [loading, setLoading] = useState(true)
-  /** Main-frame load failure — without it a dead host looks like an eternal blank pane. */
   const [loadError, setLoadError] = useState<string | null>(null)
   const [canGoBack, setCanGoBack] = useState(false)
   const [canGoForward, setCanGoForward] = useState(false)
@@ -28,13 +20,15 @@ export default React.memo(function BrowserWidget(): React.JSX.Element {
     viewRef.current = el ? (el as unknown as Webview) : null
   }, [])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const view = viewRef.current
     if (!view) return undefined
 
     const syncHistory = (): void => {
-      setCanGoBack(view.canGoBack())
-      setCanGoForward(view.canGoForward())
+      try {
+        setCanGoBack(view.canGoBack())
+        setCanGoForward(view.canGoForward())
+      } catch {}
     }
     const onStart = (): void => {
       setLoading(true)
@@ -44,12 +38,15 @@ export default React.memo(function BrowserWidget(): React.JSX.Element {
       setLoading(false)
       syncHistory()
     }
+    const onDomReady = (): void => {
+      setLoading(false)
+      syncHistory()
+    }
     const onFail = (event: Event): void => {
       const e = event as Event & { errorCode?: number; errorDescription?: string; isMainFrame?: boolean }
-      // ERR_ABORTED is our own Stop; subframe failures don't blank the page.
       if (e.errorCode === -3 || e.isMainFrame === false) return
       setLoading(false)
-      setLoadError(e.errorDescription || 'the server could not be reached')
+      setLoadError(e.errorDescription || 'server unreachable')
       syncHistory()
     }
     const onNavigate = (event: Event): void => {
@@ -62,25 +59,23 @@ export default React.memo(function BrowserWidget(): React.JSX.Element {
       if (e.isMainFrame && e.url) setUrl(e.url)
       syncHistory()
     }
-    // One automatic recovery per mount: a guest crash otherwise leaves a blank
-    // widget with a stuck loading flag. A second crash stays down instead of
-    // looping reloads forever.
     let crashReloads = 0
     const onCrashed = (): void => {
-      console.warn('browser widget guest crashed', crashReloads < 1 ? '(auto-reloading once)' : '(stayed down)')
       setLoading(false)
       if (crashReloads < 1) {
         crashReloads += 1
         try {
           view.reload()
-        } catch {
-          /* the frame was already torn down */
-        }
+        } catch {}
+      } else {
+        setLoadError('The web page process crashed. Click retry or enter a new URL.')
       }
     }
 
     view.addEventListener('did-start-loading', onStart)
     view.addEventListener('did-stop-loading', onStop)
+    view.addEventListener('did-finish-load', onDomReady)
+    view.addEventListener('dom-ready', onDomReady)
     view.addEventListener('did-fail-load', onFail)
     view.addEventListener('did-navigate', onNavigate)
     view.addEventListener('did-navigate-in-page', onInPage)
@@ -88,12 +83,13 @@ export default React.memo(function BrowserWidget(): React.JSX.Element {
     return () => {
       view.removeEventListener('did-start-loading', onStart)
       view.removeEventListener('did-stop-loading', onStop)
+      view.removeEventListener('did-finish-load', onDomReady)
+      view.removeEventListener('dom-ready', onDomReady)
       view.removeEventListener('did-fail-load', onFail)
       view.removeEventListener('did-navigate', onNavigate)
       view.removeEventListener('did-navigate-in-page', onInPage)
       view.removeEventListener('crashed', onCrashed)
     }
-    // Guests attach once per mount — the ref itself never changes identity.
   }, [])
 
   const navigate = useCallback((input: string): void => {
@@ -101,25 +97,25 @@ export default React.memo(function BrowserWidget(): React.JSX.Element {
     const view = viewRef.current
     if (!target || !view) return
     setEditing(false)
-    void view.loadURL(target).catch(() => {
-      /* a dead host already surfaces through did-fail-load */
-    })
+    void view.loadURL(target).catch(() => {})
   }, [])
 
   const host = hostOf(url)
+  const isHttps = url.startsWith('https://')
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg-raise">
-      <div className="flex h-9 flex-none items-center gap-1 border-b border-white/10 bg-[#303236] px-2">
+    <div className="flex h-full min-h-0 flex-col bg-[#121214]">
+      {/* Flat dark header */}
+      <div className="flex h-8 flex-none items-center gap-1 border-b border-[#252529] bg-[#1c1c1f] px-2">
         <button
           type="button"
           aria-label="Back"
           title="Back"
           disabled={!canGoBack}
           onClick={() => viewRef.current?.goBack()}
-          className="grid h-[24px] w-[24px] flex-none place-items-center rounded-full text-[#c0c1c3] transition-colors hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:text-[#777a7e]"
+          className="grid h-6 w-6 flex-none place-items-center rounded-md text-[#8a8a90] hover:bg-[#2a2a2e] hover:text-[#ececec] disabled:opacity-30 disabled:pointer-events-none"
         >
-          <ArrowLeft size={13} strokeWidth={2.1} />
+          <ArrowLeft size={13} strokeWidth={1.9} />
         </button>
         <button
           type="button"
@@ -127,31 +123,34 @@ export default React.memo(function BrowserWidget(): React.JSX.Element {
           title="Forward"
           disabled={!canGoForward}
           onClick={() => viewRef.current?.goForward()}
-          className="grid h-[24px] w-[24px] flex-none place-items-center rounded-full text-[#c0c1c3] transition-colors hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:text-[#777a7e]"
+          className="grid h-6 w-6 flex-none place-items-center rounded-md text-[#8a8a90] hover:bg-[#2a2a2e] hover:text-[#ececec] disabled:opacity-30 disabled:pointer-events-none"
         >
-          <ArrowRight size={13} strokeWidth={2.1} />
+          <ArrowRight size={13} strokeWidth={1.9} />
         </button>
         <button
           type="button"
           aria-label={loading ? 'Stop' : 'Reload'}
           title={loading ? 'Stop' : 'Reload'}
           onClick={() => (loading ? viewRef.current?.stop() : viewRef.current?.reload())}
-          className="grid h-[24px] w-[24px] flex-none place-items-center rounded-full text-[#c0c1c3] transition-colors hover:bg-white/10 hover:text-white"
+          className="grid h-6 w-6 flex-none place-items-center rounded-md text-[#8a8a90] hover:bg-[#2a2a2e] hover:text-[#ececec]"
         >
-          {loading ? <X size={13} strokeWidth={2.1} /> : <RotateCw size={12} strokeWidth={2.1} />}
+          {loading ? <X size={13} strokeWidth={1.9} /> : <RotateCw size={12} strokeWidth={1.9} />}
         </button>
         <form
-          className="ml-0.5 min-w-0 flex-1"
+          className="relative ml-1 flex min-w-0 flex-1 items-center"
           onSubmit={(e) => {
             e.preventDefault()
             navigate(address)
           }}
         >
+          <div className="pointer-events-none absolute left-2.5 flex items-center text-[#6a6a70]">
+            {isHttps ? <Lock size={10} strokeWidth={2} /> : <Search size={10} strokeWidth={2} />}
+          </div>
           <input
             value={address}
             spellCheck={false}
             aria-label="Address and search"
-            placeholder="Search Google or type a URL"
+            placeholder="Search or enter address"
             onChange={(e) => {
               setEditing(true)
               setAddress(e.target.value)
@@ -168,29 +167,29 @@ export default React.memo(function BrowserWidget(): React.JSX.Element {
                 e.currentTarget.blur()
               }
             }}
-            className="h-[26px] w-full rounded-full border border-white/10 bg-[#45484d] px-3 text-[11.5px] text-white outline-none transition-colors placeholder:text-[#b0b2b5] focus:border-white/25"
+            className="h-6 w-full rounded-full border border-[#2e2e32] bg-[#252529] pl-7 pr-2.5 text-[11px] text-[#e8e8ea] outline-none placeholder:text-[#6a6a70] focus:border-[#3a3a40] focus:bg-[#2a2a2e]"
           />
         </form>
-        {host && !editing && <span className="mx-1 flex-none truncate text-[10px] text-text-faint">{host}</span>}
+        {host && !editing && <span className="mx-1 hidden max-w-[90px] flex-none truncate text-[10px] text-[#6a6a70] xl:block">{host}</span>}
       </div>
       {loading && (
-        <div className="h-0.5 flex-none overflow-hidden" aria-hidden>
-          <div className="load-bar h-full w-1/4 rounded-full bg-accent/70" />
+        <div className="load-bar-track h-px flex-none" aria-hidden>
+          <div className="load-bar h-full w-1/3" />
         </div>
       )}
       {!loading && loadError && (
-        <div className="flex flex-none items-center justify-between gap-2 border-b border-danger/30 bg-danger/10 px-3 py-1 text-[11px] text-danger">
-          <span className="min-w-0 truncate">Failed to load — {loadError}</span>
+        <div className="flex flex-none items-center justify-between gap-2 border-b border-[#3a2a2a] bg-[#1f1a1c] px-2 py-1 text-[11px] text-[#c9a0a0]">
+          <span className="min-w-0 truncate">Error — {loadError}</span>
           <button
             type="button"
-            className="flex-none rounded-[8px] border border-danger/40 px-2 py-0.5 text-[10px] text-danger transition-colors hover:bg-danger/15"
+            className="flex-none rounded-md bg-[#2a2a2e] px-2 py-0.5 text-[10px] text-[#c9a0a0] hover:bg-[#303034]"
             onClick={() => viewRef.current?.reload()}
           >
             Retry
           </button>
         </div>
       )}
-      <div className="relative min-h-0 flex-1">
+      <div className="browser-surface relative min-h-0 flex-1">
         <webview
           ref={setViewRef}
           partition={BROWSER_PARTITION}

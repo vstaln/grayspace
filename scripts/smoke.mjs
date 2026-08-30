@@ -40,9 +40,7 @@ function parsePort(value) {
 }
 
 const controlPort = parsePort(requestedControlPort) ?? await freePort()
-const mcpPort = controlPort
 const controlUrl = `http://127.0.0.1:${controlPort}/health`
-const mcpUrl = `http://127.0.0.1:${mcpPort}/mcp`
 
 if (!fs.existsSync(executable)) {
   console.error(`[smoke] executable not found: ${executable}`)
@@ -113,47 +111,10 @@ async function waitForControl(token, deadline) {
   throw new Error(`control server did not become healthy within ${timeoutMs}ms`)
 }
 
-async function waitForMcp(deadline, token) {
-  const initialize = {
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'initialize',
-    params: {
-      protocolVersion: '2025-03-26',
-      capabilities: {},
-      clientInfo: { name: 'orcspace-smoke', version: '1.0.0' }
-    }
-  }
-  while (Date.now() < deadline) {
-    if (exited) throw new Error(childExitMessage('MCP initialize'))
-    try {
-      const response = await request(mcpUrl, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json, text/event-stream',
-          // The MCP endpoint is token-gated like the control API (P1).
-          'x-orcspace-token': token
-        },
-        body: JSON.stringify(initialize)
-      })
-      if (response.ok) {
-        const body = await response.text()
-        if (body.includes('result') && body.includes('protocolVersion')) return
-      }
-    } catch {
-      // Retry until the bundled MCP process has bound its port.
-    }
-    await new Promise(resolve => setTimeout(resolve, 250))
-  }
-  throw new Error(`MCP server did not answer initialize within ${timeoutMs}ms (control server was healthy)`)
-}
-
 function stop() {
   if (!child || exited) return
   if (process.platform === 'win32' && child.pid) {
-    // /t is important: the app owns the MCP child, so killing only OrcSpace
-    // could leave node.exe alive and make the next smoke collide on MCP_PORT.
+    // /t is important: the app owns the whole process tree.
     spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
       stdio: 'ignore',
       timeout: 5_000,
@@ -179,8 +140,7 @@ try {
   const deadline = Date.now() + timeoutMs
   const token = await waitForToken(deadline)
   await waitForControl(token, deadline)
-  await waitForMcp(deadline, token)
-  console.log('[smoke] control health and MCP initialize passed')
+  console.log('[smoke] combined renderer/control server health passed')
 } catch (error) {
   console.error(`[smoke] ${error instanceof Error ? error.message : String(error)}`)
   process.exitCode = 1
@@ -188,7 +148,7 @@ try {
   if (hardStopTimer) clearTimeout(hardStopTimer)
   stop()
   // On Windows taskkill /f returns before the dying tree has released its file
-  // handles, so a single rmSync usually races the OrcSpace/MCP children and
+  // handles, so a single rmSync usually races the app process and
   // leaks the profile. Retry briefly until the handles are gone.
   const removalDeadline = Date.now() + 5_000
   let removed = false

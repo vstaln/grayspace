@@ -13,7 +13,7 @@ describe('runtimePresence', () => {
     const previous = process.env.ORCSPACE_TEST_USER_DATA
     process.env.ORCSPACE_TEST_USER_DATA = dir
     try {
-      const file = writeRuntimePresence({ mcpRunning: true, workspaceDir: dir })
+      const file = writeRuntimePresence({ workspaceDir: dir })
       assert.equal(file, runtimeFile())
       const read = readRuntimePresence()
       assert.ok(read)

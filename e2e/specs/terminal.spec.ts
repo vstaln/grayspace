@@ -26,11 +26,16 @@ test.afterAll(async () => {
   await closeOrcSpace(ctx)
 })
 
-test('a terminal spawns from the rail, runs a command, and closes for real', async () => {
+async function openTerminalFromCanvas(): Promise<void> {
+  await ctx.page.getByTestId('canvas').click({ button: 'right', position: { x: 420, y: 260 } })
+  await ctx.page.getByTestId('cm-terminal').click()
+}
+
+test('a terminal spawns from the canvas menu, runs a command, and closes for real', async () => {
   const { page } = ctx
   const tag = `e2e-${Date.now()}`
 
-  await page.getByTestId('rail-new-terminal').click()
+  await openTerminalFromCanvas()
   const id = await waitForTerminalShell(ctx, page)
 
   // Type into the mounted xterm and let the shell echo it back.
@@ -58,7 +63,7 @@ test('a terminal spawns from the rail, runs a command, and closes for real', asy
 test('the agent-launch button types the CLI command into the shell', async () => {
   const { page } = ctx
 
-  await page.getByTestId('rail-new-terminal').click()
+  await openTerminalFromCanvas()
   const id = await waitForTerminalShell(ctx, page)
 
   const frame = terminalFrame(page)

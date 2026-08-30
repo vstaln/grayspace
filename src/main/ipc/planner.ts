@@ -9,7 +9,7 @@ export function registerPlannerIpc(deps: IpcDeps): void {
   ipcMain.handle('planner:list', () => deps.planner.list())
   ipcMain.handle(
     'planner:create',
-    async (_e, input: { title: string; note?: string; day?: string; time?: string }) =>
+    async (_e, input: { title: string; note?: string; day?: string; time?: string; project?: string; attachments?: string[] }) =>
       unwrap(await send('plan.create', NEW.plan, input))
   )
   ipcMain.handle(
@@ -20,10 +20,12 @@ export function registerPlannerIpc(deps: IpcDeps): void {
       patch: {
         title?: string
         note?: string
+        project?: string | null
         day?: string | null
         time?: string | null
         done?: boolean
         order?: number
+        attachments?: string[] | null
         baseVersion?: number
       }
     ) => {

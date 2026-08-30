@@ -160,7 +160,8 @@ export function registerFileCommands({ core }: CommandDeps): void {
         assertTargetMatches(command.target, source)
         if (!fs.existsSync(source)) throw new CommandError('not_found', 'Source file does not exist')
         const isSameFileCaseOnly =
-          process.platform === 'win32' && source.toLowerCase() === destination.toLowerCase()
+          (process.platform === 'win32' || process.platform === 'darwin') &&
+          source.toLowerCase() === destination.toLowerCase()
         if (fs.existsSync(destination) && !isSameFileCaseOnly) {
           throw new CommandError('failed', 'Target file name already exists')
         }

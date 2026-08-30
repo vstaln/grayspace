@@ -1,9 +1,10 @@
 import type { Core } from '../core/index.ts'
 import { registerBoardIpc } from './board.ts'
-import { registerBrainIpc } from './brain.ts'
+import { registerBrowserIpc } from './browser.ts'
 import { registerCanvasIpc } from './canvas.ts'
 import { registerFilesystemIpc } from './filesystem.ts'
 import { registerIntegrationsIpc } from './integrations.ts'
+import { registerOrchestrationIpc } from './orchestration.ts'
 import { registerPlannerIpc } from './planner.ts'
 import { registerSettingsIpc } from './settings.ts'
 import { registerSystemIpc } from './system.ts'
@@ -45,9 +46,10 @@ export function registerIpc(deps: IpcDeps): void {
   registerSettingsIpc(deps)
   registerIntegrationsIpc(deps)
   registerCanvasIpc(deps)
-  registerBrainIpc(deps)
   registerBoardIpc(deps)
   registerPlannerIpc(deps)
+  registerOrchestrationIpc(deps)
+  registerBrowserIpc(deps)
 }
 
 /** The type surfaces some modules want without importing Electron's app. */

@@ -14,6 +14,7 @@ interface PlanCreatePayload {
   project?: string
   day?: string
   time?: string
+  attachments?: string[]
 }
 
 interface PlanUpdatePayload {
@@ -24,6 +25,7 @@ interface PlanUpdatePayload {
   time?: string | null
   done?: boolean
   order?: number
+  attachments?: string[] | null
 }
 
 const PLAN_FIELDS: CommandPayloadSchema['properties'] = {
@@ -31,7 +33,8 @@ const PLAN_FIELDS: CommandPayloadSchema['properties'] = {
   note: { type: 'string', description: 'Longer note under the line' },
   project: { type: 'string', description: 'Optional group label (e.g. a release)' },
   day: { type: 'string', description: 'Day YYYY-MM-DD; omit for the undated inbox' },
-  time: { type: 'string', description: 'Time HH:MM' }
+  time: { type: 'string', description: 'Time HH:MM' },
+  attachments: { type: 'array', description: 'Attached photo paths (from media store)' }
 }
 
 export function registerPlannerCommands({ core, planner }: CommandDeps): void {
@@ -56,7 +59,7 @@ export function registerPlannerCommands({ core, planner }: CommandDeps): void {
   bus.registerDefinition<PlanUpdatePayload, PlanItem>({
     type: 'plan.update',
     description:
-      'Update a planner line (text, day/time, done, order). Pass null for day/project/time to clear them.',
+      'Update a planner line (text, day/time, done, order, attachments). Pass null for day/project/time/attachments to clear them.',
     targetScheme: 'plan',
     payloadSchema: {
       type: 'object',

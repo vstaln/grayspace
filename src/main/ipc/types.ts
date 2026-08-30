@@ -1,9 +1,9 @@
 import type { BrowserWindow } from 'electron'
 import type { CoordinationStore } from '../coordination.ts'
 import type { TerminalManager } from '../terminals.ts'
-import type { BrainStore } from '../brain.ts'
 import type { CanvasStore } from '../canvasState.ts'
 import type { PlannerStore } from '../plannerStore.ts'
+import type { OrchestrationStore } from '../orchestration/store.ts'
 import type { AppState, SettingsPatch } from '../appState.ts'
 import type { Core } from '../core/index.ts'
 
@@ -13,7 +13,8 @@ export interface IpcDeps {
   terminals: TerminalManager
   coordination: CoordinationStore
   planner: PlannerStore
-  brain: BrainStore
+  /** Runs, delegated tasks, dispatches and the coordinator inbox. */
+  orchestration: OrchestrationStore
   canvas: CanvasStore
   state: AppState
   getWindow(): BrowserWindow | null

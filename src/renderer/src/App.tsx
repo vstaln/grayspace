@@ -17,12 +17,11 @@ import { useSettings } from './hooks/useSettings'
 import { DRAW_CLICK_THRESHOLD_PX } from './lib/canvasMetrics'
 
 // Heavy surfaces behind a first-use gate are also code-split: their modules
-// (board UI, the brain editor with its link machinery, the browser pane) no
+// (board UI and the browser pane) no
 // longer parse and compile at startup — only when the user first opens them
 // (PERF-lazy-surfaces). TerminalWidget stays eager on purpose: the canvas is
 // the app's primary surface and terminals are its core widget.
 const KanbanBoard = lazy(() => import('./components/KanbanBoard'))
-const SecondBrain = lazy(() => import('./components/SecondBrain'))
 const BrowserPane = lazy(() => import('./components/BrowserPane'))
 const CodeView = lazy(() => import('./components/CodeView'))
 
@@ -95,18 +94,27 @@ function wallpaperBackgroundImage(background: string | null): string | undefined
 function Wallpaper(): React.JSX.Element | null {
   const { theme, background, dim, blur, pickBackground } = useTheme()
   if (theme !== 'photo') return null
+  const bgImg = wallpaperBackgroundImage(background)
+  const blurPx = Math.round((blur / 100) * 32)
+  const dimRatio = dim / 100
+
   return (
     <>
-      <div
-        className="wallpaper-layer"
-        style={
-          {
-            backgroundImage: wallpaperBackgroundImage(background),
-            '--wallpaper-dim': dim / 100,
-            '--wallpaper-blur': blur / 100
-          } as React.CSSProperties
-        }
-      />
+      <div className="wallpaper-container" aria-hidden="true">
+        <div
+          className="wallpaper-image"
+          style={{
+            backgroundImage: bgImg,
+            filter: blurPx > 0 ? `blur(${blurPx}px)` : 'none'
+          }}
+        />
+        {dimRatio > 0 && (
+          <div
+            className="wallpaper-dim"
+            style={{ backgroundColor: `rgba(0, 0, 0, ${dimRatio})` }}
+          />
+        )}
+      </div>
       {!background && (
         <div className="pointer-events-none absolute inset-x-0 top-10 z-[900] flex justify-center">
           <button
@@ -184,7 +192,6 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
   const editingRef = useRef<string | null>(null)
   editingRef.current = editingId
   const [boardOpen, setBoardOpen] = useState(false)
-  const [brainOpen, setBrainOpen] = useState(false)
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null)
   const [isPanning, setIsPanning] = useState(false)
   const [canvasNotice, setCanvasNotice] = useState<string | null>(null)
@@ -210,24 +217,6 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
     return () => window.clearTimeout(timer)
   }, [canvasNotice])
 
-  // The title bar's Memory tab lives outside this component, so it can only
-  // ask for the panel by event — mirrors `orcspace:open-board` below.
-  useEffect(() => {
-    const onToggleBrain = (): void => {
-      setBrainOpen((v) => !v)
-    }
-    window.addEventListener('orcspace:toggle-brain', onToggleBrain)
-    return () => {
-      window.removeEventListener('orcspace:toggle-brain', onToggleBrain)
-    }
-  }, [])
-
-  // ...and it needs to know when that panel closes some other way (Escape,
-  // the panel's own close button) so its own tab stops looking selected.
-  useEffect(() => {
-    window.dispatchEvent(new CustomEvent('orcspace:brain-open-change', { detail: brainOpen }))
-  }, [brainOpen])
-
   // P2-205: one Escape closes the frontmost transient layer — a widget-title
   // edit first, then the context menu, board, brain, chat. Text fields keep
   // the key to themselves so the chat input or note editor isn't yanked away.
@@ -243,11 +232,10 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
       if (target?.closest?.('input,textarea,select')) return
       if (menu) return setMenu(null)
       if (boardOpen) return setBoardOpen(false)
-      if (brainOpen) return setBrainOpen(false)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [menu, boardOpen, brainOpen])
+  }, [menu, boardOpen])
 
   useEffect(() => {
     const onOpenBoard = (): void => setBoardOpen(true)
@@ -288,7 +276,8 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
     [canvas.addWidget]
   )
 
-  const spawnNoteAt = useCallback(
+  /* Notes/Second Brain were removed; canvas widgets are self-contained. */
+  /* const spawnNoteAt = useCallback(
     (point: Point): void => {
       // Check before creating, not after: a full canvas would otherwise leave
       // an orphan "New Note" in the brain with no widget ever showing it.
@@ -305,15 +294,14 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
           }
         })
         .catch(() => {
-          /* a failed note create is not worth a dialog; the canvas is unchanged */
+          // removed note handler
         })
     },
     [canvas.addNoteWidget, workspaceDir]
-  )
+  ) */
 
   // Stable rail callbacks — see the note above the drag handlers (PERF-rail-memo).
   const onToggleBoard = useCallback((): void => setBoardOpen((v) => !v), [])
-  const onToggleBrain = useCallback((): void => setBrainOpen((v) => !v), [])
   const onPickDir = useCallback((): void => {
     // The result arrives via workspace:onDirChange; a rejected dialog is not
     // actionable here, but it must not surface as an unhandled rejection.
@@ -789,11 +777,8 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
         workspaceDir={workspaceDir}
         managerId={coordination.snapshot.managerId}
         boardOpen={boardOpen}
-        brainOpen={brainOpen}
         taskCount={openTasks}
-        onNewTerminal={spawnTerminalAtCenter}
         onToggleBoard={onToggleBoard}
-        onToggleBrain={onToggleBrain}
         onPickDir={onPickDir}
       />
       <div className={active ? 'contents' : 'contents invisible pointer-events-none'} aria-hidden={!active}>
@@ -873,9 +858,9 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
             }}
             onPickFiles={() => { placeWidget('files', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickSysMonitor={() => { placeWidget('sys-monitor', toWorld(menu.x, menu.y)); setMenu(null) }}
-            onPickNote={() => { spawnNoteAt(toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickTimer={() => { placeWidget('timer', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickPlanner={() => { placeWidget('planner', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onPickOrchestration={() => { placeWidget('orchestration', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickBrowser={() => { placeWidget('browser', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickLinks={() => { placeWidget('links', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickMusicPlayer={() => { placeWidget('music-player', toWorld(menu.x, menu.y)); setMenu(null) }}
@@ -902,14 +887,6 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
               return ok ? coordination.releaseLocks() : { ok: true }
             }}
             onClose={() => setBoardOpen(false)}
-          />
-        </Suspense>
-      )}
-      {brainOpen && (
-        <Suspense fallback={null}>
-          <SecondBrain
-            workspaceDir={workspaceDir}
-            onClose={() => setBrainOpen(false)}
           />
         </Suspense>
       )}

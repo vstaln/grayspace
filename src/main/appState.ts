@@ -114,7 +114,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     idleTimeoutMs: 5 * 60_000,
     offloadVision: false
   },
-  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'note', 'timer', 'planner', 'browser', 'links', 'music-player', 'id-generator']
+  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'note', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player', 'id-generator']
 }
 
 const MAX_RECENT = 12
@@ -250,7 +250,7 @@ export class AppState extends EventEmitter {
       this.state.settings.localModel = { ...this.state.settings.localModel, ...patch.localModel }
     }
     if (Array.isArray(patch.favoriteWidgets)) {
-      const allowed = new Set(['terminal', 'note', 'timer', 'board', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'id-generator'])
+      const allowed = new Set(['terminal', 'note', 'timer', 'board', 'planner', 'orchestration', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'id-generator'])
       this.state.settings.favoriteWidgets = [...new Set(patch.favoriteWidgets.filter((kind): kind is string => typeof kind === 'string' && allowed.has(kind)))].slice(0, 32)
     }
     this.commit()

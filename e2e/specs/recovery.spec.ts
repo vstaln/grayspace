@@ -30,7 +30,8 @@ test.describe('recovery', () => {
     const ctx = await launchOrcSpace()
     try {
       await waitForCanvas(ctx.page)
-      await ctx.page.getByTestId('rail-new-terminal').click()
+      await ctx.page.getByTestId('canvas').click({ button: 'right', position: { x: 420, y: 260 } })
+      await ctx.page.getByTestId('cm-terminal').click()
       const id = await waitForTerminalShell(ctx, ctx.page)
 
       const tagA = `pre-reload-${Date.now()}`
@@ -144,7 +145,8 @@ test.describe('recovery', () => {
     let titlesBefore: string[]
     try {
       await waitForCanvas(ctx.page)
-      await ctx.page.getByTestId('rail-new-terminal').click()
+      await ctx.page.getByTestId('canvas').click({ button: 'right', position: { x: 420, y: 260 } })
+      await ctx.page.getByTestId('cm-terminal').click()
       await waitForTerminalShell(ctx, ctx.page)
       // The widget reaches main through the debounced canvas import; give it
       // time to land before the quit path flushes everything to disk.

@@ -206,7 +206,7 @@ export class LockManager extends EventEmitter {
     if (!lock) return undefined
     if (lock.expiresAt > this.now()) return lock
     this.locks.delete(resource)
-    this.emit('expired', lock)
+    queueMicrotask(() => this.emit('expired', lock))
     return undefined
   }
 
@@ -215,6 +215,11 @@ export class LockManager extends EventEmitter {
       throw new CommandError('invalid', `"${resource}" is not a resource id (expected scheme:id)`)
     }
     return resource
+  }
+
+  dispose(): void {
+    this.stopSweeper()
+    this.releaseAll()
   }
 }
 

@@ -6,15 +6,13 @@
   "license": "MIT",
   "author": "OrcSpace",
   "scripts": {
-    "build:mcp": "npm --prefix Orcspace-mcp install --no-fund --no-audit && npm --prefix Orcspace-mcp run build",
-    "predev": "npm run build:mcp",
+    "setup": "node scripts/setup.mjs",
+    "predev": "npm run build:native",
     "dev": "npm run build:native && electron-vite dev",
-    "prebuild": "npm run build:mcp",
+    "prebuild": "npm run build:native",
     "build:native": "node native/build.mjs",
     "build": "npm run build:native && electron-vite build",
-    "stage:mcp": "node scripts/stage-mcp.mjs",
-    "predist": "npm run build:mcp",
-    "prestart": "npm run build:mcp",
+    "prestart": "npm run build:native",
     "start": "electron-vite preview",
     "reset": "node scripts/reset.mjs",
     "test": "node --test \"src/main/**/*.test.ts\"",
@@ -22,10 +20,10 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "typecheck:e2e": "tsc --noEmit -p e2e/tsconfig.json",
-    "dist": "npm run build && npm run stage:mcp && electron-builder --win",
-    "dist:mac": "npm run build && npm run stage:mcp && electron-builder --mac",
-    "dist:mac:arm": "npm run build && npm run stage:mcp && electron-builder --mac zip --arm64",
-    "dist:mac:intel": "npm run build && npm run stage:mcp && electron-builder --mac zip --x64",
+    "dist": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:mac:arm": "npm run build && electron-builder --mac zip --arm64",
+    "dist:mac:intel": "npm run build && electron-builder --mac zip --x64",
     "smoke": "node scripts/smoke.mjs",
     "pretest:e2e": "npm run build",
     "test:e2e": "playwright test --project=local",
@@ -36,6 +34,7 @@
     "appId": "com.orcspace.app",
     "productName": "OrcSpace",
     "npmRebuild": false,
+    "afterSign": "scripts/notarize.mjs",
     "files": [
       "out/**/*",
       "!**/node_modules/@homebridge/node-pty-prebuilt-multiarch/prebuilds/{linux-arm,linux-arm64,linux-ia32,linux-x64}/**/*",
@@ -54,8 +53,8 @@
     "compression": "maximum",
     "extraResources": [
       {
-        "from": ".staging/mcp",
-        "to": "mcp",
+        "from": "cli",
+        "to": "cli",
         "filter": [
           "**/*"
         ]
@@ -178,12 +177,21 @@
         "en_US"
       ],
       "language": "1033"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "orcspace",
+        "repo": "orcspace"
+      }
+    ]
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.122.0",
+    "@electron/notarize": "^3.1.1",
     "@homebridge/node-pty-prebuilt-multiarch": "0.13.1",
-    "@modelcontextprotocol/sdk": "^1.12.0",
     "dotenv": "^17.4.2",
+    "electron-updater": "^6.8.9",
     "zod": "^3.23.8"
   },
   "devDependencies": {

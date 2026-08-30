@@ -6,7 +6,6 @@ export const APP_TITLE = 'OrcSpace'
  * Not "workspace" — Claude Code treats that as a reserved server name and
  * silently refuses to load it, which is a wordless failure to debug.
  */
-export const MCP_SERVER_NAME = 'orcspace'
 
 function configuredPort(value: string | undefined, fallback: number): number {
   const parsed = Number(value)
@@ -14,16 +13,6 @@ function configuredPort(value: string | undefined, fallback: number): number {
 }
 
 export const CONTROL_PORT = configuredPort(process.env.WORKSPACE_CONTROL_PORT, 20220)
-
-/**
- * The endpoint MCP clients attach to; also what the config panel copies.
- * `localhost`, not a literal IP: the MCP server itself binds both loopback
- * addresses (see the embedded Orcspace-mcp runtime) precisely so this name always
- * resolves to a listener no matter which address family a client prefers.
- */
-export function mcpUrl(): string {
-  return `http://localhost:${CONTROL_PORT}/mcp`
-}
 
 /** Keeps the per-terminal scrollback that agents can read back over HTTP bounded. */
 export const OUTPUT_BUFFER_LIMIT = 50_000

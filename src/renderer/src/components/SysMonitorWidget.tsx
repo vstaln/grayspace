@@ -462,20 +462,6 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
           >
             <Lock size={12} className="text-[#e6c07b]" /> Release All Locks
           </button>
-          <button
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-[8px] border border-line bg-bg-hover/30 px-2.5 py-1.5 text-xs text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
-            onClick={async () => {
-              try {
-                await window.api.mcp.restart()
-                showNotice('MCP server restarted')
-              } catch {
-                showNotice('Failed to restart MCP server')
-              }
-            }}
-            title="Restart MCP Server"
-          >
-            <Zap size={12} className="text-accent" /> Restart MCP
-          </button>
         </div>
       </div>
     </div>

@@ -3,5 +3,14 @@
 /**
  * Sanitizes the JSON-shaped canvas strokes without changing their public shape.
  * Invalid entries/points are discarded; valid strokes need at least two points.
+ *
+ * The input `Value` is consumed rather than borrowed, so every already-valid
+ * point and stroke map is *moved* into the result. The previous version read
+ * each point through `as_f64` and then rebuilt it with `json!({"x": x, "y": y})`,
+ * allocating a fresh `serde_json::Map` plus two owned key strings for every
+ * point on the canvas — on a full canvas that is 200k map allocations on every
+ * autosave, on the main process's thread. Points that are not already the
+ * canonical `{x, y}` shape (extra keys, integers, a stray `pressure` field)
+ * still get rebuilt, so the output shape is byte-for-byte what it always was.
  */
 export declare function sanitizeStrokes(value: any): any

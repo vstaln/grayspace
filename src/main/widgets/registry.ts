@@ -60,12 +60,6 @@ export function registerBuiltinWidgets(): void {
     commands: ['terminal.spawn', 'terminal.input', 'terminal.write', 'terminal.resize', 'terminal.dispose', 'widget.update']
   })
   registerWidgetType({
-    kind: 'note',
-    label: 'Note',
-    defaultSize: { w: 460, h: 340 },
-    commands: ['note.create', 'note.update', 'note.delete', 'widget.update', 'widget.remove']
-  })
-  registerWidgetType({
     kind: 'timer',
     label: 'Timer',
     defaultSize: { w: 300, h: 220 },
@@ -108,9 +102,23 @@ export function registerBuiltinWidgets(): void {
     commands: ['widget.update', 'widget.remove']
   })
   registerWidgetType({
+    // Read-only over the fleet, plus the three writes only a human makes:
+    // answering a blocked worker, resolving a gate, releasing a finished one.
+    kind: 'orchestration',
+    label: 'Orchestration',
+    defaultSize: { w: 520, h: 560 },
+    commands: ['orc.send', 'gate.resolve', 'dispatch.account', 'run.close', 'widget.update', 'widget.remove']
+  })
+  registerWidgetType({
     kind: 'music-player',
     label: 'Music Player',
     defaultSize: { w: 460, h: 330 },
+    commands: ['widget.update', 'widget.remove']
+  })
+  registerWidgetType({
+    kind: 'id-generator',
+    label: 'ID Generator',
+    defaultSize: { w: 420, h: 360 },
     commands: ['widget.update', 'widget.remove']
   })
 }

@@ -1,10 +1,7 @@
-import * as electron from 'electron'
 import { EventEmitter } from 'events'
 import * as fs from 'fs'
-import { dirname, join } from 'path'
+import { join } from 'path'
 import { createHash } from 'crypto'
-import { createRequire } from 'module'
-import { fileURLToPath } from 'url'
 import { readStoreJson, writeJsonAtomic, writeJsonAtomicAsync } from './storage.ts'
 import { getUserDataDir } from './userData.ts'
 import {
@@ -17,22 +14,18 @@ import {
   type ResourceId
 } from './core/index.ts'
 
-const electronApp = (electron as unknown as { app?: { isPackaged?: boolean } }).app
-const moduleDir = typeof __dirname === 'string' ? __dirname : dirname(fileURLToPath(import.meta.url))
-
 /** Bumped when the on-disk canvas shape gains fields (widgets, version, …). */
 export const CANVAS_SCHEMA_VERSION = 3
 
 /** Snapshot cache interval for event sourcing. */
 export const CANVAS_SNAPSHOT_INTERVAL = 50
 
-export type WidgetKind = 'terminal' | 'note' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'id-generator'
+export type WidgetKind = 'terminal' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'id-generator' | 'orchestration'
 
 export interface CanvasWidget {
   id: string
   title: string
   kind?: WidgetKind
-  noteId?: string
   x: number
   y: number
   w: number
@@ -99,19 +92,24 @@ export function notifyCanvasWorkspaceChanged(dir: string | undefined): void {
 
 const isNum = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 
-type NativeCanvasCore = { sanitizeStrokes(value: unknown): unknown }
-const nativeCanvasCore = (() => {
-  try {
-    const require = createRequire(import.meta.url)
-    const nativeDir = electronApp?.isPackaged
-      ? join(process.resourcesPath, 'native', 'canvas-core')
-      : join(moduleDir, '../../native/canvas-core')
-    return require(nativeDir) as NativeCanvasCore
-  } catch (error) {
-    console.warn('[native] canvas-core unavailable; using the TypeScript canvas sanitizer fallback.', error)
-    return null
-  }
-})()
+/**
+ * There is deliberately no native bridge here anymore.
+ *
+ * `canvas-core`'s Rust `sanitizeStrokes` took the stroke array as a
+ * `serde_json::Value`, which means napi rebuilt every single `{x, y}` point as
+ * a `serde_json::Map` (two heap-allocated key strings apiece) on the JS thread
+ * before any Rust code ran. Measured on a canvas at the sanitizer's own
+ * 200,000-point ceiling: **~324 ms** for the native path against **~3.7 ms**
+ * for `sanitizeStrokesJs` below — the "acceleration" was ~90x slower than the
+ * TypeScript it was meant to replace, and it ran on every canvas save, import
+ * and journal replay while the user was drawing.
+ *
+ * The cost is the object-by-object napi bridge, not the Rust, so a faster Rust
+ * body cannot fix it: flattening the points into a typed array in JS first
+ * costs about as much as simply doing the whole sanitize in JS. Rust still
+ * earns its place where the bridge is cheap and the work is not — see
+ * `storage-core`'s off-thread writer (one string) and `sanitizeScrollback`.
+ */
 
 const WIDGET_KINDS = new Set<string>(['terminal', 'note', 'timer', 'board', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'id-generator'])
 
@@ -124,7 +122,6 @@ export function sanitizeWidget(value: unknown): CanvasWidget | null {
     id: w.id,
     title: w.title,
     kind: w.kind as WidgetKind | undefined,
-    noteId: typeof w.noteId === 'string' ? w.noteId : undefined,
     x: w.x,
     y: w.y,
     w: w.w,
@@ -166,22 +163,9 @@ export function sanitizeStrokesJs(value: unknown): CanvasStroke[] {
   return strokes
 }
 
-export function sanitizeStrokesNative(value: unknown): CanvasStroke[] | null {
-  if (!nativeCanvasCore) return null
-  try {
-    return nativeCanvasCore.sanitizeStrokes(value) as CanvasStroke[]
-  } catch (error) {
-    console.warn('[native] canvas-core call failed; using the TypeScript canvas sanitizer fallback.', error)
-    return null
-  }
-}
-
 function sanitizeStrokes(value: unknown): CanvasStroke[] {
-  // Fresh/legacy canvas snapshots may omit `strokes`. Normalize before calling
-  // the native bridge: napi-rs cannot encode `undefined` as JSON and would
-  // otherwise throw on every first launch before falling back to JS.
-  const normalized = value ?? []
-  return sanitizeStrokesNative(normalized) ?? sanitizeStrokesJs(normalized)
+  // Fresh/legacy canvas snapshots may omit `strokes`.
+  return sanitizeStrokesJs(value ?? [])
 }
 
 function strokesShapeMatch(current: CanvasStroke[], incoming: unknown): boolean {
@@ -272,12 +256,23 @@ export class CanvasStore extends EventEmitter {
    */
   static reduce(state: CanvasDataState, event: JournalEntry): CanvasDataState {
     if (event.phase !== 'commit') return state
-    const nextWidgets = new Map(state.widgets)
-    let nextCamera = { ...state.camera }
-    let nextStrokes = [...state.strokes]
+    // Copy-on-write, not copy-always. Every journal event used to clone the
+    // whole widget map *and* the whole stroke array up front, even a
+    // `canvas.camera` event that touches neither — so replaying a session's
+    // journal, or any single camera nudge from an agent, copied the entire
+    // canvas. `fold` chains this call per event, so the cost was quadratic in
+    // the tail length. The clone now happens only in the branch that writes.
+    let nextWidgets = state.widgets
+    let nextCamera = state.camera
+    let nextStrokes = state.strokes
     let nextVersion = state.version
     const payload = (event.payload ?? {}) as Record<string, unknown>
     const targetId = event.target.startsWith('widget:') ? event.target.slice('widget:'.length) : event.target
+    // The reducer must stay pure: the caller's map is never written through.
+    const mutableWidgets = (): Map<string, CanvasWidget> => {
+      if (nextWidgets === state.widgets) nextWidgets = new Map(state.widgets)
+      return nextWidgets
+    }
 
     if (event.type === 'widget.create') {
       const widget = sanitizeWidget({
@@ -286,7 +281,7 @@ export class CanvasStore extends EventEmitter {
         version: event.version ?? 1,
         updatedAt: event.at
       })
-      if (widget) nextWidgets.set(widget.id, widget)
+      if (widget) mutableWidgets().set(widget.id, widget)
     } else if (event.type === 'widget.update') {
       const existing = nextWidgets.get(targetId)
       if (existing) {
@@ -297,10 +292,10 @@ export class CanvasStore extends EventEmitter {
           version: event.version ?? existing.version + 1,
           updatedAt: event.at
         })
-        if (merged) nextWidgets.set(targetId, merged)
+        if (merged) mutableWidgets().set(targetId, merged)
       }
     } else if (event.type === 'widget.remove') {
-      nextWidgets.delete(targetId)
+      if (nextWidgets.has(targetId)) mutableWidgets().delete(targetId)
     } else if (event.type === 'canvas.camera') {
       nextCamera = sanitizeCamera(payload)
       nextVersion = event.version ?? nextVersion + 1
@@ -311,7 +306,7 @@ export class CanvasStore extends EventEmitter {
       if (Array.isArray(payload.widgets)) {
         for (const w of payload.widgets) {
           const widget = sanitizeWidget(w)
-          if (widget) nextWidgets.set(widget.id, widget)
+          if (widget) mutableWidgets().set(widget.id, widget)
         }
       }
       if (payload.camera !== undefined) nextCamera = sanitizeCamera(payload.camera)
@@ -339,10 +334,10 @@ export class CanvasStore extends EventEmitter {
       version: this.canvasVersions.current(CANVAS_TARGET_ID)
     }
     const nextState = CanvasStore.reduce(current, event)
-    this.widgets.clear()
-    for (const [k, v] of nextState.widgets.entries()) {
-      this.widgets.set(k, v)
-    }
+    // Assign, never clear-and-refill: `reduce` returns the *same* Map when the
+    // event touched no widget, and clearing it would then empty the source it
+    // was about to be refilled from.
+    this.widgets = nextState.widgets
     this.camera = nextState.camera
     this.strokes = nextState.strokes
 
@@ -424,10 +419,7 @@ export class CanvasStore extends EventEmitter {
           strokes: this.strokes,
           version: this.canvasVersions.current(CANVAS_TARGET_ID)
         })
-        this.widgets.clear()
-        for (const [k, v] of replayed.widgets.entries()) {
-          this.widgets.set(k, v)
-        }
+        this.widgets = replayed.widgets
         this.camera = replayed.camera
         this.strokes = replayed.strokes
         this.widgetVersions.seed(this.widgets.values())

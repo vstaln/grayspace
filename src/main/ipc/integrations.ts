@@ -1,15 +1,8 @@
-import { mcpUrl } from '../config.ts'
 import * as media from '../media.ts'
 import { ipcMain } from './shims.ts'
-import { mcpStatus, restartMcpServer } from '../mcpProcess.ts'
 import type { IpcDeps } from './types.ts'
 
 export function registerIntegrationsIpc(deps: IpcDeps): void {
-  // ---- MCP server --------------------------------------------------------
-  ipcMain.handle('mcp:getStatus', () => mcpStatus())
-  ipcMain.handle('mcp:getUrl', () => mcpUrl())
-  ipcMain.handle('mcp:restart', () => restartMcpServer())
-
   // ---- pasted pictures ---------------------------------------------------
   ipcMain.handle('media:save-clipboard', () => media.saveClipboardImage())
   /** Terminal paste: a throwaway path in the temp dir, not the durable store. */

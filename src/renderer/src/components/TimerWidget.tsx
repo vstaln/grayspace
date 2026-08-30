@@ -19,6 +19,11 @@ export default function TimerWidget(): React.JSX.Element {
   const [totalMs, setTotalMs] = useState(25 * 60_000)
   const [remaining, setRemaining] = useState(25 * 60_000)
   const [running, setRunning] = useState(false)
+  const [isCustom, setIsCustom] = useState(false)
+  const [customHours, setCustomHours] = useState('0')
+  const [customMinutes, setCustomMinutes] = useState('25')
+  const [customSeconds, setCustomSeconds] = useState('0')
+  const hoursInputRef = useRef<HTMLInputElement>(null)
   const deadline = useRef<number>(0)
   const rang = useRef(false)
   const titleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -36,6 +41,13 @@ export default function TimerWidget(): React.JSX.Element {
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (isCustom) {
+      hoursInputRef.current?.focus()
+      hoursInputRef.current?.select()
+    }
+  }, [isCustom])
 
   useEffect(() => {
     if (!running) return
@@ -81,6 +93,7 @@ export default function TimerWidget(): React.JSX.Element {
   }, [running])
 
   const start = (): void => {
+    setIsCustom(false)
     const base = remaining <= 0 ? Math.max(totalMs, 1000) : remaining
     deadline.current = Date.now() + base
     rang.current = false
@@ -107,21 +120,72 @@ export default function TimerWidget(): React.JSX.Element {
     rang.current = false
   }
 
+  const openCustom = (): void => {
+    const totalSec = Math.max(0, Math.floor(totalMs / 1000))
+    const h = Math.floor(totalSec / 3600)
+    const m = Math.floor((totalSec % 3600) / 60)
+    const s = totalSec % 60
+    setCustomHours(String(h))
+    setCustomMinutes(String(m))
+    setCustomSeconds(String(s))
+    setIsCustom(true)
+  }
+
+  const handleCustomSubmit = (e: React.FormEvent): void => {
+    e.preventDefault()
+    const h = Math.max(0, Math.min(99, parseInt(customHours, 10) || 0))
+    const m = Math.max(0, Math.min(59, parseInt(customMinutes, 10) || 0))
+    const s = Math.max(0, Math.min(59, parseInt(customSeconds, 10) || 0))
+    const totalSec = h * 3600 + m * 60 + s
+    const ms = Math.max(1000, totalSec * 1000)
+    reset(ms)
+    setIsCustom(false)
+  }
+
+  const handleKeyDown = (
+    e: React.KeyboardEvent<HTMLInputElement>,
+    setter: React.Dispatch<React.SetStateAction<string>>,
+    max: number
+  ): void => {
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setter((prev) => {
+        const num = parseInt(prev, 10) || 0
+        return String(Math.min(max, num + 1))
+      })
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setter((prev) => {
+        const num = parseInt(prev, 10) || 0
+        return String(Math.max(0, num - 1))
+      })
+    } else if (e.key === 'Escape') {
+      setIsCustom(false)
+    }
+  }
+
   const over = remaining <= 0
   // Past zero the widget keeps counting up rather than sitting at 00:00 — the
   // useful question after a timer ends is usually "how long ago".
   const shown = Math.abs(over ? -remaining : remaining)
   const progress = totalMs > 0 ? Math.min(1, Math.max(0, remaining / totalMs)) : 0
+  const isPresetActive = !isCustom && PRESETS.some((min) => totalMs === min * 60_000)
 
   return (
     <div ref={rootRef} className="flex h-full flex-col items-center justify-center gap-3 p-3">
       <div
-        className={`font-mono text-[34px] leading-none tabular-nums ${over ? 'text-danger' : 'text-text'}`}
+        className={`font-mono text-[34px] leading-none tabular-nums ${over ? 'text-danger' : 'text-text'} ${
+          !running ? 'cursor-pointer select-none hover:opacity-80' : ''
+        }`}
         role="timer"
         aria-live="off"
+        onClick={() => {
+          if (!running) openCustom()
+        }}
+        title={!running ? 'Click to set custom duration' : undefined}
       >
         {over && '+'}
-        {format(shown)}
+        {format(shown, totalMs)}
       </div>
 
       <div className="h-1 w-full overflow-hidden rounded-full bg-bg-hover" aria-hidden>
@@ -150,31 +214,129 @@ export default function TimerWidget(): React.JSX.Element {
         </button>
       </div>
 
-      <div className="flex flex-wrap justify-center gap-1" role="group" aria-label="Presets">
-        {PRESETS.map((min) => (
+      {isCustom ? (
+        <form
+          onSubmit={handleCustomSubmit}
+          className="flex flex-col items-center gap-1.5"
+          data-testid="timer-custom-form"
+        >
+          <div className="flex items-center gap-1 font-mono text-text">
+            <div className="flex flex-col items-center">
+              <input
+                ref={hoursInputRef}
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={2}
+                value={customHours}
+                onChange={(e) => setCustomHours(e.target.value.replace(/\D/g, '').slice(0, 2))}
+                onFocus={(e) => e.target.select()}
+                onKeyDown={(e) => handleKeyDown(e, setCustomHours, 99)}
+                placeholder="0"
+                className="h-6 w-9 rounded-[6px] border border-line bg-bg-raise/40 text-center text-xs text-text outline-none transition-colors focus:border-accent"
+                aria-label="Hours"
+                title="Hours (0-99)"
+              />
+              <span className="text-[9px] font-sans text-text-faint">h</span>
+            </div>
+            <span className="mb-3.5 text-xs font-bold text-text-faint">:</span>
+            <div className="flex flex-col items-center">
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={2}
+                value={customMinutes}
+                onChange={(e) => setCustomMinutes(e.target.value.replace(/\D/g, '').slice(0, 2))}
+                onFocus={(e) => e.target.select()}
+                onKeyDown={(e) => handleKeyDown(e, setCustomMinutes, 59)}
+                placeholder="0"
+                className="h-6 w-9 rounded-[6px] border border-line bg-bg-raise/40 text-center text-xs text-text outline-none transition-colors focus:border-accent"
+                aria-label="Minutes"
+                title="Minutes (0-59)"
+              />
+              <span className="text-[9px] font-sans text-text-faint">m</span>
+            </div>
+            <span className="mb-3.5 text-xs font-bold text-text-faint">:</span>
+            <div className="flex flex-col items-center">
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={2}
+                value={customSeconds}
+                onChange={(e) => setCustomSeconds(e.target.value.replace(/\D/g, '').slice(0, 2))}
+                onFocus={(e) => e.target.select()}
+                onKeyDown={(e) => handleKeyDown(e, setCustomSeconds, 59)}
+                placeholder="0"
+                className="h-6 w-9 rounded-[6px] border border-line bg-bg-raise/40 text-center text-xs text-text outline-none transition-colors focus:border-accent"
+                aria-label="Seconds"
+                title="Seconds (0-59)"
+              />
+              <span className="text-[9px] font-sans text-text-faint">s</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="submit"
+              className="rounded-[6px] bg-accent px-2.5 py-0.5 text-[11px] font-medium text-bg transition-opacity hover:opacity-90"
+            >
+              Set
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsCustom(false)}
+              className="rounded-[6px] border border-line bg-bg-hover/40 px-2.5 py-0.5 text-[11px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : (
+        <div className="flex flex-wrap justify-center gap-1" role="group" aria-label="Presets">
+          {PRESETS.map((min) => (
+            <button
+              key={min}
+              className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-colors duration-150 ${
+                totalMs === min * 60_000 && isPresetActive
+                  ? 'border-line text-text'
+                  : 'border-line-soft text-text-faint hover:text-text-dim'
+              }`}
+              aria-pressed={totalMs === min * 60_000 && isPresetActive}
+              onClick={() => {
+                setIsCustom(false)
+                reset(min * 60_000)
+              }}
+            >
+              {min}m
+            </button>
+          ))}
           <button
-            key={min}
             className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-colors duration-150 ${
-              totalMs === min * 60_000
+              !isPresetActive
                 ? 'border-line text-text'
                 : 'border-line-soft text-text-faint hover:text-text-dim'
             }`}
-            aria-pressed={totalMs === min * 60_000}
-            onClick={() => reset(min * 60_000)}
+            aria-pressed={!isPresetActive}
+            onClick={openCustom}
+            title="Set custom duration (hours, minutes, seconds)"
           >
-            {min}m
+            Custom
           </button>
-        ))}
-      </div>
+        </div>
+      )}
     </div>
   )
 }
 
-function format(ms: number): string {
+function format(ms: number, totalMs = 0): string {
   const total = Math.floor(ms / 1000)
   const h = Math.floor(total / 3600)
   const m = Math.floor((total % 3600) / 60)
   const s = total % 60
-  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  if (h > 0 || totalMs >= 3600_000) {
+    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  }
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
+

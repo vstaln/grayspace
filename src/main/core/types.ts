@@ -39,6 +39,12 @@ export const RESOURCE_SCHEMES = [
   'canvas',
   'git',
   'run',
+  // Orchestration: a delegated task, one worker's attempt at it, and a
+  // blocking question put to the coordinator. Separate from `task` (the
+  // kanban card) because they have different lifecycles and different owners.
+  'orctask',
+  'dispatch',
+  'gate',
   'plan',
   'chat',
   'search',

@@ -1,19 +1,17 @@
 use napi::bindgen_prelude::{AsyncTask, Result};
 use napi::{Env, Error, Task};
 use napi_derive::napi;
-use serde_json::Value;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Same crash-safety contract as `storage.ts`'s `writeAtomic`: serialize,
-/// write to a sibling temp file, fsync, copy the previous good file to
-/// `.bak`, then atomically rename the temp file over the target. Runs on
-/// napi's worker thread pool (via `Task::compute`), never on the JS thread.
-fn write_atomic_sync(path: &str, value: &Value) -> std::result::Result<(), String> {
-    let text = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+/// Same crash-safety contract as `storage.ts`'s `writeAtomic`: write to a
+/// sibling temp file, fsync, copy the previous good file to `.bak`, then
+/// atomically rename the temp file over the target. Runs on napi's worker
+/// thread pool (via `Task::compute`), never on the JS thread.
+fn write_atomic_sync(path: &str, text: &str, keep_backup: bool) -> std::result::Result<(), String> {
     let path = Path::new(path);
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -34,7 +32,7 @@ fn write_atomic_sync(path: &str, value: &Value) -> std::result::Result<(), Strin
         file.sync_all().map_err(|e| e.to_string())?;
     }
 
-    if path.exists() {
+    if keep_backup && path.exists() {
         let backup = format!("{}.bak", path.display());
         if let Err(e) = fs::copy(path, &backup) {
             let _ = fs::remove_file(&temp);
@@ -49,17 +47,18 @@ fn write_atomic_sync(path: &str, value: &Value) -> std::result::Result<(), Strin
     Ok(())
 }
 
-pub struct WriteJsonAtomicTask {
+pub struct WriteTextAtomicTask {
     path: String,
-    value: Value,
+    text: String,
+    keep_backup: bool,
 }
 
-impl Task for WriteJsonAtomicTask {
+impl Task for WriteTextAtomicTask {
     type Output = ();
     type JsValue = ();
 
     fn compute(&mut self) -> Result<Self::Output> {
-        write_atomic_sync(&self.path, &self.value).map_err(Error::from_reason)
+        write_atomic_sync(&self.path, &self.text, self.keep_backup).map_err(Error::from_reason)
     }
 
     fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
@@ -68,12 +67,27 @@ impl Task for WriteJsonAtomicTask {
 }
 
 /// JS-facing entry point: looks synchronous but returns a `Promise` backed by
-/// `AsyncTask`, so the JSON serialize + file write + fsync run off the
-/// Node/Electron main thread and never block IPC, PTY output, or the
-/// renderer's canvas.save round-trip.
+/// `AsyncTask`, so the file write + fsync + rename run off the Node/Electron
+/// main thread and never block IPC, PTY output, or the renderer's canvas.save
+/// round-trip.
+///
+/// It takes the **already-serialized text**, not the object. The previous
+/// signature was `write_json_atomic(path, value: serde_json::Value)`, and that
+/// `Value` was materialized by napi on the JS thread *before* the AsyncTask
+/// was ever queued: converting one full canvas (200k stroke points) into a
+/// `serde_json::Value` tree blocked the main process for ~176 ms, against
+/// ~40 ms for V8's own `JSON.stringify` of the same object and ~10 ms for the
+/// write itself. The "off-thread" writer was the single largest main-thread
+/// stall on the autosave path. Handing Rust a `String` costs one UTF-16 → UTF-8
+/// copy and moves everything that actually touches the disk off-thread, which
+/// is what the crate was for.
 #[napi]
-pub fn write_json_atomic(path: String, value: Value) -> AsyncTask<WriteJsonAtomicTask> {
-    AsyncTask::new(WriteJsonAtomicTask { path, value })
+pub fn write_text_atomic(path: String, text: String, keep_backup: bool) -> AsyncTask<WriteTextAtomicTask> {
+    AsyncTask::new(WriteTextAtomicTask {
+        path,
+        text,
+        keep_backup,
+    })
 }
 
 /// Strips ANSI escape sequences from terminal output, keeping visible text

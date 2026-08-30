@@ -1,7 +1,7 @@
-import type { BrainStore } from '../brain.ts'
 import type { CanvasStore } from '../canvasState.ts'
 import type { CoordinationStore } from '../coordination.ts'
 import type { PlannerStore } from '../plannerStore.ts'
+import type { OrchestrationStore } from '../orchestration/store.ts'
 import type { TerminalManager } from '../terminals.ts'
 import type { TerminalSnapshots } from '../terminalSnapshots.ts'
 import type { Core } from '../core/index.ts'
@@ -9,7 +9,7 @@ import { registerBoardCommands } from './board.ts'
 import { registerCanvasCommands } from './canvas.ts'
 import { registerFileCommands } from './files.ts'
 import { registerGitCommands } from './git.ts'
-import { registerNoteCommands } from './notes.ts'
+import { registerOrchestrationCommands } from './orchestration.ts'
 import { registerPlannerCommands } from './planner.ts'
 import { registerTerminalCommands } from './terminals.ts'
 import { registerBuiltinWidgets } from '../widgets/registry.ts'
@@ -18,9 +18,10 @@ import type { GitStatus } from '../git.ts'
 export interface CommandDeps {
   core: Core
   canvas: CanvasStore
-  brain: BrainStore
   board: CoordinationStore
   planner: PlannerStore
+  /** Runs, delegated tasks, dispatches and the coordinator inbox. */
+  orchestration: OrchestrationStore
   terminals: TerminalManager
   /** Saved cwd/title/scrollback so a reopened terminal has its context back. */
   snapshots: TerminalSnapshots
@@ -28,8 +29,9 @@ export interface CommandDeps {
    * Asks the renderer to mount a widget for an already-reserved terminal id.
    * `from` is the widget that caused it to open — the canvas draws the link.
    */
-  requestWidget(info: { id: string; title: string; from?: string | null }): void
+  requestWidget(info: { id: string; title: string; kind?: string; x?: number; y?: number; from?: string | null }): void
   requestWidgetRemoval(id: string): void
+  requestWidgetRename?(id: string, title: string): void
   /** Which terminal an agent is most likely running in, for the link above. */
   originWidgetId(): string | null
   /** Drops a closed terminal so it stops being offered as an origin. */
@@ -58,18 +60,21 @@ export interface CommandDeps {
 export function registerCommands(deps: CommandDeps): { git: { status(): Promise<GitStatus> } } {
   registerBuiltinWidgets()
   registerCanvasCommands(deps)
-  registerNoteCommands(deps)
   registerBoardCommands(deps)
   registerPlannerCommands(deps)
+  registerOrchestrationCommands(deps)
   registerTerminalCommands(deps)
   registerFileCommands(deps)
   return { git: registerGitCommands(deps) }
 }
 
 export const NEW = {
-  note: 'note:new',
   task: 'task:new',
   terminal: 'terminal:new',
   widget: 'widget:new',
-  plan: 'plan:new'
+  plan: 'plan:new',
+  run: 'run:new',
+  orctask: 'orctask:new',
+  dispatch: 'dispatch:new',
+  gate: 'gate:new'
 } as const

@@ -38,8 +38,17 @@ const FLARE_MS = 1600
  * a dot along the curve once; every link keeps a faint, slow shimmer after
  * that so a canvas full of terminals still reads as a tree.
  */
-function ConnectionsLayer({ connections, widgets }: Props): React.JSX.Element {
-  const byId = useMemo(() => new Map(widgets.map((w) => [w.id, w])), [widgets])
+function ConnectionsLayer({ connections, widgets }: Props): React.JSX.Element | null {
+  // No links on the canvas is the common case, and `widgets` gets a fresh
+  // array identity on every drag/resize frame — building a 200-entry lookup
+  // map per frame for a layer that draws nothing is pure overhead. Bail before
+  // the map, and before the <svg>/<filter> subtree exists at all.
+  const hasConnections = connections.length > 0
+  const byId = useMemo(
+    () => (hasConnections ? new Map(widgets.map((w) => [w.id, w])) : new Map<string, Widget>()),
+    [hasConnections, widgets]
+  )
+  if (!hasConnections) return null
 
   return (
     <svg aria-hidden className="pointer-events-none absolute inset-0 overflow-visible" style={{ width: 1, height: 1 }}>
@@ -51,7 +60,7 @@ function ConnectionsLayer({ connections, widgets }: Props): React.JSX.Element {
       {connections.map((c) => {
         const from = byId.get(c.from)
         const to = byId.get(c.to)
-        if (!from || !to) return null
+        if (!from || !to || from.id === to.id || from.maximized || to.maximized) return null
         const { d } = arcPath(anchor(from), anchor(to))
         return <ConnectionArc key={c.id} d={d} bornAt={c.bornAt} />
       })}

@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react'
-import { Check, Rocket, X } from 'lucide-react'
+import { Check, Rocket, Terminal, X } from 'lucide-react'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import ClaudeIcon from './ClaudeIcon'
 import CodexIcon from './CodexIcon'
@@ -22,7 +22,9 @@ export const CODE_AGENTS: CodeAgent[] = [
   { id: 'codex', label: 'Codex', command: 'codex', Icon: CodexIcon },
   { id: 'antigravity', label: 'Antigravity', command: 'agy', Icon: AntigravityIcon },
   { id: 'grok', label: 'Grok', command: 'grok', Icon: GrokIcon },
-  { id: 'opencode', label: 'OpenCode', command: 'opencode', Icon: OpenCodeIcon }
+  { id: 'opencode', label: 'OpenCode', command: 'opencode', Icon: OpenCodeIcon },
+  { id: 'cursor', label: 'Cursor Agent', command: 'cursor-agent', Icon: Terminal },
+  { id: 'custom', label: 'Other CLI', command: '', Icon: Terminal }
 ]
 
 const COUNTS = [1, 2, 4, 8, 12] as const
@@ -36,10 +38,12 @@ interface Props {
 export default function CodeLauncher({ onClose, onLaunch }: Props): React.JSX.Element {
   const [agentId, setAgentId] = useState(CODE_AGENTS[0].id)
   const [count, setCount] = useState<(typeof COUNTS)[number]>(4)
+  const [customCommand, setCustomCommand] = useState('')
   const panelRef = useRef<HTMLElement>(null)
   useFocusTrap(panelRef, true)
 
-  const agent = CODE_AGENTS.find((a) => a.id === agentId) ?? CODE_AGENTS[0]
+  const selected = CODE_AGENTS.find((a) => a.id === agentId) ?? CODE_AGENTS[0]
+  const agent = selected.id === 'custom' ? { ...selected, command: customCommand.trim(), label: customCommand.trim() || 'Other CLI' } : selected
 
   const launch = (): void => {
     onLaunch(agent, count)
@@ -111,6 +115,16 @@ export default function CodeLauncher({ onClose, onLaunch }: Props): React.JSX.El
                 )
               })}
             </div>
+            {agentId === 'custom' && (
+              <input
+                autoFocus
+                value={customCommand}
+                onChange={(e) => setCustomCommand(e.target.value)}
+                placeholder="Command, e.g. aider or qwen"
+                aria-label="Custom CLI command"
+                className="mt-2 h-9 w-full rounded-[8px] border border-line-soft bg-bg-raise px-2.5 text-[12px] text-text outline-none focus:border-accent"
+              />
+            )}
           </div>
 
           <div className="flex items-end justify-between gap-4">
@@ -148,6 +162,7 @@ export default function CodeLauncher({ onClose, onLaunch }: Props): React.JSX.El
           <button
             className="flex items-center gap-1.5 rounded-[10px] bg-accent px-3.5 py-1.5 text-xs font-semibold text-bg transition-opacity duration-150 hover:opacity-90"
             onClick={launch}
+            disabled={!agent.command}
           >
             <Rocket size={13} /> Launch {count} terminals
           </button>

@@ -5,7 +5,24 @@ import * as pty from '@homebridge/node-pty-prebuilt-multiarch'
 import type { IPty } from '@homebridge/node-pty-prebuilt-multiarch'
 import { OUTPUT_BUFFER_LIMIT, MAX_TERMINAL_WRITE_BYTES, defaultShell } from './config.ts'
 import { killProcessTree } from './procTree.ts'
+import { orcTerminalEnv } from './orcCli.ts'
 import { TerminalRingBuffer } from './terminalBuffer.ts'
+
+/**
+ * Drops every spelling of PATH before the shim directory is prepended.
+ *
+ * Windows environment blocks are case-insensitive but a plain object is not:
+ * inheriting `Path` and then setting `PATH` hands the shell two variables and
+ * lets it pick, which silently loses the `orc` entry about half the time.
+ */
+function withoutPath(env: Record<string, string>): Record<string, string> {
+  const copy: Record<string, string> = {}
+  for (const [key, value] of Object.entries(env)) {
+    if (key.toUpperCase() === 'PATH') continue
+    copy[key] = value
+  }
+  return copy
+}
 
 export interface TerminalInfo {
   id: string
@@ -101,7 +118,7 @@ export class TerminalManager extends EventEmitter {
     // the agent asked for is not used. Without a fixed, predictable name the
     // user can't tell an agent's terminal apart from one they opened themselves
     // at a glance, which is the entire point of naming it differently.
-    const title = prefix === 'agent' ? `Agent Terminal ${this.nextAgentNumber()}` : options.title?.trim() || id
+    const title = options.title?.trim() || (prefix === 'agent' ? `Agent Terminal ${this.nextAgentNumber()}` : id)
     const record: TerminalRecord = {
       pty: null,
       title,
@@ -195,7 +212,11 @@ export class TerminalManager extends EventEmitter {
         // running inside an OrcSpace-managed terminal rather than a bare one,
         // without having to guess from the process tree.
         env: {
-          ...(process.env as Record<string, string>),
+          ...withoutPath(process.env as Record<string, string>),
+          // Puts `orc` on the agent's PATH and tells it which app, which token
+          // and which actor it is. This is the whole of the integration: a CLI
+          // agent coordinates by typing a command, not by speaking a protocol.
+          ...orcTerminalEnv(id),
           ORCSPACE: '1',
           ORCSPACE_TERMINAL_ID: id,
           // "light foreground on black background", the conventional way a

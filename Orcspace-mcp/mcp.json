@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "orcspace": {
-      "type": "http",
-      "url": "http://localhost:47940/mcp"
-    }
-  }
-}

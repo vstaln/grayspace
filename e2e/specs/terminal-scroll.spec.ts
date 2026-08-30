@@ -35,7 +35,8 @@ test('the wheel scrolls terminal scrollback, even while a TUI tracks the mouse',
 
   // The rail's new-terminal button (double-click-to-spawn was removed by
   // design — an empty canvas no longer creates widgets on click).
-  await page.getByTestId('rail-new-terminal').click()
+  await page.getByTestId('canvas').click({ button: 'right', position: { x: 420, y: 260 } })
+  await page.getByTestId('cm-terminal').click()
   const id = await waitForTerminalShell(ctx, page)
 
   const frame = terminalFrame(page)

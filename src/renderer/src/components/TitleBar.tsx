@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Brain, Copy, GitBranch, Globe, LayoutGrid, Minus, Square, TerminalSquare, X } from 'lucide-react'
+import { Copy, GitBranch, Minus, Square, X } from 'lucide-react'
 import type { GitStatus } from '../../../preload/index.d'
 import { IS_MAC } from '../lib/platform'
 
@@ -12,16 +12,16 @@ export type WorkView = 'canvas' | 'browser' | 'code'
  * 6px radius. Changing the bar's scale is a change to these five lines.
  */
 const ISLAND =
-  'flex h-[34px] items-center gap-[3px] rounded-full border border-line-soft bg-bg-panel/85 p-[3px] shadow-sm glass:bg-bg-panel/75 glass:backdrop-blur-xl'
+  'flex h-[34px] items-center gap-[3px] rounded-full border border-[#2a2a2e] bg-[#1c1c1f] p-[3px]'
 /** A labelled capsule: icon + text. The border is always there, transparent
  *  when the control is idle, so turning it on cannot nudge the row by a pixel. */
 const PILL =
-  'flex h-[28px] flex-none items-center gap-1.5 rounded-full border border-transparent px-3 text-[13px] font-medium transition-colors duration-150 cursor-pointer select-none outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60'
+  'flex h-[28px] flex-none items-center gap-1.5 rounded-full border border-transparent px-3 text-[13px] font-medium transition-colors duration-150 cursor-pointer select-none outline-none'
 /** An icon-only capsule — the window buttons. */
 const ICON =
-  'grid h-[28px] w-[32px] flex-none place-items-center rounded-full border border-transparent transition-colors duration-150 cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60'
-const QUIET = 'text-text-dim hover:bg-bg-hover hover:text-text'
-const ON = 'border-line-soft bg-bg-hover text-text shadow-xs'
+  'grid h-[28px] w-[32px] flex-none place-items-center rounded-full border border-transparent transition-colors duration-150 cursor-pointer outline-none'
+const QUIET = 'text-[#8a8a90] hover:bg-[#232326] hover:text-[#ececec]'
+const ON = 'bg-[#2a2a2e] text-[#ececec] border-transparent'
 
 interface Props {
   /** Owned by App: the switcher only reports intent, the surfaces live there. */
@@ -37,7 +37,6 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
   const [flash, setFlash] = useState<string | null>(null)
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null)
   const [gitOpen, setGitOpen] = useState(false)
-  const [memoryOpen, setMemoryOpen] = useState(false)
   const gitIslandRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -131,27 +130,18 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
     }
   }, [])
 
-  // Memory (Second Brain) is a panel inside the canvas, not a surface this
-  // bar owns — so it's opened by asking the canvas, and its state is learned
-  // back the same way, matching the flash-message bus above.
-  useEffect(() => {
-    const onBrainOpenChange = (event: Event): void => {
-      setMemoryOpen(Boolean((event as CustomEvent<boolean>).detail))
-    }
-    window.addEventListener('orcspace:brain-open-change', onBrainOpenChange)
-    return () => window.removeEventListener('orcspace:brain-open-change', onBrainOpenChange)
-  }, [])
-
-  const toggleMemory = (): void => {
-    onViewChange('canvas')
-    window.dispatchEvent(new CustomEvent('orcspace:toggle-brain'))
-  }
-
   const dirtyCount = gitStatus
     ? gitStatus.modified + gitStatus.untracked + gitStatus.staged + gitStatus.conflicted
     : 0
 
   const noDrag = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
+
+  // No `onDoubleClick` here on purpose. The bar is a `-webkit-app-region:
+  // drag` caption area, and both platforms already give a caption
+  // double-click the native maximize/restore (macOS honours the system
+  // "double-click a window's title bar to" preference, Windows treats the
+  // region as HTCAPTION). Adding a JS `toggleMaximize()` on top of that fires
+  // *after* the native toggle and immediately undoes it.
 
   return (
     <div
@@ -175,8 +165,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
         )}
       </div>
 
-      {/* Centre island: Canvas / Browser switch the visible surface;
-          Memory toggles the Second Brain panel over whichever surface is showing. */}
+      {/* Centre island: Canvas / Browser / Code switch the visible surface. */}
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
         <div className={`${ISLAND} pointer-events-auto`} style={noDrag} role="tablist" aria-label="Workspace View">
           <button
@@ -187,7 +176,6 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
             className={`${PILL} ${activeView === 'canvas' ? ON : QUIET}`}
             title="Canvas"
           >
-            <LayoutGrid size={14} className="flex-none" />
             <span>Canvas</span>
           </button>
           <button
@@ -198,7 +186,6 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
             className={`${PILL} ${activeView === 'browser' ? ON : QUIET}`}
             title="Browser"
           >
-            <Globe size={14} className="flex-none" />
             <span>Browser</span>
           </button>
           <button
@@ -209,19 +196,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
             className={`${PILL} ${activeView === 'code' ? ON : QUIET}`}
             title="Code"
           >
-            <TerminalSquare size={14} className="flex-none" />
             <span>Code</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            onClick={toggleMemory}
-            aria-selected={memoryOpen}
-            className={`${PILL} ${memoryOpen ? ON : QUIET}`}
-            title="Memory"
-          >
-            <Brain size={14} className="flex-none" />
-            <span>Memory</span>
           </button>
         </div>
       </div>

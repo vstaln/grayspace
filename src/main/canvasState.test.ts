@@ -1,30 +1,61 @@
 import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
-import { sanitizeStrokesJs, sanitizeStrokesNative } from './canvasState.ts'
+import { CanvasStore, sanitizeStrokesJs, type CanvasDataState, type CanvasWidget } from './canvasState.ts'
+import type { JournalEntry } from './core/index.ts'
 
 const point = (x: number, y: number) => ({ x, y })
 
-const fixtures: Array<[string, unknown]> = [
-  ['valid strokes', [{ id: 'a', color: '#fff', points: [point(1, 2), point(3, 4)] }]],
-  ['invalid points', [{ id: 'a', color: '#fff', points: [null, point(1, 2), { x: 'bad', y: 4 }, point(3, 4)] }]],
-  ['empty array', []],
-  ['non-array', { id: 'not-a-stroke' }],
-  ['minimum boundary', [{ id: 'a', color: '', points: [point(0, 0), point(-0, 1)] }]],
-  ['one point is discarded', [{ id: 'a', color: '#fff', points: [point(1, 2)] }]],
-  ['per-stroke limit', [{ id: 'a', color: '#fff', points: Array.from({ length: 10_001 }, (_, i) => point(i, i)) }]],
-  ['total limit', Array.from({ length: 21 }, (_, stroke) => ({
-    id: String(stroke), color: '#000', points: Array.from({ length: 10_000 }, (_, i) => point(i, stroke))
-  }))],
-]
+/**
+ * These fixtures used to exist only to cross-check the Rust sanitizer against
+ * the TypeScript one, and skipped entirely on a machine with no Rust build.
+ * The native path is gone (it was ~90x slower than this one — see the note in
+ * canvasState.ts), so they now pin the sanitizer's own edge-case behaviour,
+ * which is what every install actually runs.
+ */
+describe('canvas stroke sanitizer edge cases', () => {
+  test('valid strokes survive with points in order', () => {
+    const out = sanitizeStrokesJs([{ id: 'a', color: '#fff', points: [point(1, 2), point(3, 4)] }])
+    assert.deepStrictEqual(out, [{ id: 'a', points: [point(1, 2), point(3, 4)], color: '#fff' }])
+  })
 
-describe('canvas stroke sanitizer equivalence', () => {
-  const nativeAvailable = sanitizeStrokesNative([]) !== null
+  test('an empty array stays empty', () => {
+    assert.deepStrictEqual(sanitizeStrokesJs([]), [])
+  })
 
-  for (const [name, fixture] of fixtures) {
-    test(name, { skip: !nativeAvailable }, () => {
-      assert.deepStrictEqual(sanitizeStrokesNative(fixture), sanitizeStrokesJs(fixture))
-    })
-  }
+  test('a non-array input yields no strokes', () => {
+    assert.deepStrictEqual(sanitizeStrokesJs({ id: 'not-a-stroke' }), [])
+  })
+
+  test('an empty colour string is still a colour', () => {
+    const out = sanitizeStrokesJs([{ id: 'a', color: '', points: [point(0, 0), point(-0, 1)] }])
+    assert.equal(out.length, 1)
+    assert.equal(out[0].color, '')
+    // -0 is folded to +0 so a round-trip through JSON cannot flip the sign.
+    assert.ok(Object.is(out[0].points[1].x, 0))
+  })
+
+  test('a single-point stroke is discarded', () => {
+    assert.deepStrictEqual(sanitizeStrokesJs([{ id: 'a', color: '#fff', points: [point(1, 2)] }]), [])
+  })
+
+  test('a stroke is capped at 10,000 points', () => {
+    const out = sanitizeStrokesJs([
+      { id: 'a', color: '#fff', points: Array.from({ length: 10_001 }, (_, i) => point(i, i)) }
+    ])
+    assert.equal(out[0].points.length, 10_000)
+  })
+
+  test('the canvas is capped at 200,000 points across strokes', () => {
+    const out = sanitizeStrokesJs(
+      Array.from({ length: 21 }, (_, stroke) => ({
+        id: String(stroke),
+        color: '#000',
+        points: Array.from({ length: 10_000 }, (_, i) => point(i, stroke))
+      }))
+    )
+    assert.equal(out.length, 20)
+    assert.equal(out.reduce((n, s) => n + s.points.length, 0), 200_000)
+  })
 })
 
 /**
@@ -100,5 +131,71 @@ describe('sanitizeStrokesJs', () => {
     const result = sanitizeStrokesJs([{ id: 'a', color: '', points: [point(0, 0), point(-0, 1)] }])
     assert.equal(result.length, 1)
     assert.equal(result[0].color, '')
+  })
+})
+
+
+/**
+ * `CanvasStore.reduce` is copy-on-write: it clones the widget map only in the
+ * branch that writes one. That is only safe while it never writes through the
+ * caller's state, and while callers never clear a map it handed straight back.
+ */
+describe('CanvasStore.reduce purity', () => {
+  const widget = (id: string): CanvasWidget => ({
+    id,
+    title: id,
+    x: 0,
+    y: 0,
+    w: 100,
+    h: 100,
+    z: 1,
+    maximized: false,
+    version: 1,
+    updatedAt: 1
+  })
+
+  const baseState = (): CanvasDataState => ({
+    widgets: new Map([['a', widget('a')]]),
+    camera: { x: 0, y: 0, zoom: 1 },
+    strokes: [{ id: 's', color: '#fff', points: [point(0, 0), point(1, 1)] }],
+    version: 1
+  })
+
+  const event = (type: string, target: string, payload: unknown = {}): JournalEntry =>
+    ({ seq: 1, at: 1, phase: 'commit', type, target, payload, version: 2 }) as unknown as JournalEntry
+
+  test('an event that touches no widget hands the same map back', () => {
+    const state = baseState()
+    const next = CanvasStore.reduce(state, event('canvas.camera', 'canvas:main', { x: 5, y: 6, zoom: 2 }))
+    assert.equal(next.widgets, state.widgets, 'no widget changed, so no clone is warranted')
+    assert.deepStrictEqual(next.camera, { x: 5, y: 6, zoom: 2 })
+    assert.equal(next.strokes, state.strokes)
+  })
+
+  test('a widget write clones rather than mutating the input map', () => {
+    const state = baseState()
+    const next = CanvasStore.reduce(state, event('widget.update', 'widget:a', { title: 'renamed' }))
+    assert.notEqual(next.widgets, state.widgets)
+    assert.equal(state.widgets.get('a')?.title, 'a', 'the input state must be untouched')
+    assert.equal(next.widgets.get('a')?.title, 'renamed')
+  })
+
+  test('removing a widget that is not there does not clone either', () => {
+    const state = baseState()
+    const next = CanvasStore.reduce(state, event('widget.remove', 'widget:missing'))
+    assert.equal(next.widgets, state.widgets)
+  })
+
+  test('removing a widget that is there leaves the input intact', () => {
+    const state = baseState()
+    const next = CanvasStore.reduce(state, event('widget.remove', 'widget:a'))
+    assert.equal(next.widgets.size, 0)
+    assert.equal(state.widgets.size, 1)
+  })
+
+  test('a non-commit event is a no-op', () => {
+    const state = baseState()
+    const pending = { ...event('widget.remove', 'widget:a'), phase: 'pending' } as unknown as JournalEntry
+    assert.equal(CanvasStore.reduce(state, pending), state)
   })
 })

@@ -42,18 +42,17 @@ export default function LinksWidget({ widgetId }: { widgetId: string }): React.J
     localStorage.setItem(`${STORAGE_PREFIX}${widgetId}`, JSON.stringify(links))
   }, [links, widgetId])
 
-  // Widget ids are never reused, so once this widget closes its storage key is
-  // unreachable garbage — clean it up instead of leaking an entry per
-  // create/close cycle. (Links widgets are never canvas-culled, so unmount
-  // here always means "closed for good".)
+  // Only the timer is cleaned up here. Purging this widget's saved links used
+  // to happen on unmount too, on the assumption that an unmount always meant
+  // "closed for good" — it did not, and the widget lost every link the moment
+  // the user maximized it (see WIDGET-maximize in App.tsx). The purge now
+  // lives in `useCanvas.removeWidget`, which is the one place that actually
+  // knows a widget was closed rather than re-parented.
   useEffect(() => {
     return () => {
       if (copiedTimerRef.current !== null) clearTimeout(copiedTimerRef.current)
-      try {
-        localStorage.removeItem(`${STORAGE_PREFIX}${widgetId}`)
-      } catch {}
     }
-  }, [widgetId])
+  }, [])
 
   const addLink = (event: React.FormEvent): void => {
     event.preventDefault()

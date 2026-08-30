@@ -1,23 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Plus, RotateCw, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Lock, Plus, RotateCcw, RotateCw, Search, X } from 'lucide-react'
 import { BROWSER_PARTITION, HOME_URL, hostOf, toNavigationUrl, type Webview } from '../lib/browserShared'
 
 interface Tab {
   id: string
-  /** Fixed at creation — the `src` attribute must not change once attached;
-   * later navigation goes through `loadURL` instead. */
   initialUrl: string
   url: string
   title: string
   loading: boolean
   canGoBack: boolean
   canGoForward: boolean
-  /** Set when the page's main frame failed to load; cleared on the next start. */
   error?: string | null
 }
 
+const MAX_TABS = 20
+
 let tabCounter = 0
-function makeTab(url: string): Tab {
+function makeTab(url: string = HOME_URL): Tab {
   tabCounter += 1
   return {
     id: `tab-${tabCounter}`,
@@ -31,8 +30,6 @@ function makeTab(url: string): Tab {
 }
 
 interface Props {
-  /** The pane keeps its tabs alive while hidden, so a page survives a trip to
-   * the canvas and back. */
   active: boolean
 }
 
@@ -40,9 +37,8 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
   const [tabs, setTabs] = useState<Tab[]>(() => [makeTab(HOME_URL)])
   const [activeId, setActiveId] = useState<string>(() => tabs[0]?.id ?? '')
   const [address, setAddress] = useState(HOME_URL)
-  /** True while the user is editing the field, so a background load's URL does
-   * not overwrite what they are halfway through typing. */
   const [editing, setEditing] = useState(false)
+  const [resetting, setResetting] = useState(false)
   const views = useRef(new Map<string, Webview>())
 
   const activeTab = useMemo(() => tabs.find((t) => t.id === activeId) ?? null, [tabs, activeId])
@@ -51,40 +47,56 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
     setTabs((current) => current.map((t) => (t.id === id ? { ...t, ...patch } : t)))
   }, [])
 
-  // The field follows the active tab unless the user is typing in it.
   useEffect(() => {
     if (!editing && activeTab) setAddress(activeTab.url)
   }, [activeTab, editing])
 
   const openTab = useCallback((url: string): void => {
-    const tab = makeTab(url)
-    setTabs((current) => [...current, tab])
+    const safeUrl = url.trim() || HOME_URL
+    const tab = makeTab(safeUrl)
+    setTabs((current) => {
+      if (current.length >= MAX_TABS) {
+        return [...current.slice(1), tab]
+      }
+      return [...current, tab]
+    })
     setActiveId(tab.id)
     setEditing(false)
   }, [])
 
-  // A popup blocked in main (target=_blank, window.open) arrives here as a tab.
-  useEffect(() => window.api.browser.onOpenTab((url) => openTab(url)), [openTab])
+  useEffect(() => {
+    const unsub = window.api.browser.onOpenTab((url) => {
+      if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+        openTab(url)
+      }
+    })
+    return () => unsub()
+  }, [openTab])
 
   const closeTab = useCallback(
     (id: string): void => {
-      const index = tabs.findIndex((t) => t.id === id)
-      if (index === -1) return
+      views.current.delete(id)
       setEditing(false)
-      if (tabs.length === 1) {
-        // The pane always shows something; closing the last tab resets it.
-        const fresh = makeTab(HOME_URL)
-        setTabs([fresh])
-        setActiveId(fresh.id)
-        return
-      }
-      const next = tabs.filter((t) => t.id !== id)
-      setTabs(next)
-      // Closing the active tab hands focus to its right-hand neighbour, or to
-      // the new last tab when it was the rightmost.
-      if (id === activeId) setActiveId(next[Math.min(index, next.length - 1)].id)
+
+      setTabs((current) => {
+        const index = current.findIndex((t) => t.id === id)
+        if (index === -1) return current
+
+        if (current.length === 1) {
+          const fresh = makeTab(HOME_URL)
+          setActiveId(fresh.id)
+          return [fresh]
+        }
+
+        const next = current.filter((t) => t.id !== id)
+        if (id === activeId) {
+          const nextIndex = Math.min(index, next.length - 1)
+          setActiveId(next[nextIndex].id)
+        }
+        return next
+      })
     },
-    [tabs, activeId]
+    [activeId]
   )
 
   const navigate = useCallback(
@@ -93,9 +105,7 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
       const view = views.current.get(activeId)
       if (!url || !view) return
       setEditing(false)
-      void view.loadURL(url).catch(() => {
-        /* a dead host already surfaces through did-fail-load */
-      })
+      void view.loadURL(url).catch(() => {})
     },
     [activeId]
   )
@@ -113,164 +123,209 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
     else views.current.delete(id)
   }, [])
 
+  const handleClearDataAndReset = useCallback(async (): Promise<void> => {
+    if (resetting) return
+    setResetting(true)
+    try {
+      if (window.api.browser.clearData) {
+        await window.api.browser.clearData()
+      }
+      const fresh = makeTab(HOME_URL)
+      views.current.clear()
+      setTabs([fresh])
+      setActiveId(fresh.id)
+      setAddress(HOME_URL)
+    } finally {
+      setResetting(false)
+    }
+  }, [resetting])
+
+  const isHttps = activeTab?.url?.startsWith('https://')
+
   return (
     <div
-      // Above every canvas layer, below the title bar's z-[50000] so the
-      // switcher and window controls stay reachable. Left edge starts past
-      // the rail so the sidebar keeps its own column instead of floating
-      // on top of this pane's content.
-      className={`absolute inset-y-0 right-0 left-rail z-[40000] flex flex-col pt-10 ${
+      className={`absolute inset-y-0 right-0 left-rail z-[40000] flex flex-col bg-[#121214] pt-10 ${
         active ? '' : 'pointer-events-none invisible'
       }`}
       aria-hidden={!active}
     >
-      {/* Tab strip */}
-      <div role="tablist" aria-label="Browser tabs" className="flex h-9 flex-none items-end gap-1 overflow-x-auto border-b border-white/10 bg-[#292b2f] px-2">
-        {tabs.map((tab) => {
-          const host = hostOf(tab.url)
-          const label = tab.title && tab.title !== 'New tab' ? tab.title : host || 'New tab'
-          const isActive = tab.id === activeId
-          return (
-            <div
-              key={tab.id}
-              role="tab"
-              aria-selected={isActive}
-              tabIndex={0}
-              onClick={() => {
-                setActiveId(tab.id)
-                setEditing(false)
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
+      {/* Header bar: Tabs and Address Bar */}
+      <div className="flex flex-col border-b border-[#252529] bg-[#1c1c1f]">
+        <div
+          role="tablist"
+          aria-label="Browser tabs"
+          className="flex h-8 flex-none items-center gap-1 overflow-x-auto bg-transparent px-2"
+        >
+          {tabs.map((tab) => {
+            const host = hostOf(tab.url)
+            const label = tab.title && tab.title !== 'New tab' ? tab.title : host || 'New tab'
+            const isActive = tab.id === activeId
+            return (
+              <div
+                key={tab.id}
+                role="tab"
+                aria-selected={isActive}
+                tabIndex={0}
+                onClick={() => {
                   setActiveId(tab.id)
                   setEditing(false)
-                }
-              }}
-              // Middle click closes a tab, as it does in every other browser.
-              onAuxClick={(e) => {
-                if (e.button === 1) {
-                  e.preventDefault()
-                  closeTab(tab.id)
-                }
-              }}
-              title={tab.url}
-              className={`group flex h-[27px] min-w-[112px] max-w-[210px] flex-none cursor-pointer select-none items-center gap-1.5 rounded-full border border-transparent px-3 text-[12px] transition-colors ${
-                isActive
-                  ? 'bg-[#45484d] text-white'
-                  : 'text-[#b8babd] hover:bg-[#36393e] hover:text-white'
-              }`}
-            >
-              <span
-                  className={`grid h-[15px] w-[15px] flex-none place-items-center rounded-full text-[9px] font-semibold uppercase ${
-                    tab.loading ? 'bg-white/20 text-white' : 'bg-black/15 text-[#d0d1d3]'
-                  }`}
-              >
-                {host.charAt(0) || '·'}
-              </span>
-              <span className="flex-1 truncate">{label}</span>
-              <button
-                type="button"
-                aria-label="Close tab"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  closeTab(tab.id)
                 }}
-                className="grid h-[16px] w-[16px] flex-none place-items-center rounded-full text-[#aeb0b3] opacity-0 transition-opacity hover:bg-white/10 hover:text-white group-hover:opacity-100 group-focus-within:opacity-100"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    setActiveId(tab.id)
+                    setEditing(false)
+                  }
+                }}
+                onAuxClick={(e) => {
+                  if (e.button === 1) {
+                    e.preventDefault()
+                    closeTab(tab.id)
+                  }
+                }}
+                title={tab.url}
+                className={`group flex h-7 min-w-[130px] max-w-[200px] flex-none cursor-pointer select-none items-center gap-2 rounded-md px-2.5 text-[12px] ${
+                  isActive ? 'bg-[#2a2a2e] text-[#ececec]' : 'text-[#8a8a90] hover:bg-[#232326] hover:text-[#d4d4d8]'
+                }`}
               >
-                <X size={11} strokeWidth={2.4} />
-              </button>
+                <span
+                  className={`grid h-4 w-4 flex-none place-items-center rounded text-[9px] font-medium uppercase ${
+                    isActive ? 'bg-[#3a3a40] text-[#ececec]' : 'bg-[#252529] text-[#8a8a90]'
+                  }`}
+                >
+                  {tab.loading ? (
+                    <span className="h-2 w-2 animate-spin rounded-full border border-[#8a8a90] border-t-transparent" />
+                  ) : (
+                    host.charAt(0) || '·'
+                  )}
+                </span>
+                <span className="flex-1 truncate">{label}</span>
+                <button
+                  type="button"
+                  aria-label="Close tab"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    closeTab(tab.id)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      closeTab(tab.id)
+                    }
+                  }}
+                  className={`grid h-4 w-4 flex-none place-items-center rounded text-[#6a6a70] transition hover:bg-[#3a3a40] hover:text-[#ececec] group-hover:opacity-100 group-focus-within:opacity-100 ${
+                    isActive ? 'opacity-100' : 'opacity-0'
+                  }`}
+                >
+                  <X size={11} strokeWidth={2} />
+                </button>
+              </div>
+            )
+          })}
+          <button
+            type="button"
+            aria-label="New tab"
+            title="New tab"
+            onClick={() => openTab(HOME_URL)}
+            className="grid h-6 w-6 flex-none place-items-center rounded-md text-[#6a6a70] hover:bg-[#232326] hover:text-[#ececec]"
+          >
+            <Plus size={14} strokeWidth={2} />
+          </button>
+        </div>
+
+        {/* Address & Controls Bar */}
+        <div className="flex h-8 flex-none items-center gap-1.5 bg-transparent px-2.5">
+          <button
+            type="button"
+            aria-label="Back"
+            title="Back"
+            disabled={!activeTab?.canGoBack}
+            onClick={() => withActiveView((v) => v.goBack())}
+            className="grid h-7 w-7 flex-none place-items-center rounded-md text-[#8a8a90] hover:bg-[#2a2a2e] hover:text-[#ececec] disabled:opacity-30 disabled:pointer-events-none"
+          >
+            <ArrowLeft size={14} strokeWidth={1.9} />
+          </button>
+          <button
+            type="button"
+            aria-label="Forward"
+            title="Forward"
+            disabled={!activeTab?.canGoForward}
+            onClick={() => withActiveView((v) => v.goForward())}
+            className="grid h-7 w-7 flex-none place-items-center rounded-md text-[#8a8a90] hover:bg-[#2a2a2e] hover:text-[#ececec] disabled:opacity-30 disabled:pointer-events-none"
+          >
+            <ArrowRight size={14} strokeWidth={1.9} />
+          </button>
+          <button
+            type="button"
+            aria-label={activeTab?.loading ? 'Stop' : 'Reload'}
+            title={activeTab?.loading ? 'Stop' : 'Reload'}
+            onClick={() => withActiveView((v) => (activeTab?.loading ? v.stop() : v.reload()))}
+            className="grid h-7 w-7 flex-none place-items-center rounded-md text-[#8a8a90] hover:bg-[#2a2a2e] hover:text-[#ececec]"
+          >
+            {activeTab?.loading ? <X size={14} strokeWidth={1.9} /> : <RotateCw size={13} strokeWidth={1.9} />}
+          </button>
+
+          <form
+            className="relative ml-1 flex flex-1 items-center"
+            onSubmit={(e) => {
+              e.preventDefault()
+              navigate(address)
+            }}
+          >
+            <div className="pointer-events-none absolute left-3 flex items-center text-[#6a6a70]">
+              {isHttps ? <Lock size={11} strokeWidth={2} /> : <Search size={11} strokeWidth={2} />}
             </div>
-          )
-        })}
-        <button
-          type="button"
-          aria-label="New tab"
-          title="New tab"
-          onClick={() => openTab(HOME_URL)}
-          className="mb-1 grid h-[22px] w-[22px] flex-none place-items-center rounded-full text-[#b8babd] transition-colors hover:bg-[#36393e] hover:text-white"
-        >
-          <Plus size={14} strokeWidth={2.2} />
-        </button>
+            <input
+              value={address}
+              spellCheck={false}
+              aria-label="Address and search"
+              placeholder="Search or enter address"
+              onChange={(e) => {
+                setEditing(true)
+                setAddress(e.target.value)
+              }}
+              onFocus={(e) => {
+                setEditing(true)
+                e.target.select()
+              }}
+              onBlur={() => setEditing(false)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setEditing(false)
+                  setAddress(activeTab?.url ?? '')
+                  e.currentTarget.blur()
+                }
+              }}
+              className="h-7 w-full rounded-full border border-[#2e2e32] bg-[#252529] pl-8 pr-3 text-[12px] text-[#e8e8ea] outline-none placeholder:text-[#6a6a70] focus:border-[#3a3a40] focus:bg-[#2a2a2e]"
+            />
+          </form>
+
+          <button
+            type="button"
+            aria-label="Reset browser and clear data"
+            title="Reset browser and clear data"
+            onClick={() => void handleClearDataAndReset()}
+            disabled={resetting}
+            className="grid h-7 w-7 flex-none place-items-center rounded-md text-[#8a8a90] hover:bg-[#2a2a2e] hover:text-[#ececec] disabled:opacity-30"
+          >
+            <RotateCcw size={13} strokeWidth={1.9} className={resetting ? 'animate-spin' : ''} />
+          </button>
+        </div>
       </div>
 
-      {/* Navigation bar */}
-      <div className="flex h-10 flex-none items-center gap-1 border-b border-white/10 bg-[#303236] px-3">
-        <button
-          type="button"
-          aria-label="Back"
-          title="Back"
-          disabled={!activeTab?.canGoBack}
-          onClick={() => withActiveView((v) => v.goBack())}
-          className="grid h-[27px] w-[27px] flex-none place-items-center rounded-full text-[#c0c1c3] transition-colors hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:text-[#777a7e]"
-        >
-          <ArrowLeft size={15} strokeWidth={2.1} />
-        </button>
-        <button
-          type="button"
-          aria-label="Forward"
-          title="Forward"
-          disabled={!activeTab?.canGoForward}
-          onClick={() => withActiveView((v) => v.goForward())}
-          className="grid h-[27px] w-[27px] flex-none place-items-center rounded-full text-[#c0c1c3] transition-colors hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:text-[#777a7e]"
-        >
-          <ArrowRight size={15} strokeWidth={2.1} />
-        </button>
-        <button
-          type="button"
-          aria-label={activeTab?.loading ? 'Stop' : 'Reload'}
-          title={activeTab?.loading ? 'Stop' : 'Reload'}
-          onClick={() => withActiveView((v) => (activeTab?.loading ? v.stop() : v.reload()))}
-          className="grid h-[27px] w-[27px] flex-none place-items-center rounded-full text-[#c0c1c3] transition-colors hover:bg-white/10 hover:text-white"
-        >
-          {activeTab?.loading ? <X size={15} strokeWidth={2.1} /> : <RotateCw size={14} strokeWidth={2.1} />}
-        </button>
-
-        <form
-          className="ml-1 flex-1"
-          onSubmit={(e) => {
-            e.preventDefault()
-            navigate(address)
-          }}
-        >
-          <input
-            value={address}
-            spellCheck={false}
-            aria-label="Address and search"
-            placeholder="Search Google or type a URL"
-            onChange={(e) => {
-              setEditing(true)
-              setAddress(e.target.value)
-            }}
-            onFocus={(e) => {
-              setEditing(true)
-              e.target.select()
-            }}
-            onBlur={() => setEditing(false)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                setEditing(false)
-                setAddress(activeTab?.url ?? '')
-                e.currentTarget.blur()
-              }
-            }}
-            className="h-[28px] w-full rounded-full border border-white/10 bg-[#45484d] px-3 text-[12.5px] text-white outline-none transition-colors placeholder:text-[#b0b2b5] focus:border-white/25"
-          />
-        </form>
-      </div>
-
-      {/* Loading progress + load-failure feedback for the visible tab. */}
       {activeTab?.loading && (
-        <div className="h-0.5 flex-none overflow-hidden" aria-hidden>
-          <div className="load-bar h-full w-1/4 rounded-full bg-accent/70" />
+        <div className="load-bar-track h-px flex-none" aria-hidden>
+          <div className="load-bar h-full w-1/3" />
         </div>
       )}
       {!activeTab?.loading && activeTab?.error && (
-        <div className="flex flex-none items-center justify-between gap-3 border-b border-danger/30 bg-danger/10 px-3 py-1.5 text-xs text-danger">
-          <span className="min-w-0 truncate">Page failed to load — {activeTab.error}</span>
+        <div className="flex flex-none items-center justify-between gap-3 border-b border-[#3a2a2a] bg-[#1f1a1c] px-3 py-1.5 text-xs text-[#c9a0a0]">
+          <span className="min-w-0 truncate">Could not load — {activeTab.error}</span>
           <button
             type="button"
-            className="flex-none rounded-[8px] border border-danger/40 px-2 py-0.5 text-[11px] text-danger transition-colors hover:bg-danger/15"
+            className="flex-none rounded-md bg-[#2a2a2e] px-2.5 py-1 text-[11px] text-[#c9a0a0] hover:bg-[#303034]"
             onClick={() => withActiveView((v) => v.reload())}
           >
             Retry
@@ -278,9 +333,7 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
         </div>
       )}
 
-      {/* Pages. Every tab stays mounted; only the active one is visible, and
-          `visibility` rather than `display` so a hidden guest keeps its size. */}
-      <div className="relative flex-1 bg-bg-raise">
+      <div className="browser-surface relative flex-1">
         {tabs.map((tab) => (
           <TabFrame
             key={tab.id}
@@ -302,13 +355,9 @@ interface TabFrameProps {
   onRegister: (id: string, view: Webview | null) => void
 }
 
-/** One guest page. Owns its own listeners so tabs can come and go freely. */
 function TabFrame({ tab, visible, onPatch, onRegister }: TabFrameProps): React.JSX.Element {
   const ref = useRef<Webview | null>(null)
   const id = tab.id
-  // Stable per-tab: an inline arrow ref would be recreated every render, and
-  // React would call ref(null)+ref(el) each time — churning the view registry
-  // (delete+set) on every parent re-render for no reason.
   const setViewRef = useCallback(
     (el: HTMLElement | null): void => {
       const view = el ? (el as unknown as Webview) : null
@@ -323,20 +372,25 @@ function TabFrame({ tab, visible, onPatch, onRegister }: TabFrameProps): React.J
     if (!view) return undefined
 
     const syncHistory = (): void => {
-      onPatch(id, { canGoBack: view.canGoBack(), canGoForward: view.canGoForward() })
+      try {
+        onPatch(id, { canGoBack: view.canGoBack(), canGoForward: view.canGoForward() })
+      } catch {}
     }
-    const onStart = (): void => onPatch(id, { loading: true, error: null })
+    const onStart = (): void => {
+      onPatch(id, { loading: true, error: null })
+    }
     const onStop = (): void => {
       onPatch(id, { loading: false })
       syncHistory()
     }
-    // A main-frame load failure used to leave a blank pane with no way to tell
-    // "still loading" from "dead host". ERR_ABORTED (-3) is our own Stop, not a
-    // failure; subframe failures don't block the page and stay invisible.
+    const onDomReady = (): void => {
+      onPatch(id, { loading: false })
+      syncHistory()
+    }
     const onFail = (event: Event): void => {
       const e = event as Event & { errorCode?: number; errorDescription?: string; isMainFrame?: boolean }
       if (e.errorCode === -3 || e.isMainFrame === false) return
-      onPatch(id, { loading: false, error: e.errorDescription || 'the server could not be reached' })
+      onPatch(id, { loading: false, error: e.errorDescription || 'server unreachable' })
       syncHistory()
     }
     const onNavigate = (event: Event): void => {
@@ -354,25 +408,21 @@ function TabFrame({ tab, visible, onPatch, onRegister }: TabFrameProps): React.J
       if (title) onPatch(id, { title })
     }
 
-    // One automatic recovery per mount: a guest renderer crash (renderer-gone)
-    // leaves a blank pane and a stuck `loading` flag. A page that crashes
-    // again after this reload stays down rather than looping forever.
     let crashReloads = 0
     const onCrashed = (): void => {
-      console.warn(`browser tab ${id} crashed`, crashReloads < 1 ? '(auto-reloading once)' : '(stayed down)')
       onPatch(id, { loading: false })
       if (crashReloads < 1) {
         crashReloads += 1
         try {
           view.reload()
-        } catch {
-          /* the frame was already torn down */
-        }
+        } catch {}
       }
     }
 
     view.addEventListener('did-start-loading', onStart)
     view.addEventListener('did-stop-loading', onStop)
+    view.addEventListener('did-finish-load', onDomReady)
+    view.addEventListener('dom-ready', onDomReady)
     view.addEventListener('did-fail-load', onFail)
     view.addEventListener('did-navigate', onNavigate)
     view.addEventListener('did-navigate-in-page', onInPage)
@@ -381,6 +431,8 @@ function TabFrame({ tab, visible, onPatch, onRegister }: TabFrameProps): React.J
     return () => {
       view.removeEventListener('did-start-loading', onStart)
       view.removeEventListener('did-stop-loading', onStop)
+      view.removeEventListener('did-finish-load', onDomReady)
+      view.removeEventListener('dom-ready', onDomReady)
       view.removeEventListener('did-fail-load', onFail)
       view.removeEventListener('did-navigate', onNavigate)
       view.removeEventListener('did-navigate-in-page', onInPage)
@@ -392,14 +444,9 @@ function TabFrame({ tab, visible, onPatch, onRegister }: TabFrameProps): React.J
   return (
     <webview
       ref={setViewRef}
-      // `partition` must reach the element before it starts loading, so it is
-      // written ahead of `src`; main pins it again at attach time regardless.
       partition={BROWSER_PARTITION}
       allowpopups
       src={tab.initialUrl}
-      // Never `visible` on the active tab: `visibility` inherits, so an explicit
-      // `visible` here would punch through the pane's own hidden state and paint
-      // the page over the canvas. Inactive tabs opt out, the active one inherits.
       className={`absolute inset-0 h-full w-full ${visible ? 'z-10' : 'invisible z-0'}`}
     />
   )

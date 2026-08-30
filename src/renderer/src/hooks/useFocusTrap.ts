@@ -28,7 +28,11 @@ export function useFocusTrap(
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key !== 'Tab') return
       const items = focusable()
-      if (items.length === 0) return
+      if (items.length === 0) {
+        e.preventDefault()
+        root.focus?.()
+        return
+      }
       const first = items[0]
       const last = items[items.length - 1]
       const current = document.activeElement

@@ -28,7 +28,6 @@ export const MAX_WIDGETS = 200
 /** Default title and size per widget type, used when the caller gives none. */
 const WIDGET_DEFAULTS: Record<WidgetKind, { title: string; w: number; h: number }> = {
   terminal: { title: 'Terminal', w: WIDGET_W, h: WIDGET_H },
-  note: { title: 'New Note', w: WIDGET_W, h: WIDGET_H },
   timer: { title: 'Timer', w: 300, h: 220 },
   board: { title: 'Task Board', w: 900, h: 520 },
   planner: { title: 'Planner', w: 420, h: 520 },
@@ -37,8 +36,63 @@ const WIDGET_DEFAULTS: Record<WidgetKind, { title: string; w: number; h: number 
   browser: { title: 'Browser', w: 720, h: 480 },
   links: { title: 'Links', w: 420, h: 360 },
   'music-player': { title: 'Music Player', w: 460, h: 420 },
-  'id-generator': { title: 'ID Generator', w: 420, h: 360 }
+  'id-generator': { title: 'ID Generator', w: 420, h: 360 },
+  orchestration: { title: 'Orchestration', w: 520, h: 560 }
 }
+
+interface StrokeBounds {
+  minX: number
+  minY: number
+  maxX: number
+  maxY: number
+}
+
+/**
+ * Axis-aligned bounds of a stroke, cached by stroke revision.
+ * Keyed by `${stroke.id}:${stroke.points.length}` so IPC deserialized snapshots
+ * with new object identities still hit the cache.
+ */
+const strokeBoundsCache = new Map<string, StrokeBounds>()
+const MAX_BOUNDS_CACHE_ENTRIES = 5000
+
+function strokeBounds(stroke: Stroke): StrokeBounds {
+  const cacheKey = `${stroke.id}:${stroke.points.length}`
+  const cached = strokeBoundsCache.get(cacheKey)
+  if (cached) return cached
+  const pts = stroke.points
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (let i = 0; i < pts.length; i += 1) {
+    const p = pts[i]
+    if (p.x < minX) minX = p.x
+    if (p.x > maxX) maxX = p.x
+    if (p.y < minY) minY = p.y
+    if (p.y > maxY) maxY = p.y
+  }
+  const bounds = { minX, minY, maxX, maxY }
+  if (strokeBoundsCache.size >= MAX_BOUNDS_CACHE_ENTRIES) {
+    const oldestKey = strokeBoundsCache.keys().next().value
+    if (oldestKey) strokeBoundsCache.delete(oldestKey)
+  }
+  strokeBoundsCache.set(cacheKey, bounds)
+  return bounds
+}
+
+/**
+ * Per-widget `localStorage` keys, cleared when a widget is closed for good.
+ *
+ * These belong here rather than in each widget's unmount cleanup: a widget
+ * unmounts whenever its frame is re-parented (maximize/restore), and a purge
+ * on unmount deleted the user's saved links the moment they maximized the
+ * Links widget. `removeWidget` is the one call that means "closed".
+ */
+const WIDGET_STORAGE_PREFIXES = [
+  'orcspace-links:',
+  'orcspace-music-playlists:',
+  'orcspace-music-volume:'
+] as const
 
 const makeConnectionId = (): string => `conn-${Date.now()}-${++localCounter}`
 
@@ -104,6 +158,10 @@ export function useCanvas() {
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const workspaceDirRef = useRef<string | null>(null)
+  // A load can overlap an MCP/agent write. If a change broadcast arrives while
+  // the read is in flight, applying the older read afterwards would erase the
+  // freshly created or renamed widget from the renderer (stale-load race).
+  const canvasChangeSeqRef = useRef(0)
 
   const hydrate = useCallback(() => {
     if (retryTimerRef.current !== null) {
@@ -120,17 +178,26 @@ export function useCanvas() {
     pendingDeletesRef.current.clear()
     pendingCreatesRef.current.clear()
     const run = ++hydrationRunRef.current
+    const changesAtStart = canvasChangeSeqRef.current
     hydratedRef.current = false
     skipNextSaveRef.current = true
     void window.api.canvas.load()
       .then((snapshot) => {
         if (run !== hydrationRunRef.current) return
-        setWidgets(snapshot.widgets)
-        setCamera(snapshot.camera)
-        setStrokes(snapshot.strokes)
-        setConnections([])
+        if (canvasChangeSeqRef.current === changesAtStart) {
+          setWidgets(snapshot.widgets)
+          setCamera(snapshot.camera)
+          setStrokes(snapshot.strokes)
+          setConnections([])
+        }
+        // Seed the counter AT the restored top, not one past it. `active` is
+        // decided by `w.z === topZ.current`, so starting one above meant no
+        // widget was the active one after a restart — the desktop came back
+        // with nothing focused until the user clicked something. `nextZ`
+        // pre-increments, so a newly added widget still lands above the
+        // restored stack (CANV-restore-focus).
         const maxZ = snapshot.widgets.reduce((max, w) => Math.max(max, w.z), 0)
-        zRef.current = Math.max(1, maxZ + 1)
+        zRef.current = Math.max(1, maxZ)
         cascadeRef.current = 0
         // Everything the snapshot lists is acknowledged by main, so no local
         // id is awaiting its first save round-trip anymore.
@@ -250,6 +317,7 @@ export function useCanvas() {
   useEffect(() => {
     return window.api.canvas.onChange((snapshot) => {
       if (!snapshot || !Array.isArray(snapshot.widgets)) return
+      canvasChangeSeqRef.current += 1
       skipNextSaveRef.current = true
       setWidgets((prev) => {
         const pending = pendingDeletesRef.current
@@ -302,7 +370,7 @@ export function useCanvas() {
   }, [])
 
   const addWidget = useCallback(
-    (point: Point, id: string = makeLocalId(), title?: string, kind: WidgetKind = 'terminal', noteId?: string): boolean => {
+    (point: Point, id: string = makeLocalId(), title?: string, kind: WidgetKind = 'terminal'): boolean => {
       const defaults = WIDGET_DEFAULTS[kind]
       // Cheap up-front check so the caller's boolean is correct even before
       // React runs the state updater — a functional setState is not guaranteed
@@ -337,7 +405,6 @@ export function useCanvas() {
             // been opened since launch.
             title: title || (kind === 'terminal' ? `Terminal ${nextTerminalNumber(prev)}` : defaults.title),
             kind,
-            noteId,
             x: point.x - 16,
             y: point.y - 16,
             w: defaults.w,
@@ -351,10 +418,6 @@ export function useCanvas() {
     },
     [nextZ]
   )
-
-  const addNoteWidget = useCallback((point: Point, noteId: string, title = 'New Note'): boolean => {
-    return addWidget(point, makeLocalId('note'), title, 'note', noteId)
-  }, [addWidget])
 
   const removeWidget = useCallback((id: string): void => {
     // Tombstone the closed id until a save round-trip proves main dropped it:
@@ -370,6 +433,18 @@ export function useCanvas() {
     // from; a widget that exists only in a not-yet-committed updater has no
     // live shell to dispose anyway.
     const target = widgetsRef.current.find((w) => w.id === id)
+    // Widget ids are never reused, so a closed widget's browser-storage keys
+    // are unreachable garbage — drop them here rather than from the widget's
+    // own unmount, which also fires for a re-parent (maximize) and would take
+    // the user's data with it. Storage is best-effort, so a failure is not
+    // worth surfacing.
+    for (const prefix of WIDGET_STORAGE_PREFIXES) {
+      try {
+        localStorage.removeItem(`${prefix}${id}`)
+      } catch {
+        /* private mode, quota, cleared site data — nothing to recover */
+      }
+    }
     if (target && (target.kind ?? 'terminal') === 'terminal') {
       // An agent holding the terminal's lock makes this reject — expected,
       // and the parked pty is reclaimed when the widget remounts.
@@ -532,14 +607,45 @@ export function useCanvas() {
         }
         for (const s of prev) {
           const pts = s.points
+          // Cheap reject: a stroke whose bounding box does not reach the
+          // eraser cannot lose a point to it, so it is passed through by
+          // reference. That matters beyond the arithmetic saved — rebuilding
+          // an untouched stroke with a fresh id (below) made every erase frame
+          // replace the whole stroke store with structurally identical data,
+          // which invalidated the ink layer's per-stroke geometry cache, made
+          // main's `strokesShapeMatch` miss on every autosave, and re-wrote the
+          // full canvas file for strokes nobody had touched (PERF-erase-churn).
+          // A stroke that can no longer render (StrokesLayer skips anything
+          // under 2 points) is dropped rather than carried forward — the same
+          // rule the rebuild path below applies to its leftover tails.
+          if (pts.length < 2) continue
+          const bounds = strokeBounds(s)
+          const r = pending.worldRadius
+          if (
+            bounds.maxX < pending.point.x - r ||
+            bounds.minX > pending.point.x + r ||
+            bounds.maxY < pending.point.y - r ||
+            bounds.minY > pending.point.y + r
+          ) {
+            next.push(s)
+            continue
+          }
           const dead = new Array<boolean>(pts.length).fill(false)
+          let anyDead = false
           for (let i = 0; i < pts.length; i++) {
             if (near(pts[i])) {
               dead[i] = true
+              anyDead = true
             } else if (i > 0 && !dead[i - 1] && crossesFootprint(pts[i - 1], pts[i])) {
               dead[i] = true
               dead[i - 1] = true
+              anyDead = true
             }
+          }
+          // Inside the eraser's box but nothing actually within its radius.
+          if (!anyDead) {
+            next.push(s)
+            continue
           }
           let current: Point[] = []
           for (let i = 0; i < pts.length; i++) {
@@ -562,7 +668,7 @@ export function useCanvas() {
   }, [])
 
   useEffect(() => {
-    const offAdd = window.api.control.onAddWidget(({ id, title, from }) => {
+    const offAdd = window.api.control.onAddWidget(({ id, title, kind, x, y, from }) => {
       // Cascade agent-opened terminals instead of stacking them all at one spot,
       // and place them relative to wherever the camera currently is. Columns
       // cycle 0..5; rows grow forever so the 37th widget keeps cascading
@@ -571,11 +677,17 @@ export function useCanvas() {
       cascadeRef.current += 1
       const col = n % 6
       const row = Math.floor(n / 6)
-      addWidget(screenToWorld(90 + col * 60, 90 + row * 60), id, title)
+      const point = kind && typeof x === 'number' && typeof y === 'number'
+        ? { x, y }
+        : screenToWorld(90 + col * 60, 90 + row * 60)
+      const added = addWidget(point, id, title, (kind as WidgetKind | undefined) ?? 'terminal')
       // `from` is the shell the request came from — draw the line that says so.
       // A dangling id (its widget already closed) draws nothing rather than an
-      // arc anchored on empty canvas.
-      if (from) {
+      // arc anchored on empty canvas. `addWidget` refusing (canvas at
+      // MAX_WIDGETS) leaves no widget that could ever trigger removeWidget's
+      // connection cleanup — pushing one here anyway would leak a Connection
+      // into state for the rest of the session, forever.
+      if (added && from) {
         setConnections((prev) => [
           ...prev,
           { id: makeConnectionId(), from, to: id, bornAt: Date.now() }
@@ -583,9 +695,13 @@ export function useCanvas() {
       }
     })
     const offRemove = window.api.control.onRemoveWidget(removeWidget)
+    const offRename = window.api.control.onRenameWidget(({ id, title }) => {
+      setWidgets((prev) => prev.map((widget) => (widget.id === id ? { ...widget, title } : widget)))
+    })
     return () => {
       offAdd()
       offRemove()
+      offRename()
     }
   }, [addWidget, removeWidget, screenToWorld])
 
@@ -603,7 +719,6 @@ export function useCanvas() {
     topZ: zRef,
     screenToWorld,
     addWidget,
-    addNoteWidget,
     removeWidget,
     updateWidget,
     bringToFront,

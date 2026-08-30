@@ -3,7 +3,7 @@ import { describe, test } from 'node:test'
 import { TerminalManager } from './terminals.ts'
 
 describe('TerminalManager', () => {
-  test('reserve assigns distinct IDs and names agent terminals sequentially', () => {
+  test('reserve keeps explicit agent names and numbers unnamed agents', () => {
     const manager = new TerminalManager()
 
     const term1 = manager.reserve({ title: 'My Shell' })
@@ -13,15 +13,15 @@ describe('TerminalManager', () => {
 
     const agent1 = manager.reserve({ prefix: 'agent', title: 'Custom Agent' })
     assert.ok(agent1.id.startsWith('agent-'))
-    assert.equal(agent1.title, 'Agent Terminal 1')
+    assert.equal(agent1.title, 'Custom Agent')
 
     const agent2 = manager.reserve({ prefix: 'agent' })
-    assert.equal(agent2.title, 'Agent Terminal 2')
+    assert.equal(agent2.title, 'Agent Terminal 1')
 
     // Dispose agent 1 and verify number reuse
     manager.dispose(agent1.id)
     const agent3 = manager.reserve({ prefix: 'agent' })
-    assert.equal(agent3.title, 'Agent Terminal 1')
+    assert.equal(agent3.title, 'Agent Terminal 2')
 
     manager.disposeAll()
   })

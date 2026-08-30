@@ -1,7 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import { Terminal, ITheme } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
-import { WebglAddon } from 'xterm-addon-webgl'
 import 'xterm/css/xterm.css'
 import { ThemeName, useTheme } from '../theme'
 import { pasteHasImage, saveImageFromPaste } from '../lib/paste'
@@ -229,32 +228,7 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
       term.write('\r\n\x1b[31m[Terminal could not be initialised; retrying is safe]\x1b[0m\r\n')
     }
 
-    // Glyphs render on the GPU instead of xterm's default 2D canvas path,
-    // which is what keeps a busy shell (a build log, an agent streaming
-    // tokens) from pegging a CPU core. Best-effort: some hosts have no WebGL
-    // context to give (headless CI, software rendering, too many contexts
-    // open across many terminal widgets at once) — xterm's default renderer
-    // is a perfectly fine fallback, so a failure here is silent rather than
-    // surfaced in the pane.
-    //
-    // Deferred a frame: creating a WebGL context means the GPU driver spins
-    // up and xterm compiles its shaders, which is 10-40ms of real work — real
-    // enough that doing it synchronously in the mount effect was on the
-    // critical path of opening a terminal, delaying the first paint of a pane
-    // that was otherwise already ready to show text. One frame is enough for
-    // the initial (2D-rendered) paint to land first; the swap to WebGL then
-    // happens invisibly a moment later.
-    let webglRaf: number | null = requestAnimationFrame(() => {
-      webglRaf = null
-      if (!mounted) return
-      try {
-        const webgl = new WebglAddon()
-        webgl.onContextLoss(() => webgl.dispose())
-        term.loadAddon(webgl)
-      } catch (err) {
-        console.warn('xterm webgl renderer unavailable, using default renderer', err)
-      }
-    })
+
 
     // The main process intercepts Ctrl+C/X/A/Z while a terminal holds focus
     // (menu accelerators would otherwise win over the pty), so it needs to
@@ -362,6 +336,65 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
     }
     container.addEventListener('paste', onPaste, true)
 
+    // Dropping a file (a screenshot dragged off the desktop, an image from
+    // Finder/Explorer, anything) writes its quoted path the same way a
+    // clipboard-pasted picture does — the terminal only ever wants a path.
+    const onDragOver = (event: DragEvent): void => {
+      if (!event.dataTransfer?.types.includes('Files')) return
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'copy'
+    }
+    const onDrop = (event: DragEvent): void => {
+      const files = event.dataTransfer?.files
+      if (!files || files.length === 0) return
+      event.preventDefault()
+      const dropped = Array.from(files)
+      // Sequential, not a parallel loop: several files each write their own
+      // path into the same line, and racing reads would interleave them into
+      // an unusable argument list.
+      void (async () => {
+        for (const file of dropped) {
+          try {
+            // An image goes through the same content-addressed scratch copy
+            // as a clipboard paste (saveImageFromPaste) rather than its raw OS
+            // path: a screenshot's real path is long, often has spaces and,
+            // on a non-English Windows install, non-ASCII characters (e.g.
+            // "Снимок экрана ....png") — exactly the kind of path some
+            // CLIs/agents mis-parse even quoted. Non-image files keep their
+            // real path; there's no such mangling concern and copying, say, a
+            // dropped video would just burn scratch space for nothing.
+            if (file.type.startsWith('image/')) {
+              const bytes = new Uint8Array(await file.arrayBuffer())
+              const ext = file.name.includes('.') ? file.name.split('.').pop()! : file.type.split('/')[1]
+              const saved = await window.api.media.saveBytesScratch(bytes, ext)
+              if (saved && 'path' in saved) {
+                writeImagePath(saved)
+                // The paste path deliberately writes no trailing space; a drop
+                // may carry several files, so each path needs its separator.
+                writePty(' ')
+              } else if (saved && 'error' in saved) {
+                term.write(`\r\n\x1b[31m[${saved.error}]\x1b[0m\r\n`)
+              }
+              continue
+            }
+            const path = window.api.media.getPathForFile(file)
+            if (!path) continue
+            // A double quote is a legal filename character off Windows, and
+            // an unescaped one would close the quoting early and hand the
+            // shell a mangled command.
+            writePty(`"${path.replace(/"/g, '\\"')}" `)
+            term.write(`\x1b[90m[Dropped: ${file.name}]\x1b[0m`)
+          } catch (err) {
+            term.write(
+              `\r\n\x1b[31m[${err instanceof Error ? err.message : 'Failed to read dropped file'}]\x1b[0m\r\n`
+            )
+          }
+        }
+      })()
+    }
+    container.addEventListener('dragover', onDragOver)
+    container.addEventListener('drop', onDrop)
+
     // A failed spawn must not look like a working terminal: the widget reports
     // it in-band instead of silently mounting a dead pane.
     // On reconnect (`live`), the process never died (folder switch) — paint the
@@ -443,10 +476,11 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
 
     return () => {
       mounted = false
-      if (webglRaf !== null) cancelAnimationFrame(webglRaf)
       if (resizeRaf !== null) cancelAnimationFrame(resizeRaf)
       observer.disconnect()
       container.removeEventListener('paste', onPaste, true)
+      container.removeEventListener('dragover', onDragOver)
+      container.removeEventListener('drop', onDrop)
       container.removeEventListener('wheel', onWheel, true)
       container.removeEventListener('focusin', onFocusIn)
       container.removeEventListener('focusout', onFocusOut)

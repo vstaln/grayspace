@@ -79,12 +79,46 @@ export function scratchDir(): string {
   return join(os.tmpdir(), 'orcspace-clipboard')
 }
 
+/**
+ * How long a throwaway clipboard picture is kept before being swept: long
+ * enough that the CLI it was pasted for is certainly still running, short
+ * enough that a long session pasting many different screenshots doesn't grow
+ * the OS temp dir forever. Nothing else ever deletes these (SCRATCH-TTL) —
+ * unlike userData/media, the OS does not actually reclaim an app's own
+ * subdirectory of %TEMP% on its own.
+ */
+export const SCRATCH_TTL_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Deletes scratch files older than `SCRATCH_TTL_MS`. Best-effort: a file that
+ * is gone or briefly locked (another process still reading it) is skipped
+ * rather than thrown — the next write sweeps it instead.
+ */
+export function pruneScratch(dir: string = scratchDir()): void {
+  let entries: string[]
+  try {
+    entries = fs.readdirSync(dir)
+  } catch {
+    return
+  }
+  const cutoff = Date.now() - SCRATCH_TTL_MS
+  for (const name of entries) {
+    const path = join(dir, name)
+    try {
+      if (fs.statSync(path).mtimeMs < cutoff) fs.unlinkSync(path)
+    } catch {
+      /* already gone, or briefly locked — the next sweep catches it */
+    }
+  }
+}
+
 /** saveBytes' throwaway twin — same content addressing, temp dir instead. */
 export function saveBytesToScratch(bytes: Buffer, ext: string): MediaFile {
   if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('File larger than 24 MB')
   const safeExt = MIME_BY_EXT[ext.replace(/^\./, '').toLowerCase()] ? ext.replace(/^\./, '').toLowerCase() : 'png'
   const dir = scratchDir()
   fs.mkdirSync(dir, { recursive: true })
+  pruneScratch(dir)
   const digest = createHash('sha1').update(bytes).digest('hex').slice(0, 16)
   const name = `${digest}.${safeExt}`
   const path = join(dir, name)

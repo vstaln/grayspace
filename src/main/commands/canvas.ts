@@ -1,13 +1,14 @@
-import { CANVAS_TARGET_ID, type CanvasWidget, type WidgetKind } from '../canvasState.ts'
+import { CANVAS_TARGET_ID, type CanvasCamera, type CanvasStroke, type CanvasWidget, type WidgetKind } from '../canvasState.ts'
 import { CommandError, parseResource, resourceId } from '../core/index.ts'
 import { widgetType } from '../widgets/registry.ts'
 import type { CommandDeps } from './index.ts'
+
+export const CANVAS_TARGET = resourceId('canvas', CANVAS_TARGET_ID)
 
 interface WidgetCreatePayload {
   id?: string
   kind?: WidgetKind
   title?: string
-  noteId?: string
   x?: number
   y?: number
   w?: number
@@ -31,7 +32,10 @@ export function registerCanvasCommands({
   canvas,
   terminals,
   snapshots,
-  forgetOrigin
+  forgetOrigin,
+  requestWidget,
+  requestWidgetRename,
+  requestWidgetRemoval
 }: CommandDeps): void {
   const { bus } = core
 
@@ -49,7 +53,6 @@ export function registerCanvasCommands({
         id: { type: 'string', description: '1–128 chars of [A-Za-z0-9._:-]; generated when omitted' },
         kind: { type: 'string', description: 'Widget kind from the registry' },
         title: { type: 'string' },
-        noteId: { type: 'string' },
         x: { type: 'number' },
         y: { type: 'number' },
         w: { type: 'number' },
@@ -67,17 +70,26 @@ export function registerCanvasCommands({
         if (canvas.widget(id)) throw new CommandError('conflict', `widget ${id} already exists`)
         const defaults = widgetType(p.kind)?.defaultSize
         try {
-          return canvas.putWidget({
+          const widget = canvas.putWidget({
             id,
             kind: p.kind,
             title: (p.title?.trim() || widgetType(p.kind)?.label || id).slice(0, 120),
-            noteId: p.noteId,
             x: Number(p.x) || 0,
             y: Number(p.y) || 0,
             w: Number(p.w) || defaults?.w || 520,
             h: Number(p.h) || defaults?.h || 360,
             z: Number(p.z) || 1
           })
+          // External canvas creates have no renderer-side mount yet. Notify
+          // the open window immediately instead of waiting for a restart.
+          requestWidget({
+            id: widget.id,
+            title: widget.title,
+            kind: widget.kind,
+            x: widget.x,
+            y: widget.y,
+          })
+          return widget
         } catch (err) {
           if (err instanceof CommandError) throw err
           throw new CommandError('invalid', err instanceof Error ? err.message : String(err))
@@ -113,9 +125,12 @@ export function registerCanvasCommands({
         }
         if (!canvas.widget(id)) throw new CommandError('not_found', `widget ${id} not found`)
         const updated = canvas.patchWidget(id, command.payload ?? {})
-        // Keep the shell list label in the assistant's context in sync.
-        if (typeof command.payload?.title === 'string' && (updated.kind === 'terminal' || !updated.kind)) {
-          terminals.setTitle(id, command.payload.title)
+        // Keep the shell list label in the assistant's context and renderer in sync.
+        if (typeof command.payload?.title === 'string') {
+          if (updated.kind === 'terminal' || !updated.kind) {
+            terminals.setTitle(id, command.payload.title)
+          }
+          requestWidgetRename?.(id, command.payload.title)
         }
         return updated
       }
@@ -131,99 +146,73 @@ export function registerCanvasCommands({
     handler: {
       apply: ({ command }) => {
         const id = widgetIdOf(command.target)
-        // Closing a terminal widget must also tear the shell down: a live PTY
-        // with no widget to reclaim it is a zombie process that keeps running
-        // unseen. Mirror terminal.dispose's teardown so an agent's close_widget
-        // cleans up everything (CANV-01).
-        const widget = canvas.widget(id)
-        if (widget && (widget.kind === 'terminal' || !widget.kind)) {
+        const removed = canvas.removeWidget(id)
+        if (!removed) throw new CommandError('not_found', `widget ${id} not found`)
+        forgetOrigin(id)
+        requestWidgetRemoval(id)
+        snapshots.forget(id)
+        if (terminals.has(id)) {
           terminals.dispose(id)
-          snapshots.forget(id)
-          forgetOrigin(id)
         }
-        // Idempotent on purpose: this is the command most likely to be replayed
-        // after a crash, and "it is already gone" is the outcome the caller
-        // wanted either way.
-        canvas.removeWidget(id)
         return { id }
       }
     }
   })
 
-  bus.registerDefinition<{ x: number; y: number; zoom: number }, { camera: unknown }>({
+  bus.registerDefinition<{ x?: number; y?: number; zoom?: number }, { camera: CanvasCamera }>({
     type: 'canvas.camera',
-    description: 'Set the viewer camera (world-space offset + zoom) for the main canvas.',
+    description: 'Pan or zoom the canvas viewport (world coordinates).',
     targetScheme: 'canvas',
-    requiresLock: false,
     ignoreVersion: true,
     payloadSchema: {
       type: 'object',
       properties: {
-        x: { type: 'number', description: 'Camera offset X' },
-        y: { type: 'number', description: 'Camera offset Y' },
-        zoom: { type: 'number', description: 'Zoom, 0.2–4' }
+        x: { type: 'number' },
+        y: { type: 'number' },
+        zoom: { type: 'number' }
       }
     },
     handler: {
-      apply: ({ command }) => ({ camera: canvas.setCamera(command.payload) })
+      apply: ({ command }) => {
+        const parsed = parseResource(command.target)
+        if (!parsed || parsed.scheme !== 'canvas') {
+          throw new CommandError('invalid', 'canvas.camera target must have canvas scheme')
+        }
+        return { camera: canvas.setCamera(command.payload ?? {}) }
+      }
     }
   })
 
   bus.registerDefinition<{ strokes: unknown }, { count: number }>({
     type: 'canvas.strokes',
-    description: 'Replace the freehand stroke layer of the canvas.',
+    description: 'Update freehand strokes on the canvas.',
     targetScheme: 'canvas',
-    payloadSchema: {
-      type: 'object',
-      properties: { strokes: { type: 'array', description: 'Stroke list as the renderer draws it' } }
-    },
-    handler: {
-      apply: ({ command }) => ({ count: canvas.setStrokes(command.payload?.strokes).length })
-    }
-  })
-
-  /**
-   * The renderer's periodic layout save. It is a merge rather than a replace —
-   * see `CanvasStore.importFromRenderer` — so a widget an agent created or
-   * moved mid-drag is not undone by the UI echoing back what it last read.
-   */
-  bus.registerDefinition<
-    { widgets?: unknown; camera?: unknown; strokes?: unknown; removed?: unknown },
-    { applied: number; skipped: number; removed: number }
-  >({
-    type: 'canvas.import',
-    description: 'Merge a renderer layout snapshot into the canvas store.',
-    targetScheme: 'canvas',
-    requiresLock: false,
-    ignoreVersion: true,
     payloadSchema: {
       type: 'object',
       properties: {
-        widgets: { type: 'array', description: 'Widget geometry list' },
-        camera: { type: 'object' },
-        strokes: { type: 'array' },
-        removed: { type: 'array' }
+        strokes: { type: 'array' }
       }
     },
     handler: {
       apply: ({ command }) => {
-        const result = canvas.importFromRenderer(command.payload ?? {})
-        // A terminal widget the renderer no longer reports is gone from the
-        // canvas for good: nothing will ever reclaim its pty, so tear the shell
-        // down here exactly like widget.remove does. Otherwise the process keeps
-        // running unseen until the app quits (CANV-01).
-        for (const gone of result.removedWidgets) {
-          if (gone.kind === 'terminal' || !gone.kind) {
-            terminals.dispose(gone.id)
-            snapshots.forget(gone.id)
-            forgetOrigin(gone.id)
-          }
-        }
-        return result
+        return { count: canvas.setStrokes(command.payload?.strokes).length }
+      }
+    }
+  })
+
+  bus.registerDefinition<
+    { widgets?: unknown; camera?: unknown; strokes?: unknown },
+    { applied: number; skipped: number; removed: number; removedWidgets: Array<{ id: string; kind?: WidgetKind }> }
+  >({
+    type: 'canvas.import',
+    description: 'Merge an entire canvas snapshot from the renderer.',
+    targetScheme: 'canvas',
+    ignoreVersion: true,
+    payloadSchema: { type: 'object', properties: {} },
+    handler: {
+      apply: ({ command }) => {
+        return canvas.importFromRenderer(command.payload ?? {})
       }
     }
   })
 }
-
-/** The target every camera/stroke command addresses. */
-export const CANVAS_TARGET = resourceId('canvas', CANVAS_TARGET_ID)

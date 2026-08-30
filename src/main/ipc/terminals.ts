@@ -46,6 +46,14 @@ export function registerTerminalIpc(deps: IpcDeps): void {
     unmarkTerminalMounted(id)
     return unwrap(await send('terminal.dispose', `terminal:${id}`))
   })
+  ipcMain.handle('terminal:set-title', async (_e, id: string, title: string) => {
+    if (typeof id !== 'string' || typeof title !== 'string') {
+      return { ok: false, error: 'invalid terminal id or title' }
+    }
+    deps.terminals.setTitle(id, title)
+    deps.getWindow()?.webContents.send('control:rename-widget', { id, title })
+    return { ok: true }
+  })
   /** The renderer reports which terminal holds keyboard focus, if any. */
   ipcMain.on('terminal:focus', (_e, focused: boolean, id?: string) => {
     setFocusedTerminal(focused && typeof id === 'string' ? id : null)

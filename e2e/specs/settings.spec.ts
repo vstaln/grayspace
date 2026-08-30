@@ -30,7 +30,7 @@ test('settings modal opens and switches tabs', async () => {
   // Switch to Account (the API Keys tab was removed together with the
   // OpenRouter/Tavily integrations)
   await modal.getByTestId('settings-tab-account').click()
-  await expect(modal.getByText('Display Name / Assignee', { exact: true })).toBeVisible()
+  await expect(modal.getByText('Display name', { exact: true })).toBeVisible()
 
   await modal.getByRole('button', { name: 'Close' }).click()
   await expect(modal).not.toBeVisible()

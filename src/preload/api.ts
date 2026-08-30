@@ -49,6 +49,7 @@ export interface TerminalApi {
   write(id: string, data: string): Promise<{ ok: true } | { error: string; code?: string }>
   resize(id: string, cols: number, rows: number): void
   dispose(id: string): Promise<unknown>
+  setTitle?(id: string, title: string): Promise<{ ok: boolean; error?: string }>
   /**
    * Widget unmounted without an intentional close (folder switch, redraw).
    * Parks the shell — does not kill Claude Code or other long sessions.
@@ -61,8 +62,9 @@ export interface TerminalApi {
 }
 
 export interface ControlApi {
-  onAddWidget(cb: (payload: { id: string; title: string; from?: string | null }) => void): () => void
+  onAddWidget(cb: (payload: { id: string; title: string; kind?: string; x?: number; y?: number; from?: string | null }) => void): () => void
   onRemoveWidget(cb: (id: string) => void): () => void
+  onRenameWidget(cb: (payload: { id: string; title: string }) => void): () => void
 }
 
 export interface RecentDir {
@@ -170,6 +172,121 @@ export interface MediaApi {
   saveBytesScratch(bytes: Uint8Array, ext: string): Promise<MediaFile | { error: string } | null>
   /** Reads an image back as a data URL; null when missing or not an image. */
   dataUrl(path: string): Promise<string | null>
+  /**
+   * Resolves a dropped `File`'s real filesystem path — sandbox +
+   * contextIsolation strip `File.path` in the renderer, so a drag-and-drop of
+   * a screenshot (or any file) onto a terminal needs this to hand the shell a
+   * usable path instead of an opaque in-memory blob.
+   */
+  getPathForFile(file: File): string
+}
+
+// ---- orchestration ---------------------------------------------------------
+
+/**
+ * The fleet, as the window sees it. Agents drive all of this through the `orc`
+ * CLI; the window mirrors it and owns the few decisions only a human can make.
+ */
+export type OrcTaskStatus = 'pending' | 'ready' | 'dispatched' | 'completed' | 'failed' | 'blocked'
+export type OrcMessageType =
+  | 'dispatch'
+  | 'worker_done'
+  | 'heartbeat'
+  | 'escalation'
+  | 'ask'
+  | 'reply'
+  | 'note'
+export type OrcOutcome = 'succeeded' | 'failed'
+export type OrcDispatchState = 'running' | 'settled' | 'retained' | 'released'
+
+export interface OrcRun {
+  id: string
+  objective: string
+  coordinator: string
+  createdAt: number
+  closedAt?: number
+  version: number
+}
+
+export interface OrcTask {
+  id: string
+  runId: string
+  title: string
+  spec: string
+  deps: string[]
+  status: OrcTaskStatus
+  createdBy: string
+  createdAt: number
+  updatedAt: number
+  outcome?: OrcOutcome
+  version: number
+}
+
+export interface OrcDispatch {
+  id: string
+  runId: string
+  taskId: string
+  terminalId: string
+  agent: string
+  state: OrcDispatchState
+  outcome?: OrcOutcome
+  preamble: string
+  startedAt: number
+  settledAt?: number
+  filesModified?: string[]
+  version: number
+}
+
+export interface OrcMessage {
+  id: string
+  runId: string
+  type: OrcMessageType
+  from: string
+  to: string
+  subject: string
+  body: string
+  taskId?: string
+  dispatchId?: string
+  outcome?: OrcOutcome
+  filesModified?: string[]
+  options?: string[]
+  replyTo?: string
+  createdAt: number
+  ackedBy: string[]
+}
+
+export interface OrcGate {
+  id: string
+  runId: string
+  taskId?: string
+  question: string
+  options: string[]
+  createdBy: string
+  resolution?: string
+  createdAt: number
+  resolvedAt?: number
+  version: number
+}
+
+export interface OrcSnapshot {
+  runs: OrcRun[]
+  tasks: OrcTask[]
+  dispatches: OrcDispatch[]
+  messages: OrcMessage[]
+  gates: OrcGate[]
+}
+
+export interface OrchestrationApi {
+  snapshot(runId?: string): Promise<OrcSnapshot>
+  /** Reads the run's mail without consuming it — acking is the agent's job. */
+  inbox(runId?: string): Promise<OrcMessage[]>
+  /** Answers a worker that is blocked on `orc ask`. */
+  reply(askId: string, body: string): Promise<unknown>
+  resolveGate(gateId: string, resolution: string): Promise<unknown>
+  /** Accounts for a settled worker: keep its terminal, or hand it back. */
+  account(dispatchId: string, state: 'retained' | 'released', closeTerminal?: boolean): Promise<unknown>
+  closeRun(runId: string): Promise<unknown>
+  onChange(cb: () => void): () => void
 }
 
 export interface CoordinationApi {
@@ -221,6 +338,8 @@ export interface PlanItem {
   createdAt: number
   updatedAt: number
   version: number
+  /** Absolute paths to attached photos (media store). */
+  attachments?: string[]
 }
 
 export interface PlannerApi {
@@ -231,6 +350,7 @@ export interface PlannerApi {
     project?: string
     day?: string
     time?: string
+    attachments?: string[]
   }): Promise<PlanItem | { error: string }>
   update(
     id: string,
@@ -242,6 +362,7 @@ export interface PlannerApi {
       time?: string | null
       done?: boolean
       order?: number
+      attachments?: string[] | null
       baseVersion?: number
     }
   ): Promise<PlanItem | { error: string }>
@@ -288,8 +409,7 @@ export interface BrainApi {
 export interface CanvasWidget {
   id: string
   title: string
-  kind?: 'terminal' | 'note' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'id-generator'
-  noteId?: string
+  kind?: 'terminal' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'id-generator' | 'orchestration'
   x: number
   y: number
   w: number
@@ -449,6 +569,7 @@ export interface SystemApi {
 
 export interface BrowserApi {
   onOpenTab(cb: (url: string) => void): () => void
+  clearData(): Promise<{ ok: boolean; error?: string }>
 }
 
 export interface WindowApi {

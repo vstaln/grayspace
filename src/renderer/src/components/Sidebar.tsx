@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { CreditCard, FileText, FolderOpen, KanbanSquare, Palette, Pin, Settings, Terminal, User, UserRound, X } from 'lucide-react'
+import { CreditCard, FolderOpen, KanbanSquare, Palette, Pin, Settings, User, UserRound, X } from 'lucide-react'
 import type { RecentDir, UserRole } from '../../../preload/index.d'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { THEMES, useTheme } from '../theme'
@@ -11,11 +11,8 @@ interface Props {
   workspaceDir: string | null
   managerId: string | null
   boardOpen: boolean
-  brainOpen: boolean
   taskCount: number
-  onNewTerminal(): void
   onToggleBoard(): void
-  onToggleBrain(): void
   onPickDir(): void
 }
 
@@ -65,13 +62,6 @@ function IconButton({
   )
 }
 
-/** Full settings dialog: portaled to body so the rail's drag region / stacking context cannot clip it. */
-const LINK_SYNTAX: { id: 'wiki' | 'dollar' | 'both'; label: string; hint: string }[] = [
-  { id: 'both', label: 'Both', hint: '[[Title]] or $Title' },
-  { id: 'wiki', label: 'Wiki', hint: '[[Note Title]]' },
-  { id: 'dollar', label: 'Dollar', hint: '$Note-Title' }
-]
-
 const ROLES: { id: UserRole; label: string; hint: string }[] = [
   {
     id: 'lead',
@@ -95,15 +85,178 @@ const FAVORITE_WIDGETS = [
   ['terminal', 'Terminal', 'Shell in the current workspace'],
   ['files', 'Files', 'Browse workspace files'],
   ['sys-monitor', 'System Monitor', 'CPU, RAM and processes'],
-  ['note', 'Note', 'Quick notes on the canvas'],
   ['timer', 'Timer', 'Countdown or stopwatch'],
   ['planner', 'Planner', 'Daily agenda and checklist'],
+  ['orchestration', 'Orchestration', 'The agent fleet: tasks, workers and their questions'],
   ['browser', 'Browser', 'Embedded web page'],
   ['links', 'Links', 'Saved links'],
   ['music-player', 'Music Player', 'Stream YouTube, Yandex Music, Spotify or MP3 links'],
   ['id-generator', 'ID Generator', 'Random identifiers']
 ] as const
 
+/*
+ * The settings surface is built from a few primitives and two button classes,
+ * so every panel in it keeps the same rhythm: a quiet caption, one line of
+ * help, then the control. Nothing here paints a colour of its own — selection
+ * is a brighter hairline and a step in fill, the same language the rail and
+ * the widget frames use.
+ *
+ * Vertical rhythm is `flex flex-col gap-*`, never `space-y-*`: the gap belongs
+ * to the container, so a conditional child (the Remove button, an error line)
+ * cannot leave a stray margin behind when it unmounts.
+ */
+const CAPTION = 'text-[10px] font-medium tracking-[0.09em] text-text-faint uppercase'
+const BTN_QUIET =
+  'rounded-[8px] border border-line-soft px-3 py-1.5 text-[11px] text-text-dim transition-colors duration-150 hover:border-line hover:bg-bg-hover hover:text-text'
+const BTN_PRIMARY =
+  'rounded-[8px] bg-accent px-3.5 py-1.5 text-[11px] font-medium text-bg transition-opacity duration-150 hover:opacity-90 disabled:opacity-35'
+
+function Section({
+  title,
+  hint,
+  children
+}: {
+  title: string
+  hint?: string
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex flex-col gap-1.5">
+        <h3 className={CAPTION}>{title}</h3>
+        {hint && <p className="text-[11px] leading-relaxed text-text-faint">{hint}</p>}
+      </div>
+      {children}
+    </section>
+  )
+}
+
+/** A pickable card. Selected reads as "lit hairline + lifted fill", never as a tinted slab. */
+function Choice({
+  selected,
+  label,
+  hint,
+  mono,
+  onClick
+}: {
+  selected: boolean
+  label: string
+  hint?: string
+  mono?: boolean
+  onClick(): void
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={onClick}
+      className={`flex flex-col gap-1.5 rounded-[10px] border p-3.5 text-left transition-colors duration-150 ${
+        selected ? 'border-line bg-bg-hover' : 'border-line-soft hover:border-line'
+      }`}
+    >
+      <span className="flex items-center justify-between gap-2">
+        <span className={`text-xs ${selected ? 'text-text' : 'text-text-dim'}`}>{label}</span>
+        {selected && <span className="flex-none text-[10px] text-text-faint">Active</span>}
+      </span>
+      {hint && (
+        <span className={`text-[10px] leading-relaxed text-text-faint ${mono ? 'font-mono' : ''}`}>{hint}</span>
+      )}
+    </button>
+  )
+}
+
+/** Label, track and value on one line — the reading stays next to the handle. */
+function Slider({
+  label,
+  value,
+  onChange
+}: {
+  label: string
+  value: number
+  onChange(value: number): void
+}): React.JSX.Element {
+  return (
+    <label className="flex items-center gap-3 text-[11px] text-text-dim">
+      <span className="w-8 flex-none">{label}</span>
+      <input
+        className="min-w-0 flex-1 accent-white"
+        type="range"
+        min={0}
+        max={90}
+        step={5}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+      <span className="w-9 flex-none text-right font-mono text-text-faint">{value}%</span>
+    </label>
+  )
+}
+
+/** A plan. The one splash of colour left is the verified badge itself. */
+function PlanCard({
+  name,
+  price,
+  hint,
+  features,
+  active,
+  action,
+  verified,
+  onSelect
+}: {
+  name: string
+  price: string
+  hint: string
+  features: readonly string[]
+  active: boolean
+  action: string
+  verified?: boolean
+  onSelect(): void
+}): React.JSX.Element {
+  return (
+    <div
+      className={`flex flex-col gap-5 rounded-[12px] border p-5 transition-colors duration-150 ${
+        active ? 'border-line bg-bg-hover' : 'border-line-soft'
+      }`}
+    >
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex items-center gap-1.5 text-xs text-text">
+            {name}
+            {verified && <VerifiedBadge size={13} />}
+          </span>
+          {active && <span className="flex-none text-[10px] text-text-faint">Current</span>}
+        </div>
+        <div className="flex items-baseline gap-1.5">
+          <span className="text-[26px] leading-none font-light text-text">{price}</span>
+          <span className="text-[11px] text-text-faint">/ month</span>
+        </div>
+        <p className="text-[11px] leading-relaxed text-text-faint">{hint}</p>
+      </div>
+      <ul className="flex flex-1 flex-col gap-2 text-[11px] text-text-dim">
+        {features.map((feature) => (
+          <li key={feature} className="flex gap-2">
+            <span className="text-text-faint">·</span>
+            <span className="min-w-0 flex-1">{feature}</span>
+          </li>
+        ))}
+      </ul>
+      <button
+        type="button"
+        onClick={onSelect}
+        disabled={active}
+        className={`w-full rounded-[8px] border px-3 py-2 text-[11px] transition-colors duration-150 ${
+          active
+            ? 'cursor-default border-transparent text-text-faint'
+            : 'border-line-soft text-text-dim hover:border-line hover:bg-bg-hover hover:text-text'
+        }`}
+      >
+        {active ? 'Current plan' : action}
+      </button>
+    </div>
+  )
+}
+
+/** Full settings dialog: portaled to body so the rail's drag region / stacking context cannot clip it. */
 function SettingsModal({
   workspaceDir,
   managerId
@@ -171,15 +324,14 @@ function SettingsModal({
     }
   }
 
-
   const dialog =
     open &&
     // Portal layer sits above the rail (z-45000) and the Browser/Code panes
     // (z-40000): this modal is opened from the rail in every view, so painting
     // it beneath either made Settings/Account look dead there (UI-audit P0).
     createPortal(
-        <div
-          className="fixed top-10 inset-x-0 bottom-0 z-[50000] flex items-center justify-center p-6 backdrop-blur-sm"
+      <div
+        className="fixed top-10 inset-x-0 bottom-0 z-[50000] flex items-center justify-center bg-black/45 p-6 backdrop-blur-[2px]"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         role="presentation"
         onMouseDown={(event) => {
@@ -192,523 +344,266 @@ function SettingsModal({
           aria-modal="true"
           aria-label="Settings"
           data-testid="settings-modal"
-          className="flex max-h-[min(720px,calc(100vh-80px))] w-[min(900px,calc(100vw-48px))] flex-col overflow-hidden rounded-[16px] border border-line bg-bg-panel shadow-2xl sm:flex-row glass:bg-bg-panel/90"
+          className="pop-in flex max-h-[min(720px,calc(100vh-80px))] w-[min(820px,calc(100vw-48px))] flex-col overflow-hidden rounded-[14px] border border-line-soft bg-bg-panel sm:flex-row glass:bg-bg-panel/90 glass:backdrop-blur-2xl"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
-          <nav className="flex flex-none gap-1 overflow-x-auto border-b border-line-soft bg-bg-raise/30 p-2 sm:block sm:w-44 sm:border-r sm:border-b-0 sm:p-3">
-            <div className="hidden px-2 pb-4 text-sm font-semibold text-text sm:block">Settings</div>
+          <nav className="flex flex-none gap-1 overflow-x-auto border-b border-line-soft p-2.5 sm:w-[172px] sm:flex-col sm:border-r sm:border-b-0 sm:p-3">
+            <div className={`${CAPTION} hidden px-2.5 pt-1 pb-3.5 sm:block`}>Settings</div>
             {SETTINGS_TABS.map(({ id, label, Icon }) => (
               <button
                 key={id}
                 data-testid={`settings-tab-${id}`}
                 aria-current={tab === id ? 'true' : undefined}
-                className={`flex flex-none items-center gap-2 rounded-[9px] px-2.5 py-2 text-left text-xs sm:mb-1 sm:w-full ${tab === id ? 'bg-bg-hover text-accent' : 'text-text-dim hover:bg-bg-hover hover:text-text'}`}
+                className={`flex flex-none items-center gap-2.5 rounded-[8px] px-2.5 py-1.5 text-left text-xs transition-colors duration-150 sm:w-full ${
+                  tab === id ? 'bg-bg-hover text-text' : 'text-text-dim hover:text-text'
+                }`}
                 onClick={() => setTab(id)}
               >
-                <Icon size={14} strokeWidth={1.8} />
+                <Icon size={14} strokeWidth={1.6} className="flex-none opacity-80" />
                 {label}
               </button>
             ))}
           </nav>
-          <main className="min-w-0 flex-1 overflow-auto p-5">
-            <div className="mb-5 flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-text">
+          <main className="flex min-w-0 flex-1 flex-col gap-7 overflow-auto px-7 py-6">
+            <header className="flex flex-none items-center justify-between">
+              <h2 className="text-[15px] font-medium text-text">
                 {tab === 'appearance' ? 'Appearance' : tab === 'account' ? 'Account' : 'Billing'}
               </h2>
               <button
-                className="rounded-[8px] p-1.5 text-text-dim hover:bg-bg-hover hover:text-text"
+                className="grid h-7 w-7 place-items-center rounded-[8px] text-text-faint transition-colors duration-150 hover:bg-bg-hover hover:text-text"
                 onClick={() => setOpen(false)}
                 aria-label="Close"
               >
-                <X size={17} />
+                <X size={15} />
               </button>
-            </div>
+            </header>
 
             {tab === 'appearance' && (
-              <div className="max-w-xl space-y-5">
-                <div>
-                  <div className="mb-2 text-xs font-semibold text-text">Theme</div>
-                  <div className="grid grid-cols-2 gap-2">
+              <div className="flex max-w-xl flex-col gap-8">
+                <Section title="Theme">
+                  <div className="grid grid-cols-2 gap-2.5">
                     {THEMES.map((item) => (
-                      <button
+                      <Choice
                         key={item.id}
-                        aria-pressed={theme === item.id}
-                        className={`rounded-[10px] border p-3 text-left ${theme === item.id ? 'border-accent bg-accent/10' : 'border-line hover:bg-bg-hover'}`}
+                        selected={theme === item.id}
+                        label={item.label}
+                        hint={item.hint}
                         onClick={() => {
                           setTheme(item.id)
                           if (item.id === 'photo' && !background) void pickBackground()
                         }}
-                      >
-                        <div className="text-xs text-text">{item.label}</div>
-                        <div className="mt-1 text-[10px] text-text-faint">{item.hint}</div>
-                      </button>
+                      />
                     ))}
                   </div>
-                </div>
-                <div>
-                  <div className="mb-2 text-xs font-semibold text-text">Right-click menu</div>
-                  <p className="mb-2 text-[11px] leading-relaxed text-text-faint">
-                    Choose which widgets appear when you right-click the canvas.
-                  </p>
-                  <div className="space-y-1">
+                </Section>
+
+                <Section title="Right-click menu" hint="Which widgets appear when you right-click the canvas.">
+                  <div className="-mx-2 flex flex-col">
                     {FAVORITE_WIDGETS.map(([id, label, hint]) => {
                       const selected = (settings.favoriteWidgets ?? []).includes(id)
                       return (
-                        <label key={id} className="flex cursor-pointer items-center gap-2 rounded-[8px] px-2 py-1.5 text-xs text-text hover:bg-bg-hover">
+                        <label
+                          key={id}
+                          className="flex cursor-pointer items-center gap-3 rounded-[8px] px-2 py-2 text-xs text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text"
+                        >
                           <input
                             type="checkbox"
                             checked={selected}
-                            onChange={() => void update({ favoriteWidgets: selected ? (settings.favoriteWidgets ?? []).filter((kind) => kind !== id) : [...(settings.favoriteWidgets ?? []), id] })}
-                            className="accent-accent"
+                            onChange={() =>
+                              void update({
+                                favoriteWidgets: selected
+                                  ? (settings.favoriteWidgets ?? []).filter((kind) => kind !== id)
+                                  : [...(settings.favoriteWidgets ?? []), id]
+                              })
+                            }
+                            className="h-3 w-3 flex-none accent-white"
                           />
-                          <span className="min-w-0 flex-1">{label}</span>
-                          <span className="text-[10px] text-text-faint">{hint}</span>
+                          {/* Name and hint read as one line, so the hint sits right after
+                              the name instead of being flung to the far edge of the panel. */}
+                          <span className="w-28 flex-none">{label}</span>
+                          <span className="min-w-0 flex-1 truncate text-[11px] text-text-faint">{hint}</span>
                         </label>
                       )
                     })}
                   </div>
-                </div>
-                <div>
-                  <div className="mb-2 text-xs font-semibold text-text">Background</div>
+                </Section>
+
+                <Section title="Background">
                   {background ? (
                     <div
-                      className="mb-2 h-28 rounded-[10px] bg-cover bg-center"
+                      className="h-32 rounded-[10px] border border-line-soft bg-cover bg-center"
                       style={{ backgroundImage: `url("${background}")` }}
                     />
                   ) : (
-                    <div className="mb-2 rounded-[10px] border border-dashed border-line px-3 py-6 text-center text-xs text-text-faint">
+                    <div className="rounded-[10px] border border-dashed border-line-soft px-3 py-8 text-center text-[11px] text-text-faint">
                       No background selected
                     </div>
                   )}
                   <div className="flex gap-2">
-                    <button
-                      className="rounded-[9px] border border-line px-3 py-2 text-xs text-text hover:bg-bg-hover"
-                      onClick={() => void pickBackground()}
-                    >
-                      Choose Background
+                    <button className={BTN_QUIET} onClick={() => void pickBackground()}>
+                      Choose…
                     </button>
                     {background && (
-                      <button
-                        className="rounded-[9px] border border-line px-3 py-2 text-xs text-text-dim hover:bg-bg-hover"
-                        onClick={clearBackground}
-                      >
-                        Remove Background
+                      <button className={BTN_QUIET} onClick={clearBackground}>
+                        Remove
                       </button>
                     )}
                   </div>
-                  <label className="mt-4 block text-xs text-text-dim">
-                    Blur: {blur}%
-                    <input
-                      className="mt-2 w-full accent-white"
-                      type="range"
-                      min={0}
-                      max={90}
-                      step={5}
-                      value={blur}
-                      onChange={(event) => setBlur(Number(event.target.value))}
-                    />
-                  </label>
-                  <label className="mt-4 block text-xs text-text-dim">
-                    Dim: {dim}%
-                    <input
-                      className="mt-2 w-full accent-white"
-                      type="range"
-                      min={0}
-                      max={90}
-                      step={5}
-                      value={dim}
-                      onChange={(event) => setDim(Number(event.target.value))}
-                    />
-                  </label>
-                  {error && <p className="mt-2 text-xs text-danger">{error}</p>}
-                </div>
-                <div>
-                  <div className="mb-2 text-xs font-semibold text-text">Note links</div>
-                  <p className="mb-2 text-[11px] leading-relaxed text-text-faint">
-                    How Second Brain turns typed references into links between notes.
-                  </p>
-                  <div className="grid grid-cols-3 gap-2">
-                    {LINK_SYNTAX.map((item) => (
-                      <button
-                        key={item.id}
-                        aria-pressed={settings.linkSyntax === item.id}
-                        className={`rounded-[10px] border p-3 text-left ${settings.linkSyntax === item.id ? 'border-accent bg-accent/10' : 'border-line hover:bg-bg-hover'}`}
-                        onClick={() => void update({ linkSyntax: item.id })}
-                      >
-                        <div className="text-xs text-text">{item.label}</div>
-                        <div className="mt-1 font-mono text-[10px] text-text-faint">{item.hint}</div>
-                      </button>
-                    ))}
+                  <div className="flex flex-col gap-3 pt-1">
+                    <Slider label="Blur" value={blur} onChange={setBlur} />
+                    <Slider label="Dim" value={dim} onChange={setDim} />
                   </div>
-                </div>
+                  {error && <p className="text-[11px] text-danger">{error}</p>}
+                </Section>
+
               </div>
             )}
 
             {tab === 'account' && (
-              <div className="max-w-xl space-y-4">
-                {/* Profile Card */}
-                <section className="rounded-[12px] border border-line-soft bg-bg-raise/40 p-4">
-                  <div className="flex items-center gap-3.5">
-                    <div className="grid h-12 w-12 flex-none place-items-center rounded-full bg-accent text-base font-bold text-black shadow-md select-none">
-                      {(userName.trim() || settings.userName || 'you').slice(0, 2).toUpperCase()}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-semibold text-text">
-                          {userName.trim() || settings.userName || 'you'}
-                        </span>
-                        {settings.plan === 'plus' && <VerifiedBadge size={15} />}
-                        <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[10px] font-semibold text-accent">
-                          {settings.role === 'lead' ? 'Lead' : 'Member'}
-                        </span>
-                      </div>
-                      <p className="mt-0.5 text-[11px] text-text-faint">
-                        Local Operator ID: <span className="font-mono text-text-dim">user</span>
-                      </p>
-                    </div>
+              <div className="flex max-w-xl flex-col gap-8">
+                {/* Identity is a plain row, not a card — the avatar already frames it. */}
+                <div className="flex items-center gap-3.5">
+                  <div className="grid h-11 w-11 flex-none place-items-center rounded-full border border-line-soft bg-bg-raise text-[13px] font-medium text-text select-none">
+                    {(userName.trim() || settings.userName || 'you').slice(0, 2).toUpperCase()}
                   </div>
-                </section>
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-sm text-text">
+                        {userName.trim() || settings.userName || 'you'}
+                      </span>
+                      {settings.plan === 'plus' && <VerifiedBadge size={14} />}
+                    </div>
+                    <p className="text-[11px] text-text-faint">
+                      {settings.role === 'lead' ? 'Lead' : 'Member'} · {settings.plan === 'plus' ? 'Plus' : 'Free'} ·
+                      operator <span className="font-mono">user</span>
+                    </p>
+                  </div>
+                </div>
 
-                {/* Display Name */}
-                <div>
-                  <div className="mb-1 text-xs font-semibold text-text">Display Name / Assignee</div>
-                  <p className="mb-2 text-[11px] leading-relaxed text-text-faint">
-                    Shown as the assignee on Kanban cards and as the author of notes you create.
-                  </p>
+                <Section
+                  title="Display name"
+                  hint="Shown as the assignee on Kanban cards and as the author of notes you create."
+                >
                   <input
-                    className="w-full rounded-lg border border-line bg-bg-panel px-2.5 py-2 text-xs text-text outline-none focus:border-text-faint"
+                    className="w-full rounded-[8px] border border-line-soft bg-transparent px-3 py-2.5 text-xs text-text outline-none transition-colors duration-150 focus:border-line"
                     type="text"
                     maxLength={40}
                     value={userName}
                     onChange={(event) => setUserName(event.target.value)}
                     placeholder="e.g. you"
                   />
-                </div>
+                  <div>
+                    <button
+                      className={BTN_PRIMARY}
+                      disabled={busy || !userName.trim() || userName.trim() === settings.userName}
+                      onClick={() => void saveAccount()}
+                    >
+                      Save
+                    </button>
+                  </div>
+                </Section>
 
-                {/* Workspace Role */}
-                <div>
-                  <div className="mb-1 text-xs font-semibold text-text">Workspace Role</div>
-                  <p className="mb-2 text-[11px] leading-relaxed text-text-faint">
-                    Determines your orchestration and editing capabilities across the workspace.
-                  </p>
-                  <div className="grid grid-cols-2 gap-2">
+                <Section
+                  title="Workspace role"
+                  hint="Determines your orchestration and editing capabilities across the workspace."
+                >
+                  <div className="grid grid-cols-2 gap-2.5">
                     {ROLES.map((item) => (
-                      <button
+                      <Choice
                         key={item.id}
-                        type="button"
-                        aria-pressed={settings.role === item.id}
-                        className={`rounded-[10px] border p-3 text-left transition-colors ${settings.role === item.id ? 'border-accent bg-accent/10' : 'border-line hover:bg-bg-hover'}`}
+                        selected={settings.role === item.id}
+                        label={item.label}
+                        hint={item.hint}
                         onClick={() => {
                           void update({ role: item.id })
                           setNotice(`Role switched to ${item.label}.`)
                         }}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-medium text-text">{item.label}</span>
-                          {settings.role === item.id && (
-                            <span className="text-[10px] font-semibold text-accent">Active</span>
-                          )}
-                        </div>
-                        <div className="mt-1 text-[10px] leading-relaxed text-text-faint">{item.hint}</div>
-                      </button>
+                      />
                     ))}
                   </div>
-                </div>
+                </Section>
 
-                {/* Subscription Plan */}
-                <div>
-                  <div className="mb-1 text-xs font-semibold text-text">Subscription Plan</div>
-                  <p className="mb-2 text-[11px] leading-relaxed text-text-faint">
-                    Choose your plan tier to unlock verified status and extended capabilities.
-                  </p>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      className={`rounded-[10px] border p-3 text-left transition-colors ${settings.plan !== 'plus' ? 'border-accent bg-accent/15 shadow-sm ring-1 ring-accent/30' : 'border-line hover:bg-bg-hover'}`}
-                      onClick={() => {
-                        void update({ plan: 'free' })
-                        setNotice('Switched to Free plan.')
-                      }}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-text">Free ($0)</span>
-                        {settings.plan !== 'plus' && (
-                          <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-bold text-black">Active ✓</span>
-                        )}
-                      </div>
-                      <div className="mt-1 text-[10px] leading-relaxed text-text-faint">Standard local tools</div>
-                    </button>
-
-                    <button
-                      type="button"
-                      className={`rounded-[10px] border p-3 text-left transition-colors ${settings.plan === 'plus' ? 'border-[#38bdf8] bg-[#38bdf8]/15 shadow-sm ring-1 ring-[#38bdf8]/40' : 'border-line hover:bg-bg-hover'}`}
-                      onClick={() => {
-                        void update({ plan: 'plus' })
-                        setNotice('Welcome to OrcSpace Plus! Verified badge activated.')
-                      }}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="flex items-center gap-1.5 text-xs font-medium text-text">
-                          OrcSpace Plus ($9.99/mo)
-                          <VerifiedBadge size={14} />
-                        </span>
-                        {settings.plan === 'plus' ? (
-                          <span className="rounded-full bg-[#38bdf8] px-2 py-0.5 text-[10px] font-bold text-black">Active ✓</span>
-                        ) : (
-                          <span className="rounded-full bg-[#38bdf8]/20 px-2 py-0.5 text-[10px] font-bold text-[#38bdf8]">Select</span>
-                        )}
-                      </div>
-                      <div className="mt-1 text-[10px] leading-relaxed text-text-faint">Verified badge + Full power</div>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 pt-1">
-                  <button
-                    className="rounded-[9px] bg-accent px-4 py-2 text-xs font-semibold text-black hover:bg-white disabled:opacity-50"
-                    disabled={busy || !userName.trim() || userName.trim() === settings.userName}
-                    onClick={() => void saveAccount()}
-                  >
-                    Save Account Settings
-                  </button>
-                </div>
-
-                {/* Workspace Session Info */}
-                <section className="rounded-[12px] border border-line-soft bg-bg-raise/20 p-3 text-[11px] text-text-dim">
-                  <div className="mb-1.5 font-semibold text-text">Workspace Session Info</div>
-                  <div className="space-y-1 text-text-faint">
-                    <div className="truncate">
-                      Active Folder: <span className="font-mono text-text-dim">{workspaceDir || 'None'}</span>
+                {/* The plan itself lives on the Billing tab; repeating the picker
+                    here was the same decision offered twice. */}
+                <Section title="Session">
+                  <dl className="flex flex-col gap-2 text-[11px] text-text-faint">
+                    <div className="flex gap-3">
+                      <dt className="w-28 flex-none">Active folder</dt>
+                      <dd className="min-w-0 flex-1 truncate font-mono text-text-dim">{workspaceDir || 'None'}</dd>
                     </div>
-                    <div>
-                      Lead Manager: <span className="font-mono text-text-dim">{managerId || 'None'}</span>
+                    <div className="flex gap-3">
+                      <dt className="w-28 flex-none">Lead manager</dt>
+                      <dd className="min-w-0 flex-1 truncate font-mono text-text-dim">{managerId || 'None'}</dd>
                     </div>
-                    <div>
-                      Storage Security: <span className="text-ok">Credentials encrypted locally via OS safeStorage</span>
+                    <div className="flex gap-3">
+                      <dt className="w-28 flex-none">Credentials</dt>
+                      <dd className="min-w-0 flex-1 text-text-dim">Encrypted locally via OS safeStorage</dd>
                     </div>
-                  </div>
-                </section>
+                  </dl>
+                </Section>
               </div>
             )}
 
-
             {tab === 'plans' && (
-              <div className="max-w-xl space-y-4">
-                {/* Active Plan Status Banner with Quick Switcher */}
-                <section
-                  className={`rounded-[12px] border p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-all ${
-                    settings.plan === 'plus'
-                      ? 'border-[#38bdf8]/40 bg-[#38bdf8]/10'
-                      : 'border-line-soft bg-bg-raise/30'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    {settings.plan === 'plus' ? (
-                      <div className="flex items-center gap-2.5">
-                        <VerifiedBadge size={22} />
-                        <div>
-                          <div className="flex items-center gap-1.5 text-xs font-semibold text-text">
-                            OrcSpace Plus Active
-                            <span className="rounded-full bg-[#38bdf8]/20 px-2 py-0.5 text-[10px] font-bold text-[#38bdf8]">
-                              $9.99 / mo
-                            </span>
-                          </div>
-                          <p className="mt-0.5 text-[11px] text-text-dim">
-                            Blue verified checkmark is active on your profile and workspace.
-                          </p>
-                        </div>
-                      </div>
-                    ) : (
-                      <div>
-                        <div className="text-xs font-semibold text-text">Free Plan Active</div>
-                        <p className="mt-0.5 text-[11px] text-text-faint">
-                          Click below to immediately select Free ($0) or OrcSpace Plus ($9.99/mo).
-                        </p>
-                      </div>
-                    )}
-                  </div>
+              <div className="flex max-w-xl flex-col gap-5">
+                {/* One line of state, then the two cards that change it — the old
+                    banner carried a second copy of the same switch. */}
+                <p className="text-[11px] text-text-faint">
+                  Current plan ·{' '}
+                  <span className="text-text-dim">
+                    {settings.plan === 'plus' ? 'OrcSpace Plus, $9.99 / month' : 'Free, $0 / month'}
+                  </span>
+                </p>
 
-                  <div className="flex items-center gap-1.5 flex-none">
-                    <button
-                      type="button"
-                      className={`rounded-lg px-3 py-1.5 text-xs transition-colors ${
-                        settings.plan !== 'plus'
-                          ? 'bg-accent font-bold text-black shadow-sm'
-                          : 'border border-line text-text-dim hover:text-text hover:bg-bg-hover'
-                      }`}
-                      onClick={() => {
-                        void update({ plan: 'free' })
-                        setNotice('Switched to Free plan.')
-                      }}
-                    >
-                      Free ($0)
-                    </button>
-                    <button
-                      type="button"
-                      className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-colors ${
-                        settings.plan === 'plus'
-                          ? 'bg-[#38bdf8] font-bold text-black shadow-[0_0_10px_rgba(56,189,248,0.4)]'
-                          : 'border border-[#38bdf8]/40 text-[#38bdf8] hover:bg-[#38bdf8]/15'
-                      }`}
-                      onClick={() => {
-                        void update({ plan: 'plus' })
-                        setNotice('Welcome to OrcSpace Plus! Verified badge activated.')
-                      }}
-                    >
-                      <VerifiedBadge size={13} />
-                      Plus ($9.99/mo)
-                    </button>
-                  </div>
-                </section>
-
-                {/* Plan Cards Grid - Both fully interactive and selectable */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                  {/* Free Plan Card */}
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => {
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <PlanCard
+                    name="Free"
+                    price="$0"
+                    hint="Basic local and solo agent workflows"
+                    features={[
+                      'Up to 3 active terminals',
+                      'Basic MCP tools',
+                      'Standard local AI models'
+                    ]}
+                    active={settings.plan !== 'plus'}
+                    action="Switch to Free"
+                    onSelect={() => {
                       void update({ plan: 'free' })
                       setNotice('Switched to Free plan.')
                     }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        void update({ plan: 'free' })
-                        setNotice('Switched to Free plan.')
-                      }
-                    }}
-                    className={`group cursor-pointer select-none flex flex-col justify-between rounded-[12px] border p-4 text-left transition-all ${
-                      settings.plan !== 'plus'
-                        ? 'border-accent bg-accent/10 shadow-md ring-1 ring-accent/30'
-                        : 'border-line-soft bg-bg-raise/20 hover:border-line hover:bg-bg-raise/40'
-                    }`}
-                  >
-                    <div>
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-sm font-semibold text-text">Free Plan</h3>
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors ${
-                            settings.plan !== 'plus'
-                              ? 'bg-accent text-black font-bold'
-                              : 'border border-line text-text-faint group-hover:text-text group-hover:border-text-faint'
-                          }`}
-                        >
-                          {settings.plan !== 'plus' ? 'Selected ✓' : 'Select'}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-[11px] text-text-faint">For basic local and solo agent workflows</p>
-                      <div className="mt-3 flex items-baseline gap-1">
-                        <span className="text-2xl font-bold text-text">$0</span>
-                        <span className="text-xs text-text-faint">/ month</span>
-                      </div>
-                      <ul className="mt-4 space-y-2 text-[11px] text-text-dim">
-                        <li className="flex items-center gap-2">
-                          <span className="text-text-faint">•</span> Up to 3 active terminals
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <span className="text-text-faint">•</span> Second Brain notes & graph
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <span className="text-text-faint">•</span> Basic MCP tools
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <span className="text-text-faint">•</span> Standard local AI models
-                        </li>
-                      </ul>
-                    </div>
-
-                    <div
-                      className={`mt-5 w-full rounded-[9px] border px-3 py-2 text-center text-xs font-semibold transition-colors ${
-                        settings.plan !== 'plus'
-                          ? 'border-accent/40 bg-accent/20 text-accent font-bold'
-                          : 'border-line bg-bg-panel text-text-dim group-hover:text-text group-hover:border-text-faint'
-                      }`}
-                    >
-                      {settings.plan !== 'plus' ? 'Current Plan ✓' : 'Switch to Free'}
-                    </div>
-                  </div>
-
-                  {/* OrcSpace Plus Plan Card */}
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => {
+                  />
+                  <PlanCard
+                    name="OrcSpace Plus"
+                    price="$9.99"
+                    hint="Full orchestration power and verified status"
+                    verified
+                    features={[
+                      'Blue verified checkmark',
+                      'Unlimited terminals & workspaces',
+                      'Autonomous agent orchestration',
+                      'Real-time voice & audio pipeline',
+                      'Full MCP protocol'
+                    ]}
+                    active={settings.plan === 'plus'}
+                    action="Subscribe"
+                    onSelect={() => {
                       void update({ plan: 'plus' })
                       setNotice('Welcome to OrcSpace Plus! Verified badge activated.')
                     }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        void update({ plan: 'plus' })
-                        setNotice('Welcome to OrcSpace Plus! Verified badge activated.')
-                      }
-                    }}
-                    className={`group relative cursor-pointer select-none flex flex-col justify-between rounded-[12px] border p-4 text-left transition-all ${
-                      settings.plan === 'plus'
-                        ? 'border-[#38bdf8] bg-gradient-to-b from-[#38bdf826] to-bg-panel shadow-[0_4px_6px_-1px_rgba(56,189,248,0.1),0_2px_4px_-2px_rgba(56,189,248,0.1)] ring-1 ring-[#38bdf8]/40'
-                        : 'border-[#38bdf8]/30 bg-bg-raise/30 hover:border-[#38bdf8]/70 hover:bg-bg-raise/50'
-                    }`}
-                  >
-                    <div>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-1.5">
-                          <h3 className="text-sm font-semibold text-text">OrcSpace Plus</h3>
-                          <VerifiedBadge size={16} />
-                        </div>
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-bold transition-colors ${
-                            settings.plan === 'plus'
-                              ? 'bg-[#38bdf8] text-black'
-                              : 'bg-[#38bdf8]/20 text-[#38bdf8] group-hover:bg-[#38bdf8] group-hover:text-black'
-                          }`}
-                        >
-                          {settings.plan === 'plus' ? 'Active ✓' : 'Select ($9.99/mo)'}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-[11px] text-text-faint">Full orchestration power & verified status</p>
-                      <div className="mt-3 flex items-baseline gap-1">
-                        <span className="text-2xl font-bold text-[#38bdf8]">$9.99</span>
-                        <span className="text-xs text-text-faint">/ month</span>
-                      </div>
-                      <ul className="mt-4 space-y-2 text-[11px] text-text">
-                        <li className="flex items-center gap-2">
-                          <VerifiedBadge size={13} />
-                          <span className="font-medium text-[#38bdf8]">Blue Verified Checkmark Badge</span>
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <span className="text-[#38bdf8]">•</span> Unlimited terminals & workspaces
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <span className="text-[#38bdf8]">•</span> Autonomous agent orchestration
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <span className="text-[#38bdf8]">•</span> Real-time voice & audio pipeline
-                        </li>
-                        <li className="flex items-center gap-2">
-                          <span className="text-[#38bdf8]">•</span> Full MCP protocol
-                        </li>
-                      </ul>
-                    </div>
-
-                    <div
-                      className={`mt-5 w-full rounded-[9px] px-3 py-2 text-center text-xs font-semibold transition-colors ${
-                        settings.plan === 'plus'
-                          ? 'bg-[#38bdf8] text-black shadow-[0_0_12px_rgba(56,189,248,0.4)]'
-                          : 'bg-[#38bdf8]/80 text-black group-hover:bg-[#38bdf8]'
-                      }`}
-                    >
-                      {settings.plan === 'plus' ? 'Active Subscription ✓' : 'Subscribe for $9.99 / month'}
-                    </div>
-                  </div>
+                  />
                 </div>
               </div>
             )}
-            {notice && <p className="mt-4 text-xs text-text-dim">{notice}</p>}
-            {settingsError && (
-              <p role="alert" className="mt-2 text-xs text-danger">
-                Failed to save settings: {settingsError}
-              </p>
+
+            {(notice || settingsError) && (
+              <div className="flex flex-col gap-1.5">
+                {notice && <p className="text-[11px] text-text-faint">{notice}</p>}
+                {settingsError && (
+                  <p role="alert" className="text-[11px] text-danger">
+                    Failed to save settings: {settingsError}
+                  </p>
+                )}
+              </div>
             )}
           </main>
         </div>
@@ -726,6 +621,8 @@ function SettingsModal({
   )
 }
 
+
+
 // Memoized: the canvas re-renders on every camera frame, and this rail sits
 // next to it in the same tree. All props are stable primitives or stable
 // callbacks (App keeps them in useCallback), so the memo lets the rail skip
@@ -734,11 +631,8 @@ export default React.memo(function Sidebar({
   workspaceDir,
   managerId,
   boardOpen,
-  brainOpen,
   taskCount,
-  onNewTerminal,
   onToggleBoard,
-  onToggleBrain,
   onPickDir
 }: Props): React.JSX.Element {
   const { settings } = useSettings()
@@ -810,7 +704,7 @@ export default React.memo(function Sidebar({
     }
   }
 
-  const RAIL_ITEM_IDS = ['terminal', 'board', 'notes', 'folders'] as const
+  const RAIL_ITEM_IDS = ['board', 'folders'] as const
   type RailItemId = (typeof RAIL_ITEM_IDS)[number]
   const [order, setOrder] = useState<RailItemId[]>(() => {
     try {
@@ -832,26 +726,18 @@ export default React.memo(function Sidebar({
     if (!dragged || dragged === target) return
     setOrder((prev) => {
       const next = prev.filter((id) => id !== dragged)
-      next.splice(next.indexOf(target), 0, dragged)
+      const targetIndex = next.indexOf(target)
+      if (targetIndex === -1) return prev
+      next.splice(targetIndex, 0, dragged)
       localStorage.setItem('rail-order', JSON.stringify(next))
       return next
     })
   }
 
   const railItems: Record<RailItemId, React.ReactNode> = {
-    terminal: (
-      <IconButton label="New Terminal" testId="rail-new-terminal" onClick={onNewTerminal}>
-        <Terminal size={17} />
-      </IconButton>
-    ),
     board: (
       <IconButton label="Task Board" testId="rail-board" active={boardOpen} badge={taskCount} onClick={onToggleBoard}>
         <KanbanSquare size={17} />
-      </IconButton>
-    ),
-    notes: (
-      <IconButton label="Memory" testId="rail-notes" active={brainOpen} onClick={onToggleBrain}>
-        <FileText size={17} />
       </IconButton>
     ),
     folders: (

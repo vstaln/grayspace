@@ -324,7 +324,8 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
     }
   }
 
-  const createNoteFromFile = async (entry: FileEntry): Promise<void> => {
+  /* Removed: Second Brain file import. */
+  /* const createNoteFromFile = async (entry: FileEntry): Promise<void> => {
     try {
       const res = await window.api.fs.readFile(entry.path)
       if ('content' in res && typeof res.content === 'string') {
@@ -346,7 +347,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
     } catch {
       showNotice('Failed to create note from file')
     }
-  }
+  } */
 
   const filteredItems = useMemo(() => {
     if (!search.trim()) return items
@@ -631,15 +632,6 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                         >
                           <Pencil size={12} />
                         </button>
-                        {!entry.isDirectory && (
-                          <button
-                            className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
-                            onClick={() => void createNoteFromFile(entry)}
-                            title="Save as note in Second Brain"
-                          >
-                            <FileText size={12} />
-                          </button>
-                        )}
                         <button
                           className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-danger/20 hover:text-danger"
                           onClick={() => void handleDelete(entry)}

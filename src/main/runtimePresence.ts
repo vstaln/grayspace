@@ -14,11 +14,10 @@ export function runtimeFile(): string {
  * it without knowing the control token. No secrets — ports and paths only.
  */
 export function writeRuntimePresence(input: {
-  mcpRunning: boolean
   workspaceDir: string | null | undefined
 }): string {
   const payload = {
-    ...buildPresence(input),
+    ...buildPresence({ workspaceDir: input.workspaceDir }),
     writtenAt: Date.now()
   }
   const dir = getUserDataDir()

@@ -1,29 +1,16 @@
 /**
  * Shared browser surface used by both the full-screen pane (BrowserPane) and
  * the canvas widget (BrowserWidget). Kept in its own module so the pane can be
- * React.lazy-split without dragging it — and everything it imports — back into
- * the startup chunk through BrowserWidget's static import.
+ * React.lazy-split without dragging it into the startup chunk.
  */
 
 /**
- * Session shared by every tab. Must match `BROWSER_PARTITION` in main, which
- * pins it again at attach time — the attribute here is only the hint.
+ * Session shared by every tab.
  */
 export const BROWSER_PARTITION = 'persist:orcspace-browser'
 
 /**
- * Plain google.com — no `/ncr`.
- *
- * `/ncr` means "no country redirect": it pins every user to the generic
- * google.com experience instead of letting Google send them to their own
- * country's service. That was added to stop the build machine's country
- * appearing in the footer, but it solved that by making the browser wrong for
- * everyone else — a user in any other country got US-style results, language
- * and currency, and no way to correct it.
- *
- * Without it Google resolves the country from the visitor's own IP address on
- * their own machine, which is what makes search results, units and prices come
- * back in the local currency wherever the app is actually installed.
+ * Default home URL (standard Google search).
  */
 export const HOME_URL = 'https://www.google.com'
 
@@ -40,18 +27,19 @@ export interface Webview extends HTMLElement {
   canGoBack(): boolean
   canGoForward(): boolean
   executeJavaScript(code: string, userGesture?: boolean): Promise<unknown>
+  insertCSS?(css: string): Promise<string>
 }
 
 /**
  * What the user typed, resolved the way an address bar is expected to: a real
  * URL is opened, a bare host is completed to https, and anything else is a
- * Google search rather than a failed navigation.
+ * search query.
  */
 export function toNavigationUrl(input: string): string | null {
   const raw = input.trim()
   if (!raw) return null
   if (/^https?:\/\//i.test(raw)) return raw
-  if (/^localhost(:\d+)?([/?#]|$)/i.test(raw)) return `http://${raw}`
+  if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?([/?#]|$)/i.test(raw)) return `http://${raw}`
   if (!/\s/.test(raw) && /^[\w-]+(\.[\w-]+)+(:\d+)?([/?#]|$)/.test(raw)) return `https://${raw}`
   return `https://www.google.com/search?q=${encodeURIComponent(raw)}`
 }

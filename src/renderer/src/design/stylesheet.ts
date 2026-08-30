@@ -141,29 +141,35 @@ const componentsLayer: Sheet = {
    * without it the window would be fully transparent (frame:false + transparent
    * window), showing the bare desktop behind the UI (P2-207).
    */
-  '.wallpaper-layer': {
+  '.wallpaper-container': {
     position: 'fixed',
     inset: 0,
     zIndex: -1,
+    overflow: 'hidden',
+    pointerEvents: 'none',
     backgroundColor: palette.wallpaperBase,
+    contain: 'strict'
+  },
+
+  '.wallpaper-image': {
+    position: 'absolute',
+    // Extend beyond container edges by 48px to eliminate edge-blur fade
+    // without needing CSS scale() transforms that cause Skia tile artifacts.
+    inset: '-48px',
     backgroundPosition: 'center',
     backgroundSize: 'cover',
     backgroundRepeat: 'no-repeat',
     pointerEvents: 'none',
-    // Both knobs are user-controlled from Settings → Appearance: `--wallpaper-blur`
-    // softens the picture, `--wallpaper-dim` lays a black veil over it. The slight
-    // scale-up keeps blur sampling from pulling in the (sharp) element edge as a
-    // visible ring.
-    filter: 'blur(calc(var(--wallpaper-blur, 0.4) * 32px))',
-    transform: 'scale(1.08)',
-    // The dim veil lives on a pseudo-element so it sits above the image but
-    // under everything else; default 0 keeps an untouched photo untouched.
-    '&::after': {
-      content: '""',
-      position: 'absolute',
-      inset: 0,
-      backgroundColor: 'rgba(0, 0, 0, var(--wallpaper-dim, 0))'
-    }
+    // Force a stable, dedicated compositor layer with integer pixel boundaries
+    willChange: 'transform',
+    transform: 'translate3d(0, 0, 0)',
+    backfaceVisibility: 'hidden'
+  },
+
+  '.wallpaper-dim': {
+    position: 'absolute',
+    inset: 0,
+    pointerEvents: 'none'
   },
 
   // Flat fill + a hairline ring; depth comes from the ring alone, so a focused
@@ -239,8 +245,70 @@ const componentsLayer: Sheet = {
     to: { opacity: 1, transform: 'scale(1)' }
   },
 
-  /* Indeterminate progress strip shown while a browser page is loading. */
-  '.load-bar': { animation: 'load-bar-slide 1.1s ease-in-out infinite' },
+  /* Browser — простой тёмно-серый, без стекла и без белых обводок */
+  '.browser-chrome': {
+    background: '#1e1e21',
+    borderBottom: '1px solid #2a2a2e',
+    contain: 'layout paint style'
+  },
+  '.browser-tab-strip': {
+    background: '#18181b',
+    borderBottom: '1px solid #232326',
+    scrollbarWidth: 'none',
+    '&::-webkit-scrollbar': { display: 'none' }
+  },
+  '.browser-tab': {
+    position: 'relative',
+    contain: 'layout paint',
+    transition: 'background 120ms ease, color 120ms ease'
+  },
+  '.browser-tab-active': {
+    background: '#2a2a2e',
+    color: '#ececec',
+    borderColor: 'transparent'
+  },
+  '.browser-tab-idle': {
+    background: 'transparent',
+    color: '#8a8a90',
+    '&:hover': { background: '#232326', color: '#d4d4d8' }
+  },
+  '.browser-omnibox': {
+    background: '#252529',
+    border: '1px solid #2e2e32',
+    transition: 'border-color 120ms ease, background 120ms ease',
+    '&:focus-within': {
+      background: '#2a2a2e',
+      borderColor: '#3a3a40'
+    }
+  },
+  '.browser-omnibox-input': {
+    background: 'transparent',
+    outline: 'none'
+  },
+  '.browser-icon-btn': {
+    color: '#9a9aa0',
+    transition: 'background 120ms ease, color 120ms ease',
+    '&:hover': { background: '#2a2a2e', color: '#ececec' },
+    '&:active': { background: '#303034' },
+    '&:disabled': { opacity: 0.3, pointerEvents: 'none' }
+  },
+  '.browser-surface': {
+    background: '#121214',
+    contain: 'strict'
+  },
+
+  /* Тонкая полоса загрузки — просто серая, без белых свечений */
+  '.load-bar': {
+    background: '#5a5a60',
+    willChange: 'transform',
+    animation: 'load-bar-slide 1.0s ease-in-out infinite',
+    contain: 'paint'
+  },
+  '.load-bar-track': {
+    background: '#1e1e21',
+    overflow: 'hidden',
+    contain: 'paint'
+  },
   '@keyframes load-bar-slide': {
     from: { transform: 'translateX(-100%)' },
     to: { transform: 'translateX(400%)' }

@@ -1,4 +1,4 @@
-﻿import type { CanvasCamera, CanvasPoint, CanvasStroke, CanvasWidget } from './canvasState.ts'
+import type { CanvasCamera, CanvasPoint, CanvasStroke, CanvasWidget } from './canvasState.ts'
 
 export type LODLevel = 'full' | 'compact' | 'placeholder'
 
@@ -171,6 +171,16 @@ export class CanvasVirtualizer {
         visibleStrokes.push(s)
       } else {
         culledStrokeCount += 1
+      }
+    }
+
+    // Prune deleted stroke bboxes if the cache grew larger than the active set
+    if (this.strokeBBoxes.size > strokes.length + 50) {
+      const activeIds = new Set(strokes.map((s) => s.id))
+      for (const id of this.strokeBBoxes.keys()) {
+        if (!activeIds.has(id)) {
+          this.strokeBBoxes.delete(id)
+        }
       }
     }
 

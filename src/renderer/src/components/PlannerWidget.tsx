@@ -1,8 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useConfirm } from './ConfirmDialog'
-import { Check, Plus, Trash2 } from 'lucide-react'
+import { Bot, Check, ImagePlus, Loader, Paperclip, Plus, Trash2, X, ImageOff } from 'lucide-react'
 import DatePicker from './DatePicker'
-import type { PlanItem } from '../../../preload/index.d'
+import type { PlanItem, Task } from '../../../preload/index.d'
+import { pasteHasImage, saveImageFromPaste } from '../lib/paste'
+import { useCoordination } from '../hooks/useCoordination'
 
 type Scope = 'all' | 'today' | 'week' | 'inbox'
 
@@ -42,6 +44,7 @@ function inWeek(day: string | undefined, today: string, weekEnd: string): boolea
  * board card. Agents see the same data via MCP list_plan_items / toggle_plan_item.
  */
 export default function PlannerWidget(): React.JSX.Element {
+  const coordination = useCoordination()
   const [items, setItems] = useState<PlanItem[]>([])
   const [scope, setScope] = useState<Scope>('today')
   const [projectFilter, setProjectFilter] = useState<string | null>(null)
@@ -51,7 +54,14 @@ export default function PlannerWidget(): React.JSX.Element {
   const [creating, setCreating] = useState(false)
   const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set())
   const [today, setToday] = useState(() => todayKey())
+  const [pendingCreateAttachments, setPendingCreateAttachments] = useState<string[]>([])
+  const [createAttachBusy, setCreateAttachBusy] = useState(false)
+  const createFileRef = useRef<HTMLInputElement | null>(null)
   const confirm = useConfirm()
+
+  const tasksMap = useMemo(() => {
+    return new Map((coordination.snapshot?.tasks || []).map((t) => [t.id, t]))
+  }, [coordination.snapshot?.tasks])
 
   useEffect(() => {
     void window.api.planner.list().then(setItems).catch(() => setError('Failed to load planner items'))
@@ -108,24 +118,73 @@ export default function PlannerWidget(): React.JSX.Element {
           ? 'Inbox (No Date)'
           : 'All Tasks'
 
+  const saveFiles = async (files: FileList | File[]): Promise<string[]> => {
+    const list = Array.from(files as FileList & Iterable<File>)
+    const images = list.filter((f) => f.type.startsWith('image/'))
+    if (!images.length) return []
+    const paths: string[] = []
+    for (const file of images) {
+      if (paths.length + pendingCreateAttachments.length >= 12) break
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        const ext = file.name.includes('.') ? (file.name.split('.').pop() ?? 'png') : file.type.split('/')[1] ?? 'png'
+        const saved = await window.api.media.saveBytes(bytes, ext)
+        if (saved && 'path' in saved && saved.path) paths.push(saved.path)
+        else if (saved && 'error' in saved) throw new Error(saved.error)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Could not attach image')
+      }
+    }
+    return paths
+  }
+
+  const handleCreateAttach = async (files: FileList | null): Promise<void> => {
+    if (!files || files.length === 0) return
+    setCreateAttachBusy(true)
+    try {
+      const paths = await saveFiles(files)
+      if (paths.length) setPendingCreateAttachments((cur) => [...cur, ...paths].slice(0, 12))
+    } finally {
+      setCreateAttachBusy(false)
+      if (createFileRef.current) createFileRef.current.value = ''
+    }
+  }
+
+  const handleCreatePaste = async (e: React.ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>): Promise<void> => {
+    if (!pasteHasImage(e.nativeEvent)) return
+    e.preventDefault()
+    setCreateAttachBusy(true)
+    try {
+      const saved = await saveImageFromPaste(e.nativeEvent)
+      if (saved?.path) setPendingCreateAttachments((cur) => [...cur, saved.path].slice(0, 12))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not paste image')
+    } finally {
+      setCreateAttachBusy(false)
+    }
+  }
+
+  const handleCreateDrop = async (e: React.DragEvent): Promise<void> => {
+    const files = e.dataTransfer?.files
+    if (!files || files.length === 0) return
+    const hasImage = Array.from(files).some((f) => f.type.startsWith('image/'))
+    if (!hasImage) return
+    e.preventDefault()
+    await handleCreateAttach(files)
+  }
+
   const add = async (): Promise<void> => {
     const text = title.trim()
     if (!text || creating) return
     const day =
-      // "Today" and "Week" pin the created line to today — the week view only
-      // renders items with a date inside the current window, so a dayless item
-      // added there would silently disappear. "Inbox" means "no date" and
-      // "All" is deliberately left alone: stamping today on those would drop
-      // the line into a day bucket the user never chose.
       scope === 'inbox' || scope === 'all' ? undefined : todayKey()
     setCreating(true)
     try {
       const result = await window.api.planner.create({
         title: text,
         day,
-        // With a project filter active the project input is hidden, so any
-        // leftover typed value is stale — the active filter must win.
-        project: (projectFilter || project.trim() || undefined) ?? undefined
+        project: (projectFilter || project.trim() || undefined) ?? undefined,
+        ...(pendingCreateAttachments.length ? { attachments: pendingCreateAttachments } : {})
       })
       if (result && typeof result === 'object' && 'error' in result) {
         setError(result.error)
@@ -133,6 +192,7 @@ export default function PlannerWidget(): React.JSX.Element {
       }
       setError(null)
       setTitle((current) => (current.trim() === text ? '' : current))
+      setPendingCreateAttachments([])
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -171,6 +231,72 @@ export default function PlannerWidget(): React.JSX.Element {
     }).then((ok) => {
       if (ok) void runItemAction(item, () => window.api.planner.delete(item.id))
     })
+  }
+
+  const attachToItem = async (item: PlanItem, files: FileList | File[]): Promise<void> => {
+    const list = Array.from(files as unknown as File[])
+    const images = list.filter((f) => f.type.startsWith('image/'))
+    if (!images.length) return
+    const existing = item.attachments ?? []
+    if (existing.length >= 12) {
+      setError('Maximum 12 photos per task')
+      return
+    }
+    // optimistically mark pending
+    setPendingIds((cur) => new Set(cur).add(item.id))
+    try {
+      const newPaths: string[] = []
+      for (const file of images) {
+        if (existing.length + newPaths.length >= 12) break
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        const ext = file.name.includes('.') ? (file.name.split('.').pop() ?? 'png') : file.type.split('/')[1] ?? 'png'
+        const saved = await window.api.media.saveBytes(bytes, ext)
+        if (saved && 'path' in saved && saved.path) newPaths.push(saved.path)
+        else if (saved && 'error' in saved) throw new Error(saved.error)
+      }
+      if (newPaths.length) {
+        const merged = [...existing, ...newPaths].slice(0, 12)
+        const result = await window.api.planner.update(item.id, { attachments: merged, baseVersion: item.version })
+        if (result && typeof result === 'object' && 'error' in result) setError(String(result.error))
+        else setError(null)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setPendingIds((cur) => {
+        const next = new Set(cur)
+        next.delete(item.id)
+        return next
+      })
+    }
+  }
+
+  const attachClipboardToItem = async (item: PlanItem, event: ClipboardEvent): Promise<boolean> => {
+    if (!pasteHasImage(event)) return false
+    event.preventDefault()
+    setPendingIds((cur) => new Set(cur).add(item.id))
+    try {
+      const saved = await saveImageFromPaste(event)
+      if (!saved?.path) return true
+      const merged = [...(item.attachments ?? []), saved.path].slice(0, 12)
+      const result = await window.api.planner.update(item.id, { attachments: merged, baseVersion: item.version })
+      if (result && typeof result === 'object' && 'error' in result) setError(String(result.error))
+      else setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setPendingIds((cur) => {
+        const next = new Set(cur)
+        next.delete(item.id)
+        return next
+      })
+    }
+    return true
+  }
+
+  const removeAttachment = (item: PlanItem, targetIndex: number): void => {
+    const next = (item.attachments ?? []).filter((_, idx) => idx !== targetIndex)
+    void runItemAction(item, () => window.api.planner.update(item.id, { attachments: next.length ? next : null, baseVersion: item.version }))
   }
 
   const scopes: { id: Scope; label: string }[] = [
@@ -251,8 +377,6 @@ export default function PlannerWidget(): React.JSX.Element {
             role="tablist"
             aria-label="Planner scope"
             onKeyDown={(e) => {
-              // Roving focus for the tab pattern: arrows move selection and
-              // focus together, matching how screen readers announce tabs.
               if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
               e.preventDefault()
               const delta = e.key === 'ArrowRight' ? 1 : -1
@@ -282,20 +406,45 @@ export default function PlannerWidget(): React.JSX.Element {
           </div>
 
           {/* Add row */}
-          <div className="flex flex-none flex-col gap-1.5 px-3 pb-2">
-            <div className="flex items-center gap-2 rounded-[12px] bg-bg-hover/20 px-2.5 py-1.5">
+          <div
+            className="flex flex-none flex-col gap-1.5 px-3 pb-2"
+            onDragOver={(e) => {
+              if (Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault()
+            }}
+            onDrop={(e) => void handleCreateDrop(e)}
+          >
+            <div className="flex items-center gap-1.5 rounded-[12px] bg-bg-hover/20 px-2.5 py-1.5">
               <Plus size={14} className="flex-none text-text-faint" aria-hidden />
               <input
                 className="min-w-0 flex-1 bg-transparent px-px text-[12px] text-text outline-none placeholder:text-text-faint"
-                placeholder="Add a task…"
+                placeholder="Add a task…  (paste image or drag & drop)"
                 value={title}
                 disabled={creating}
                 onChange={(e) => setTitle(e.target.value)}
+                onPaste={(e) => void handleCreatePaste(e)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') void add()
                 }}
                 aria-label="New planner item"
               />
+              <input
+                ref={createFileRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => void handleCreateAttach(e.target.files)}
+              />
+              <button
+                type="button"
+                className="grid h-7 w-7 flex-none place-items-center rounded-[8px] text-text-faint transition-colors hover:bg-bg-hover hover:text-text disabled:opacity-30"
+                disabled={creating || createAttachBusy}
+                title="Attach photo"
+                aria-label="Attach photo to new task"
+                onClick={() => createFileRef.current?.click()}
+              >
+                {createAttachBusy ? <Loader size={14} className="animate-spin" /> : <Paperclip size={14} />}
+              </button>
               <button
                 type="button"
                 className="flex h-6 flex-none items-center rounded-[8px] bg-accent px-2.5 text-[11px] font-semibold text-bg transition-opacity hover:opacity-90 disabled:opacity-30"
@@ -307,6 +456,13 @@ export default function PlannerWidget(): React.JSX.Element {
                 Add
               </button>
             </div>
+            {pendingCreateAttachments.length > 0 && (
+              <CreateAttachmentsPreview
+                paths={pendingCreateAttachments}
+                busy={createAttachBusy}
+                onRemove={(indexToRemove) => setPendingCreateAttachments((cur) => cur.filter((_, idx) => idx !== indexToRemove))}
+              />
+            )}
             {!projectFilter && (
               <input
                 className="rounded-[10px] border border-line-soft bg-transparent px-2.5 py-1 text-[11px] text-text-dim outline-none placeholder:text-text-faint focus:border-line"
@@ -314,6 +470,7 @@ export default function PlannerWidget(): React.JSX.Element {
                 value={project}
                 disabled={creating}
                 onChange={(e) => setProject(e.target.value)}
+                onPaste={(e) => void handleCreatePaste(e)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') void add()
                 }}
@@ -321,6 +478,9 @@ export default function PlannerWidget(): React.JSX.Element {
               />
             )}
             {error && <p className="text-[11px] text-danger">{error}</p>}
+            <p className="text-[10px] leading-relaxed text-text-faint">
+              Совет: вставь скриншот (Ctrl+V), перетащи картинку или нажми <Paperclip size={10} className="inline" /> — фото сохранится вместе с задачей.
+            </p>
           </div>
 
           {/* Checklist */}
@@ -341,12 +501,16 @@ export default function PlannerWidget(): React.JSX.Element {
                   <PlanRow
                     key={item.id}
                     item={item}
+                    task={tasksMap.get(item.id)}
                     index={index + 1}
                     showDay={scope !== 'today'}
                     pending={pendingIds.has(item.id)}
                     onToggle={() => toggle(item)}
                     onRemove={() => remove(item)}
                     onReschedule={(day) => reschedule(item, day)}
+                    onAttachFiles={(files) => void attachToItem(item, files)}
+                    onPasteImage={(e) => void attachClipboardToItem(item, e)}
+                    onRemoveAttachment={(targetIndex) => removeAttachment(item, targetIndex)}
                   />
                 ))}
               </ul>
@@ -362,83 +526,305 @@ function Empty({ text }: { text: string }): React.JSX.Element {
   return <p className="px-3 pt-8 text-center text-[12px] leading-relaxed text-text-faint">{text}</p>
 }
 
+function CreateAttachmentsPreview({
+  paths,
+  busy,
+  onRemove
+}: {
+  paths: string[]
+  busy: boolean
+  onRemove: (index: number) => void
+}): React.JSX.Element {
+  const [urls, setUrls] = useState<Record<string, string | null>>({})
+  const key = paths.join('\0')
+  useEffect(() => {
+    let cancelled = false
+    setUrls({})
+    void Promise.all(
+      paths.map(async (path) => {
+        try {
+          return [path, await window.api.media.dataUrl(path)] as const
+        } catch {
+          return [path, null] as const
+        }
+      })
+    ).then((pairs) => {
+      if (!cancelled) setUrls(Object.fromEntries(pairs))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [key])
+
+  return (
+    <div className="flex flex-wrap gap-1.5 rounded-[10px] border border-dashed border-line-soft bg-bg-hover/20 px-2 py-2">
+      {paths.map((path, idx) => {
+        const url = urls[path]
+        const loaded = Object.prototype.hasOwnProperty.call(urls, path)
+        return (
+          <div key={`${path}-${idx}`} className="group relative h-16 w-20 overflow-hidden rounded-[8px] border border-line-soft bg-bg-hover">
+            {!loaded ? (
+              <span className="grid h-full w-full place-items-center text-text-faint">
+                <Loader size={14} className="animate-spin" />
+              </span>
+            ) : url ? (
+              <img src={url} alt="attachment" className="h-full w-full object-cover" />
+            ) : (
+              <span className="grid h-full w-full place-items-center text-text-faint">
+                <ImageOff size={14} />
+              </span>
+            )}
+            <button
+              type="button"
+              className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/80"
+              title="Remove"
+              aria-label="Remove attachment"
+              onClick={() => onRemove(idx)}
+            >
+              <X size={10} />
+            </button>
+          </div>
+        )
+      })}
+      {busy && (
+        <span className="grid h-16 w-20 place-items-center rounded-[8px] border border-line-soft bg-bg-hover text-text-faint">
+          <Loader size={14} className="animate-spin" />
+        </span>
+      )}
+    </div>
+  )
+}
+
 function PlanRow({
   item,
+  task,
   index,
   showDay,
   pending,
   onToggle,
   onRemove,
-  onReschedule
+  onReschedule,
+  onAttachFiles,
+  onPasteImage,
+  onRemoveAttachment
 }: {
   item: PlanItem
+  task?: Task
   index: number
   showDay: boolean
   pending: boolean
   onToggle: () => void
   onRemove: () => void
   onReschedule: (day: string) => void
+  onAttachFiles: (files: FileList) => void
+  onPasteImage: (e: ClipboardEvent) => void
+  onRemoveAttachment: (index: number) => void
 }): React.JSX.Element {
-  return (
-    <li className="group flex items-start gap-2.5 rounded-[12px] px-2 py-2 transition-colors hover:bg-bg-hover/40 focus-within:bg-bg-hover/40">
-      <button
-        type="button"
-        className={`mt-0.5 grid h-[18px] w-[18px] flex-none place-items-center rounded-full border transition-colors duration-150 ${
-          item.done
-            ? 'border-ok bg-ok/20 text-ok'
-            : 'border-line text-transparent hover:border-ok hover:text-ok/70'
-        }`}
-        title={item.done ? 'Mark incomplete' : 'Mark completed'}
-        aria-label={item.done ? 'Mark incomplete' : 'Mark completed'}
-        aria-pressed={item.done}
-        disabled={pending}
-        onClick={onToggle}
-      >
-        <Check size={11} strokeWidth={2.5} />
-      </button>
+  const fileRef = useRef<HTMLInputElement | null>(null)
+  const [dragOver, setDragOver] = useState(false)
+  const isWorking = task && (task.state === 'in_progress' || task.state === 'review')
 
-      <div className="min-w-0 flex-1 pt-px">
-        <div className="flex items-baseline gap-1.5">
-          <span className="flex-none text-[11px] tabular-nums text-text-faint">{index}</span>
-          <span
-            className={`min-w-0 text-[12.5px] leading-snug ${
-              item.done ? 'text-text-faint line-through' : 'text-text'
-            }`}
-            title={item.note || item.title}
-          >
-            {item.title}
-          </span>
-        </div>
-        {(item.note || item.project || item.time || showDay) && (
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-[18px] text-[10px] text-text-faint">
-            {item.project && <span className="text-text-dim">{item.project}</span>}
-            {showDay && (
-              <DatePicker
-                value={item.day ?? ''}
-                onChange={onReschedule}
-                placeholder="No date"
-                ariaLabel={`Schedule date for ${item.title}`}
-                disabled={pending}
-                formatValue={formatDayShort}
-                className="-mx-1 flex h-auto flex-none items-center gap-1 rounded-[6px] border border-transparent px-1 py-0 text-[10px] tabular-nums text-text-faint transition-colors hover:border-line-soft hover:text-text-dim"
-              />
+  return (
+    <li
+      className={`group flex flex-col gap-1 rounded-[12px] px-2 py-2 transition-colors focus-within:bg-bg-hover/40 ${dragOver ? 'bg-accent/10 ring-1 ring-accent/30' : 'hover:bg-bg-hover/40'}`}
+      onDragOver={(e) => {
+        if (Array.from(e.dataTransfer.types).includes('Files')) {
+          e.preventDefault()
+          setDragOver(true)
+        }
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        setDragOver(false)
+        const files = e.dataTransfer?.files
+        if (files && files.length) {
+          e.preventDefault()
+          onAttachFiles(files)
+        }
+      }}
+      onPaste={(e) => {
+        // Only intercept image pastes; text pastes must keep native behaviour
+        if (pasteHasImage(e.nativeEvent as unknown as ClipboardEvent)) {
+          void onPasteImage(e.nativeEvent as unknown as ClipboardEvent)
+        }
+      }}
+    >
+      <div className="flex items-start gap-2.5">
+        <button
+          type="button"
+          className={`mt-0.5 grid h-[18px] w-[18px] flex-none place-items-center rounded-full border transition-colors duration-150 ${
+            item.done
+              ? 'border-ok bg-ok/20 text-ok'
+              : 'border-line text-transparent hover:border-ok hover:text-ok/70'
+          }`}
+          title={item.done ? 'Mark incomplete' : 'Mark completed'}
+          aria-label={item.done ? 'Mark incomplete' : 'Mark completed'}
+          aria-pressed={item.done}
+          disabled={pending}
+          onClick={onToggle}
+        >
+          <Check size={11} strokeWidth={2.5} />
+        </button>
+
+        <div className="min-w-0 flex-1 pt-px">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="flex-none text-[11px] tabular-nums text-text-faint">{index}</span>
+            <span
+              className={`min-w-0 text-[12.5px] leading-snug break-words ${
+                item.done ? 'text-text-faint line-through' : 'text-text'
+              }`}
+              title={item.note || item.title}
+            >
+              {item.title}
+            </span>
+            {isWorking && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 text-[9.5px] font-medium text-amber-300 animate-pulse"
+                title={`Active in progress: ${task.assignee || 'worker'}`}
+              >
+                <Bot size={10} />
+                <span>{task.assignee || 'In Progress'}</span>
+              </span>
             )}
-            {item.time && <span className="tabular-nums">{item.time}</span>}
-            {item.note && <span className="truncate opacity-80">{item.note}</span>}
           </div>
-        )}
+          {(item.note || item.project || item.time || showDay) && (
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-[18px] text-[10px] text-text-faint">
+              {item.project && <span className="text-text-dim">{item.project}</span>}
+              {showDay && (
+                <DatePicker
+                  value={item.day ?? ''}
+                  onChange={onReschedule}
+                  placeholder="No date"
+                  ariaLabel={`Schedule date for ${item.title}`}
+                  disabled={pending}
+                  formatValue={formatDayShort}
+                  className="-mx-1 flex h-auto flex-none items-center gap-1 rounded-[6px] border border-transparent px-1 py-0 text-[10px] tabular-nums text-text-faint transition-colors hover:border-line-soft hover:text-text-dim"
+                />
+              )}
+              {item.time && <span className="tabular-nums">{item.time}</span>}
+              {item.note && <span className="truncate opacity-80">{item.note}</span>}
+            </div>
+          )}
+        </div>
+
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files) onAttachFiles(e.target.files)
+            e.target.value = ''
+          }}
+        />
+
+        <div className="mt-0.5 flex flex-none items-center gap-0.5">
+          <button
+            type="button"
+            className="grid h-7 w-7 place-items-center rounded-[8px] text-text-faint/70 transition-colors hover:bg-bg-hover hover:text-text disabled:opacity-30"
+            title={item.attachments?.length ? `Add photo (${item.attachments.length}/12)` : 'Attach photo'}
+            aria-label="Attach photo"
+            disabled={pending}
+            onClick={() => fileRef.current?.click()}
+          >
+            {pending ? <Loader size={12} className="animate-spin" /> : <ImagePlus size={14} />}
+          </button>
+
+          <button
+            type="button"
+            className="grid h-7 w-7 place-items-center rounded-[8px] text-text-faint/70 transition-colors hover:bg-bg-hover hover:text-text group-hover:text-text-faint group-focus-within:text-text-faint hover:!text-danger disabled:opacity-30"
+            title="Delete"
+            aria-label="Delete item"
+            disabled={pending}
+            onClick={onRemove}
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
       </div>
 
-      <button
-        type="button"
-        className="mt-0.5 grid h-5 w-5 flex-none place-items-center rounded-[8px] text-text-faint/70 transition-colors group-hover:text-text-faint group-focus-within:text-text-faint hover:!text-danger"
-        title="Delete"
-        aria-label="Delete item"
-        disabled={pending}
-        onClick={onRemove}
-      >
-        <Trash2 size={12} />
-      </button>
+      {item.attachments && item.attachments.length > 0 && (
+        <PlanAttachments attachments={item.attachments} onRemove={onRemoveAttachment} pending={pending} />
+      )}
+
+      {dragOver && (
+        <div className="ml-[28px] flex items-center gap-1.5 rounded-[8px] border border-dashed border-accent/40 bg-accent/10 px-2 py-1 text-[10px] text-accent">
+          <ImagePlus size={12} /> Drop image to attach
+        </div>
+      )}
     </li>
+  )
+}
+
+function PlanAttachments({
+  attachments,
+  onRemove,
+  pending
+}: {
+  attachments: string[]
+  onRemove: (index: number) => void
+  pending: boolean
+}): React.JSX.Element {
+  const [urls, setUrls] = useState<Record<string, string | null>>({})
+  const key = attachments.join('\0')
+
+  useEffect(() => {
+    let cancelled = false
+    setUrls({})
+    void Promise.all(
+      attachments.map(async (path) => {
+        try {
+          return [path, await window.api.media.dataUrl(path)] as const
+        } catch {
+          return [path, null] as const
+        }
+      })
+    ).then((pairs) => {
+      if (!cancelled) setUrls(Object.fromEntries(pairs))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [key])
+
+  return (
+    <div className="ml-[28px] flex flex-wrap gap-1.5 pt-1">
+      {attachments.map((path, idx) => {
+        const url = urls[path]
+        const loaded = Object.prototype.hasOwnProperty.call(urls, path)
+        return (
+          <div
+            key={`${path}-${idx}`}
+            className="group/thumb relative h-16 w-20 overflow-hidden rounded-[8px] border border-line-soft bg-bg-hover"
+            title={path}
+          >
+            {!loaded ? (
+              <span className="grid h-full w-full place-items-center text-text-faint" role="status">
+                <Loader size={14} className="animate-spin" aria-hidden />
+              </span>
+            ) : url ? (
+              <a href={url} target="_blank" rel="noreferrer" className="block h-full w-full">
+                <img className="h-full w-full object-cover transition-opacity hover:opacity-90" src={url} alt="Plan attachment" />
+              </a>
+            ) : (
+              <span className="grid h-full w-full place-items-center text-text-faint">
+                <ImageOff size={14} aria-hidden />
+              </span>
+            )}
+            <button
+              type="button"
+              className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover/thumb:opacity-100 hover:bg-black/80 disabled:opacity-50"
+              title="Remove photo"
+              aria-label="Remove photo"
+              disabled={pending}
+              onClick={() => onRemove(idx)}
+            >
+              <X size={10} />
+            </button>
+          </div>
+        )
+      })}
+    </div>
   )
 }

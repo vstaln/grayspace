@@ -19,7 +19,8 @@ export function writeJsonAtomic(file: string, data: unknown): void {
 }
 
 type NativeStorageCore = {
-  writeJsonAtomic(path: string, value: unknown): Promise<void>
+  /** Newer binding: takes the already-serialized text (see below). */
+  writeTextAtomic?(path: string, text: string, keepBackup: boolean): Promise<void>
   sanitizeScrollback?(text: string, limit: number): string
 }
 const nativeStorageCore = ((): NativeStorageCore | null => {
@@ -59,25 +60,35 @@ export function sanitizeScrollbackNative(text: string, limit: number): string | 
  * process's event loop. Use this on hot, frequently-debounced save paths
  * (e.g. canvas autosave while the user is actively dragging/drawing) where a
  * synchronous multi-megabyte `JSON.stringify` + `writeFileSync` would stall
- * IPC/PTY handling for the duration of the write. Falls back to native Rust
- * (off-thread serialize+write) when built; otherwise uses non-blocking
- * `fs.promises` calls, which still avoid blocking the event loop even though
- * serialization itself remains on the main thread.
+ * IPC/PTY handling for the duration of the write. Prefers the native Rust
+ * writer (off-thread temp file + fsync + rename) when built; otherwise uses
+ * non-blocking `fs.promises` calls, which also keep the disk work off the
+ * event loop.
  *
  * NOT for paths that must be guaranteed durable before the process exits
  * (e.g. `before-quit` flushes) — those should keep using the synchronous
  * `writeJsonAtomic` so Electron does not tear down mid-write.
+ *
+ * Serialization happens here, in V8, and the *text* is what crosses into Rust.
+ * The native binding used to take the object and let napi build a
+ * `serde_json::Value` from it — but that conversion runs on the JS thread
+ * before the async task is queued, and for one full canvas (200k stroke
+ * points) it blocked the main process for ~176 ms per autosave versus ~40 ms
+ * for `JSON.stringify` of the same object. The nominally non-blocking writer
+ * was the biggest main-thread stall on the drawing path.
  */
 export async function writeJsonAtomicAsync(file: string, data: unknown): Promise<void> {
-  if (nativeStorageCore) {
+  const text = JSON.stringify(data, null, 2)
+  const writeText = nativeStorageCore?.writeTextAtomic
+  if (typeof writeText === 'function') {
     try {
-      await nativeStorageCore.writeJsonAtomic(file, data)
+      await writeText.call(nativeStorageCore, file, text, true)
       return
     } catch (error) {
       console.warn('[native] storage-core write failed; falling back to the async JS writer.', error)
     }
   }
-  await writeAtomicAsync(file, JSON.stringify(data, null, 2), true)
+  await writeAtomicAsync(file, text, true)
 }
 
 async function writeAtomicAsync(file: string, text: string, keepBackup: boolean): Promise<void> {
@@ -117,8 +128,19 @@ export function writeTextAtomic(file: string, text: string): void {
   writeAtomic(file, text, false)
 }
 
-/** Non-blocking counterpart to `writeTextAtomic` (no `.bak`, same crash safety). */
+/** Non-blocking counterpart to `writeTextAtomic` (no `.bak`, same crash safety).
+ *  Terminal scrollback snapshots go through here on every save, so they take
+ *  the same off-thread Rust writer when one is built. */
 export async function writeTextAtomicAsync(file: string, text: string): Promise<void> {
+  const writeText = nativeStorageCore?.writeTextAtomic
+  if (typeof writeText === 'function') {
+    try {
+      await writeText.call(nativeStorageCore, file, text, false)
+      return
+    } catch (error) {
+      console.warn('[native] storage-core write failed; falling back to the async JS writer.', error)
+    }
+  }
   await writeAtomicAsync(file, text, false)
 }
 

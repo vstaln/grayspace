@@ -1,4 +1,4 @@
-﻿import { EventEmitter } from 'events'
+import { EventEmitter } from 'events'
 import { join } from 'path'
 import { readStoreJson, writeJsonAtomic, writeJsonAtomicAsync } from './storage.ts'
 import { getUserDataDir } from './userData.ts'
@@ -567,6 +567,7 @@ claimManager(agentId: string): { managerId: string; role: 'manager' } {
   }
 
   createTask(input: {
+    id?: string
     title: string
     brief?: string
     files?: unknown
@@ -583,7 +584,7 @@ claimManager(agentId: string): { managerId: string; role: 'manager' } {
     if (!title) throw new CommandError('invalid', 'title is required')
     this.touchManager(input.createdBy)
     const now = Date.now()
-    const id = this.nextTaskId()
+    const id = (typeof input.id === 'string' && input.id.trim()) ? input.id.trim() : this.nextTaskId()
     const task: Task = {
       id,
       title,
@@ -762,7 +763,7 @@ claimManager(agentId: string): { managerId: string; role: 'manager' } {
   deleteTask(taskId: string, overlayId?: string): void {
     this.ensure()
     const task = this.tasks.get(taskId)
-    if (!task) throw new CommandError('not_found', 'task not found')
+    if (!task) return
     this.releaseTaskLocks(task)
     this.tasks.delete(taskId)
     this.versions.forget(taskId, overlayId)

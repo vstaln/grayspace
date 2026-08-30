@@ -53,6 +53,7 @@ opencode.json
 .kimi/
 .windsurf/
 .antigravity/
+.claude/
 
 # Playwright E2E output
 test-results/

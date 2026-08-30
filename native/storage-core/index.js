@@ -565,4 +565,4 @@ if (!nativeBinding) {
 
 module.exports = nativeBinding
 module.exports.sanitizeScrollback = nativeBinding.sanitizeScrollback
-module.exports.writeJsonAtomic = nativeBinding.writeJsonAtomic
+module.exports.writeTextAtomic = nativeBinding.writeTextAtomic

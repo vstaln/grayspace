@@ -1,19 +1,22 @@
 import * as http from 'http'
-import { CONTROL_PORT, MCP_SERVER_NAME, mcpUrl } from './config'
-import { embeddedMcpRequest } from './embeddedMcp.ts'
-import { CoordinationStore, USER_AUTHOR } from './coordination'
-import { TerminalManager } from './terminals'
-import { BrainStore } from './brain'
-import { CanvasStore } from './canvasState'
+import * as fs from 'fs'
+import { extname, join, normalize, sep } from 'path'
+import { CONTROL_PORT } from './config.ts'
+import { CoordinationStore, USER_AUTHOR } from './coordination.ts'
+import { TerminalManager } from './terminals.ts'
+import { CanvasStore } from './canvasState.ts'
 import type { PlannerStore } from './plannerStore.ts'
-import { CONTROL_TOKEN_HEADER, controlToken } from './controlToken'
+import type { OrchestrationStore } from './orchestration/store.ts'
+import type { MessageType } from './orchestration/types.ts'
+import { listWorkers, resolveWorker } from './orchestration/workers.ts'
+import { CONTROL_TOKEN_HEADER, controlToken } from './controlToken.ts'
 import { CANVAS_TARGET } from './commands/canvas.ts'
 import { TASK_MANAGER_TARGET } from './commands/board.ts'
 import { GIT_TARGET } from './commands/git.ts'
 import { NEW } from './commands/index.ts'
 import { applyLoopbackCors, isLoopbackRequest, secretsEqual } from './netGuard.ts'
 import { buildPresence, buildSnapshot } from './linkSnapshot.ts'
-import type { AppState } from './appState'
+import type { AppState } from './appState.ts'
 import { fileResource, parseResource, type ActorType, type CommandErrorCode, type CommandResult, type Core } from './core/index.ts'
 
 const MAX_BODY_BYTES = 1_000_000
@@ -53,14 +56,15 @@ interface ControlDeps {
   terminals: TerminalManager
   coordination: CoordinationStore
   planner: PlannerStore
-  brain: BrainStore
+  orchestration: OrchestrationStore
   canvas: CanvasStore
   state: AppState
   defaultCwd(): string | undefined
-  /** Reports whether the bundled MCP server process is currently up. */
-  mcpRunning(): boolean
-  mcpStatus?(): { running: boolean; error?: string; pid?: number; restarts?: number }
-  restartMcp?(): Promise<{ running: boolean; error?: string; pid?: number; restarts?: number }>
+  /** Optional custom port; defaults to CONTROL_PORT (20220). */
+  port?: number
+  /** Optional packaged renderer directory; served by this same listener. */
+  rendererDir?: string
+  broadcast?(channel: string, payload: unknown): void
 }
 
 /** How a failed command maps onto HTTP for callers that only speak status codes. */
@@ -79,26 +83,21 @@ const STATUS_BY_CODE: Record<CommandErrorCode, number> = {
 }
 
 /**
- * Loopback-only HTTP surface that the MCP server (and any local tooling)
- * drives the app through.
- *
- * It is a *transport*, and after the core refactor that is all it is: it
- * authenticates a caller, turns the request into a command, and renders the
- * result as JSON. There is no state logic left in this file — no lock checks,
- * no manager rules, no store writes — because those now live in exactly one
- * place for all three transports.
+ * Loopback-only HTTP surface that the MCP server, CLI agents (`orc`),
+ * and local tooling drive the app through.
  */
 export function startControlServer(deps: ControlDeps): http.Server {
   const token = controlToken()
+  const port = deps.port ?? CONTROL_PORT
   const server = http.createServer((req, res) => {
     applyLoopbackCors(req, res, `Content-Type, ${CONTROL_TOKEN_HEADER}`)
     const url = new URL(req.url || '/', 'http://localhost')
     const parts = url.pathname.split('/').filter(Boolean)
     const method = req.method || 'GET'
 
-    // MCP owns the complete Streamable HTTP lifecycle on the same listener,
-    // including OPTIONS and unauthenticated transport-level rejection.
-    if (url.pathname === '/mcp') return embeddedMcpRequest(req, res)
+    if (deps.rendererDir && (method === 'GET' || method === 'HEAD') && isRendererPath(url.pathname)) {
+      return serveRendererFile(deps.rendererDir, url.pathname, res, method === 'HEAD')
+    }
 
     // Presence and CORS preflight OPTIONS are unauthenticated:
     if (method === 'OPTIONS') {
@@ -113,7 +112,7 @@ export function startControlServer(deps: ControlDeps): http.Server {
       return sendJson(
         res,
         200,
-        buildPresence({ mcpRunning: deps.mcpRunning(), workspaceDir: deps.defaultCwd() ?? null })
+        buildPresence({ workspaceDir: deps.defaultCwd() ?? null })
       )
     }
 
@@ -133,29 +132,45 @@ export function startControlServer(deps: ControlDeps): http.Server {
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       console.error(
-        `control port ${CONTROL_PORT} is already in use — another OrcSpace instance is probably running.`
+        `control port ${port} is already in use — another OrcSpace instance is probably running.`
       )
       return
     }
     console.error('control server error', err)
   })
-  server.listen(CONTROL_PORT, '127.0.0.1', () => {
-    console.log(`control server listening on http://127.0.0.1:${CONTROL_PORT}`)
+  server.listen(port, '127.0.0.1', () => {
+    console.log(`control server listening on http://127.0.0.1:${port}`)
   })
   return server
 }
 
-/**
- * Two gates, and the second one is the one that matters.
- *
- * Binding to loopback keeps the network out but not the browser: any page the
- * user visits can POST to 127.0.0.1, and this API opens shells. The old rule —
- * "no Origin header means a trusted local tool" — gave every process on the
- * machine arbitrary command execution, since a plain HTTP client sends no
- * Origin either. So the header check stays (it is cheap, and it blocks
- * DNS-rebinding), but the actual authority is a token generated at startup and
- * written to a file only this user can read.
- */
+function isRendererPath(pathname: string): boolean {
+  return pathname === '/' || pathname === '/index.html' || pathname.startsWith('/assets/')
+}
+
+function serveRendererFile(rendererDir: string, pathname: string, res: http.ServerResponse, head: boolean): void {
+  let relative: string
+  try { relative = normalize(decodeURIComponent(pathname === '/' ? '/index.html' : pathname)) } catch {
+    res.writeHead(400).end(); return
+  }
+  const filePath = join(rendererDir, relative)
+  if (!filePath.startsWith(rendererDir + sep) && filePath !== rendererDir) {
+    res.writeHead(403).end(); return
+  }
+  fs.readFile(filePath, (err, data) => {
+    if (err) { res.writeHead(404).end(); return }
+    res.writeHead(200, { 'Content-Type': rendererMime[extname(filePath)] ?? 'application/octet-stream', 'Cache-Control': pathname.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache' })
+    if (head) res.end(); else res.end(data)
+  })
+}
+
+const rendererMime: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png',
+  '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2', '.map': 'application/json; charset=utf-8'
+}
+
 function isTrustedCaller(req: http.IncomingMessage, token: string): boolean {
   if (!isLoopbackRequest(req)) return false
   const presented = req.headers[CONTROL_TOKEN_HEADER]
@@ -165,11 +180,6 @@ function isTrustedCaller(req: http.IncomingMessage, token: string): boolean {
 /** Built-in actor ids that HTTP callers must never claim. */
 const RESERVED_ACTOR_IDS = new Set(['user', 'assistant', 'system'])
 
-/**
- * Validates and registers an HTTP agent id. Refuses reserved names and any id
- * already registered as a non-agent (so a token holder cannot ride the human
- * or the built-in assistant).
- */
 function registerHttpAgent(
   core: Core,
   agentIdRaw: unknown
@@ -178,8 +188,6 @@ function registerHttpAgent(
   if (!agentId) {
     return { ok: false, status: 401, error: 'agentId is required', code: 'unknown_actor' }
   }
-  // Bound actor ids so a hostile client cannot grow the actor registry forever
-  // with multi-megabyte keys (the body cap is 1MB, but ids are stored long-lived).
   if (agentId.length > 128 || !/^[a-zA-Z0-9._@:-]+$/.test(agentId)) {
     return {
       ok: false,
@@ -213,17 +221,12 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
   const url = new URL(req.url || '/', 'http://localhost')
   const parts = url.pathname.split('/').filter(Boolean)
   const method = req.method || 'GET'
-  const { terminals, coordination, planner, brain, canvas, core } = deps
+  const { terminals, coordination, planner, canvas, core, orchestration } = deps
 
   if (rateLimitedApi()) {
     return sendJson(res, 429, { error: 'too many requests' })
   }
 
-  /**
-   * Registers the caller and submits one command as them. Every external
-   * writer arrives with an `agentId` in its body; it becomes an `agent` actor,
-   * which is how the journal can later say which CLI moved what.
-   */
   const submit = async <T>(
     body: Json,
     type: string,
@@ -231,15 +234,11 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     payload: unknown,
     _options: { actorType?: ActorType } = {}
   ): Promise<CommandResult<T>> => {
-    // HTTP is always an agent transport. actorType is ignored so a client cannot
-    // escalate to user/assistant/system by asking.
     const rawAgentId = body.agentId ?? url.searchParams.get('agentId') ?? req.headers['x-agent-id']
     const registered = registerHttpAgent(core, rawAgentId)
     if (!registered.ok) {
       return { ok: false, code: registered.code, message: registered.error }
     }
-    // Any call is a liveness signal, which is what keeps this agent's locks
-    // alive; go quiet for a minute and they are swept.
     core.locks.heartbeat(registered.agentId)
     const baseVersion = typeof body.baseVersion === 'number' ? body.baseVersion : undefined
     return core.bus.submit<T>({ actorId: registered.agentId, type, target, payload, baseVersion })
@@ -259,10 +258,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     return sendJson(res, 200, {
       ok: true,
       app: 'orcspace',
-      server: MCP_SERVER_NAME,
+      server: 'orcspace-control',
       controlPort: CONTROL_PORT,
-      mcpUrl: mcpUrl(),
-      mcpRunning: deps.mcpRunning(),
       workspaceDir: deps.defaultCwd() ?? null,
       terminals: terminals.list().length,
       managerId: coordination.managerId,
@@ -278,14 +275,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     const others = canvas
       .listWidgets()
       .filter((w) => w.kind !== 'terminal')
-      .map((w) => ({ id: w.id, title: w.title, kind: w.kind ?? 'note', noteId: w.noteId, version: w.version }))
+      .map((w) => ({ id: w.id, title: w.title, kind: w.kind, version: w.version }))
     const sinceRaw = Number(url.searchParams.get('since') || Math.max(0, core.journal.lastSeq - 40))
     const since = Number.isFinite(sinceRaw) && sinceRaw >= 0 ? sinceRaw : Math.max(0, core.journal.lastSeq - 40)
     return sendJson(
       res,
       200,
       buildSnapshot({
-        mcpRunning: deps.mcpRunning(),
         workspaceDir: deps.defaultCwd() ?? null,
         managerId: coord.managerId,
         terminals: shells,
@@ -293,29 +289,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
         tasks: coord.tasks,
         locks: core.locks.list(),
         plannerItems,
-        brainNotes: brain.snapshot().notes,
         journal: { lastSeq: core.journal.lastSeq, entries: core.journal.since(since) },
         commands: core.bus.types(),
-        mcp: deps.mcpStatus?.()
       })
     )
   }
 
-  // ---- mcp supervisor -----------------------------------------------------
-  if (parts[0] === 'mcp') {
-    if (method === 'GET' && parts.length === 1) {
-      return sendJson(res, 200, deps.mcpStatus?.() ?? { running: deps.mcpRunning() })
-    }
-    if (method === 'POST' && parts[1] === 'restart') {
-      if (!deps.restartMcp) return sendJson(res, 501, { error: 'mcp restart is not available' })
-      const status = await deps.restartMcp()
-      return sendJson(res, 200, status)
-    }
-  }
-
   // ---- locks --------------------------------------------------------------
-  // First-class now that they protect resources: an agent about to touch a
-  // file takes the lock explicitly and holds it across several commands.
   if (parts[0] === 'locks') {
     if (method === 'GET') return sendJson(res, 200, { locks: core.locks.list() })
     const body = await readJson(req)
@@ -354,8 +334,6 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
   if (parts[0] === 'git') {
     const body = method === 'GET' ? {} : await readJson(req)
     if (method === 'GET' && parts[1] === 'status') {
-      // Status is a read, but it still goes through the bus so the refresh is
-      // journaled next to whatever the agent does with the answer.
       core.actors.register({ id: 'system', type: 'system', label: 'OrcSpace', transport: 'internal' })
       return reply(await core.bus.submit({ actorId: 'system', type: 'git.refresh', target: GIT_TARGET, payload: {} }))
     }
@@ -365,29 +343,227 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
   }
 
   // ---- journal ------------------------------------------------------------
-  // The audit trail, readable by tooling: who changed what, in order.
   if (method === 'GET' && parts[0] === 'journal') {
     const sinceRaw = Number(url.searchParams.get('since') || 0)
     const since = Number.isFinite(sinceRaw) && sinceRaw >= 0 ? sinceRaw : 0
     return sendJson(res, 200, { lastSeq: core.journal.lastSeq, entries: core.journal.since(since) })
   }
 
-  // ---- second brain -------------------------------------------------------
-  if (parts[0] === 'brain') {
-    if (method === 'GET' && parts.length === 1) return sendJson(res, 200, brain.snapshot())
-    if (method === 'GET' && parts[1] === 'search')
-      return sendJson(res, 200, { notes: brain.search(url.searchParams.get('q') || '') })
-    if (method === 'POST' && parts.length === 1) {
-      const body = await readJson(req)
-      return reply(await submit(body, 'note.create', NEW.note, body), 201)
+  // ---- orchestration ------------------------------------------------------
+  if (parts[0] === 'orchestration') {
+    const runIdParam = url.searchParams.get('runId') || undefined
+    const callerId = (): { ok: true; agentId: string } | { ok: false; status: number; error: string; code: CommandErrorCode } =>
+      registerHttpAgent(core, url.searchParams.get('agentId') ?? req.headers['x-agent-id'])
+
+    // ---- reads --------------------------------------------------------
+    if (method === 'GET' && parts.length === 1) {
+      return sendJson(res, 200, orchestration.snapshot(runIdParam))
     }
-    if (method === 'PATCH' && parts[1]) {
-      const body = await readJson(req)
-      return reply(await submit(body, 'note.update', `note:${decodeURIComponent(parts[1])}`, body))
+    if (method === 'GET' && parts[1] === 'runs') {
+      if (parts[2]) {
+        const runId = decodeURIComponent(parts[2])
+        try {
+          const run = orchestration.requireRun(runId)
+          return sendJson(res, 200, { run })
+        } catch (err) {
+          return sendJson(res, 404, { error: (err as Error).message })
+        }
+      }
+      return sendJson(res, 200, { runs: orchestration.listRuns(), active: orchestration.activeRun() ?? null })
     }
-    if (method === 'DELETE' && parts[1]) {
+    if (method === 'GET' && parts[1] === 'tasks') {
+      if (parts[2]) {
+        const taskId = decodeURIComponent(parts[2])
+        try {
+          const task = orchestration.requireTask(taskId)
+          return sendJson(res, 200, { task })
+        } catch (err) {
+          return sendJson(res, 404, { error: (err as Error).message })
+        }
+      }
+      const status = url.searchParams.get('status') || undefined
+      return sendJson(res, 200, {
+        tasks: orchestration.listTasks({
+          runId: runIdParam,
+          status: status as never,
+          ready: url.searchParams.get('ready') === '1'
+        })
+      })
+    }
+    if (method === 'GET' && parts[1] === 'messages' && parts[2]) {
+      const msgId = decodeURIComponent(parts[2])
+      const msg = orchestration.messageById(msgId)
+      if (!msg) return sendJson(res, 404, { error: `no message "${msgId}"` })
+      return sendJson(res, 200, { message: msg })
+    }
+    if (method === 'GET' && parts[1] === 'dispatches') {
+      if (parts[2]) {
+        const dispId = decodeURIComponent(parts[2])
+        try {
+          const dispatch = orchestration.requireDispatch(dispId)
+          return sendJson(res, 200, { dispatch })
+        } catch (err) {
+          return sendJson(res, 404, { error: (err as Error).message })
+        }
+      }
+      return sendJson(res, 200, {
+        dispatches: orchestration.listDispatches({
+          runId: runIdParam,
+          taskId: url.searchParams.get('taskId') || undefined
+        }),
+        unaccounted: orchestration.unaccountedDispatches(runIdParam).map((d) => d.id)
+      })
+    }
+    if (method === 'GET' && parts[1] === 'gates') {
+      if (parts[2]) {
+        const gateId = decodeURIComponent(parts[2])
+        try {
+          const gate = orchestration.requireGate(gateId)
+          return sendJson(res, 200, { gate })
+        } catch (err) {
+          return sendJson(res, 404, { error: (err as Error).message })
+        }
+      }
+      return sendJson(res, 200, {
+        gates: orchestration.listGates({ runId: runIdParam, open: url.searchParams.get('open') === '1' })
+      })
+    }
+
+    // ---- the worker roster --------------------------------------------
+    if (parts[1] === 'workers') {
+      const registered = callerId()
+      const caller = registered.ok ? registered.agentId : undefined
+
+      if (method === 'GET' && parts.length === 2) {
+        return sendJson(res, 200, { workers: listWorkers({ terminals, orchestration }, caller) })
+      }
+
+      if (method === 'POST' && (parts[2] === 'tell' || parts[2] === 'rename')) {
+        const body = await readJson(req)
+        let worker: ReturnType<typeof resolveWorker>
+        try {
+          worker = resolveWorker({ terminals, orchestration }, String(body.to ?? ''), caller)
+        } catch (err) {
+          const code = (err as { code?: CommandErrorCode }).code ?? 'invalid'
+          return sendJson(res, STATUS_BY_CODE[code] ?? 400, { error: (err as Error).message, code })
+        }
+
+        if (parts[2] === 'rename') {
+          const title = String(body.name ?? '')
+          if (!canvas.widget(worker.id) && terminals.has(worker.id)) {
+            terminals.setTitle(worker.id, title)
+            deps.broadcast?.('control:rename-widget', { id: worker.id, title })
+            return sendJson(res, 200, { ok: true, id: worker.id, name: title })
+          }
+          const result = await submit(body, 'widget.update', `widget:${worker.id}`, { title })
+          if (result.ok) return sendJson(res, 200, { ok: true, id: worker.id, name: String(body.name ?? '') })
+          return reply(result)
+        }
+
+        return reply(
+          await submit(body, 'terminal.write', `terminal:${worker.id}`, {
+            text: String(body.text ?? ''),
+            pressEnter: body.pressEnter !== false
+          })
+        )
+      }
+    }
+
+    // ---- blocking inbox read (orc check --wait) -----------------------
+    if (method === 'GET' && parts[1] === 'inbox') {
+      const registered = callerId()
+      if (!registered.ok) return sendJson(res, registered.status, { error: registered.error, code: registered.code })
+      const types = (url.searchParams.get('types') || '')
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean) as MessageType[]
+      const filter = {
+        runId: runIdParam,
+        types: types.length ? types : undefined,
+        includeAcked: url.searchParams.get('all') === '1',
+        limit: clampInt(url.searchParams.get('limit'), 50, 1, 200)
+      }
+      const immediate = orchestration.inbox(registered.agentId, filter)
+      if (immediate.length > 0 || url.searchParams.get('wait') !== '1') {
+        return sendJson(res, 200, { messages: immediate, waited: false })
+      }
+      const messages = await waitForInbox(
+        orchestration,
+        registered.agentId,
+        filter,
+        clampInt(url.searchParams.get('timeoutMs'), 900_000, 1_000, 3_600_000),
+        req
+      )
+      return sendJson(res, 200, { messages, waited: true })
+    }
+
+    // ---- blocking reply read (orc ask) --------------------------------
+    if (method === 'GET' && parts[1] === 'replies' && parts[2]) {
+      const askId = decodeURIComponent(parts[2])
+      const existing = orchestration.replyTo(askId)
+      if (existing || url.searchParams.get('wait') !== '1') {
+        return sendJson(res, 200, { reply: existing ?? null, waited: false })
+      }
+      const answered = await waitForReply(
+        orchestration,
+        askId,
+        clampInt(url.searchParams.get('timeoutMs'), 600_000, 1_000, 3_600_000),
+        req
+      )
+      return sendJson(res, 200, { reply: answered ?? null, waited: true })
+    }
+
+    // ---- writes -------------------------------------------------------
+    if (method === 'POST' && parts[1] === 'runs' && parts.length === 2) {
       const body = await readJson(req)
-      return reply(await submit(body, 'note.delete', `note:${decodeURIComponent(parts[1])}`, {}))
+      return reply(await submit(body, 'run.create', NEW.run, body), 201)
+    }
+    if (method === 'POST' && parts[1] === 'runs' && parts[3] === 'close') {
+      const body = await readJson(req)
+      return reply(await submit(body, 'run.close', `run:${decodeURIComponent(parts[2])}`, {}))
+    }
+    if (method === 'POST' && parts[1] === 'tasks' && parts.length === 2) {
+      const body = await readJson(req)
+      return reply(await submit(body, 'orctask.create', NEW.orctask, body), 201)
+    }
+    if (method === 'PATCH' && parts[1] === 'tasks' && parts[2]) {
+      const body = await readJson(req)
+      return reply(await submit(body, 'orctask.update', `orctask:${decodeURIComponent(parts[2])}`, body))
+    }
+    if (method === 'POST' && parts[1] === 'dispatches' && parts.length === 2) {
+      const body = await readJson(req)
+      return reply(await submit(body, 'dispatch.start', NEW.dispatch, body), 201)
+    }
+    if (method === 'POST' && parts[1] === 'dispatches' && parts[3] === 'settle') {
+      const body = await readJson(req)
+      return reply(await submit(body, 'dispatch.settle', `dispatch:${decodeURIComponent(parts[2])}`, body))
+    }
+    if (method === 'POST' && parts[1] === 'dispatches' && parts[3] === 'account') {
+      const body = await readJson(req)
+      return reply(await submit(body, 'dispatch.account', `dispatch:${decodeURIComponent(parts[2])}`, body))
+    }
+    if (method === 'POST' && parts[1] === 'messages' && parts.length === 2) {
+      const body = await readJson(req)
+      return reply(await submit(body, 'orc.send', runTarget(body.runId), body), 201)
+    }
+    if (method === 'POST' && parts[1] === 'messages' && parts[3] === 'ack') {
+      const body = await readJson(req)
+      return reply(await submit(body, 'orc.ack', runTarget(body.runId), { messageId: decodeURIComponent(parts[2]) }))
+    }
+    if (method === 'POST' && parts[1] === 'gates' && parts.length === 2) {
+      const body = await readJson(req)
+      return reply(await submit(body, 'gate.create', NEW.gate, body), 201)
+    }
+    if (method === 'POST' && parts[1] === 'gates' && parts[3] === 'resolve') {
+      const body = await readJson(req)
+      return reply(await submit(body, 'gate.resolve', `gate:${decodeURIComponent(parts[2])}`, body))
+    }
+    if (method === 'POST' && parts[1] === 'reset') {
+      const body = await readJson(req)
+      const registered = registerHttpAgent(core, body.agentId)
+      if (!registered.ok) return sendJson(res, registered.status, { error: registered.error, code: registered.code })
+      orchestration.reset({ tasks: body.tasks === true, messages: body.messages === true, all: body.all === true })
+      return sendJson(res, 200, { ok: true })
     }
   }
 
@@ -397,8 +573,6 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     if (method === 'GET' && parts[1] === 'tasks') return sendJson(res, 200, { tasks: coordination.snapshot().tasks })
     if (method === 'GET' && parts[1] === 'locks') return sendJson(res, 200, { locks: core.locks.list() })
 
-    // Extra file reservation mid-task (MCP lock_task_file). Appends the path to
-    // the card so later state transitions renew/release it with the rest.
     if (method === 'POST' && parts[1] === 'locks') {
       const body = await readJson(req)
       const registered = registerHttpAgent(core, body.agentId)
@@ -448,8 +622,6 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
   }
 
   // ---- planner ------------------------------------------------------------
-  // Personal day outline, separate from the kanban board. Agents (especially a
-  // manager) may list and edit plan lines the same way the planner widget does.
   if (parts[0] === 'planner') {
     if (method === 'GET' && parts.length === 1) {
       const items = planner.list()
@@ -500,12 +672,12 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     const others = canvas
       .listWidgets()
       .filter((w) => w.kind !== 'terminal')
-      .map((w) => ({ id: w.id, title: w.title, kind: w.kind ?? 'note', noteId: w.noteId, version: w.version }))
+      .map((w) => ({ id: w.id, title: w.title, kind: w.kind, version: w.version }))
     const shells = terminals.list().map((t) => ({ ...t, kind: 'terminal' as const }))
     return sendJson(res, 200, { widgets: [...shells, ...others] })
   }
 
-  if (method === 'POST' && parts[0] === 'widgets' && parts[1] === 'terminal') {
+  if (method === 'POST' && ((parts[0] === 'widgets' && parts[1] === 'terminal') || (parts[0] === 'terminal' && parts.length === 1))) {
     const body = await readJson(req)
     return reply(
       await submit(body, 'terminal.create', NEW.terminal, {
@@ -516,7 +688,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     )
   }
 
-  if (method === 'DELETE' && parts[0] === 'widgets' && parts[1]) {
+  if (method === 'DELETE' && (parts[0] === 'widgets' || parts[0] === 'terminal') && parts[1]) {
     const id = decodeURIComponent(parts[1])
     const body = await readJson(req)
     if (terminals.has(id)) return reply(await submit(body, 'terminal.dispose', `terminal:${id}`, {}))
@@ -551,13 +723,6 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
 
   if (method === 'GET' && parts[0] === 'terminal' && parts[2] === 'output') {
     const id = decodeURIComponent(parts[1])
-    // `full=1` bypasses the agent read-offset and returns the whole retained
-    // scrollback (bounded by OUTPUT_BUFFER_LIMIT) instead of only what
-    // arrived since the last poll. A TUI that redraws by cursor-skipping over
-    // already-drawn text (Claude Code's Ink renderer does this) means a
-    // delta-only read can be missing the literal characters a later frame's
-    // skip-forward silently relies on still being on screen; the full buffer
-    // usually still has them.
     if (url.searchParams.get('full') === '1') {
       const output = terminals.fullOutput(id)
       if (output === null) return sendJson(res, 404, { error: 'terminal not found' })
@@ -571,11 +736,82 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
   sendJson(res, 404, { error: 'not found' })
 }
 
+function runTarget(runId: unknown): string {
+  const id = String(runId ?? '').trim()
+  return id ? `run:${id}` : NEW.run
+}
+
+function clampInt(raw: string | null, fallback: number, min: number, max: number): number {
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.min(max, Math.max(min, Math.trunc(parsed)))
+}
+
+function waitForInbox(
+  orchestration: OrchestrationStore,
+  agentId: string,
+  filter: { runId?: string; types?: MessageType[]; includeAcked?: boolean; limit?: number },
+  timeoutMs: number,
+  req: http.IncomingMessage
+): Promise<unknown[]> {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (value: unknown[]): void => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      orchestration.off('message', onMessage)
+      req.off('close', onClose)
+      resolve(value)
+    }
+    const onMessage = (message?: { runId?: string; type?: MessageType }): void => {
+      if (message) {
+        if (filter.runId && message.runId !== filter.runId) return
+        if (filter.types?.length && message.type && !filter.types.includes(message.type)) return
+      }
+      const found = orchestration.inbox(agentId, filter)
+      if (found.length > 0) finish(found)
+    }
+    const onClose = (): void => finish([])
+    const timer = setTimeout(() => finish([]), timeoutMs)
+    timer.unref?.()
+    orchestration.on('message', onMessage)
+    req.on('close', onClose)
+    onMessage()
+  })
+}
+
+function waitForReply(
+  orchestration: OrchestrationStore,
+  askId: string,
+  timeoutMs: number,
+  req: http.IncomingMessage
+): Promise<unknown> {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (value: unknown): void => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      orchestration.off('message', onMessage)
+      req.off('close', onClose)
+      resolve(value)
+    }
+    const onMessage = (): void => {
+      const found = orchestration.replyTo(askId)
+      if (found) finish(found)
+    }
+    const onClose = (): void => finish(null)
+    const timer = setTimeout(() => finish(null), timeoutMs)
+    timer.unref?.()
+    orchestration.on('message', onMessage)
+    req.on('close', onClose)
+    onMessage()
+  })
+}
+
 function readJson(req: http.IncomingMessage): Promise<Json> {
   return new Promise((resolve, reject) => {
-    // Buffers are collected whole and decoded once at the end — decoding each
-    // chunk on its own (e.g. via `body += chunk`) can split a multi-byte UTF-8
-    // character across a chunk boundary and silently corrupt it.
     const chunks: Buffer[] = []
     let bytes = 0
     let settled = false
@@ -583,7 +819,6 @@ function readJson(req: http.IncomingMessage): Promise<Json> {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      // Stop reading so a hostile client cannot keep the stream open after 413.
       req.destroy()
       const error = new Error(message) as Error & { statusCode: number }
       error.statusCode = statusCode
@@ -632,7 +867,6 @@ function readJson(req: http.IncomingMessage): Promise<Json> {
   })
 }
 
-/** HTTP callers pass `file:C:\src\a.ts` or a raw path; locks only match `fileResource()`. */
 function normalizeLockResource(raw: unknown): string {
   const text = String(raw ?? '').trim()
   const parsed = parseResource(text)
@@ -642,28 +876,21 @@ function normalizeLockResource(raw: unknown): string {
 }
 
 function sendJson(res: http.ServerResponse, status: number, data: unknown): void {
-  // readJson() destroys the request socket on 413/408/499, which also takes the
-  // shared socket out from under the response; writeHead would then throw inside
-  // a caller's catch handler and surface as an unhandled rejection.
   if (res.headersSent || res.destroyed || res.writableEnded) return
   const body = JSON.stringify(data)
   try {
     res.writeHead(status, {
       'Content-Type': 'application/json; charset=utf-8',
       'Content-Length': Buffer.byteLength(body),
-      // Control API is loopback-only and token-gated; still refuse embedding and
-      // MIME sniffing so a compromised renderer cannot treat responses as HTML.
       'X-Content-Type-Options': 'nosniff',
       'Cache-Control': 'no-store'
     })
     res.end(body)
   } catch {
-    // The socket raced away before the response could be written; nothing left
-    // to answer, and nothing the caller can do about it.
+    // Socket disconnected
   }
 }
 
-/** Local calendar day as `YYYY-MM-DD` — same convention as the planner widget. */
 function localDayKey(d = new Date()): string {
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')

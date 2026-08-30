@@ -14,3 +14,5 @@ export const app = (electronAny.app ?? mockAny.app) as typeof electron.app
 export const dialog = (electronAny.dialog ?? mockAny.dialog) as typeof electron.dialog
 export const shell = (electronAny.shell ?? mockAny.shell) as typeof electron.shell
 export const BrowserWindow = (electronAny.BrowserWindow ?? mockAny.BrowserWindow) as typeof electron.BrowserWindow
+export const session = (electronAny.session ?? mockAny.session) as typeof electron.session
+

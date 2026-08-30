@@ -1,4 +1,4 @@
-import { CONTROL_PORT, mcpUrl } from './config.ts'
+import { CONTROL_PORT } from './config.ts'
 
 export const APP_VERSION = '2.0.0'
 
@@ -8,10 +8,6 @@ export interface PresenceInfo {
   version: string
   pid: number
   controlPort: number
-  /** Deprecated compatibility field; it is always the same TCP port as controlPort. */
-  mcpPort: number
-  mcpUrl: string
-  mcpRunning: boolean
   workspaceDir: string | null
 }
 
@@ -25,13 +21,8 @@ export interface SnapshotInfo extends PresenceInfo {
     items: unknown[]
     summary: PlannerSummary
   }
-  brain: {
-    count: number
-    notes: Array<{ id: string; title: string; tags: string[]; updatedAt: number }>
-  }
   journal: { lastSeq: number; entries: unknown[] }
   commands: string[]
-  mcp?: { running: boolean; error?: string; pid?: number; restarts?: number }
 }
 
 export interface PlannerSummary {
@@ -46,7 +37,6 @@ export interface PlannerSummary {
 }
 
 export function buildPresence(input: {
-  mcpRunning: boolean
   workspaceDir: string | null | undefined
   pid?: number
 }): PresenceInfo {
@@ -56,9 +46,6 @@ export function buildPresence(input: {
     version: APP_VERSION,
     pid: input.pid ?? process.pid,
     controlPort: CONTROL_PORT,
-    mcpPort: CONTROL_PORT,
-    mcpUrl: mcpUrl(),
-    mcpRunning: Boolean(input.mcpRunning),
     workspaceDir: input.workspaceDir ?? null
   }
 }
@@ -107,7 +94,6 @@ export function summarizePlanner(items: Array<{ day?: string; done?: boolean; pr
 }
 
 export function buildSnapshot(input: {
-  mcpRunning: boolean
   workspaceDir: string | null | undefined
   managerId: string | null
   terminals: unknown[]
@@ -115,12 +101,9 @@ export function buildSnapshot(input: {
   tasks: unknown[]
   locks: unknown[]
   plannerItems: Array<{ day?: string; done?: boolean; project?: string }>
-  brainNotes: Array<{ id: string; title: string; tags?: string[]; updatedAt: number; deletedAt?: number }>
   journal: { lastSeq: number; entries: unknown[] }
   commands: string[]
-  mcp?: { running: boolean; error?: string; pid?: number; restarts?: number }
 }): SnapshotInfo {
-  const aliveNotes = input.brainNotes.filter((n) => !n.deletedAt)
   return {
     ...buildPresence(input),
     managerId: input.managerId,
@@ -132,18 +115,8 @@ export function buildSnapshot(input: {
       items: input.plannerItems,
       summary: summarizePlanner(input.plannerItems)
     },
-    brain: {
-      count: aliveNotes.length,
-      notes: aliveNotes.map((n) => ({
-        id: n.id,
-        title: n.title,
-        tags: n.tags ?? [],
-        updatedAt: n.updatedAt
-      }))
-    },
     journal: input.journal,
     commands: input.commands,
-    mcp: input.mcp
   }
 }
 

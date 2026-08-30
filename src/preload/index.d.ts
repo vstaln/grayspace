@@ -6,15 +6,14 @@
 // '../../../preload/index.d'` keeps working as before.
 export * from './api'
 import type {
-  BrainApi,
   BrowserApi,
   CanvasApi,
   ControlApi,
   CoordinationApi,
   FsApi,
   GitApi,
-  McpApi,
   MediaApi,
+  OrchestrationApi,
   PlannerApi,
   SettingsApi,
   SystemApi,
@@ -30,11 +29,10 @@ declare global {
       control: ControlApi
       workspace: WorkspaceApi
       settings: SettingsApi
-      mcp: McpApi
       media: MediaApi
       coordination: CoordinationApi
+      orchestration: OrchestrationApi
       planner: PlannerApi
-      brain: BrainApi
       canvas: CanvasApi
       git: GitApi
       fs: FsApi

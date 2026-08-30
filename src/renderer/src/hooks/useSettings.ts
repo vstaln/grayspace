@@ -17,7 +17,7 @@ const DEFAULTS: AppSettings = {
     idleTimeoutMs: 5 * 60_000,
     offloadVision: false
   },
-  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'note', 'timer', 'planner', 'browser', 'links', 'music-player', 'id-generator']
+  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player', 'id-generator']
 }
 
 const PLAN_STORAGE_KEY = 'orcspace-user-plan'

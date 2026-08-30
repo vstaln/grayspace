@@ -46,7 +46,7 @@ test('right-click offers every canvas action and places widgets on the canvas', 
   await openContextMenu()
   // Every widget in the default favourites list (useSettings.ts) — the menu
   // renders exactly those, so this count moves whenever that list does.
-  await expect(page.getByRole('menu', { name: 'Context Menu' }).getByRole('menuitem')).toHaveCount(10)
+  await expect(page.getByRole('menu', { name: 'Context Menu' }).getByRole('menuitem')).toHaveCount(11)
 
   // A stateless widget lands instantly.
   await page.getByTestId('cm-timer').click()
@@ -66,7 +66,8 @@ test('right-click offers every canvas action and places widgets on the canvas', 
 test('widgets maximize and rename', async () => {
   const { page } = ctx
 
-  await page.getByTestId('rail-new-terminal').click()
+  await openContextMenu()
+  await page.getByTestId('cm-terminal').click()
   const id = await waitForTerminalShell(ctx, page)
   const frame = terminalFrame(page)
   const fullHeight = await frame.evaluate((el) => (el as HTMLElement).offsetHeight)
@@ -90,10 +91,75 @@ test('widgets maximize and rename', async () => {
   void id
 })
 
+test('maximizing a widget keeps the state it holds', async () => {
+  // Its own instance: the tests above have already covered the canvas with
+  // widgets, and this one needs bare canvas to right-click on.
+  const own = await launchOrcSpace()
+  try {
+    const { page } = own
+    await waitForCanvas(page)
+
+    // The Links widget is the sharpest probe available: everything it holds is
+    // React state backed by localStorage, so if maximizing tears the component
+    // down and builds a fresh one, the list comes back empty.
+    //
+    // It used to. Maximized frames rendered in a different container than
+    // in-world ones, and a React key is only unique within a parent — so the
+    // toggle unmounted the widget and mounted a new one, and the Links widget's
+    // unmount cleanup (which assumed unmount meant "closed") wiped its storage
+    // on the way out (WIDGET-maximize).
+    await page.getByTestId('canvas').click({ button: 'right', position: { x: 320, y: 260 } })
+    await expect(page.getByRole('menu', { name: 'Context Menu' })).toBeVisible()
+    await page.getByTestId('cm-links').click()
+    const links = page.locator('[data-testid^="widget-links-"]')
+    await expect(links).toBeVisible()
+
+    await links.getByLabel('URL').fill('https://example.com/kept')
+    await links.getByLabel('Add link').click()
+    await expect(links.getByTitle('https://example.com/kept')).toBeVisible()
+
+    await links.getByTestId('widget-maximize').click()
+    await expect(links.getByTitle('https://example.com/kept')).toBeVisible()
+
+    await links.getByTestId('widget-maximize').click()
+    await expect(links.getByTitle('https://example.com/kept')).toBeVisible()
+
+    // Closing it for real is what clears the saved links.
+    await links.getByTestId('widget-close').click()
+    await expect(links).toHaveCount(0)
+
+    // A second probe that no amount of persistence could paper over: the
+    // Timer keeps everything in memory on purpose ("closing it forgets the
+    // timer"), so a running countdown that survives a maximize is proof the
+    // component itself was never torn down.
+    await page.getByTestId('canvas').click({ button: 'right', position: { x: 700, y: 300 } })
+    await expect(page.getByRole('menu', { name: 'Context Menu' })).toBeVisible()
+    await page.getByTestId('cm-timer').click()
+    const timer = page.locator('[data-testid^="widget-timer-"]')
+    await expect(timer).toBeVisible()
+
+    const readout = timer.getByRole('timer')
+    await expect(readout).toHaveText('25:00')
+    await timer.getByRole('button', { name: 'Start' }).click()
+    // Let it get far enough off the preset that a reset would be unmistakable.
+    await expect.poll(() => readout.textContent(), { timeout: 5000 }).not.toBe('25:00')
+    const running = await readout.textContent()
+
+    await timer.getByTestId('widget-maximize').click()
+    await expect(timer.getByRole('button', { name: 'Pause' })).toBeVisible()
+    // Still counting down from where it was, not back at the 25:00 preset.
+    await expect(readout).not.toHaveText('25:00')
+    await expect.poll(() => readout.textContent()).not.toBe(running)
+  } finally {
+    await closeOrcSpace(own)
+  }
+})
+
 test('Delete asks before killing a terminal, and can be cancelled', async () => {
   const { page } = ctx
 
-  await page.getByTestId('rail-new-terminal').click()
+  await openContextMenu()
+  await page.getByTestId('cm-terminal').click()
   const id = await waitForTerminalShell(ctx, page)
   const frame = terminalFrame(page)
 

@@ -1,6 +1,6 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Clipboard, Cpu, FileText, Fingerprint, FolderOpen, Globe, ListTodo, Music2, Terminal, Timer } from 'lucide-react'
+import { Clipboard, Cpu, Fingerprint, FolderOpen, Globe, ListTodo, Music2, Network, Terminal, Timer } from 'lucide-react'
 import { Point } from '../types'
 
 interface Props {
@@ -8,13 +8,13 @@ interface Props {
   onPickTerminal: () => void
   onPickFiles: () => void
   onPickSysMonitor: () => void
-  onPickNote: () => void
   onPickTimer: () => void
   onPickPlanner: () => void
   onPickBrowser: () => void
   onPickLinks: () => void
   onPickMusicPlayer: () => void
   onPickIdGenerator: () => void
+  onPickOrchestration: () => void
   favoriteWidgets: string[]
   onClose: () => void
 }
@@ -35,13 +35,13 @@ export default function ContextMenu({
   onPickTerminal,
   onPickFiles,
   onPickSysMonitor,
-  onPickNote,
   onPickTimer,
   onPickPlanner,
   onPickBrowser,
   onPickLinks,
   onPickMusicPlayer,
   onPickIdGenerator,
+  onPickOrchestration,
   favoriteWidgets,
   onClose
 }: Props): React.JSX.Element {
@@ -73,13 +73,6 @@ export default function ContextMenu({
         hint: 'CPU, RAM & process statistics',
         icon: <Cpu size={15} className="text-accent" />,
         onSelect: onPickSysMonitor
-      },
-      {
-        id: 'note',
-        label: 'Note',
-        hint: 'Knowledge snippet or thought on canvas',
-        icon: <FileText size={15} className="text-accent" />,
-        onSelect: onPickNote
       },
       {
         id: 'timer',
@@ -117,6 +110,13 @@ export default function ContextMenu({
         onSelect: onPickMusicPlayer
       },
       {
+        id: 'orchestration',
+        label: 'Orchestration',
+        hint: 'Watch the agent fleet: tasks, workers and their questions',
+        icon: <Network size={15} className="text-accent" />,
+        onSelect: onPickOrchestration
+      },
+      {
         id: 'id-generator', label: 'ID Generator', hint: 'Generate safe random identifiers', icon: <Fingerprint size={15} className="text-accent" />, onSelect: onPickIdGenerator
       }
     ].filter((item) => favoriteWidgets.includes(item.id)),
@@ -124,13 +124,13 @@ export default function ContextMenu({
       onPickTerminal,
       onPickFiles,
       onPickSysMonitor,
-      onPickNote,
       onPickTimer,
       onPickPlanner,
       onPickBrowser,
       onPickLinks,
       onPickMusicPlayer,
       onPickIdGenerator,
+      onPickOrchestration,
       favoriteWidgets
     ]
   )

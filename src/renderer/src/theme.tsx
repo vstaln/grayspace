@@ -13,7 +13,12 @@ export const THEMES: { id: ThemeName; label: string; hint: string }[] = [
 const TRANSLUCENT: ThemeName[] = ['photo']
 
 function readStoredTheme(): ThemeName {
-  const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null
+  let saved: string | null = null
+  try {
+    saved = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null
+  } catch {
+    // Storage can be unavailable in restricted/sandboxed renderer contexts.
+  }
   return THEMES.some((t) => t.id === saved) ? (saved as ThemeName) : 'dark'
 }
 
@@ -61,7 +66,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
     // A single flag lets every translucent rule target both themes at once.
     if (TRANSLUCENT.includes(theme)) root.setAttribute('data-translucent', '')
     else root.removeAttribute('data-translucent')
-    localStorage.setItem(STORAGE_KEY, theme)
+    try {
+      localStorage.setItem(STORAGE_KEY, theme)
+    } catch {
+      // The theme still applies for this session when persistence is blocked.
+    }
   }, [theme])
 
   // The wallpaper and its dim live in the main process (they outgrow localStorage
