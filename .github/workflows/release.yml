@@ -76,10 +76,9 @@ jobs:
       - name: Build the installer
         run: npm run ${{ matrix.script }}
         env:
-          # Without a Developer ID certificate electron-builder would otherwise
-          # try (and fail) to sign. Unsigned is the honest outcome here; see the
-          # note in the job summary below about what that means for users.
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Note what was produced
         shell: bash

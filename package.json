@@ -21,11 +21,11 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "typecheck:e2e": "tsc --noEmit -p e2e/tsconfig.json",
-    "dist": "npm run build && electron-builder --win",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:mac:arm": "npm run build && electron-builder --mac dmg zip --arm64",
-    "dist:mac:intel": "npm run build && electron-builder --mac dmg zip --x64",
-    "dist:mac:dmg": "npm run build && electron-builder --mac dmg",
+    "dist": "npm run build && electron-builder --win --publish never",
+    "dist:mac": "npm run build && electron-builder --mac --publish never",
+    "dist:mac:arm": "npm run build && electron-builder --mac dmg zip --arm64 --publish never",
+    "dist:mac:intel": "npm run build && electron-builder --mac dmg zip --x64 --publish never",
+    "dist:mac:dmg": "npm run build && electron-builder --mac dmg --publish never",
     "pack:archive": "node scripts/pack-archive.mjs",
     "smoke": "node scripts/smoke.mjs",
     "pretest:e2e": "npm run build",
@@ -180,14 +180,7 @@
         "en_US"
       ],
       "language": "1033"
-    },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "orcspace",
-        "repo": "orcspace"
-      }
-    ]
+    }
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.122.0",

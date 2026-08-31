@@ -46,9 +46,8 @@ for arg in "$@"; do
   case "$arg" in
     --dmg) MODE="dmg" ;;
     --zip) MODE="zip" ;;
-    --universal) MODE="universal" ;;
     --all) MODE="all" ;;
-    *) die "Unknown option: $arg (expected --dmg, --zip, --universal or --all)" ;;
+    *) die "Unknown option: $arg (expected --dmg, --zip or --all)" ;;
   esac
 done
 
@@ -81,11 +80,8 @@ case "$MODE" in
       npm run dist:mac:intel
     fi
     ;;
-  universal)
-    npm run dist:mac:universal
-    ;;
   all)
-    npm run dist:mac
+    npm run dist:mac:arm && npm run dist:mac:intel
     ;;
 esac
 [ $? -eq 0 ] || die 'The build failed — see the output above.'
