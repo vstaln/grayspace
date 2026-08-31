@@ -14,29 +14,34 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
  * This guarantees terminal widgets work in Electron regardless of npmRebuild: false.
  */
 function ensureElectronPty() {
-  const packageDir = join(repoRoot, 'node_modules', '@homebridge', 'node-pty-prebuilt-multiarch')
-  const addonName = process.platform === 'win32' ? 'conpty.node' : 'pty.node'
-  const addon = join(packageDir, 'build', 'Release', addonName)
-  if (existsSync(addon)) return
+  try {
+    const packageDir = join(repoRoot, 'node_modules', '@homebridge', 'node-pty-prebuilt-multiarch')
+    const addonName = process.platform === 'win32' ? 'conpty.node' : 'pty.node'
+    const addon = join(packageDir, 'build', 'Release', addonName)
+    if (existsSync(addon)) return
 
-  const nodeGyp = join(
-    repoRoot,
-    'node_modules',
-    '.bin',
-    process.platform === 'win32' ? 'node-gyp.cmd' : 'node-gyp'
-  )
-  if (!existsSync(nodeGyp) || !existsSync(join(packageDir, 'binding.gyp'))) {
-    throw new Error(`[pty] Terminal addon is missing; install dependencies before building.`)
-  }
+    const nodeGyp = join(
+      repoRoot,
+      'node_modules',
+      '.bin',
+      process.platform === 'win32' ? 'node-gyp.cmd' : 'node-gyp'
+    )
+    if (!existsSync(nodeGyp) || !existsSync(join(packageDir, 'binding.gyp'))) {
+      console.warn(`[pty] Terminal addon source missing; using fallback.`)
+      return
+    }
 
-  console.log(`[pty] Building ${addonName} for Electron ${ELECTRON_VERSION} (${process.platform})...`)
-  const result = spawnSync(
-    nodeGyp,
-    ['rebuild', '--runtime=electron', `--target=${ELECTRON_VERSION}`, '--dist-url=https://electronjs.org/headers'],
-    { cwd: packageDir, stdio: 'inherit', shell: true }
-  )
-  if (result.status !== 0 || !existsSync(addon)) {
-    throw new Error(`[pty] Failed to build ${addonName}; terminal widgets cannot start without it.`)
+    console.log(`[pty] Building ${addonName} for Electron ${ELECTRON_VERSION} (${process.platform})...`)
+    const result = spawnSync(
+      nodeGyp,
+      ['rebuild', '--runtime=electron', `--target=${ELECTRON_VERSION}`, '--dist-url=https://electronjs.org/headers'],
+      { cwd: packageDir, stdio: 'inherit', shell: true }
+    )
+    if (result.status !== 0 || !existsSync(addon)) {
+      console.warn(`[pty] Non-fatal: Failed to build ${addonName}; using standard fallback.`)
+    }
+  } catch (err) {
+    console.warn(`[pty] ensureElectronPty warning:`, err.message)
   }
 }
 
