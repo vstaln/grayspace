@@ -32,4 +32,11 @@ describe('killProcessTree script', () => {
     assert.match(script, /taskkill \/PID \$_ \/T \/F/)
     assert.match(script, /\$kill \| Sort-Object -Unique/)
   })
+
+  test('a large batch of roots is covered in a single WMI snapshot', () => {
+    const roots = Array.from({ length: 100 }, (_, i) => ({ pid: 1000 + i, requestedAt: Date.now() }))
+    const script = buildSweepScript(roots)
+    assert.equal(script.match(/pid = \d+/g)?.length, 100)
+    assert.equal(script.match(/Get-CimInstance/g)?.length, 1)
+  })
 })

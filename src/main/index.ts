@@ -19,6 +19,7 @@ import { clearRuntimePresence, writeRuntimePresence } from './runtimePresence'
 import { registerIpc, focusedTerminalId, originTerminalId, forgetTerminalOrigin, USER_ACTOR_ID, isTerminalMounted, clearMountedTerminals } from './ipc'
 import { AppState } from './appState'
 import { CanvasStore } from './canvasState'
+import { CodeStore } from './codeState.ts'
 import { PlannerStore } from './plannerStore.ts'
 import { initPlannerSync } from './plannerSync.ts'
 import { createCore } from './core/index.ts'
@@ -40,7 +41,19 @@ const IS_MAC = process.platform === 'darwin'
 
 let mainWindow: BrowserWindow | null = null
 let controlServer: { close(): void } | null = null
-let rendererEntryUrl: string | null = null
+let orchestrationSignal: ReturnType<typeof setTimeout> | null = null
+
+function getPreloadPath(): string {
+  const candidates = [
+    join(__dirname, '../preload/index.cjs'),
+    join(__dirname, '../preload/index.js'),
+    join(__dirname, '../preload/index.mjs')
+  ]
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return join(__dirname, '../preload/index.cjs')
+}
 
 /**
  * The unified core, built before anything that writes state exists. Every
@@ -55,7 +68,9 @@ const core = createCore({
   seed: journalTail.entries
 })
 
-const terminals = new TerminalManager()
+/** Persisted folders + settings. */
+const state = new AppState()
+const terminals = new TerminalManager({ getWindowsShell: () => state.settings.windowsShell })
 // A build log or an agent streaming tokens can emit hundreds of pty chunks a
 // second; forwarding each straight over IPC starves the renderer's event
 // loop faster than it can paint. Consolidate into at most one IPC message
@@ -64,10 +79,10 @@ const terminalBatcher = new TerminalStreamBatcher()
 /** cwd + title + capped scrollback per terminal, so a restart keeps the context. */
 const snapshots = new TerminalSnapshots()
 const coordination = new CoordinationStore(core.locks, (id) => core.actors.isAlive(id))
-/** Persisted folders + settings. */
-const state = new AppState()
 /** Canvas layout (widgets, camera, strokes) survives restarts — DI-004. */
 const canvas = new CanvasStore()
+/** Code tab sessions survive restarts per-workspace. */
+const code = new CodeStore()
 /** The planner's outline — a day plan distinct from the delegable task board. */
 const planner = new PlannerStore()
 /**
@@ -86,6 +101,13 @@ const disposePlannerSync = initPlannerSync(planner, coordination)
  */
 // Allow ambient media, music widgets, and alert sounds to play without requiring an initial user gesture.
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
+// Use Direct3D 11 ANGLE backend on Windows for smooth 60+ FPS hardware acceleration
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('use-angle', 'd3d11')
+  app.commandLine.appendSwitch('enable-gpu-rasterization')
+  app.commandLine.appendSwitch('enable-zero-copy')
+  app.commandLine.appendSwitch('ignore-gpu-blocklist')
+}
 
 const hasInstanceLock = app.requestSingleInstanceLock()
 if (!hasInstanceLock) {
@@ -93,7 +115,7 @@ if (!hasInstanceLock) {
   // flush() would write empty planner/board/canvas over the live instance.
   // Log so a `npm run dev` that immediately exits isn't a mystery — setup.bat
   // checks :20220 aliveness first, but a manual launch benefits from the hint.
-  console.log('Another OrcSpace instance is already running — handing off and exiting.')
+  console.warn('Another OrcSpace instance is already running — handing off and exiting.')
   app.exit(0)
 }
 
@@ -136,7 +158,7 @@ function createWindow(): void {
     backgroundColor: '#0e0e11',
     title: APP_TITLE,
     webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
+      preload: getPreloadPath(),
       // Chromium sandbox + context isolation: the renderer is untrusted-ish
       // input surface (note content from agents), so both are on. The preload
       // only uses contextBridge/ipcRenderer, which work sandboxed (SEC-005).
@@ -152,12 +174,24 @@ function createWindow(): void {
     mainWindow?.show()
   })
 
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    console.log(`[Renderer:${level}] ${message} (${sourceId}:${line})`)
+  })
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('Renderer process gone:', details)
+  })
+
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error(`Failed to load window: ${errorCode} - ${errorDescription} (${validatedURL})`)
+  })
+
   // Prevent arbitrary navigation in the main window
   mainWindow.webContents.on('will-navigate', (e, url) => {
     const isAppUrl =
-      (rendererEntryUrl && url.startsWith(rendererEntryUrl)) ||
       (process.env['ELECTRON_RENDERER_URL'] && url.startsWith(process.env['ELECTRON_RENDERER_URL'])) ||
-      url.endsWith('index.html')
+      url.endsWith('index.html') ||
+      url.startsWith('file://')
     if (!isAppUrl) {
       e.preventDefault()
       if (url.startsWith('https:') || url.startsWith('http:')) {
@@ -175,8 +209,6 @@ function createWindow(): void {
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else if (rendererEntryUrl) {
-    mainWindow.loadURL(rendererEntryUrl)
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
@@ -237,6 +269,7 @@ coordination.on('change', (snapshot) => {
 })
 planner.on('change', (items) => send('planner:onChange', items))
 canvas.on('change', (snapshot) => send('canvas:onChange', snapshot))
+code.on('change', (snapshot) => send('code:onChange', snapshot))
 
 function syncAgentConfigsFor(dir: string): void {
   syncOrcGuide(dir)
@@ -338,6 +371,7 @@ if (hasInstanceLock) {
       planner,
       orchestration,
       canvas,
+      code,
       state,
       getWindow: () => mainWindow,
       getWorkspaceDir: () => state.workspaceDir,
@@ -349,10 +383,6 @@ if (hasInstanceLock) {
         send('workspace:onDirChange', dir ?? null)
       }
     })
-
-    if (!process.env['ELECTRON_RENDERER_URL']) {
-      rendererEntryUrl = `http://localhost:${CONTROL_PORT}/index.html`
-    }
 
     ensureOrcExecutable()
 
@@ -367,7 +397,6 @@ if (hasInstanceLock) {
       canvas,
       state,
       defaultCwd: () => state.workspaceDir,
-      rendererDir: process.env['ELECTRON_RENDERER_URL'] ? undefined : join(__dirname, '../renderer'),
       broadcast: (channel, payload) => send(channel, payload)
     })
 
@@ -459,6 +488,7 @@ let shuttingDown = false
 app.on('before-quit', () => {
   if (shuttingDown) return
   shuttingDown = true
+  if (orchestrationSignal !== null) { clearTimeout(orchestrationSignal); orchestrationSignal = null }
   snapshotTerminals()
   snapshots.beginShutdown()
   try {
@@ -474,6 +504,7 @@ app.on('before-quit', () => {
   planner.dispose()
   orchestration.dispose()
   canvas.dispose()
+  code.dispose()
   core.dispose()
 })
 

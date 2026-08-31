@@ -357,7 +357,7 @@ function WidgetBody({
 }): React.JSX.Element {
   switch (widget.kind) {
     case 'timer':
-      return <TimerWidget />
+      return <TimerWidget widgetId={widget.id} />
     case 'planner':
       return <PlannerWidget />
     case 'board':

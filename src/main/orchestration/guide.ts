@@ -2,6 +2,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import { dirname, join } from 'path'
 import { writeConfigAtomic } from '../atomicFile.ts'
+import { safeParseJson, sanitizeParsed } from '../safeJson.ts'
 
 /**
  * Markers around the block this app owns. Everything between them is rewritten

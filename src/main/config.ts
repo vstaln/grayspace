@@ -26,9 +26,9 @@ export const MAX_CHAT_PROMPT_CHARS = 100_000
 /** Wallpapers are copied here so the background survives the original being moved. */
 export const BACKGROUND_DIR_NAME = 'backgrounds'
 
-export function defaultShell(): string {
+export function defaultShell(windowsShell: 'cmd' | 'powershell' = 'cmd'): string {
   if (process.platform === 'win32') {
-    return process.env.ComSpec || 'powershell.exe'
+    return windowsShell === 'powershell' ? 'powershell.exe' : process.env.ComSpec || 'cmd.exe'
   }
   return process.env.SHELL || '/bin/sh'
 }

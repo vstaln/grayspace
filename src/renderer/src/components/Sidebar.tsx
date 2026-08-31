@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { CreditCard, FolderOpen, KanbanSquare, Palette, Pin, Settings, User, UserRound, X } from 'lucide-react'
+import { FolderOpen, KanbanSquare, Palette, Pin, Settings, UserRound, X } from 'lucide-react'
 import type { RecentDir, UserRole } from '../../../preload/index.d'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { THEMES, useTheme } from '../theme'
@@ -77,8 +77,7 @@ const ROLES: { id: UserRole; label: string; hint: string }[] = [
 
 const SETTINGS_TABS = [
   { id: 'appearance' as const, label: 'Appearance', Icon: Palette },
-  { id: 'account' as const, label: 'Account', Icon: UserRound },
-  { id: 'plans' as const, label: 'Billing', Icon: CreditCard },
+  { id: 'account' as const, label: 'Account', Icon: UserRound }
 ]
 
 const FAVORITE_WIDGETS = [
@@ -192,70 +191,6 @@ function Slider({
   )
 }
 
-/** A plan. The one splash of colour left is the verified badge itself. */
-function PlanCard({
-  name,
-  price,
-  hint,
-  features,
-  active,
-  action,
-  verified,
-  onSelect
-}: {
-  name: string
-  price: string
-  hint: string
-  features: readonly string[]
-  active: boolean
-  action: string
-  verified?: boolean
-  onSelect(): void
-}): React.JSX.Element {
-  return (
-    <div
-      className={`flex flex-col gap-5 rounded-[12px] border p-5 transition-colors duration-150 ${
-        active ? 'border-line bg-bg-hover' : 'border-line-soft'
-      }`}
-    >
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-2">
-          <span className="flex items-center gap-1.5 text-xs text-text">
-            {name}
-            {verified && <VerifiedBadge size={13} />}
-          </span>
-          {active && <span className="flex-none text-[10px] text-text-faint">Current</span>}
-        </div>
-        <div className="flex items-baseline gap-1.5">
-          <span className="text-[26px] leading-none font-light text-text">{price}</span>
-          <span className="text-[11px] text-text-faint">/ month</span>
-        </div>
-        <p className="text-[11px] leading-relaxed text-text-faint">{hint}</p>
-      </div>
-      <ul className="flex flex-1 flex-col gap-2 text-[11px] text-text-dim">
-        {features.map((feature) => (
-          <li key={feature} className="flex gap-2">
-            <span className="text-text-faint">·</span>
-            <span className="min-w-0 flex-1">{feature}</span>
-          </li>
-        ))}
-      </ul>
-      <button
-        type="button"
-        onClick={onSelect}
-        disabled={active}
-        className={`w-full rounded-[8px] border px-3 py-2 text-[11px] transition-colors duration-150 ${
-          active
-            ? 'cursor-default border-transparent text-text-faint'
-            : 'border-line-soft text-text-dim hover:border-line hover:bg-bg-hover hover:text-text'
-        }`}
-      >
-        {active ? 'Current plan' : action}
-      </button>
-    </div>
-  )
-}
-
 /** Full settings dialog: portaled to body so the rail's drag region / stacking context cannot clip it. */
 function SettingsModal({
   workspaceDir,
@@ -266,7 +201,7 @@ function SettingsModal({
 }): React.JSX.Element {
   const { theme, setTheme, background, dim, setDim, blur, setBlur, pickBackground, clearBackground, error } = useTheme()
   const { settings, update, error: settingsError } = useSettings()
-  const [tab, setTab] = useState<'appearance' | 'account' | 'plans'>('appearance')
+  const [tab, setTab] = useState<'appearance' | 'account'>('appearance')
   const [userName, setUserName] = useState('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -367,7 +302,7 @@ function SettingsModal({
           <main className="flex min-w-0 flex-1 flex-col gap-7 overflow-auto px-7 py-6">
             <header className="flex flex-none items-center justify-between">
               <h2 className="text-[15px] font-medium text-text">
-                {tab === 'appearance' ? 'Appearance' : tab === 'account' ? 'Account' : 'Billing'}
+                {tab === 'appearance' ? 'Appearance' : 'Account'}
               </h2>
               <button
                 className="grid h-7 w-7 place-items-center rounded-[8px] text-text-faint transition-colors duration-150 hover:bg-bg-hover hover:text-text"
@@ -394,6 +329,25 @@ function SettingsModal({
                         }}
                       />
                     ))}
+                  </div>
+                </Section>
+
+                <Section title="Terminal shell" hint="Shell used when opening new terminal widgets on Windows.">
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <Choice
+                      selected={settings.windowsShell === 'cmd'}
+                      label="Command Prompt (CMD)"
+                      hint="cmd.exe"
+                      mono
+                      onClick={() => void update({ windowsShell: 'cmd' })}
+                    />
+                    <Choice
+                      selected={settings.windowsShell === 'powershell'}
+                      label="PowerShell"
+                      hint="powershell.exe"
+                      mono
+                      onClick={() => void update({ windowsShell: 'powershell' })}
+                    />
                   </div>
                 </Section>
 
@@ -471,11 +425,10 @@ function SettingsModal({
                       <span className="truncate text-sm text-text">
                         {userName.trim() || settings.userName || 'you'}
                       </span>
-                      {settings.plan === 'plus' && <VerifiedBadge size={14} />}
+                      <VerifiedBadge size={14} />
                     </div>
                     <p className="text-[11px] text-text-faint">
-                      {settings.role === 'lead' ? 'Lead' : 'Member'} · {settings.plan === 'plus' ? 'Plus' : 'Free'} ·
-                      operator <span className="font-mono">user</span>
+                      {settings.role === 'lead' ? 'Lead' : 'Member'} · operator <span className="font-mono">user</span>
                     </p>
                   </div>
                 </div>
@@ -523,8 +476,6 @@ function SettingsModal({
                   </div>
                 </Section>
 
-                {/* The plan itself lives on the Billing tab; repeating the picker
-                    here was the same decision offered twice. */}
                 <Section title="Session">
                   <dl className="flex flex-col gap-2 text-[11px] text-text-faint">
                     <div className="flex gap-3">
@@ -541,57 +492,6 @@ function SettingsModal({
                     </div>
                   </dl>
                 </Section>
-              </div>
-            )}
-
-            {tab === 'plans' && (
-              <div className="flex max-w-xl flex-col gap-5">
-                {/* One line of state, then the two cards that change it — the old
-                    banner carried a second copy of the same switch. */}
-                <p className="text-[11px] text-text-faint">
-                  Current plan ·{' '}
-                  <span className="text-text-dim">
-                    {settings.plan === 'plus' ? 'OrcSpace Plus, $9.99 / month' : 'Free, $0 / month'}
-                  </span>
-                </p>
-
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <PlanCard
-                    name="Free"
-                    price="$0"
-                    hint="Basic local and solo agent workflows"
-                    features={[
-                      'Up to 3 active terminals',
-                      'Basic MCP tools',
-                      'Standard local AI models'
-                    ]}
-                    active={settings.plan !== 'plus'}
-                    action="Switch to Free"
-                    onSelect={() => {
-                      void update({ plan: 'free' })
-                      setNotice('Switched to Free plan.')
-                    }}
-                  />
-                  <PlanCard
-                    name="OrcSpace Plus"
-                    price="$9.99"
-                    hint="Full orchestration power and verified status"
-                    verified
-                    features={[
-                      'Blue verified checkmark',
-                      'Unlimited terminals & workspaces',
-                      'Autonomous agent orchestration',
-                      'Real-time voice & audio pipeline',
-                      'Full MCP protocol'
-                    ]}
-                    active={settings.plan === 'plus'}
-                    action="Subscribe"
-                    onSelect={() => {
-                      void update({ plan: 'plus' })
-                      setNotice('Welcome to OrcSpace Plus! Verified badge activated.')
-                    }}
-                  />
-                </div>
               </div>
             )}
 
@@ -774,6 +674,7 @@ export default React.memo(function Sidebar({
                   <button
                     className={`flex-none rounded-[10px] p-1 text-text-faint hover:bg-bg-hover hover:text-text ${entry.pinned ? 'text-accent' : ''}`}
                     title={entry.pinned ? 'Unpin' : 'Pin'}
+                    aria-label={entry.pinned ? `Unpin ${entry.name}` : `Pin ${entry.name}`}
                     onClick={() => void pinRecent(entry.path)}
                   >
                     <Pin size={12} />
@@ -781,6 +682,7 @@ export default React.memo(function Sidebar({
                   <button
                     className="flex-none rounded-[10px] p-1 text-text-faint hover:bg-bg-hover hover:text-text"
                     title="Remove from recent"
+                    aria-label={`Remove ${entry.name} from recent`}
                     onClick={() => void forgetRecent(entry.path)}
                   >
                     <X size={12} />
@@ -818,11 +720,7 @@ export default React.memo(function Sidebar({
         type="button"
         aria-label="Account"
         title={`${avatarName} · Account`}
-        className={`group absolute bottom-[52px] grid h-9 w-9 place-items-center rounded-full p-[2px] transition-transform hover:scale-105 ${
-          settings.plan === 'plus'
-            ? 'bg-[#2563eb]'
-            : 'bg-line-soft'
-        }`}
+        className="group absolute bottom-[52px] grid h-9 w-9 place-items-center rounded-full bg-[#2563eb] p-[2px] transition-transform hover:scale-105"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-account'))}
       >

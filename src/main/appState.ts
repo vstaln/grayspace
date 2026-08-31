@@ -12,8 +12,8 @@ export type LinkSyntax = 'wiki' | 'dollar' | 'both'
 
 /** `lead` sees and edits the whole board; `member` works inside their own tasks. */
 export type UserRole = 'member' | 'lead'
-
-export type UserPlan = 'free' | 'plus'
+/** Shell used for newly spawned terminal widgets on Windows. */
+export type WindowsShell = 'cmd' | 'powershell'
 
 export interface RecentDir {
   path: string
@@ -25,8 +25,8 @@ export interface RecentDir {
 
 export interface AppSettings {
   linkSyntax: LinkSyntax
+  windowsShell: WindowsShell
   role: UserRole
-  plan?: UserPlan
   /** Shown as the assignee on kanban cards the human takes. */
   userName: string
   /** Absolute path of the wallpaper copied into userData; unset means no photo yet. */
@@ -96,8 +96,8 @@ export interface AppStateShape {
 
 const DEFAULT_SETTINGS: AppSettings = {
   linkSyntax: 'both',
+  windowsShell: 'cmd',
   role: 'lead',
-  plan: 'free',
   userName: 'you',
   backgroundDim: 45,
   backgroundBlur: 40,
@@ -224,11 +224,13 @@ export class AppState extends EventEmitter {
 
   /** `backgroundImage: null` clears the wallpaper; omitting the key leaves it alone. */
   patchSettings(patch: SettingsPatch): AppSettings {
+    if (patch.windowsShell && ['cmd', 'powershell'].includes(patch.windowsShell)) {
+      this.state.settings.windowsShell = patch.windowsShell
+    }
     this.ensure()
     if (patch.linkSyntax && ['wiki', 'dollar', 'both'].includes(patch.linkSyntax))
       this.state.settings.linkSyntax = patch.linkSyntax
     if (patch.role && ['member', 'lead'].includes(patch.role)) this.state.settings.role = patch.role
-    if (patch.plan && ['free', 'plus'].includes(patch.plan)) this.state.settings.plan = patch.plan
     if (typeof patch.assistantModel === 'string')
       this.state.settings.assistantModel = patch.assistantModel.trim() || undefined
     if (typeof patch.userName === 'string' && patch.userName.trim())
@@ -320,6 +322,8 @@ export class AppState extends EventEmitter {
     // grew its newest field (or one saved with only a couple of keys patched)
     // silently drop the rest of the defaults instead of filling the gaps.
     this.state.settings.localModel = { ...DEFAULT_SETTINGS.localModel, ...(raw.settings?.localModel || {}) }
+    if (!['cmd', 'powershell'].includes(this.state.settings.windowsShell))
+      this.state.settings.windowsShell = DEFAULT_SETTINGS.windowsShell
     // A state file written before wallpapers existed (or hand-edited) can carry a
     // non-numeric dim/blur, which would otherwise reach the renderer broken.
     if (!Number.isFinite(this.state.settings.backgroundDim))

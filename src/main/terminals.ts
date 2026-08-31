@@ -40,6 +40,14 @@ export interface SpawnResult {
 
 interface TerminalRecord {
   pty: IPty | null
+  /**
+   * Disposables returned by node-pty's listener registration. The pty is
+   * killed when its shell exits, but until then the closures that handle
+   * onData/onExit stay referenced by the native side — keeping a handle here
+   * lets us release them when the record is torn down so the closures can be
+   * GC'd alongside the pty.
+   */
+  ptyDisposers: { dispose(): void }[]
   title: string
   cwd: string
   /**
@@ -72,6 +80,7 @@ interface TerminalRecord {
  * silently dropped and full-screen TUIs then render against the wrong geometry.
  */
 export class TerminalManager extends EventEmitter {
+  private readonly getWindowsShell: () => 'cmd' | 'powershell'
   private readonly terminals = new Map<string, TerminalRecord>()
   // Ids never repeat (the counter only increments), so a disposed id can be
   // remembered; this blocks the P3-012 resurrection race. The list is capped
@@ -87,6 +96,11 @@ export class TerminalManager extends EventEmitter {
    * when the model says "the terminal" / `terminal:new` without a real id.
    */
   private preferredId: string | null = null
+
+  constructor(options: { getWindowsShell?: () => 'cmd' | 'powershell' } = {}) {
+    super()
+    this.getWindowsShell = options.getWindowsShell ?? (() => 'cmd')
+  }
 
   /**
    * The lowest `Agent Terminal N` not currently open. Numbers are reused once
@@ -121,6 +135,7 @@ export class TerminalManager extends EventEmitter {
     const title = options.title?.trim() || (prefix === 'agent' ? `Agent Terminal ${this.nextAgentNumber()}` : id)
     const record: TerminalRecord = {
       pty: null,
+      ptyDisposers: [],
       title,
       cwd: this.resolveCwd(options.cwd),
       output: new TerminalRingBuffer({ maxBytes: OUTPUT_BUFFER_LIMIT }),
@@ -192,6 +207,7 @@ export class TerminalManager extends EventEmitter {
     if (!record) {
       record = {
         pty: null,
+        ptyDisposers: [],
         title: id,
         cwd: this.resolveCwd(cwd),
         output: new TerminalRingBuffer({ maxBytes: OUTPUT_BUFFER_LIMIT }),
@@ -202,7 +218,7 @@ export class TerminalManager extends EventEmitter {
     }
 
     try {
-      const child = pty.spawn(defaultShell(), [], {
+      const child = pty.spawn(defaultShell(this.getWindowsShell()), [], {
         name: 'xterm-256color',
         cols: isPositiveInt(cols) ? cols : 80,
         rows: isPositiveInt(rows) ? rows : 24,
@@ -230,16 +246,22 @@ export class TerminalManager extends EventEmitter {
       record.rootPid = child.pid
       this.preferredId = id
 
-      child.onData((chunk) => {
-        const current = this.terminals.get(id)
-        if (!current || current.pty !== child) return
-        current.output.append(chunk)
-        current.lastDataAt = Date.now()
-        this.emit('data', id, chunk)
-      })
-      child.onExit(({ exitCode }) => {
-        this.handlePtyExit(id, child, exitCode)
-      })
+      // Keep the disposer handles so we can release them at teardown — otherwise
+      // the closures stay pinned by the native listener table for the lifetime
+      // of the (already-killed) pty, which matters when many shells cycle in a
+      // single session.
+      record.ptyDisposers.push(
+        child.onData((chunk) => {
+          const current = this.terminals.get(id)
+          if (!current || current.pty !== child) return
+          current.output.append(chunk)
+          current.lastDataAt = Date.now()
+          this.emit('data', id, chunk)
+        }),
+        child.onExit(({ exitCode }) => {
+          this.handlePtyExit(id, child, exitCode)
+        })
+      )
       return { ok: true }
     } catch (err) {
       console.error(`failed to spawn terminal ${id}`, err)
@@ -373,6 +395,17 @@ export class TerminalManager extends EventEmitter {
     // Do not keep the stale pid around: Windows recycles pids quickly, and a
     // later release()/disposeAll() would then taskkill an innocent process.
     current.rootPid = undefined
+    // Release the listener handles so their closures can be GC'd. The pty is
+    // already gone by the time onExit fires, but the native side still pins
+    // the callbacks until they are explicitly disposed.
+    for (const d of current.ptyDisposers ?? []) {
+      try {
+        d.dispose()
+      } catch {
+        /* ignore */
+      }
+    }
+    current.ptyDisposers = []
   }
 
   dispose(id: string): void {
@@ -407,6 +440,18 @@ export class TerminalManager extends EventEmitter {
     } catch {
       /* the process may already be gone */
     }
+    // Detach the onData/onExit listeners so their closures (which close over
+    // the manager and the terminal id) can be collected as soon as the pty
+    // itself goes away. Without this they stay referenced by the native side
+    // for the lifetime of the killed pty handle.
+    for (const d of record.ptyDisposers ?? []) {
+      try {
+        d.dispose()
+      } catch {
+        /* ignore — pty may already be torn down */
+      }
+    }
+    record.ptyDisposers = []
     this.terminals.delete(id)
     if (this.preferredId === id) this.preferredId = null
     // DI-009: a detached child (Start-Process -WindowStyle Hidden, a new

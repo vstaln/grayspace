@@ -34,16 +34,21 @@ die() { err "$1"; finish 1; }
 cd "$(cd -P "$(dirname "$0")" && pwd)" || die 'Could not enter the script directory.'
 [ -f package.json ] || die 'Run this from the OrcSpace repository root.'
 
+# Add common PATHs for macOS environments (Homebrew arm64/x64, NVM, Volta, FNM)
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.nvm/versions/node/$(ls "$HOME/.nvm/versions/node" 2>/dev/null | tail -1)/bin:$HOME/.volta/bin:$HOME/.fnm/current/bin:$PATH"
+
 [ "$(uname -s)" = "Darwin" ] || die "macOS is required to build a Mac app; this is $(uname -s)."
-command -v node >/dev/null 2>&1 || die 'Node.js not found. Install Node LTS: brew install node'
+command -v node >/dev/null 2>&1 || die 'Node.js not found. Install Node LTS: brew install node (or from https://nodejs.org)'
 xcode-select -p >/dev/null 2>&1 || die 'Xcode Command Line Tools missing. Run: xcode-select --install'
 
-MODE="zip"
+MODE="dmg"
 for arg in "$@"; do
   case "$arg" in
     --dmg) MODE="dmg" ;;
+    --zip) MODE="zip" ;;
+    --universal) MODE="universal" ;;
     --all) MODE="all" ;;
-    *) die "Unknown option: $arg (expected --dmg or --all)" ;;
+    *) die "Unknown option: $arg (expected --dmg, --zip, --universal or --all)" ;;
   esac
 done
 
@@ -56,17 +61,32 @@ step 'Dependencies'
 if [ -d node_modules ] && [ -f node_modules/.package-lock.json ]; then
   ok 'App dependencies present.'
 else
-  printf ' Installing (slow the first time)...\n'
+  printf ' Installing dependencies (npm ci)...\n'
   npm ci --no-fund --no-audit || die 'npm ci failed.'
 fi
 
-step 'Building'
+step 'Building Installer'
 case "$MODE" in
-  # arm64 for Apple Silicon, x64 for Intel — whichever this Mac actually is.
-  # Building only the host architecture is what keeps the artifact ~100 MB
-  # instead of the ~200 MB a universal build costs.
-  zip) if [ "$ARCH" = "arm64" ]; then npm run dist:mac:arm; else npm run dist:mac:intel; fi ;;
-  dmg|all) npm run dist:mac ;;
+  dmg)
+    if [ "$ARCH" = "arm64" ]; then
+      npm run dist:mac:arm
+    else
+      npm run dist:mac:intel
+    fi
+    ;;
+  zip)
+    if [ "$ARCH" = "arm64" ]; then
+      npm run dist:mac:arm
+    else
+      npm run dist:mac:intel
+    fi
+    ;;
+  universal)
+    npm run dist:mac:universal
+    ;;
+  all)
+    npm run dist:mac
+    ;;
 esac
 [ $? -eq 0 ] || die 'The build failed — see the output above.'
 

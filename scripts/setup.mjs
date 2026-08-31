@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const APP_PORT = process.env.WORKSPACE_CONTROL_PORT || '20220'
 const MIN_NODE_MAJOR = 20
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 
 const args = process.argv.slice(2)
 const flags = {
@@ -72,6 +73,18 @@ if (nodeMajor < MIN_NODE_MAJOR) {
 }
 console.log(` [ok] Node.js ${nodeVersion} (${process.platform}-${process.arch})`)
 
+// npm is the only supported package manager for the checked-in lockfile.
+// Failing early here avoids a half-installed app when a machine has no npm
+// shim (common with portable Node installations on Windows).
+const npmCheck = spawnSync(npmCommand, ['--version'], {
+  stdio: 'ignore',
+  shell: process.platform === 'win32'
+})
+if (npmCheck.status !== 0) {
+  console.error(' [x] npm is not available on PATH. Install the Node.js LTS bundle and retry.')
+  process.exit(1)
+}
+
 // Check cargo (optional)
 const cargoCheck = spawnSync('cargo', ['--version'], { shell: process.platform === 'win32' })
 if (cargoCheck.status === 0) {
@@ -102,7 +115,7 @@ if (flags.reinstall) {
 // 4. App Dependencies
 if (!existsSync(join(root, 'node_modules'))) {
   console.log('\n ==> Installing app dependencies...')
-  if (!sh('npm', ['install', '--no-fund', '--no-audit'])) {
+  if (!sh(npmCommand, ['ci', '--no-fund', '--no-audit'])) {
     console.error(' [x] npm install failed.')
     process.exit(1)
   }
@@ -138,7 +151,7 @@ if (isRunning) {
   console.log(`\n [ok] OrcSpace is already live on :${APP_PORT} — no second instance needed.`)
 } else if (!flags.check) {
   console.log(`\n ==> Starting OrcSpace (npm run dev)... leave this window open.\n`)
-  spawn('npm', ['run', 'dev'], { cwd: root, shell: true, stdio: 'inherit', detached: false })
+  spawn(npmCommand, ['run', 'dev'], { cwd: root, shell: process.platform === 'win32', stdio: 'inherit', detached: false })
 
   console.log(` Waiting for http://127.0.0.1:${APP_PORT}/presence ...`)
   for (let i = 0; i < 45; i++) {

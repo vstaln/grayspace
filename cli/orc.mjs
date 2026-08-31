@@ -51,11 +51,17 @@ function getAllCandidateTokens(stopAtFirst = false) {
   const candidateDirs = [
     path.join(process.cwd(), '.dev-user-data'),
     process.env.ORCSPACE_DEV_USER_DATA,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'OrcSpace') : null,
     process.env.APPDATA ? path.join(process.env.APPDATA, 'Orcspace') : null,
     process.env.APPDATA ? path.join(process.env.APPDATA, 'com.orcspace.app') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'OrcSpace') : null,
     process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Orcspace') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'com.orcspace.app') : null,
     path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.dev-user-data'),
+    path.join(os.homedir(), '.config', 'OrcSpace'),
     path.join(os.homedir(), '.config', 'Orcspace'),
+    path.join(os.homedir(), '.config', 'orcspace'),
+    path.join(os.homedir(), 'Library', 'Application Support', 'OrcSpace'),
     path.join(os.homedir(), 'Library', 'Application Support', 'Orcspace')
   ].filter(Boolean)
 
@@ -967,17 +973,20 @@ async function plan(action, flags, positional = []) {
         time: pick(flags, 'time'),
         project: pick(flags, 'project')
       })
+    case 'done':
+    case 'complete':
+      return post(`/planner/${enc(require1(id, `plan ${action} needs <id>`))}/toggle`, { done: true })
     case 'toggle':
       return post(`/planner/${enc(require1(id, 'plan toggle needs <id>'))}/toggle`, { done: flags.done })
     case 'delete':
       return call('DELETE', `/planner/${enc(require1(id, 'plan delete needs <id>'))}`, { agentId: AGENT_ID })
     default:
-      throw new OrcError(`plan: unknown action "${action}" (list|create|update|toggle|delete)`, 'invalid')
+      throw new OrcError(`plan: unknown action "${action}" (list|create|update|done|toggle|delete)`, 'invalid')
   }
 }
 
 async function board(action, flags, positional = []) {
-  const id = pick(flags, 'id', 'task') ?? (action === 'claim' || action === 'update' ? positional[2] : undefined)
+  const id = pick(flags, 'id', 'task') ?? (action === 'claim' || action === 'update' || action === 'done' || action === 'complete' ? positional[2] : undefined)
   switch (action) {
     case 'status':
     case undefined:
@@ -993,6 +1002,11 @@ async function board(action, flags, positional = []) {
       })
     case 'claim':
       return post(`/coordination/tasks/${enc(require1(id, 'board claim needs <task-id>'))}/claim`, {})
+    case 'done':
+    case 'complete':
+      return patch(`/coordination/tasks/${enc(require1(id, `board ${action} needs <task-id>`))}`, {
+        state: 'done'
+      })
     case 'update':
       return patch(`/coordination/tasks/${enc(require1(id, 'board update needs <task-id>'))}`, {
         state: require1(pick(flags, 'state') ?? positional[3], 'board update needs <state>')
@@ -1000,7 +1014,7 @@ async function board(action, flags, positional = []) {
     case 'become-manager':
       return post('/coordination/manager', {})
     default:
-      throw new OrcError(`board: unknown action "${action}" (status|list|create|claim|update|become-manager)`, 'invalid')
+      throw new OrcError(`board: unknown action "${action}" (status|list|create|claim|done|update|become-manager)`, 'invalid')
   }
 }
 

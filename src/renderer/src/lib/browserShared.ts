@@ -38,6 +38,9 @@ export interface Webview extends HTMLElement {
 export function toNavigationUrl(input: string): string | null {
   const raw = input.trim()
   if (!raw) return null
+  // Block dangerous protocols immediately
+  const compact = raw.replace(/\s+/g, '').toLowerCase()
+  if (compact.startsWith('javascript:') || compact.startsWith('data:') || compact.startsWith('vbscript:') || compact.startsWith('file:')) return null
   if (/^https?:\/\//i.test(raw)) return raw
   if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?([/?#]|$)/i.test(raw)) return `http://${raw}`
   if (!/\s/.test(raw) && /^[\w-]+(\.[\w-]+)+(:\d+)?([/?#]|$)/.test(raw)) return `https://${raw}`

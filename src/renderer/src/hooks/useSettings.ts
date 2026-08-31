@@ -3,8 +3,8 @@ import type { AppSettings } from '../../../preload/index.d'
 
 const DEFAULTS: AppSettings = {
   linkSyntax: 'both',
+  windowsShell: 'cmd',
   role: 'lead',
-  plan: 'free',
   userName: 'you',
   backgroundDim: 45,
   backgroundBlur: 40,
@@ -20,7 +20,6 @@ const DEFAULTS: AppSettings = {
   favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player', 'id-generator']
 }
 
-const PLAN_STORAGE_KEY = 'orcspace-user-plan'
 const FAVORITES_ALL_MIGRATION_KEY = 'orcspace-favorites-all-enabled'
 
 /** Reads persisted app settings and writes patches straight through to disk. */
@@ -30,13 +29,7 @@ export function useSettings(): {
   /** Set when the last update() failed to persist, so UI can say so. */
   error: string | null
 } {
-  const [settings, setSettings] = useState<AppSettings>(() => {
-    try {
-      const savedPlan = localStorage.getItem(PLAN_STORAGE_KEY) as 'free' | 'plus' | null
-      if (savedPlan) return { ...DEFAULTS, plan: savedPlan }
-    } catch {}
-    return DEFAULTS
-  })
+  const [settings, setSettings] = useState<AppSettings>(DEFAULTS)
   const [error, setError] = useState<string | null>(null)
   // The initial get() is in flight while onChange broadcasts and update()
   // calls can already be landing. Without a guard the stale fetch would
@@ -46,19 +39,16 @@ export function useSettings(): {
 
   useEffect(() => {
     const seq = ++initSeqRef.current
-    const mergePlan = (s: AppSettings): AppSettings => {
-      const withDefaults = { ...DEFAULTS, ...s, favoriteWidgets: (s.favoriteWidgets ?? DEFAULTS.favoriteWidgets ?? []).filter((kind) => kind !== 'translator') }
-      try {
-        const localPlan = localStorage.getItem(PLAN_STORAGE_KEY) as 'free' | 'plus' | null
-        if (localPlan) return { ...withDefaults, plan: localPlan }
-      } catch {}
-      return withDefaults
-    }
+    const mergeDefaults = (s: AppSettings): AppSettings => ({
+      ...DEFAULTS,
+      ...s,
+      favoriteWidgets: (s.favoriteWidgets ?? DEFAULTS.favoriteWidgets ?? []).filter((kind) => kind !== 'translator')
+    })
 
     void window.api.settings
       .get()
       .then((s) => {
-        if (seq === initSeqRef.current) setSettings(mergePlan(s))
+        if (seq === initSeqRef.current) setSettings(mergeDefaults(s))
         try {
           if (!localStorage.getItem(FAVORITES_ALL_MIGRATION_KEY)) {
             localStorage.setItem(FAVORITES_ALL_MIGRATION_KEY, '1')
@@ -70,7 +60,7 @@ export function useSettings(): {
       .catch((err) => console.warn('settings:get failed', err))
     const offSettings = window.api.settings.onChange((s) => {
       initSeqRef.current += 1
-      setSettings(mergePlan(s as AppSettings))
+      setSettings(mergeDefaults(s as AppSettings))
     })
     return () => {
       initSeqRef.current += 1
@@ -82,17 +72,11 @@ export function useSettings(): {
     // A mount-time get() still in flight must not overwrite this update.
     const seq = ++initSeqRef.current
     setError(null)
-    if (patch.plan) {
-      try {
-        localStorage.setItem(PLAN_STORAGE_KEY, patch.plan)
-      } catch {}
-    }
     setSettings((prev) => ({ ...prev, ...patch }))
     try {
       const next = (await window.api.settings.set(patch)) as AppSettings
       if (seq === initSeqRef.current && next && typeof next === 'object') {
-        const localPlan = (localStorage.getItem(PLAN_STORAGE_KEY) as 'free' | 'plus' | null) || patch.plan
-        setSettings({ ...next, ...(localPlan ? { plan: localPlan } : {}) })
+        setSettings(next)
       }
     } catch (err) {
       // Keep the optimistic state, but SAY the write failed — a settings save

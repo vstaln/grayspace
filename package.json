@@ -2,6 +2,7 @@
   "name": "orcspace",
   "version": "2.0.0",
   "description": "OrcSpace — an infinite canvas with terminals, notes and agent coordination",
+  "type": "module",
   "main": "./out/main/index.js",
   "license": "MIT",
   "author": "OrcSpace",
@@ -22,8 +23,11 @@
     "typecheck:e2e": "tsc --noEmit -p e2e/tsconfig.json",
     "dist": "npm run build && electron-builder --win",
     "dist:mac": "npm run build && electron-builder --mac",
-    "dist:mac:arm": "npm run build && electron-builder --mac zip --arm64",
-    "dist:mac:intel": "npm run build && electron-builder --mac zip --x64",
+    "dist:mac:dmg": "npm run build && electron-builder --mac dmg",
+    "dist:mac:universal": "npm run build && electron-builder --mac dmg --universal",
+    "dist:mac:arm": "npm run build && electron-builder --mac dmg zip --arm64",
+    "dist:mac:intel": "npm run build && electron-builder --mac dmg zip --x64",
+    "pack:archive": "node scripts/pack-archive.mjs",
     "smoke": "node scripts/smoke.mjs",
     "pretest:e2e": "npm run build",
     "test:e2e": "playwright test --project=local",
@@ -117,14 +121,16 @@
           "target": "dmg",
           "arch": [
             "arm64",
-            "x64"
+            "x64",
+            "universal"
           ]
         },
         {
           "target": "zip",
           "arch": [
             "arm64",
-            "x64"
+            "x64",
+            "universal"
           ]
         }
       ],

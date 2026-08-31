@@ -62,33 +62,41 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
   }, [])
 
   const gitSeq = useRef(0)
+  const gitAbortRef = useRef<AbortController | null>(null)
   const refreshGit = useCallback(async (): Promise<void> => {
+    gitAbortRef.current?.abort()
+    const ctrl = new AbortController()
+    gitAbortRef.current = ctrl
     const seq = ++gitSeq.current
     try {
-      const res = (await window.api.git.status()) as GitStatus | { error: string }
-      if (seq !== gitSeq.current) return
+      const res = (await window.api.git.status()) as GitStatus | { error: string; code?: string }
+      if (ctrl.signal.aborted || seq !== gitSeq.current) return
       if (res && !('error' in res)) {
         setGitStatus(res as GitStatus)
       } else {
-        setGitStatus(null)
+        const code = (res as { code?: string })?.code
+        if (code === 'cancelled') return
+        if ((res as { error?: string }).error) {
+          setGitStatus(res as unknown as GitStatus)
+        } else {
+          setGitStatus(null)
+        }
       }
     } catch {
-      if (seq !== gitSeq.current) return
+      if (ctrl.signal.aborted || seq !== gitSeq.current) return
       setGitStatus(null)
     }
   }, [])
 
   useEffect(() => {
     void refreshGit()
-    // Self-scheduling chain instead of a fixed interval: while the window is
-    // focused the tree refreshes every 8s, but unfocused/backgrounded it backs
-    // off to 30s — git status is not going anywhere, and a background OrcSpace
-    // should not wake the CPU (and spawn a git process) three times a minute
-    // for a badge nobody is looking at (PERF-git-backoff).
     let timer: ReturnType<typeof setTimeout>
+    let cancelled = false
     const schedule = (): void => {
+      if (cancelled) return
       const delay = document.hidden || !document.hasFocus() ? 30_000 : 8_000
       timer = setTimeout(() => {
+        if (cancelled) return
         if (!document.hidden) void refreshGit()
         schedule()
       }, delay)
@@ -104,7 +112,10 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
     window.addEventListener('focus', onFocus)
     const offDir = window.api.workspace.onDirChange(() => void refreshGit())
     return () => {
+      cancelled = true
       clearTimeout(timer)
+      gitAbortRef.current?.abort()
+      gitSeq.current += 1
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onFocus)
       offDir()

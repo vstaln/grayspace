@@ -1,8 +1,20 @@
 #!/bin/sh
-# macOS / Linux shim for the OrcSpace agent CLI.
+# macOS / Linux / Windows (Git Bash/MSYS2) shim for the OrcSpace agent CLI.
 #
 # ORCSPACE_NODE points at the app's own Electron binary; ELECTRON_RUN_AS_NODE
 # turns it into a plain Node runtime, so an agent's shell needs no system Node
 # install and cannot pick up a different one from the user's PATH.
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-ELECTRON_RUN_AS_NODE=1 exec "${ORCSPACE_NODE:-node}" "$dir/orc.mjs" "$@"
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*)
+    if command -v cygpath >/dev/null 2>&1; then
+      script_path=$(cygpath -w "$dir/orc.mjs")
+    else
+      script_path="$dir/orc.mjs"
+    fi
+    ;;
+  *)
+    script_path="$dir/orc.mjs"
+    ;;
+esac
+ELECTRON_RUN_AS_NODE=1 exec "${ORCSPACE_NODE:-node}" "$script_path" "$@"

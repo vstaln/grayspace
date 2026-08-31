@@ -17,21 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The app spawns the MCP server from the sibling `Orcspace-mcp` repo
-      # (`build:mcp` → `../Orcspace-mcp`, see src/main/mcpProcess.ts). CI does
-      # not share the developer's local drive, so the workflow materializes it
-      # next to the checkout. Point the `ORCSPACE_MCP_REPO` repository variable
-      # (owner/repo) at the Orcspace-mcp repository to enable the run — add it
-      # under Settings → Secrets and variables → Actions → Variables.
-      - name: Check out the MCP server sibling repo
-        shell: pwsh
-        run: |
-          $repo = "${{ vars.ORCSPACE_MCP_REPO }}"
-          if (-not $repo) {
-            throw "ORCSPACE_MCP_REPO repository variable is not set. Add it (e.g. 'acme/Orcspace-mcp') under Settings - Secrets and variables - Actions."
-          }
-          git clone --depth 1 "https://github.com/$repo.git" "$env:GITHUB_WORKSPACE\..\Orcspace-mcp"
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22

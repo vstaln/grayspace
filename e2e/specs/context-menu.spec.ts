@@ -33,8 +33,27 @@ async function openContextMenu(): Promise<void> {
     { x: 850, y: 220 },
     // Below the timer (300x220 from the first open) and clear of the planner
     // (420x520 dropped at the second open) — right-clicks must hit bare canvas.
-    { x: 320, y: 600 }
+    { x: 320, y: 600 },
+    { x: 700, y: 500 },
+    { x: 150, y: 500 },
+    { x: 900, y: 400 }
   ]
+  // Try positions in rotation until one hits bare canvas (not a widget).
+  // After a few widgets are on the canvas the original 3 spots are occupied,
+  // so a fixed rotation would start clicking inside widgets and the menu
+  // never appears (flaky across test ordering).
+  for (let attempt = 0; attempt < positions.length; attempt += 1) {
+    const position = positions[(contextMenuOpenCount + attempt) % positions.length]
+    await ctx.page.getByTestId('canvas').click({ button: 'right', position })
+    try {
+      await expect(ctx.page.getByRole('menu', { name: 'Context Menu' })).toBeVisible({ timeout: 800 })
+      contextMenuOpenCount += attempt + 1
+      return
+    } catch {
+      // Missed — widget was under the cursor, try next slot.
+    }
+  }
+  // Last resort: the original slot (will throw with a clear message if still failing)
   const position = positions[contextMenuOpenCount++ % positions.length]
   await ctx.page.getByTestId('canvas').click({ button: 'right', position })
   await expect(ctx.page.getByRole('menu', { name: 'Context Menu' })).toBeVisible()
@@ -46,7 +65,7 @@ test('right-click offers every canvas action and places widgets on the canvas', 
   await openContextMenu()
   // Every widget in the default favourites list (useSettings.ts) — the menu
   // renders exactly those, so this count moves whenever that list does.
-  await expect(page.getByRole('menu', { name: 'Context Menu' }).getByRole('menuitem')).toHaveCount(11)
+  await expect(page.getByRole('menu', { name: 'Context Menu' }).getByRole('menuitem')).toHaveCount(10)
 
   // A stateless widget lands instantly.
   await page.getByTestId('cm-timer').click()

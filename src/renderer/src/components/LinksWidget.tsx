@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Check, Clipboard, Link2, Plus, Trash2 } from 'lucide-react'
+import { isSafeUrl } from '../lib/sanitizeUrl'
 
 interface LinkItem {
   id: string
@@ -59,6 +60,11 @@ export default function LinksWidget({ widgetId }: { widgetId: string }): React.J
     const value = url.trim()
     if (!value) {
       setError('Enter a link')
+      return
+    }
+    // Block javascript: and other dangerous protocols via the shared sanitizer
+    if (!isSafeUrl(value)) {
+      setError('Blocked: unsafe URL (javascript:, data: etc. not allowed)')
       return
     }
     let defaultTitle = value

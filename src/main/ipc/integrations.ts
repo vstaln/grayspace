@@ -19,6 +19,6 @@ export function registerIntegrationsIpc(deps: IpcDeps): void {
     return media.saveBytesToScratch(Buffer.from(bytes), ext || 'png')
   })
   ipcMain.handle('media:data-url', (_e, path: string) =>
-    typeof path === 'string' && media.hasImageExtension(path) ? media.dataUrl(path) : null
+    typeof path === 'string' && media.hasMediaExtension(path) ? media.dataUrl(path) : null
   )
 }

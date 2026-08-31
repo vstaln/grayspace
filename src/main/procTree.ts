@@ -34,13 +34,19 @@ let lastSweepEndedAt = 0
 const SWEEP_DEBOUNCE_MS = 1_200
 /** Minimum quiet time between two sweeps, so a burst of closes cannot chain them. */
 const SWEEP_COOLDOWN_MS = 4_000
-/** A single sweep covers at most this many roots; beyond that the script grows for no gain. */
-const MAX_ROOTS_PER_SWEEP = 32
+/**
+ * A single sweep covers at most this many roots. The cost of a sweep is
+ * dominated by the single WMI snapshot (~50 ms on a normal workstation), not
+ * the per-root dictionary lookups, so the previous 32-root cap silently lost
+ * deep sweeps for any terminals past the 32nd when many shells were closed
+ * together (e.g. on shutdown). 256 covers the practical maximum of any
+ * single canvas without risking a runaway script.
+ */
+const MAX_ROOTS_PER_SWEEP = 256
 
 export function killProcessTree(rootPid: number | undefined, settleMs = SWEEP_DEBOUNCE_MS): void {
   if (process.platform !== 'win32' || !rootPid || !Number.isInteger(rootPid) || rootPid <= 0) return
 
-  // Fast path: kill the immediate tree with native taskkill.exe (very low overhead).
   try {
     execFile('taskkill', ['/PID', String(rootPid), '/T', '/F'], { windowsHide: true }, () => {})
   } catch {
@@ -50,7 +56,10 @@ export function killProcessTree(rootPid: number | undefined, settleMs = SWEEP_DE
   // Capture the instant we still know this pid is *ours*. By the time the sweep
   // runs a recycled pid would have a newer CreationDate — the script skips it.
   if (!pendingRoots.has(rootPid)) {
-    if (pendingRoots.size >= MAX_ROOTS_PER_SWEEP) return
+    if (pendingRoots.size >= MAX_ROOTS_PER_SWEEP) {
+      const oldestKey = Array.from(pendingRoots.keys())[0]
+      if (oldestKey !== undefined) pendingRoots.delete(oldestKey)
+    }
     pendingRoots.set(rootPid, Date.now())
   }
   scheduleSweep(settleMs)
@@ -78,8 +87,10 @@ function runSweep(): void {
     if (pendingRoots.size > 0) scheduleSweep(SWEEP_DEBOUNCE_MS)
   }
 
+  let spawned = false
   try {
     const encoded = Buffer.from(buildSweepScript(roots), 'utf16le').toString('base64')
+    spawned = true
     execFile(
       'powershell',
       ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
@@ -87,7 +98,17 @@ function runSweep(): void {
       finish
     )
   } catch {
-    finish()
+    // execFile threw synchronously (e.g. powershell.exe missing). Put the roots
+    // back so a later sweep can still try; the fast-path taskkill already
+    // handled the immediate tree.
+    if (spawned) {
+      finish()
+    } else {
+      for (const r of roots) pendingRoots.set(r.pid, r.requestedAt)
+      sweepInFlight = false
+      lastSweepEndedAt = Date.now()
+      if (pendingRoots.size > 0) scheduleSweep(SWEEP_DEBOUNCE_MS)
+    }
   }
 }
 

@@ -112,6 +112,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
   const [renamingName, setRenamingName] = useState('')
   const renameCancelled = useRef(false)
+  const renameInFlightRef = useRef(false)
   const fsActionBusyRef = useRef(false)
   const previewRef = useRef<HTMLDivElement>(null)
   useFocusTrap(previewRef, Boolean(previewFile))
@@ -265,20 +266,24 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
   }
 
   const handleRename = async (): Promise<void> => {
+    // A single keypress on Enter triggers both `onKeyDown` and the subsequent
+    // `onBlur` from the unmounting input; without this gate both paths would
+    // race to rename the same entry twice (the second hit reading the now
+    // cleared `renamingPath` and bailing out — but only after a wasted IPC).
+    if (renameInFlightRef.current) return
     if (renameCancelled.current) {
       renameCancelled.current = false
       return
     }
     const name = renamingName.trim()
     if (!name || !renamingPath || !currentPath || fsActionBusyRef.current) return
-    fsActionBusyRef.current = true
-    const targetPath = joinChildPath(currentPath, name)
-    if (!targetPath) {
-      showNotice('Name cannot contain path separators or “..”')
-      fsActionBusyRef.current = false
-      return
-    }
+    renameInFlightRef.current = true
     try {
+      const targetPath = joinChildPath(currentPath, name)
+      if (!targetPath) {
+        showNotice('Name cannot contain path separators or “..”')
+        return
+      }
       const res = await window.api.fs.rename(renamingPath, targetPath)
       if (res.error) showNotice(`Failed to rename: ${res.error}`)
       else {
@@ -292,6 +297,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
       showNotice(String(err))
     } finally {
       fsActionBusyRef.current = false
+      renameInFlightRef.current = false
     }
   }
 
@@ -567,7 +573,10 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                             aria-label="New name"
                             onChange={(e) => setRenamingName(e.target.value)}
                             onKeyDown={(e) => {
-                              if (e.key === 'Enter') void handleRename()
+                              if (e.key === 'Enter') {
+                                e.preventDefault()
+                                void handleRename()
+                              }
                               if (e.key === 'Escape') {
                                 e.stopPropagation()
                                 renameCancelled.current = true

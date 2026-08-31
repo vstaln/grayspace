@@ -220,6 +220,7 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
     try {
       term.open(container)
       if (container.clientWidth > 0 && container.clientHeight > 0) fit.fit()
+      term.focus()
     } catch (err) {
       // A canvas redraw can detach the host between React's effect and xterm's
       // canvas setup. Report it in the pane instead of letting it take down
@@ -228,7 +229,11 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
       term.write('\r\n\x1b[31m[Terminal could not be initialised; retrying is safe]\x1b[0m\r\n')
     }
 
-
+    // Ensure clicking anywhere within the terminal container immediately focuses the xterm instance
+    const onPointerDown = (): void => {
+      term.focus()
+    }
+    container.addEventListener('pointerdown', onPointerDown)
 
     // The main process intercepts Ctrl+C/X/A/Z while a terminal holds focus
     // (menu accelerators would otherwise win over the pty), so it needs to
@@ -482,6 +487,7 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
       container.removeEventListener('dragover', onDragOver)
       container.removeEventListener('drop', onDrop)
       container.removeEventListener('wheel', onWheel, true)
+      container.removeEventListener('pointerdown', onPointerDown)
       container.removeEventListener('focusin', onFocusIn)
       container.removeEventListener('focusout', onFocusOut)
       window.api.terminal.setFocused(false, id)

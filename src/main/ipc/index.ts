@@ -2,6 +2,7 @@ import type { Core } from '../core/index.ts'
 import { registerBoardIpc } from './board.ts'
 import { registerBrowserIpc } from './browser.ts'
 import { registerCanvasIpc } from './canvas.ts'
+import { registerCodeIpc } from './code.ts'
 import { registerFilesystemIpc } from './filesystem.ts'
 import { registerIntegrationsIpc } from './integrations.ts'
 import { registerOrchestrationIpc } from './orchestration.ts'
@@ -46,6 +47,7 @@ export function registerIpc(deps: IpcDeps): void {
   registerSettingsIpc(deps)
   registerIntegrationsIpc(deps)
   registerCanvasIpc(deps)
+  registerCodeIpc(deps)
   registerBoardIpc(deps)
   registerPlannerIpc(deps)
   registerOrchestrationIpc(deps)

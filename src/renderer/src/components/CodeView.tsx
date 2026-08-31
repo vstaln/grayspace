@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Maximize2, Minimize2, Plus, X } from 'lucide-react'
+import { Maximize2, Minimize2, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
 import TerminalWidget from './TerminalWidget'
-import CodeLauncher, { CodeAgent } from './CodeLauncher'
+import CodeLauncher, { CODE_AGENTS, CodeAgent } from './CodeLauncher'
 import { queueInitialCommand } from '../lib/pendingTerminalCommands'
 
 interface Session {
@@ -14,6 +14,19 @@ let sessionCounter = 0
 function makeSessionId(): string {
   sessionCounter += 1
   return `code-${Date.now()}-${sessionCounter}`
+}
+
+function agentForPersisted(agentId: string, label: string, command: string): CodeAgent {
+  const found = CODE_AGENTS.find((a) => a.id === agentId)
+  if (found && found.command === command) return found
+  if (found && agentId !== 'custom') return found
+  // Fallback for custom or unknown agents — preserve stored label/command
+  return { id: agentId || 'custom', label: label || command || 'Other CLI', command, Icon: TerminalIcon }
+}
+
+function extractCounter(id: string): number | null {
+  const m = /-(\d+)$/.exec(id)
+  return m ? Number(m[1]) : null
 }
 
 interface Props {
@@ -58,7 +71,13 @@ const SessionCard = React.memo(function SessionCard({
         className={`flex h-7 flex-none items-center justify-between gap-2 border-b border-line-soft px-2 ${
           promotable && !editing ? 'cursor-pointer transition-colors hover:bg-bg-hover' : ''
         }`}
-        onClick={promotable && !editing ? onFocus : undefined}
+        onClick={(e) => {
+          if (!editing) {
+            onFocus?.()
+            const termEl = e.currentTarget.parentElement?.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
+            termEl?.focus()
+          }
+        }}
         onDoubleClick={promotable && !editing ? onFocus : undefined}
         title={promotable && !editing ? 'Click to expand this session' : undefined}
       >
@@ -151,7 +170,141 @@ export default function CodeView({ active }: Props): React.JSX.Element {
   // grid the user just cleaned (CODE-02).
   const wasActiveRef = useRef(false)
 
+  // ---- persistence (code sessions survive restarts per workspace) ----
+  const hydratedRef = useRef(false)
+  const skipNextSaveRef = useRef(false)
+  const hydrationRunRef = useRef(0)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const workspaceDirRef = useRef<string | null>(null)
+  const codeChangeSeqRef = useRef(0)
+  const dirtyRef = useRef(false)
+
+  const hydrate = useCallback(() => {
+    if (saveTimerRef.current !== null) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+    dirtyRef.current = false
+    const run = ++hydrationRunRef.current
+    const changesAtStart = codeChangeSeqRef.current
+    hydratedRef.current = false
+    skipNextSaveRef.current = true
+    void window.api.code
+      .load()
+      .then((snapshot) => {
+        if (run !== hydrationRunRef.current) return
+        if (codeChangeSeqRef.current !== changesAtStart) {
+          hydratedRef.current = true
+          return
+        }
+        const restored: Session[] = (snapshot.sessions ?? []).map((s) => ({
+          id: s.id,
+          agent: agentForPersisted(s.agentId, s.label, s.command),
+          title: s.title ?? s.label
+        }))
+        // Keep counter ahead of any restored id so new sessions never collide
+        let maxCounter = 0
+        for (const s of restored) {
+          const c = extractCounter(s.id)
+          if (c !== null && c > maxCounter) maxCounter = c
+        }
+        if (maxCounter > sessionCounter) sessionCounter = maxCounter
+        setSessions(restored)
+        setFeaturedId(snapshot.featuredId ?? null)
+        setMaximizedId(snapshot.maximizedId ?? null)
+        hydratedRef.current = true
+      })
+      .catch(() => {
+        if (run !== hydrationRunRef.current) return
+        // Keep hydrated false so next save is skipped; background retry via workspace change or manual?
+        hydratedRef.current = true
+      })
+  }, [])
+
   useEffect(() => {
+    void window.api.workspace
+      .getDir()
+      .then((dir) => {
+        workspaceDirRef.current = dir
+      })
+      .catch(() => {})
+      .finally(() => hydrate())
+    const unbindDir = window.api.workspace.onDirChange((dir) => {
+      if (workspaceDirRef.current === dir) return
+      workspaceDirRef.current = dir
+      hydrate()
+    })
+    return () => {
+      unbindDir()
+      if (saveTimerRef.current !== null) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+    }
+  }, [hydrate])
+
+  // Save on sessions/featured/maximized changes (debounced)
+  useEffect(() => {
+    if (!hydratedRef.current) return
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false
+      return
+    }
+    dirtyRef.current = true
+    const dirAtSchedule = workspaceDirRef.current
+    const timer = setTimeout(() => {
+      saveTimerRef.current = null
+      if (workspaceDirRef.current !== dirAtSchedule) return
+      const payload = {
+        sessions: sessions.map((s) => ({
+          id: s.id,
+          agentId: s.agent.id,
+          label: s.agent.label,
+          command: s.agent.command,
+          title: s.title ?? s.agent.label
+        })),
+        featuredId,
+        maximizedId,
+        workspaceDir: dirAtSchedule ?? null
+      }
+      dirtyRef.current = false
+      void window.api.code.save(payload).catch(() => {})
+    }, 800)
+    saveTimerRef.current = timer
+    return () => {
+      clearTimeout(timer)
+      if (saveTimerRef.current === timer) saveTimerRef.current = null
+    }
+  }, [sessions, featuredId, maximizedId])
+
+  // External updates (workspace switch from main, or another renderer)
+  useEffect(() => {
+    return window.api.code.onChange((snapshot) => {
+      if (!snapshot || !Array.isArray(snapshot.sessions)) return
+      codeChangeSeqRef.current += 1
+      if (!hydratedRef.current) return
+      skipNextSaveRef.current = true
+      // If we have unsaved local edits, don't overwrite them with stale snapshot
+      if (dirtyRef.current) return
+      const restored: Session[] = (snapshot.sessions ?? []).map((s) => ({
+        id: s.id,
+        agent: agentForPersisted(s.agentId, s.label, s.command),
+        title: s.title ?? s.label
+      }))
+      let maxCounter = 0
+      for (const s of restored) {
+        const c = extractCounter(s.id)
+        if (c !== null && c > maxCounter) maxCounter = c
+      }
+      if (maxCounter > sessionCounter) sessionCounter = maxCounter
+      setSessions(restored)
+      setFeaturedId(snapshot.featuredId ?? null)
+      setMaximizedId(snapshot.maximizedId ?? null)
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!hydratedRef.current) return
     if (active && !wasActiveRef.current && sessions.length === 0) setLauncherOpen(true)
     wasActiveRef.current = active
   }, [active, sessions.length])

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { ExternalLink, Music2, Pause, Play, Plus, RotateCcw, SkipBack, SkipForward, SquareStop, Trash2, Volume2, VolumeX } from 'lucide-react'
+import { isSafeUrl, sanitizeUrl } from '../lib/sanitizeUrl'
 
 type Provider = 'youtube' | 'yandex' | 'spotify' | 'audio'
 type Track = { id: string; url: string; title: string; provider: Provider }
@@ -100,6 +101,8 @@ function youtubeApi(): Promise<YTApi> {
   return apiPromise
 }
 
+const SUPPORTED_AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'flac', 'aac', 'm4a', 'opus', 'weba'])
+
 function provider(url: string): Provider | null {
   try {
     const trimmed = url.trim()
@@ -109,11 +112,47 @@ function provider(url: string): Provider | null {
     if (host === 'youtube.com' || host === 'youtu.be' || host === 'm.youtube.com' || host === 'music.youtube.com') return 'youtube'
     if (host === 'open.spotify.com' || host === 'spotify.com') return 'spotify'
     if (host === 'music.yandex.ru' || host === 'music.yandex.com') return 'yandex'
-    // Any direct link to an audio file streams through <audio>
+    // Direct link to an audio file streams through <audio> — only if extension matches
+    // the six required formats plus common containers. No generic http fallback:
+    // treating every https URL as audio misclassifies pages as tracks and
+    // makes <audio> issue a CORS/noise request for HTML.
+    const ext = u.pathname.split('.').pop()?.split('?')[0]?.toLowerCase() ?? ''
+    if (SUPPORTED_AUDIO_EXTS.has(ext)) return 'audio'
     if (/\.(mp3|ogg|oga|wav|m4a|flac|aac|opus|weba)($|\?)/i.test(u.pathname)) return 'audio'
-    if (u.protocol === 'http:' || u.protocol === 'https:') return 'audio'
   } catch {}
   return null
+}
+
+function isSupportedAudioUrl(url: string): boolean {
+  try {
+    const u = new URL(url)
+    const ext = u.pathname.split('.').pop()?.split('?')[0]?.toLowerCase() ?? ''
+    return SUPPORTED_AUDIO_EXTS.has(ext)
+  } catch {
+    return false
+  }
+}
+
+function sanitizeAudioSrc(url: string): string | null {
+  if (!url) return null
+  const trimmed = url.trim()
+  if (!trimmed) return null
+  // Allow blob: and data:audio/* for cached / locally-imported audio; otherwise require safe http(s)
+  if (trimmed.startsWith('blob:')) return trimmed
+  if (trimmed.startsWith('data:audio/')) return trimmed
+  // Fall back to the shared sanitizer which blocks javascript:, file:, etc.
+  const sanitized = sanitizeUrl(trimmed)
+  if (!sanitized || !isSafeUrl(sanitized)) return null
+  // Extra gate: must be http(s) and ideally have a supported extension, but
+  // allow extension-less streaming URLs (e.g. HLS) — the <audio> element will
+  // error gracefully if the format is truly unsupported.
+  try {
+    const u = new URL(sanitized)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+  } catch {
+    return null
+  }
+  return sanitized
 }
 
 function videoId(url: string): string | null {
@@ -241,6 +280,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
   const [scrub, setScrub] = useState<number | null>(null)
   const [mediaError, setMediaError] = useState<string | null>(null)
   const volKey = `orcspace-music-volume:${widgetId}`
+  const muteKey = `orcspace-music-muted:${widgetId}`
   const [volume, setVolume] = useState(() => {
     try {
       const v = Number(localStorage.getItem(volKey))
@@ -249,7 +289,13 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
       return 100
     }
   })
-  const [muted, setMuted] = useState(false)
+  const [muted, setMuted] = useState(() => {
+    try {
+      return localStorage.getItem(muteKey) === '1'
+    } catch {
+      return false
+    }
+  })
   const hostRef = useRef<HTMLDivElement>(null)
   const player = useRef<Player | null>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
@@ -436,13 +482,45 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
     setScrub(null)
     setMediaError(null)
     dragging.current = false
-  }, [track?.id])
+    if (track?.provider === 'audio' && !sanitizeAudioSrc(track.url)) {
+      setMediaError('Unsupported or unsafe audio link — use mp3, wav, ogg, flac, aac or m4a over https.')
+    }
+  }, [track?.id, track?.url, track?.provider])
 
   useEffect(() => {
     try {
       localStorage.setItem(volKey, String(volume))
     } catch {}
   }, [volKey, volume])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(muteKey, muted ? '1' : '0')
+    } catch {}
+  }, [muteKey, muted])
+
+  // Unmount audio cleanup: pause, revoke src, and abandon any pending play
+  // promise so the widget does not leak a playing <audio> after removal.
+  useEffect(() => {
+    return () => {
+      const a = audioRef.current
+      if (a) {
+        try {
+          a.pause()
+          // Removing src and calling load() releases the network resource and
+          // clears the internal decoder; without this a removed-but-playing
+          // element keeps its HTTP stream and audio thread alive.
+          a.removeAttribute('src')
+          a.load()
+        } catch {}
+      }
+      try {
+        player.current?.destroy()
+      } catch {}
+      player.current = null
+      if (hostRef.current) hostRef.current.innerHTML = ''
+    }
+  }, [])
 
   useEffect(() => {
     const a = audioRef.current
@@ -462,7 +540,8 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
     }
   }, [volume, muted, ready, track?.id])
 
-  const controllable = !!id || track?.provider === 'audio'
+  const audioSrc = track?.provider === 'audio' ? sanitizeAudioSrc(track.url) : null
+  const controllable = !!id || (track?.provider === 'audio' && !!audioSrc)
   const canSeek = Number.isFinite(duration) && duration > 0
   const shown = scrub ?? current
   const pct = canSeek ? Math.min(100, Math.max(0, (shown / duration) * 100)) : 0
@@ -644,6 +723,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
         <button
           className="rounded p-1 text-text-faint hover:text-danger disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:text-text-faint"
           title={lists.length > 1 ? 'Delete playlist' : 'The last playlist cannot be deleted'}
+          aria-label={lists.length > 1 ? 'Delete playlist' : 'The last playlist cannot be deleted'}
           disabled={lists.length <= 1}
           onClick={() => {
             setLists((prev) => prev.filter((_, i) => i !== listIndex))
@@ -662,7 +742,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
         />
-        <button className="rounded bg-accent px-2 text-bg" type="submit">
+        <button className="rounded bg-accent px-2 text-bg" type="submit" title="Add track" aria-label="Add track">
           <Plus size={13} />
         </button>
       </form>
@@ -686,7 +766,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
                 {i === trackIndex && playing ? <Play size={9} className="mr-1 inline text-accent" /> : null}
                 {t.title} <span className="text-[9px] uppercase text-text-faint">· {t.provider}</span>
               </button>
-              <button className="p-1 text-text-faint hover:text-danger" title="Remove track" onClick={() => removeTrack(t.id)}>
+              <button className="p-1 text-text-faint hover:text-danger" title={`Remove ${t.title}`} aria-label={`Remove ${t.title}`} onClick={() => removeTrack(t.id)}>
                 <Trash2 size={11} />
               </button>
             </div>
@@ -841,13 +921,14 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
         </div>
       )}
 
-      {track?.provider === 'audio' && (
+      {track?.provider === 'audio' && audioSrc && (
         <audio
           key={track.id}
           ref={audioRef}
           autoPlay
           preload="metadata"
-          src={track.url}
+          crossOrigin="anonymous"
+          src={audioSrc}
           className="hidden"
           onPlay={() => setPlaying(true)}
           onPause={() => setPlaying(false)}
@@ -861,7 +942,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
             const a = audioRef.current
             if (a && Number.isFinite(a.duration) && a.duration > 0) setDuration(a.duration)
           }}
-          onError={() => setMediaError('Could not load this audio — check the link.')}
+          onError={() => setMediaError('Could not load this audio — check the link or format (mp3/wav/ogg/flac/aac/m4a).')}
           onEnded={() => {
             const a = audioRef.current
             if ((listRef.current?.tracks.length ?? 0) <= 1 && a) {
@@ -897,8 +978,8 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
           </div>
         ))}
 
-      {track && /^https?:/i.test(track.url) && (
-        <a className="flex items-center gap-1 text-[10px] text-text-faint hover:text-accent" href={track.url} target="_blank" rel="noreferrer">
+      {track && isSafeUrl(track.url) && sanitizeUrl(track.url) && (
+        <a className="flex items-center gap-1 text-[10px] text-text-faint hover:text-accent" href={sanitizeUrl(track.url) ?? undefined} target="_blank" rel="noreferrer noopener">
           <ExternalLink size={11} /> Open current track
         </a>
       )}

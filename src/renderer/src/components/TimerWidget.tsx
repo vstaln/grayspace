@@ -15,18 +15,53 @@ const PRESETS = [5, 15, 25, 45]
  * a background tab throttles its timers, and a counter that ticks slower than
  * a second is a clock that lies.
  */
-export default function TimerWidget(): React.JSX.Element {
-  const [totalMs, setTotalMs] = useState(25 * 60_000)
-  const [remaining, setRemaining] = useState(25 * 60_000)
-  const [running, setRunning] = useState(false)
-  const [isCustom, setIsCustom] = useState(false)
-  const [customHours, setCustomHours] = useState('0')
-  const [customMinutes, setCustomMinutes] = useState('25')
-  const [customSeconds, setCustomSeconds] = useState('0')
+interface TimerPersist {
+  totalMs: number
+  remaining: number
+  running: boolean
+  deadline: number
+  rang: boolean
+  isCustom: boolean
+  customHours: string
+  customMinutes: string
+  customSeconds: string
+}
+
+const timerPersist = new Map<string, TimerPersist>()
+
+export function clearTimerPersist(id: string): void {
+  timerPersist.delete(id)
+}
+
+export default function TimerWidget({ widgetId }: { widgetId?: string }): React.JSX.Element {
+  const persistKey = widgetId ?? '__singleton__'
+  const cached = timerPersist.get(persistKey)
+  const [totalMs, setTotalMs] = useState(() => cached?.totalMs ?? 25 * 60_000)
+  const [remaining, setRemaining] = useState(() => {
+    if (!cached) return 25 * 60_000
+    if (cached.running) return cached.deadline - Date.now()
+    return cached.remaining
+  })
+  const [running, setRunning] = useState(() => cached?.running ?? false)
+  const [isCustom, setIsCustom] = useState(() => cached?.isCustom ?? false)
+  const [customHours, setCustomHours] = useState(() => cached?.customHours ?? '0')
+  const [customMinutes, setCustomMinutes] = useState(() => cached?.customMinutes ?? '25')
+  const [customSeconds, setCustomSeconds] = useState(() => cached?.customSeconds ?? '0')
   const hoursInputRef = useRef<HTMLInputElement>(null)
-  const deadline = useRef<number>(0)
-  const rang = useRef(false)
+  const deadline = useRef<number>(cached?.deadline ?? 0)
+  const rang = useRef(cached?.rang ?? false)
   const titleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Persist state so a maximize-triggered remount restores the running countdown
+  // instead of resetting to 25:00. Closing the widget forgets the timer — that
+  // cleanup lives in useCanvas's removeWidget which clears widget-specific
+  // storage; the in-memory entry is left to be GC'd after reload (the timer
+  // is intentionally not persisted across restarts).
+  const syncPersist = useRef(false)
+  // placeholder to keep linter happy
+  void syncPersist
+  // sync on every render-relevant change
+
   // A minimized timer's body is display:none; ticking (and re-rendering) 5×/s
   // for a number nobody can see is pure waste. Time is kept as a deadline, so
   // skipped ticks lose nothing — the next visible tick recomputes from the
@@ -41,6 +76,21 @@ export default function TimerWidget(): React.JSX.Element {
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (!widgetId) return
+    timerPersist.set(persistKey, {
+      totalMs,
+      remaining,
+      running,
+      deadline: deadline.current,
+      rang: rang.current,
+      isCustom,
+      customHours,
+      customMinutes,
+      customSeconds
+    })
+  }, [persistKey, widgetId, totalMs, remaining, running, isCustom, customHours, customMinutes, customSeconds])
 
   useEffect(() => {
     if (isCustom) {

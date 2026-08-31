@@ -15,8 +15,14 @@
     />
     <title>OrcSpace</title>
   </head>
-  <body>
-    <div id="root"></div>
+  <body style="margin:0;background:#0e0e11;color:#e8e8ea;font-family:Inter,system-ui,sans-serif">
+    <!-- Visible while the renderer bundle is loading (or reports a startup
+         error); a blank root is indistinguishable from a crashed window. -->
+    <div id="root">
+      <div style="display:grid;place-items:center;height:100vh;font-size:13px;letter-spacing:.02em">
+        Starting OrcSpace…
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

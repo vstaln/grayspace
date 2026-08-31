@@ -8,6 +8,7 @@ export * from './api'
 import type {
   BrowserApi,
   CanvasApi,
+  CodeApi,
   ControlApi,
   CoordinationApi,
   FsApi,
@@ -34,6 +35,7 @@ declare global {
       orchestration: OrchestrationApi
       planner: PlannerApi
       canvas: CanvasApi
+      code: CodeApi
       git: GitApi
       fs: FsApi
       system: SystemApi

@@ -87,7 +87,6 @@ export interface WorkspaceApi {
 
 export type LinkSyntax = 'wiki' | 'dollar' | 'both'
 export type UserRole = 'member' | 'lead'
-export type UserPlan = 'free' | 'plus'
 
 export interface LocalModelSettings {
   enabled: boolean
@@ -102,8 +101,8 @@ export interface LocalModelSettings {
 
 export interface AppSettings {
   linkSyntax: LinkSyntax
+  windowsShell: 'cmd' | 'powershell'
   role: UserRole
-  plan?: UserPlan
   userName: string
   backgroundImage?: string
   /** 0–90 % black laid over the wallpaper. */
@@ -448,6 +447,31 @@ export interface CanvasApi {
   save(snapshot: { widgets: CanvasWidget[]; camera: { x: number; y: number; zoom: number }; strokes: CanvasStroke[] }): Promise<
     { applied: number; skipped: number; removed: number } | { error: string }
   >
+}
+
+export interface CodeSession {
+  id: string
+  agentId: string
+  label: string
+  command: string
+  title?: string
+}
+
+export type WorkView = 'canvas' | 'code' | 'browser'
+
+export interface CodeSnapshot {
+  schemaVersion: number
+  sessions: CodeSession[]
+  featuredId: string | null
+  maximizedId: string | null
+  activeView?: WorkView | null
+  version: number
+}
+
+export interface CodeApi {
+  load(): Promise<CodeSnapshot>
+  save(snapshot: { sessions?: CodeSession[]; featuredId?: string | null; maximizedId?: string | null; activeView?: WorkView | null; workspaceDir?: string | null }): Promise<{ ok: boolean } | { error: string }>
+  onChange(cb: (snapshot: CodeSnapshot) => void): () => void
 }
 
 /** Repository status for the open project folder (main/git.ts). */

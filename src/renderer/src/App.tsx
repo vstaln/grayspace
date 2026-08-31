@@ -38,11 +38,48 @@ export default function App(): React.JSX.Element {
   // it pays nothing for the guest process. Same for the Code view.
   const [browserStarted, setBrowserStarted] = useState(false)
   const [codeStarted, setCodeStarted] = useState(false)
+  const workspaceDirForUiRef = useRef<string | null>(null)
+
+  // Restore Code sessions + last active view per workspace — so closing the
+  // app with Code terminals running brings them back instead of starting empty
+  // (user request: "сохранение на вкладку code после закрытия приложения").
+  useEffect(() => {
+    void window.api.workspace.getDir().then((dir) => {
+      workspaceDirForUiRef.current = dir
+    }).catch(() => {})
+    const offDir = window.api.workspace.onDirChange((dir) => {
+      workspaceDirForUiRef.current = dir
+    })
+    void window.api.code
+      .load()
+      .then((snap) => {
+        if (snap.sessions && snap.sessions.length > 0) setCodeStarted(true)
+        const av = (snap as unknown as { activeView?: WorkView }).activeView
+        if (av === 'code' && snap.sessions.length > 0) {
+          setCodeStarted(true)
+          setActiveView('code')
+        } else if (av === 'browser') {
+          setBrowserStarted(true)
+          setActiveView('browser')
+        } else if (av === 'canvas') {
+          setActiveView('canvas')
+        }
+      })
+      .catch(() => {})
+    const offCode = window.api.code.onChange((snap) => {
+      if (snap.sessions && snap.sessions.length > 0) setCodeStarted((prev) => prev || true)
+    })
+    return () => {
+      offDir()
+      offCode()
+    }
+  }, [])
 
   const showView = useCallback((view: WorkView): void => {
     if (view === 'browser') setBrowserStarted(true)
     if (view === 'code') setCodeStarted(true)
     setActiveView(view)
+    void window.api.code.save({ activeView: view, workspaceDir: workspaceDirForUiRef.current }).catch(() => {})
   }, [])
 
   return (
@@ -485,7 +522,7 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
         canvas.updateWidget(id, { x: widget.x + dx * step, y: widget.y + dy * step })
       }
     },
-    [canvas, onWidgetClose, confirm]
+    [canvas]
   )
 
   // P3-219: keyboard pan — arrows move the view while the canvas itself has
@@ -698,8 +735,11 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
    *  the frames' props stay identical and their React.memo skips the frame
    *  entirely (PERF-layer-transform). */
   const worldTransform = useMemo(
-    () => ({ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})` }),
-    [camera.x, camera.y, camera.zoom]
+    () => ({
+      transform: `translate3d(${camera.x}px, ${camera.y}px, 0px) scale(${camera.zoom})`,
+      willChange: isPanning ? 'transform' : 'auto'
+    }),
+    [camera.x, camera.y, camera.zoom, isPanning]
   )
 
   /** In-canvas widgets sit in world coordinates inside the scaled layer; a
@@ -806,7 +846,7 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
       >
         <div
           className="absolute inset-0 h-px w-px origin-top-left"
-          style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})` }}
+          style={worldTransform}
         >
           {/* Full `widgets`, not the culled/maximize-filtered list: an arc
               anchored to a maximized widget must still draw to its stored

@@ -20,7 +20,7 @@ export const CANVAS_SCHEMA_VERSION = 3
 /** Snapshot cache interval for event sourcing. */
 export const CANVAS_SNAPSHOT_INTERVAL = 50
 
-export type WidgetKind = 'terminal' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'id-generator' | 'orchestration'
+export type WidgetKind = 'terminal' | 'note' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'id-generator' | 'orchestration'
 
 export interface CanvasWidget {
   id: string
@@ -79,15 +79,15 @@ export const CANVAS_TARGET_ID = 'main'
 
 const EMPTY_WORKSPACE_SLOT = '__no-workspace__'
 type WorkspaceChangeListener = (dir: string | undefined) => void
-let workspaceChangeListener: WorkspaceChangeListener | null = null
+const workspaceChangeListeners = new Set<WorkspaceChangeListener>()
 
 /** AppState uses this bridge so changing the active folder also changes the canvas. */
 export function registerCanvasWorkspaceListener(listener: WorkspaceChangeListener): void {
-  workspaceChangeListener = listener
+  workspaceChangeListeners.add(listener)
 }
 
 export function notifyCanvasWorkspaceChanged(dir: string | undefined): void {
-  workspaceChangeListener?.(dir)
+  for (const listener of workspaceChangeListeners) listener(dir)
 }
 
 const isNum = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
@@ -111,7 +111,7 @@ const isNum = (value: unknown): value is number => typeof value === 'number' && 
  * `storage-core`'s off-thread writer (one string) and `sanitizeScrollback`.
  */
 
-const WIDGET_KINDS = new Set<string>(['terminal', 'note', 'timer', 'board', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'id-generator'])
+const WIDGET_KINDS = new Set<string>(['terminal', 'note', 'timer', 'board', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'id-generator', 'orchestration'])
 
 export function sanitizeWidget(value: unknown): CanvasWidget | null {
   const w = value as Record<string, unknown>
@@ -195,6 +195,7 @@ export class CanvasStore extends EventEmitter {
   private strokes: CanvasStroke[] = []
   private loaded = false
   private saveTimer: ReturnType<typeof setTimeout> | null = null
+  private changeTimer: ReturnType<typeof setTimeout> | null = null
   private writeChain: Promise<void> = Promise.resolve()
   private writeSeq = 0
   private syncFlushSeq = 0
@@ -696,7 +697,13 @@ export class CanvasStore extends EventEmitter {
   // ---- persistence --------------------------------------------------------
 
   private changed(): void {
-    this.emit('change', this.snapshot())
+    if (this.changeTimer === null) {
+      this.changeTimer = setTimeout(() => {
+        this.changeTimer = null
+        this.emit('change', this.snapshot())
+      }, 50)
+      this.changeTimer.unref?.()
+    }
     if (this.saveTimer !== null) clearTimeout(this.saveTimer)
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null
@@ -781,6 +788,14 @@ export class CanvasStore extends EventEmitter {
   }
 
   dispose(): void {
+    if (this.saveTimer !== null) {
+      clearTimeout(this.saveTimer)
+      this.saveTimer = null
+    }
+    if (this.changeTimer !== null) {
+      clearTimeout(this.changeTimer)
+      this.changeTimer = null
+    }
     this.flush()
   }
 }

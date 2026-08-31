@@ -27,6 +27,23 @@ const MIME_BY_EXT: Record<string, string> = {
 
 export const IMAGE_EXTENSIONS = Object.keys(MIME_BY_EXT)
 
+const AUDIO_MIME_BY_EXT: Record<string, string> = {
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  oga: 'audio/ogg',
+  flac: 'audio/flac',
+  aac: 'audio/aac',
+  m4a: 'audio/mp4',
+  opus: 'audio/opus',
+  weba: 'audio/webm'
+}
+
+export const AUDIO_EXTENSIONS = Object.keys(AUDIO_MIME_BY_EXT)
+
+/** Combined map for dataUrl MIME lookup (images + audio). */
+const MEDIA_MIME_BY_EXT: Record<string, string> = { ...MIME_BY_EXT, ...AUDIO_MIME_BY_EXT }
+
 /** Refuse anything big enough to make a data URL a memory problem in the renderer. */
 export const MAX_MEDIA_BYTES = 24 * 1024 * 1024
 
@@ -45,7 +62,8 @@ export function mediaDir(): string {
  */
 export function saveBytes(bytes: Buffer, ext: string): MediaFile {
   if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('File larger than 24 MB')
-  const safeExt = MIME_BY_EXT[ext.replace(/^\./, '').toLowerCase()] ? ext.replace(/^\./, '').toLowerCase() : 'png'
+  const clean = ext.replace(/^\./, '').toLowerCase()
+  const safeExt = MIME_BY_EXT[clean] || AUDIO_MIME_BY_EXT[clean] ? clean : 'png'
   const digest = createHash('sha1').update(bytes).digest('hex').slice(0, 16)
   const dir = mediaDir()
   fs.mkdirSync(dir, { recursive: true })
@@ -115,7 +133,8 @@ export function pruneScratch(dir: string = scratchDir()): void {
 /** saveBytes' throwaway twin — same content addressing, temp dir instead. */
 export function saveBytesToScratch(bytes: Buffer, ext: string): MediaFile {
   if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('File larger than 24 MB')
-  const safeExt = MIME_BY_EXT[ext.replace(/^\./, '').toLowerCase()] ? ext.replace(/^\./, '').toLowerCase() : 'png'
+  const clean = ext.replace(/^\./, '').toLowerCase()
+  const safeExt = MIME_BY_EXT[clean] || AUDIO_MIME_BY_EXT[clean] ? clean : 'png'
   const dir = scratchDir()
   fs.mkdirSync(dir, { recursive: true })
   pruneScratch(dir)
@@ -187,7 +206,8 @@ export async function dataUrl(path: string): Promise<string | null> {
   try {
     const bytes = await fs.promises.readFile(authorizedPath)
     if (bytes.byteLength > MAX_MEDIA_BYTES) return null
-    const mime = MIME_BY_EXT[extname(authorizedPath).slice(1).toLowerCase()] || 'image/png'
+    const ext = extname(authorizedPath).slice(1).toLowerCase()
+    const mime = MEDIA_MIME_BY_EXT[ext] || MIME_BY_EXT[ext] || 'application/octet-stream'
     return `data:${mime};base64,${bytes.toString('base64')}`
   } catch {
     return null
@@ -221,4 +241,17 @@ async function authorizedMediaPath(path: string): Promise<string | null> {
  */
 export function hasImageExtension(path: string): boolean {
   return extname(path).slice(1).toLowerCase() in MIME_BY_EXT
+}
+
+export function hasAudioExtension(path: string): boolean {
+  return extname(path).slice(1).toLowerCase() in AUDIO_MIME_BY_EXT
+}
+
+export function hasMediaExtension(path: string): boolean {
+  const ext = extname(path).slice(1).toLowerCase()
+  return ext in MIME_BY_EXT || ext in AUDIO_MIME_BY_EXT
+}
+
+export function isAudioFile(path: string): boolean {
+  return hasAudioExtension(path)
 }

@@ -11,10 +11,26 @@ export function registerBrowserIpc(_deps: IpcDeps): void {
     try {
       if (session && typeof session.fromPartition === 'function') {
         const ses = session.fromPartition(BROWSER_PARTITION)
-        await ses.clearStorageData({
-          storages: ['cookies', 'filesystem', 'indexdb', 'localstorage', 'shadercache', 'serviceworkers', 'cachestorage']
+        // Полная очистка: куки, localStorage, IndexedDB, ServiceWorkers, кэш, shader, websql и т.д.
+        // Следы браузера -> 0. Срабатывает без перезапуска.
+        await (ses.clearStorageData as unknown as (opts: unknown) => Promise<void>)({
+          storages: [
+            'cookies',
+            'filesystem',
+            'indexdb',
+            'localstorage',
+            'shadercache',
+            'serviceworkers',
+            'cachestorage'
+          ]
         })
         await ses.clearCache()
+        // Дополнительные слои Chromium
+        try { await (ses as unknown as { clearHostResolverCache?: () => Promise<void> }).clearHostResolverCache?.() } catch {}
+        try { await (ses as unknown as { clearAuthCache?: () => Promise<void> }).clearAuthCache?.() } catch {}
+        try { await (ses as unknown as { clearCodeCaches?: (opts: unknown) => Promise<void> }).clearCodeCaches?.({}) } catch {}
+        try { (ses as unknown as { flushStorageData?: () => void }).flushStorageData?.() } catch {}
+        try { await (ses as unknown as { clearData?: (opts: unknown) => Promise<void> }).clearData?.({}) } catch {}
       }
       return { ok: true }
     } catch (err) {

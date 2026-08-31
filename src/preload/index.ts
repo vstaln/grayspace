@@ -10,6 +10,8 @@ import type {
   BrowserApi,
   CanvasApi,
   CanvasSnapshot,
+  CodeApi,
+  CodeSnapshot,
   ControlApi,
   CoordinationApi,
   CoordinationSnapshot,
@@ -226,6 +228,13 @@ const canvas: CanvasApi = {
   onChange: (cb: (snapshot: CanvasSnapshot) => void): (() => void) => onBroadcast('canvas:onChange', cb)
 }
 
+const code: CodeApi = {
+  load: (): Promise<CodeSnapshot> => ipcRenderer.invoke('code:load'),
+  save: (snapshot: unknown): Promise<{ ok: boolean } | { error: string }> =>
+    ipcRenderer.invoke('code:save', snapshot),
+  onChange: (cb: (snapshot: CodeSnapshot) => void): (() => void) => onBroadcast('code:onChange', cb)
+}
+
 const fs: FsApi = {
   list: (dirPath?: string, options?: { showHidden?: boolean }): Promise<FsListResult | { error: string }> =>
     ipcRenderer.invoke('fs:list', dirPath, options),
@@ -261,6 +270,7 @@ contextBridge.exposeInMainWorld('api', {
   orchestration,
   planner,
   canvas,
+  code,
   git,
   fs,
   system,
