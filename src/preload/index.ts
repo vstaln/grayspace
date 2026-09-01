@@ -257,7 +257,9 @@ const fs: FsApi = {
 }
 
 const system: SystemApi = {
-  stats: (): Promise<SystemStats | { error: string }> => ipcRenderer.invoke('system:stats')
+  stats: (): Promise<SystemStats | { error: string }> => ipcRenderer.invoke('system:stats'),
+  onPersistError: (cb: (payload: { store: string; message: string; at: number }) => void): (() => void) =>
+    onBroadcast('system:persistError', cb)
 }
 
 contextBridge.exposeInMainWorld('api', {

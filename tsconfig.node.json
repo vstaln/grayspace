@@ -23,6 +23,7 @@
     "src/main/**/*",
     "src/preload/**/*",
     "src/renderer/src/lib/markdown.ts",
-    "src/renderer/src/lib/sanitizeUrl.ts"
+    "src/renderer/src/lib/sanitizeUrl.ts",
+    "src/renderer/src/lib/canvasMetrics.ts"
   ]
 }

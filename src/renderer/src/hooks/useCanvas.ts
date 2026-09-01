@@ -36,7 +36,6 @@ const WIDGET_DEFAULTS: Record<WidgetKind, { title: string; w: number; h: number 
   browser: { title: 'Browser', w: 720, h: 480 },
   links: { title: 'Links', w: 420, h: 360 },
   'music-player': { title: 'Music Player', w: 460, h: 420 },
-  'id-generator': { title: 'ID Generator', w: 420, h: 360 },
   orchestration: { title: 'Orchestration', w: 520, h: 560 }
 }
 

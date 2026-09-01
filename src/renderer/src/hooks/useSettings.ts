@@ -17,7 +17,7 @@ const DEFAULTS: AppSettings = {
     idleTimeoutMs: 5 * 60_000,
     offloadVision: false
   },
-  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player', 'id-generator']
+  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player']
 }
 
 const FAVORITES_ALL_MIGRATION_KEY = 'orcspace-favorites-all-enabled'
@@ -42,7 +42,7 @@ export function useSettings(): {
     const mergeDefaults = (s: AppSettings): AppSettings => ({
       ...DEFAULTS,
       ...s,
-      favoriteWidgets: (s.favoriteWidgets ?? DEFAULTS.favoriteWidgets ?? []).filter((kind) => kind !== 'translator')
+      favoriteWidgets: (s.favoriteWidgets ?? DEFAULTS.favoriteWidgets ?? []).filter((kind) => kind !== 'translator' && kind !== 'id-generator')
     })
 
     void window.api.settings

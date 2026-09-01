@@ -1,3 +1,5 @@
+import * as fs from 'fs'
+import { join } from 'path'
 
 export const APP_TITLE = 'OrcSpace'
 
@@ -28,7 +30,25 @@ export const BACKGROUND_DIR_NAME = 'backgrounds'
 
 export function defaultShell(windowsShell: 'cmd' | 'powershell' = 'cmd'): string {
   if (process.platform === 'win32') {
-    return windowsShell === 'powershell' ? 'powershell.exe' : process.env.ComSpec || 'cmd.exe'
+    const systemRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows'
+    if (windowsShell === 'powershell') {
+      const candidates = [
+        join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+        join(process.env.ProgramFiles || 'C:\\Program Files', 'PowerShell', '7', 'pwsh.exe'),
+        join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'PowerShell', '7', 'pwsh.exe'),
+        join(process.env.LOCALAPPDATA || '', 'Microsoft', 'PowerShell', 'pwsh.exe')
+      ]
+      for (const candidate of candidates) {
+        if (candidate && fs.existsSync(candidate)) return candidate
+      }
+      return 'powershell.exe'
+    }
+    if (process.env.ComSpec && fs.existsSync(process.env.ComSpec)) {
+      return process.env.ComSpec
+    }
+    const cmdCandidate = join(systemRoot, 'System32', 'cmd.exe')
+    if (fs.existsSync(cmdCandidate)) return cmdCandidate
+    return 'cmd.exe'
   }
   return process.env.SHELL || '/bin/sh'
 }

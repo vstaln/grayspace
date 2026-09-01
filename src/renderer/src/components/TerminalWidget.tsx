@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import { Terminal, ITheme } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
+import { WebglAddon } from 'xterm-addon-webgl'
 import 'xterm/css/xterm.css'
 import { ThemeName, useTheme } from '../theme'
 import { pasteHasImage, saveImageFromPaste } from '../lib/paste'
@@ -53,7 +54,7 @@ function xtermTheme(_appTheme: ThemeName): ITheme {
   return { ...BASE_COLORS, background: palette.terminalSolid, cursorAccent: palette.wallpaperBase }
 }
 
-export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
+function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const { theme } = useTheme()
@@ -117,11 +118,21 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
     term.onData((data) => writePty(data))
     term.onResize(({ cols, rows }) => window.api.terminal.resize(id, cols, rows))
 
-    /** A shell takes a path, not pixels, so a picture is written as a quoted path. */
-    const writeImagePath = (image: { name: string; path: string } | null): void => {
+    let imageCounter = 0
+
+    const isImageFile = (f: { name?: string; type?: string }): boolean => {
+      if (f.type && f.type.startsWith('image/')) return true
+      const name = (f.name || '').toLowerCase()
+      return /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|tiff?)$/i.test(name)
+    }
+
+    /** Formats pasted/dropped picture as [Image N] token. */
+    const writeImageToken = (image: { name: string; path: string } | null, addTrailingSpace = false): void => {
       if (!image) return void term.write('\r\n\x1b[33m[No image in clipboard]\x1b[0m\r\n')
-      writePty(`"${image.path}"`)
-      term.write(`\x1b[90m[Image pasted: ${image.name}]\x1b[0m`)
+      imageCounter += 1
+      const token = `[Image ${imageCounter}]`
+      writePty(addTrailingSpace ? `${token} ` : token)
+      term.write(`\x1b[90m[${token}: ${image.name}]\x1b[0m`)
     }
 
     term.attachCustomKeyEventHandler((event) => {
@@ -163,11 +174,14 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
       // instead of hijacking it (UI-audit). On macOS Option+V is a real glyph
       // (√), so the image chord is Cmd+V's paste path there instead.
       if (!IS_MAC && event.altKey && !event.ctrlKey && event.key.toLowerCase() === 'v') {
-        void window.api.media.saveClipboardScratch().then(writeImagePath).catch((err) => {
-          term.write(
-            `\r\n\x1b[31m[${err instanceof Error ? err.message : 'Failed to save image'}]\x1b[0m\r\n`
-          )
-        })
+        void window.api.media
+          .saveClipboardScratch()
+          .then((img) => writeImageToken(img, false))
+          .catch((err) => {
+            term.write(
+              `\r\n\x1b[31m[${err instanceof Error ? err.message : 'Failed to save image'}]\x1b[0m\r\n`
+            )
+          })
         return false
       }
       if (event.shiftKey && event.key === 'PageUp') {
@@ -217,9 +231,24 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
       return true
     })
 
+    let webglAddon: WebglAddon | null = null
     try {
       term.open(container)
       if (container.clientWidth > 0 && container.clientHeight > 0) fit.fit()
+      try {
+        webglAddon = new WebglAddon()
+        webglAddon.onContextLoss(() => {
+          try {
+            webglAddon?.dispose()
+          } catch {
+            /* ignore context loss dispose */
+          }
+          webglAddon = null
+        })
+        term.loadAddon(webglAddon)
+      } catch {
+        webglAddon = null
+      }
       term.focus()
     } catch (err) {
       // A canvas redraw can detach the host between React's effect and xterm's
@@ -293,14 +322,16 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
     // Capture phase + stopPropagation: the event never reaches xterm's own
     // textarea paste handler, so the text is written to the pty a single time.
     // Handling it on bubble instead is what caused every Ctrl+V to paste twice.
+    // Capture phase + stopPropagation: the event never reaches xterm's own
+    // textarea paste handler, so the text is written to the pty a single time.
+    // Handling it on bubble instead is what caused every Ctrl+V to paste twice.
     const onPaste = (event: ClipboardEvent): void => {
       event.preventDefault()
       event.stopPropagation()
-      // Ctrl+V / Cmd+V on a picture writes its path too, so the image case no
-      // longer depends on remembering Alt+V.
+      // Ctrl+V / Cmd+V on a picture writes [Image N] token so CLI agents receive the image reference.
       if (pasteHasImage(event)) {
         void saveImageFromPaste(event, { scratch: true })
-          .then(writeImagePath)
+          .then((img) => writeImageToken(img, false))
           .catch((err) =>
             term.write(
               `\r\n\x1b[31m[${err instanceof Error ? err.message : 'Failed to save image'}]\x1b[0m\r\n`
@@ -321,7 +352,7 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
           .saveClipboardScratch()
           .then((image) => {
             // Genuinely empty clipboard: stay silent rather than nagging.
-            if (image) writeImagePath(image)
+            if (image) writeImageToken(image, false)
           })
           .catch(() => {
             /* nothing usable on the clipboard — a paste of nothing is not an error */
@@ -342,41 +373,44 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
     container.addEventListener('paste', onPaste, true)
 
     // Dropping a file (a screenshot dragged off the desktop, an image from
-    // Finder/Explorer, anything) writes its quoted path the same way a
-    // clipboard-pasted picture does — the terminal only ever wants a path.
-    const onDragOver = (event: DragEvent): void => {
-      if (!event.dataTransfer?.types.includes('Files')) return
+    // Finder/Explorer, anything) writes [Image N] for images or quoted path for documents.
+    const onDragEnter = (event: DragEvent): void => {
       event.preventDefault()
-      event.dataTransfer.dropEffect = 'copy'
+      event.stopPropagation()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+    }
+    const onDragOver = (event: DragEvent): void => {
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
     }
     const onDrop = (event: DragEvent): void => {
-      const files = event.dataTransfer?.files
-      if (!files || files.length === 0) return
       event.preventDefault()
-      const dropped = Array.from(files)
+      event.stopPropagation()
+      const dt = event.dataTransfer
+      let dropped: File[] = Array.from(dt?.files ?? [])
+      if (dropped.length === 0 && dt?.items) {
+        for (const item of Array.from(dt.items)) {
+          if (item.kind === 'file') {
+            const f = item.getAsFile()
+            if (f) dropped.push(f)
+          }
+        }
+      }
+      if (dropped.length === 0) return
+
       // Sequential, not a parallel loop: several files each write their own
-      // path into the same line, and racing reads would interleave them into
+      // path/token into the same line, and racing reads would interleave them into
       // an unusable argument list.
       void (async () => {
         for (const file of dropped) {
           try {
-            // An image goes through the same content-addressed scratch copy
-            // as a clipboard paste (saveImageFromPaste) rather than its raw OS
-            // path: a screenshot's real path is long, often has spaces and,
-            // on a non-English Windows install, non-ASCII characters (e.g.
-            // "Снимок экрана ....png") — exactly the kind of path some
-            // CLIs/agents mis-parse even quoted. Non-image files keep their
-            // real path; there's no such mangling concern and copying, say, a
-            // dropped video would just burn scratch space for nothing.
-            if (file.type.startsWith('image/')) {
+            if (isImageFile(file)) {
               const bytes = new Uint8Array(await file.arrayBuffer())
-              const ext = file.name.includes('.') ? file.name.split('.').pop()! : file.type.split('/')[1]
+              const ext = file.name.includes('.') ? file.name.split('.').pop()! : file.type.split('/')[1] || 'png'
               const saved = await window.api.media.saveBytesScratch(bytes, ext)
               if (saved && 'path' in saved) {
-                writeImagePath(saved)
-                // The paste path deliberately writes no trailing space; a drop
-                // may carry several files, so each path needs its separator.
-                writePty(' ')
+                writeImageToken(saved, true)
               } else if (saved && 'error' in saved) {
                 term.write(`\r\n\x1b[31m[${saved.error}]\x1b[0m\r\n`)
               }
@@ -397,6 +431,7 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
         }
       })()
     }
+    container.addEventListener('dragenter', onDragEnter)
     container.addEventListener('dragover', onDragOver)
     container.addEventListener('drop', onDrop)
 
@@ -484,6 +519,7 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
       if (resizeRaf !== null) cancelAnimationFrame(resizeRaf)
       observer.disconnect()
       container.removeEventListener('paste', onPaste, true)
+      container.removeEventListener('dragenter', onDragEnter)
       container.removeEventListener('dragover', onDragOver)
       container.removeEventListener('drop', onDrop)
       container.removeEventListener('wheel', onWheel, true)
@@ -497,6 +533,14 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
       dataUnsub()
       exitUnsub()
       try {
+        if (webglAddon) {
+          try {
+            webglAddon.dispose()
+          } catch {
+            /* ignore */
+          }
+          webglAddon = null
+        }
         term.dispose()
       } catch (err) {
         // xterm-addon-webgl's teardown hook rebuilds the DOM renderer via
@@ -514,3 +558,5 @@ export default function TerminalWidget({ id, onProcessExit }: Props): React.JSX.
 
   return <div ref={containerRef} className="term-shell term h-full w-full py-1.5 pr-0 pl-2" data-testid="terminal-xterm" />
 }
+
+export default React.memo(TerminalWidget)

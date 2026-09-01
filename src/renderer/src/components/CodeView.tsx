@@ -349,14 +349,47 @@ export default function CodeView({ active }: Props): React.JSX.Element {
     setSessions((current) => current.filter((s) => s.id !== id))
   }, [])
 
+  const handlerCacheRef = useRef<Map<string, {
+    onClose: () => void
+    onFocus: () => void
+    onRename: (title: string) => void
+    onToggleMaximize: () => void
+  }>>(new Map())
+
+  const getSessionHandlers = (id: string) => {
+    let handlers = handlerCacheRef.current.get(id)
+    if (!handlers) {
+      handlers = {
+        onClose: () => closeSession(id),
+        onFocus: () => setFeaturedId(id),
+        onRename: (title: string) => renameSession(id, title),
+        onToggleMaximize: () => setMaximizedId((current) => (current === id ? null : id))
+      }
+      handlerCacheRef.current.set(id, handlers)
+    }
+    return handlers
+  }
+
+  useEffect(() => {
+    const cache = handlerCacheRef.current
+    if (cache.size === 0) return
+    const live = new Set(sessions.map((s) => s.id))
+    for (const id of Array.from(cache.keys())) {
+      if (!live.has(id)) cache.delete(id)
+    }
+  }, [sessions])
+
   // Columns scale with how many sessions are actually open, so a launcher
   // pick of 2 doesn't waste half the pane and 8 doesn't overflow it.
   const columns = sessions.length <= 1 ? 1 : sessions.length <= 4 ? 2 : sessions.length <= 6 ? 3 : 4
 
-  // With exactly 3 sessions a grid wastes half a row — one big terminal on
-  // the left with the other two stacked on the right reads better instead.
+  // With exactly 3 sessions a grid used to promote one terminal to a big
+  // left slot (featured). That caused closing 1 of 4 → 3 to auto-promote
+  // sessions[0] and make another card "fly" to the top-right. Disable the
+  // automatic fallback — featured layout now only applies when the user has
+  // explicitly clicked a small card to promote it.
   const featured =
-    sessions.length === 3 ? sessions.find((s) => s.id === featuredId) ?? sessions[0] : null
+    sessions.length === 3 ? sessions.find((s) => s.id === featuredId) ?? null : null
 
   /**
    * Grid placement per session. The featured layout is expressed purely as
@@ -412,19 +445,22 @@ export default function CodeView({ active }: Props): React.JSX.Element {
             : { gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gridAutoRows: 'minmax(0, 1fr)' }
         }
       >
-        {sessions.map((session) => (
-          <SessionCard
-            key={session.id}
-            session={session}
-            style={placementOf(session.id)}
-            onClose={() => closeSession(session.id)}
-            onFocus={() => setFeaturedId(session.id)}
-            onRename={(title) => renameSession(session.id, title)}
-            promotable={Boolean(featured) && session.id !== featured?.id}
-            maximized={maximizedId === session.id}
-            onToggleMaximize={() => setMaximizedId((current) => (current === session.id ? null : session.id))}
-          />
-        ))}
+        {sessions.map((session) => {
+          const handlers = getSessionHandlers(session.id)
+          return (
+            <SessionCard
+              key={session.id}
+              session={session}
+              style={placementOf(session.id)}
+              onClose={handlers.onClose}
+              onFocus={handlers.onFocus}
+              onRename={handlers.onRename}
+              promotable={Boolean(featured) && session.id !== featured?.id}
+              maximized={maximizedId === session.id}
+              onToggleMaximize={handlers.onToggleMaximize}
+            />
+          )
+        })}
         {sessions.length === 0 && (
           <div className="grid place-items-center p-6 text-center text-[12px] text-text-faint">
             No code sessions yet — press Launch to start one.

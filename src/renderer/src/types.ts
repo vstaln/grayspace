@@ -3,7 +3,7 @@
  * state (a PTY); the rest render from state the app
  * already has, which is why they need no id of their own beyond the widget's.
  */
-export type WidgetKind = 'terminal' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'id-generator' | 'orchestration'
+export type WidgetKind = 'terminal' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration'
 
 export interface Widget {
   id: string

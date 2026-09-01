@@ -89,8 +89,7 @@ const FAVORITE_WIDGETS = [
   ['orchestration', 'Orchestration', 'The agent fleet: tasks, workers and their questions'],
   ['browser', 'Browser', 'Embedded web page'],
   ['links', 'Links', 'Saved links'],
-  ['music-player', 'Music Player', 'Stream YouTube, Yandex Music, Spotify or MP3 links'],
-  ['id-generator', 'ID Generator', 'Random identifiers']
+  ['music-player', 'Music Player', 'Stream YouTube, Yandex Music, Spotify or MP3 links']
 ] as const
 
 /*

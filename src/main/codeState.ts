@@ -18,7 +18,7 @@ export interface CodeSession {
   title?: string
 }
 
-export type WorkView = 'canvas' | 'code' | 'browser'
+export type WorkView = 'canvas' | 'code' | 'chat'
 
 export interface CodeSnapshot {
   schemaVersion: number
@@ -52,7 +52,9 @@ function sanitizeSession(raw: unknown): CodeSession | null {
 }
 
 function isWorkView(v: unknown): v is WorkView {
-  return v === 'canvas' || v === 'code' || v === 'browser'
+  // 'browser' kept for backward compat with old persisted saves — normalize to 'chat'
+  if (v === 'browser') return true
+  return v === 'canvas' || v === 'code' || v === 'chat'
 }
 
 function sanitizeSnapshot(raw: Record<string, unknown>): CodeSnapshot {
@@ -66,7 +68,8 @@ function sanitizeSnapshot(raw: Record<string, unknown>): CodeSnapshot {
   const maximizedId = isString(raw.maximizedId) && SESSION_ID_RE.test(raw.maximizedId) && sessions.some(s => s.id === raw.maximizedId)
     ? raw.maximizedId
     : null
-  const activeView = isWorkView(raw.activeView) ? raw.activeView : null
+  let activeView: WorkView | null = isWorkView(raw.activeView) ? (raw.activeView as WorkView) : null
+  if (activeView === ('browser' as unknown as WorkView)) activeView = 'chat'
   return {
     schemaVersion: CODE_SCHEMA_VERSION,
     sessions,
@@ -216,7 +219,8 @@ export class CodeStore extends EventEmitter {
       }
     }
     if ('activeView' in input) {
-      const sanitized = isWorkView(input.activeView) ? input.activeView : null
+      let sanitized: WorkView | null = isWorkView(input.activeView) ? (input.activeView as WorkView) : null
+      if (sanitized === ('browser' as unknown as WorkView)) sanitized = 'chat'
       if (sanitized !== this.activeView) {
         this.activeView = sanitized
         changed = true

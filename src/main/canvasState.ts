@@ -4,6 +4,7 @@ import { join } from 'path'
 import { createHash } from 'crypto'
 import { readStoreJson, writeJsonAtomic, writeJsonAtomicAsync } from './storage.ts'
 import { getUserDataDir } from './userData.ts'
+import { notifyPersistError } from './persistNotifier.ts'
 import {
   VersionRegistry,
   fold,
@@ -20,7 +21,7 @@ export const CANVAS_SCHEMA_VERSION = 3
 /** Snapshot cache interval for event sourcing. */
 export const CANVAS_SNAPSHOT_INTERVAL = 50
 
-export type WidgetKind = 'terminal' | 'note' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'id-generator' | 'orchestration'
+export type WidgetKind = 'terminal' | 'note' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration'
 
 export interface CanvasWidget {
   id: string
@@ -111,7 +112,7 @@ const isNum = (value: unknown): value is number => typeof value === 'number' && 
  * `storage-core`'s off-thread writer (one string) and `sanitizeScrollback`.
  */
 
-const WIDGET_KINDS = new Set<string>(['terminal', 'note', 'timer', 'board', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'id-generator', 'orchestration'])
+const WIDGET_KINDS = new Set<string>(['terminal', 'note', 'timer', 'board', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'orchestration'])
 
 export function sanitizeWidget(value: unknown): CanvasWidget | null {
   const w = value as Record<string, unknown>
@@ -237,7 +238,7 @@ export class CanvasStore extends EventEmitter {
 
   private switchWorkspace(dir: string | undefined): void {
     if (this.workspaceDir === dir && this.loaded) return
-    if (this.loaded) this.flush()
+    if (this.loaded) this.flushAsync()
     this.workspaceDir = dir
     this.loaded = false
     for (const id of this.widgets.keys()) this.widgetVersions.forget(id)
@@ -743,7 +744,7 @@ export class CanvasStore extends EventEmitter {
       this.syncFlushSeq = this.writeSeq
       this.eventsSinceSnapshot = 0
     } catch (err) {
-      console.error('failed to persist canvas layout', err)
+      notifyPersistError('canvas', err)
     }
   }
 
@@ -777,12 +778,12 @@ export class CanvasStore extends EventEmitter {
             writeJsonAtomic(this.file, this.snapshotForPersist())
             this.eventsSinceSnapshot = 0
           } catch (err) {
-            console.error('failed to persist canvas layout', err)
+            notifyPersistError('canvas', err)
           }
         }
       })
       .catch((err: unknown) => {
-        console.error('failed to persist canvas layout', err)
+        notifyPersistError('canvas', err)
       })
     this.eventsSinceSnapshot = 0
   }

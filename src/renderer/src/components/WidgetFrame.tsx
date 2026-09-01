@@ -16,9 +16,8 @@ import SysMonitorWidget from './SysMonitorWidget'
 import BrowserWidget from './BrowserWidget'
 import LinksWidget from './LinksWidget'
 import MusicPlayerWidget from './MusicPlayerWidget'
-import IdGeneratorWidget from './IdGeneratorWidget'
 import ErrorBoundary from './ErrorBoundary'
-import { RESIZE_HANDLES, ResizeDir, Widget } from '../types'
+import { RESIZE_HANDLES, ResizeDir, Widget, WidgetKind } from '../types'
 
 interface Props {
   widget: Widget
@@ -91,6 +90,18 @@ function WidgetFrame({
   // Generator) are single-purpose utility panels whose default title already
   // says what they are, so the pencil/double-click affordance was just clutter.
   const canRename = isTerminal
+  // Timer, Links, Files, Music Player, Orchestration have no benefit from
+  // fullscreen — stretching them to the whole canvas just leaves empty space.
+  // Disable the entire maximize path, not just the button: double-click,
+  // keyboard, and programmatic toggles are all blocked (user: "не просто кнопку").
+  const NON_MAXIMIZABLE: ReadonlySet<WidgetKind> = new Set<WidgetKind>([
+    'timer',
+    'links',
+    'files',
+    'music-player',
+    'orchestration'
+  ])
+  const canMaximize = !NON_MAXIMIZABLE.has((widget.kind ?? 'terminal') as WidgetKind)
   const [agentMenuOpen, setAgentMenuOpen] = useState(false)
   const [agentIdx, setAgentIdx] = useState(() => agentSelectionByWidget.get(widget.id) ?? 0)
   const [agentLaunchError, setAgentLaunchError] = useState<string | null>(null)
@@ -128,7 +139,9 @@ function WidgetFrame({
   // fullscreen and back. Scoped so nothing else breaks: the title keeps its
   // double-click rename, buttons stay single-click, and a double-click that
   // just picked a word out of the scrollback (xterm selection) never toggles.
+  // Blocked entirely for non-maximizable widgets (timer etc.).
   const onTerminalDoubleClick = (e: React.MouseEvent): void => {
+    if (!canMaximize) return
     const target = e.target as HTMLElement
     if (target.closest('button, input, [data-testid="widget-title"]')) return
     if (window.getSelection()?.toString()) return
@@ -162,6 +175,28 @@ function WidgetFrame({
     }
   }, [agentMenuOpen])
 
+  const handlePointerDown = (e: React.PointerEvent): void => {
+    onFocus()
+    if (isTerminal && !editing) {
+      const target = e.target as HTMLElement | null
+      if (!target?.closest('button, input, [role="menu"]')) {
+        const termEl = (e.currentTarget as HTMLElement).querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
+        termEl?.focus()
+      }
+    }
+  }
+
+  const handleHeaderPointerDown = (e: React.PointerEvent): void => {
+    onHeaderPointerDown(e)
+    if (isTerminal && !editing) {
+      const target = e.target as HTMLElement | null
+      if (!target?.closest('button, input, [role="menu"]')) {
+        const termEl = (e.currentTarget.parentElement as HTMLElement)?.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
+        termEl?.focus()
+      }
+    }
+  }
+
   return (
     <div
       className={[
@@ -181,7 +216,7 @@ function WidgetFrame({
       // xterm's own wheel/mouse-report handlers and TerminalWidget's scrollback
       // handler among them — so no terminal could be scrolled at all.
       data-canvas-scroll-lock="true"
-      onPointerDown={onFocus}
+      onPointerDown={handlePointerDown}
       // P3-219: the frame is a keyboard stop — arrows move it, Alt+arrows
       // resize it, Delete closes it (handled in App's onFrameKey).
       tabIndex={0}
@@ -191,7 +226,7 @@ function WidgetFrame({
     >
       <div
         className="widget-header-shell flex h-[34px] flex-none cursor-grab items-center gap-1 py-0 pr-0 pl-2.5 active:cursor-grabbing"
-        onPointerDown={onHeaderPointerDown}
+        onPointerDown={handleHeaderPointerDown}
         onDoubleClick={isTerminal ? onTerminalDoubleClick : undefined}
       >
         {editing ? (
@@ -297,15 +332,17 @@ function WidgetFrame({
           </button>
         )}
         <div className="ml-1 flex h-[34px] flex-none items-center">
-          <button
-            className="grid h-full w-8 place-items-center text-text-dim outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
-            onClick={onToggleMaximize}
-            data-testid="widget-maximize"
-            title={widget.maximized ? 'Restore' : 'Maximize'}
-            aria-label={widget.maximized ? 'Restore' : 'Maximize'}
-          >
-            {widget.maximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-          </button>
+          {canMaximize && (
+            <button
+              className="grid h-full w-8 place-items-center text-text-dim outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
+              onClick={onToggleMaximize}
+              data-testid="widget-maximize"
+              title={widget.maximized ? 'Restore' : 'Maximize'}
+              aria-label={widget.maximized ? 'Restore' : 'Maximize'}
+            >
+              {widget.maximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+            </button>
+          )}
           <button
             className="grid h-full w-8 place-items-center rounded-tr-[10px] text-text-dim outline-none transition-colors duration-150 hover:bg-[#e04343] hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
             onClick={onClose}
@@ -374,8 +411,6 @@ function WidgetBody({
       return <LinksWidget widgetId={widget.id} />
     case 'music-player':
       return <MusicPlayerWidget widgetId={widget.id} />
-    case 'id-generator':
-      return <IdGeneratorWidget />
     default:
       return <TerminalWidget id={widget.id} onProcessExit={onProcessExit} />
   }

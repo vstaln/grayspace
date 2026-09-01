@@ -114,7 +114,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     idleTimeoutMs: 5 * 60_000,
     offloadVision: false
   },
-  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'note', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player', 'id-generator']
+  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'note', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player']
 }
 
 const MAX_RECENT = 12
@@ -224,10 +224,10 @@ export class AppState extends EventEmitter {
 
   /** `backgroundImage: null` clears the wallpaper; omitting the key leaves it alone. */
   patchSettings(patch: SettingsPatch): AppSettings {
+    this.ensure()
     if (patch.windowsShell && ['cmd', 'powershell'].includes(patch.windowsShell)) {
       this.state.settings.windowsShell = patch.windowsShell
     }
-    this.ensure()
     if (patch.linkSyntax && ['wiki', 'dollar', 'both'].includes(patch.linkSyntax))
       this.state.settings.linkSyntax = patch.linkSyntax
     if (patch.role && ['member', 'lead'].includes(patch.role)) this.state.settings.role = patch.role
@@ -252,7 +252,7 @@ export class AppState extends EventEmitter {
       this.state.settings.localModel = { ...this.state.settings.localModel, ...patch.localModel }
     }
     if (Array.isArray(patch.favoriteWidgets)) {
-      const allowed = new Set(['terminal', 'note', 'timer', 'board', 'planner', 'orchestration', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'id-generator'])
+      const allowed = new Set(['terminal', 'note', 'timer', 'board', 'planner', 'orchestration', 'files', 'sys-monitor', 'browser', 'links', 'music-player'])
       this.state.settings.favoriteWidgets = [...new Set(patch.favoriteWidgets.filter((kind): kind is string => typeof kind === 'string' && allowed.has(kind)))].slice(0, 32)
     }
     this.commit()

@@ -289,4 +289,71 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     const deleteRes = await runOrc(['plan', 'delete', created.id])
     assert.equal(deleteRes.status, 0)
   })
+
+  test('orc tell command routes text to worker', async () => {
+    const term = terminals.reserve({ title: 'worker-2' })
+    const record = (terminals as unknown as { terminals: Map<string, { pty: unknown }> }).terminals?.get(term.id)
+    if (record) {
+      record.pty = { write: () => true, resize: () => {}, kill: () => {} }
+      terminals.emit('spawned', term.id)
+    }
+    const tellRes = await runOrc(['tell', 'worker-2', 'echo hello'])
+    assert.equal(tellRes.status, 0)
+    terminals.dispose(term.id)
+  })
+
+  if (process.platform === 'win32') {
+    test('Windows orc.cmd batch shim executes correctly with ORCSPACE_NODE', async () => {
+      const cmdPath = join(process.cwd(), 'cli', 'orc.cmd')
+      const res = await new Promise<{ status: number; stdout: string; stderr: string }>((resolve) => {
+        execFile(
+          'cmd.exe',
+          ['/c', cmdPath, 'whoami', '--json'],
+          {
+            env: {
+              ...process.env,
+              ORCSPACE_URL: `http://127.0.0.1:${testPort}`,
+              ORCSPACE_TOKEN: token,
+              ORCSPACE_AGENT_ID: agentId,
+              ORCSPACE_NODE: process.execPath
+            },
+            encoding: 'utf8'
+          },
+          (error, stdout, stderr) => {
+            const exitCode = error ? (typeof error.code === 'number' ? error.code : 1) : 0
+            resolve({ status: exitCode, stdout, stderr })
+          }
+        )
+      })
+
+      assert.equal(res.status, 0, `orc.cmd failed: ${res.stderr}`)
+      const parsed = JSON.parse(res.stdout) as { agentId: string }
+      assert.equal(parsed.agentId, agentId)
+    })
+
+    test('Windows orc.cmd batch shim executes correctly without ORCSPACE_NODE', async () => {
+      const cmdPath = join(process.cwd(), 'cli', 'orc.cmd')
+      const env: Record<string, string | undefined> = { ...process.env, ORCSPACE_URL: `http://127.0.0.1:${testPort}`, ORCSPACE_TOKEN: token, ORCSPACE_AGENT_ID: agentId }
+      delete env.ORCSPACE_NODE
+      const res = await new Promise<{ status: number; stdout: string; stderr: string }>((resolve) => {
+        execFile(
+          'cmd.exe',
+          ['/c', cmdPath, 'whoami', '--json'],
+          {
+            env,
+            encoding: 'utf8'
+          },
+          (error, stdout, stderr) => {
+            const exitCode = error ? (typeof error.code === 'number' ? error.code : 1) : 0
+            resolve({ status: exitCode, stdout, stderr })
+          }
+        )
+      })
+
+      assert.equal(res.status, 0, `orc.cmd failed: ${res.stderr}`)
+      const parsed = JSON.parse(res.stdout) as { agentId: string }
+      assert.equal(parsed.agentId, agentId)
+    })
+  }
 })
+

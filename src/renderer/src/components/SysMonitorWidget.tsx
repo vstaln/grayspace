@@ -1,18 +1,27 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Activity,
+  Calendar,
   ChevronDown,
+  Clock,
   Cpu,
   HardDrive,
+  Layers,
   Lock,
   Pause,
   Play,
   RefreshCw,
   Server,
+  Sparkles,
   Terminal,
   Trash2,
   Zap
 } from 'lucide-react'
+import AntigravityIcon from './AntigravityIcon'
+import CodexIcon from './CodexIcon'
+import ClaudeIcon from './ClaudeIcon'
+import GrokIcon from './GrokIcon'
+import OpenCodeIcon from './OpenCodeIcon'
 import type { SystemStats } from '../../../preload/index.d'
 import { useConfirm } from './ConfirmDialog'
 
@@ -36,13 +45,61 @@ function formatUptime(seconds: number): string {
   return `${s}s`
 }
 
+function renderAgentIcon(id: string, size = 13): React.JSX.Element {
+  switch (id) {
+    case 'antigravity':
+      return <AntigravityIcon size={size} />
+    case 'codex':
+      return <CodexIcon size={size} />
+    case 'claude':
+      return <ClaudeIcon size={size} />
+    case 'grok':
+      return <GrokIcon size={size} />
+    case 'opencode':
+      return <OpenCodeIcon size={size} />
+    default:
+      return <Activity size={size} className="text-accent" />
+  }
+}
+
+function getPercentColor(percent: number): string {
+  if (percent > 80) return 'text-[#f87171]'
+  if (percent > 50) return 'text-[#e6c07b]'
+  return 'text-[#38bdf8]'
+}
+
+function getProgressBg(percent: number): string {
+  if (percent > 80) return 'bg-[#f87171]'
+  if (percent > 50) return 'bg-[#e6c07b]'
+  return 'bg-[#38bdf8]'
+}
+
+function getRemainingColor(rem: number): string {
+  if (rem < 20) return 'text-[#f87171]'
+  if (rem < 50) return 'text-[#e6c07b]'
+  return 'text-[#4ade80]'
+}
+
+function getRemainingProgressBg(rem: number): string {
+  if (rem < 20) return 'bg-[#f87171]'
+  if (rem < 50) return 'bg-[#e6c07b]'
+  return 'bg-[#4ade80]'
+}
+
+function formatTokens(tokens?: number): string {
+  if (!tokens || tokens <= 0) return ''
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M tokens`
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k tokens`
+  return `${tokens} tokens`
+}
+
 export default React.memo(function SysMonitorWidget(): React.JSX.Element {
   const [stats, setStats] = useState<SystemStats | null>(null)
   const [loading, setLoading] = useState(false)
   const [paused, setPaused] = useState(false)
   const [cpuHistory, setCpuHistory] = useState<number[]>(() => new Array(25).fill(0))
   const [notice, setNotice] = useState<string | null>(null)
-  const [refreshInterval, setRefreshInterval] = useState<number>(2000)
+  const [refreshInterval, setRefreshInterval] = useState<number>(5000)
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const intervalMenuRef = useRef<HTMLDivElement>(null)
   const [intervalMenuOpen, setIntervalMenuOpen] = useState(false)
@@ -235,6 +292,143 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
 
       {/* Main Body */}
       <div className="min-h-0 flex-1 overflow-y-auto p-3 space-y-3.5">
+        {/* Active AI Sessions Section */}
+        {stats?.agents && stats.agents.length > 0 && (
+          <div className="rounded-[10px] border border-line-soft bg-bg-hover/20 p-2.5 space-y-2.5">
+            <div className="flex items-center justify-between text-xs font-semibold text-text">
+              <span className="flex items-center gap-1.5">
+                <Sparkles size={13} className="text-accent" />
+                AI Agent Usage & Limits
+              </span>
+              <span className="text-[10px] font-normal text-emerald-400">
+                {stats.agents.filter((a) => a.isOpen).length} Active
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {stats.agents
+                .filter((a) => a.isOpen || a.fiveHour.requests > 0 || a.weekly.requests > 0)
+                .map((ag) => {
+                  const rem5h = ag.fiveHour.remainingPercent ?? ag.fiveHour.percent
+                  const remWk = ag.weekly.remainingPercent ?? ag.weekly.percent
+                  const remMo = ag.monthly ? (ag.monthly.remainingPercent ?? ag.monthly.percent) : null
+                  const used5h = ag.fiveHour.usedPercent ?? parseFloat((100 - rem5h).toFixed(1))
+                  const usedWk = ag.weekly.usedPercent ?? parseFloat((100 - remWk).toFixed(1))
+                  const usedMo = ag.monthly ? (ag.monthly.usedPercent ?? parseFloat((100 - (remMo ?? 0)).toFixed(1))) : null
+
+                  return (
+                    <div
+                      key={ag.id}
+                      className="rounded-[8px] border border-line-soft/80 bg-black/30 p-2 space-y-2"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="grid h-5 w-5 flex-none place-items-center rounded bg-bg-hover/60">
+                              {renderAgentIcon(ag.id, 13)}
+                            </span>
+                            <span className="font-semibold text-text truncate text-xs">{ag.name}</span>
+                          </div>
+                          <span
+                            className={`flex items-center gap-1 rounded-full px-1.5 py-0.2 text-[10px] font-medium border ${
+                              ag.isOpen
+                                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                                : 'border-line-soft bg-bg-hover/40 text-text-dim'
+                            }`}
+                          >
+                            {ag.isOpen && <span className="h-1 w-1 rounded-full bg-emerald-400" />}
+                            {ag.isOpen ? `${ag.openCount > 1 ? `${ag.openCount} ` : ''}Active` : 'Idle'}
+                          </span>
+                        </div>
+                        {(ag.modelName || ag.accountEmail || ag.tierName) && (
+                          <div className="mt-1 flex items-center gap-2 truncate text-[10px] text-text-dim">
+                            {ag.modelName && (
+                              <span className="truncate font-medium text-accent">{ag.modelName}</span>
+                            )}
+                            {ag.accountEmail && (
+                              <span className="truncate text-text-faint">({ag.accountEmail})</span>
+                            )}
+                            {ag.tierName && (
+                              <span className="rounded bg-bg-hover px-1 py-0.2 text-[9px] text-text-dim">{ag.tierName}</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 5-Hour Limit Remaining */}
+                      <div className="space-y-1 rounded bg-black/20 p-1.5 border border-white/5">
+                        <div className="flex items-center justify-between text-[10px]">
+                          <span className="flex items-center gap-1 text-text font-medium">
+                            <Clock size={10} className="text-[#38bdf8]" /> 5h Remaining (Осталось)
+                          </span>
+                          <span className={`font-semibold tabular-nums ${getRemainingColor(rem5h)}`}>
+                            {typeof rem5h === 'number' && Number.isInteger(rem5h) ? `${rem5h}%` : `${Number(rem5h).toFixed(2)}%`}
+                          </span>
+                        </div>
+                        <div className="h-1 w-full overflow-hidden rounded-full bg-line-soft">
+                          <div
+                            className={`h-full transition-all duration-300 ${getRemainingProgressBg(rem5h)}`}
+                            style={{ width: `${Math.min(100, Math.max(rem5h > 0 ? 3 : 0, rem5h))}%` }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between text-[9px] text-text-faint">
+                          <span>{used5h}% used · {ag.fiveHour.requests} reqs{ag.fiveHour.tokens ? ` (${formatTokens(ag.fiveHour.tokens)})` : ''}</span>
+                          <span className="text-text-dim">{ag.fiveHour.resetInfo}</span>
+                        </div>
+                      </div>
+
+                      {/* Weekly Limit Remaining */}
+                      <div className="space-y-1 rounded bg-black/20 p-1.5 border border-white/5">
+                        <div className="flex items-center justify-between text-[10px]">
+                          <span className="flex items-center gap-1 text-text font-medium">
+                            <Calendar size={10} className="text-[#7fd99a]" /> Weekly Remaining (Осталось)
+                          </span>
+                          <span className={`font-semibold tabular-nums ${getRemainingColor(remWk)}`}>
+                            {typeof remWk === 'number' && Number.isInteger(remWk) ? `${remWk}%` : `${Number(remWk).toFixed(2)}%`}
+                          </span>
+                        </div>
+                        <div className="h-1 w-full overflow-hidden rounded-full bg-line-soft">
+                          <div
+                            className={`h-full transition-all duration-300 ${getRemainingProgressBg(remWk)}`}
+                            style={{ width: `${Math.min(100, Math.max(remWk > 0 ? 3 : 0, remWk))}%` }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between text-[9px] text-text-faint">
+                          <span>{usedWk}% used · {ag.weekly.requests} reqs{ag.weekly.tokens ? ` (${formatTokens(ag.weekly.tokens)})` : ''}</span>
+                          <span className="text-text-dim">{ag.weekly.resetInfo}</span>
+                        </div>
+                      </div>
+
+                      {/* Monthly Limit Remaining */}
+                      {ag.monthly && remMo !== null && (
+                        <div className="space-y-1 rounded bg-black/20 p-1.5 border border-white/5">
+                          <div className="flex items-center justify-between text-[10px]">
+                            <span className="flex items-center gap-1 text-text font-medium">
+                              <Layers size={10} className="text-[#a78bfa]" /> Monthly Remaining (Месячный)
+                            </span>
+                            <span className={`font-semibold tabular-nums ${getRemainingColor(remMo)}`}>
+                              {typeof remMo === 'number' && Number.isInteger(remMo) ? `${remMo}%` : `${Number(remMo).toFixed(2)}%`}
+                            </span>
+                          </div>
+                          <div className="h-1 w-full overflow-hidden rounded-full bg-line-soft">
+                            <div
+                              className={`h-full transition-all duration-300 ${getRemainingProgressBg(remMo)}`}
+                              style={{ width: `${Math.min(100, Math.max(remMo > 0 ? 3 : 0, remMo))}%` }}
+                            />
+                          </div>
+                          <div className="flex items-center justify-between text-[9px] text-text-faint">
+                            <span>{usedMo}% used · {ag.monthly.requests} reqs{ag.monthly.tokens ? ` (${formatTokens(ag.monthly.tokens)})` : ''}</span>
+                            <span className="text-text-dim">{ag.monthly.resetInfo}</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+            </div>
+          </div>
+        )}
+
         {/* Real-time Gauges Grid */}
         <div className="grid grid-cols-2 gap-2.5">
           {/* CPU Card */}

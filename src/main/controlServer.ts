@@ -1,6 +1,6 @@
 import * as http from 'http'
 import * as fs from 'fs'
-import { extname, join, normalize, sep } from 'path'
+import { extname, join, normalize, resolve, sep } from 'path'
 import { CONTROL_PORT } from './config.ts'
 import { CoordinationStore, USER_AUTHOR } from './coordination.ts'
 import { TerminalManager } from './terminals.ts'
@@ -153,10 +153,12 @@ function serveRendererFile(rendererDir: string, pathname: string, res: http.Serv
   try { relative = normalize(decodeURIComponent(pathname === '/' ? '/index.html' : pathname)) } catch {
     res.writeHead(400).end(); return
   }
-  const filePath = join(rendererDir, relative)
-  if (!filePath.startsWith(rendererDir + sep) && filePath !== rendererDir) {
+  // Prevent path traversal: resolve and verify the result is within rendererDir
+  const resolved = resolve(rendererDir, relative)
+  if (!resolved.startsWith(rendererDir + sep) && resolved !== rendererDir) {
     res.writeHead(403).end(); return
   }
+  const filePath = resolved
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404).end(); return }
     res.writeHead(200, { 'Content-Type': rendererMime[extname(filePath)] ?? 'application/octet-stream', 'Cache-Control': pathname.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache' })
@@ -188,11 +190,20 @@ function registerHttpAgent(
   if (!agentId) {
     return { ok: false, status: 401, error: 'agentId is required', code: 'unknown_actor' }
   }
-  if (agentId.length > 128 || !/^[a-zA-Z0-9._@:-]+$/.test(agentId)) {
+  if (agentId.length > 128) {
     return {
       ok: false,
       status: 400,
-      error: 'agentId must be 1–128 chars of [A-Za-z0-9._@:-]',
+      error: 'agentId must be 1–128 chars',
+      code: 'invalid'
+    }
+  }
+  // Only allow alphanumeric, dash, underscore, dot, and @ - no colons or special chars that could inject into targets
+  if (!/^[A-Za-z0-9._@-]+$/.test(agentId)) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'agentId must be [A-Za-z0-9._@-] only',
       code: 'invalid'
     }
   }

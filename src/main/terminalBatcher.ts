@@ -1,4 +1,4 @@
-﻿import { EventEmitter } from 'events'
+import { EventEmitter } from 'events'
 
 export interface BatcherOptions {
   frameIntervalMs?: number
@@ -64,7 +64,7 @@ export class TerminalStreamBatcher extends EventEmitter {
     const list = this.pending.get(terminalId)
     if (!list || list.length === 0) return
 
-    const combined = list.join('')
+    const combined = list.length === 1 ? list[0] : list.join('')
     this.pending.delete(terminalId)
     this.pendingBytes.delete(terminalId)
 

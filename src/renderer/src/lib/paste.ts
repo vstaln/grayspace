@@ -24,10 +24,12 @@ export async function saveImageFromPaste(
   options?: { scratch?: boolean }
 ): Promise<MediaFile | null> {
   const scratch = options?.scratch === true
-  const file = Array.from(event.clipboardData?.files ?? []).find((f) => f.type.startsWith('image/'))
+  const file = Array.from(event.clipboardData?.files ?? []).find(
+    (f) => f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|tiff?)$/i.test(f.name)
+  )
   if (file) {
     const bytes = new Uint8Array(await file.arrayBuffer())
-    const ext = file.name.includes('.') ? file.name.split('.').pop()! : file.type.split('/')[1]
+    const ext = file.name.includes('.') ? file.name.split('.').pop()! : file.type.split('/')[1] || 'png'
     const saved = scratch
       ? await window.api.media.saveBytesScratch(bytes, ext)
       : await window.api.media.saveBytes(bytes, ext)
@@ -41,7 +43,12 @@ export async function saveImageFromPaste(
 export function pasteHasImage(event: ClipboardEvent): boolean {
   const data = event.clipboardData
   if (!data) return false
-  if (Array.from(data.files).some((f) => f.type.startsWith('image/'))) return true
+  if (
+    Array.from(data.files).some(
+      (f) => f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|tiff?)$/i.test(f.name)
+    )
+  )
+    return true
   // A browser image copy exposes an `image/*` item with no File behind it.
   return Array.from(data.items).some((i) => i.kind === 'file' && i.type.startsWith('image/'))
 }

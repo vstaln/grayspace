@@ -1,4 +1,5 @@
 import { execFile } from 'child_process'
+import { defaultShell } from './config.ts'
 
 /**
  * Kills every process whose ancestry (through Win32_Process ParentProcessId)
@@ -92,7 +93,7 @@ function runSweep(): void {
     const encoded = Buffer.from(buildSweepScript(roots), 'utf16le').toString('base64')
     spawned = true
     execFile(
-      'powershell',
+      defaultShell('powershell'),
       ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
       { windowsHide: true, timeout: 15_000 },
       finish

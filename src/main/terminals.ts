@@ -171,6 +171,8 @@ export class TerminalManager extends EventEmitter {
     return this.terminals.get(id)?.pty != null
   }
 
+
+
   list(): TerminalInfo[] {
     return Array.from(this.terminals, ([id, record]) => this.toInfo(id, record))
   }
@@ -223,33 +225,22 @@ export class TerminalManager extends EventEmitter {
         cols: isPositiveInt(cols) ? cols : 80,
         rows: isPositiveInt(rows) ? rows : 24,
         cwd: record.cwd,
-        // Lets anything started in this shell — a CLI agent asked to "create
-        // a terminal" or otherwise act on its surroundings — tell it's
-        // running inside an OrcSpace-managed terminal rather than a bare one,
-        // without having to guess from the process tree.
         env: {
           ...withoutPath(process.env as Record<string, string>),
-          // Puts `orc` on the agent's PATH and tells it which app, which token
-          // and which actor it is. This is the whole of the integration: a CLI
-          // agent coordinates by typing a command, not by speaking a protocol.
           ...orcTerminalEnv(id),
           ORCSPACE: '1',
           ORCSPACE_TERMINAL_ID: id,
-          // "light foreground on black background", the conventional way a
-          // terminal tells a TUI it is dark. Belt to the OSC 11 answer's braces:
-          // programs that never ask, or that ask before the theme is applied,
-          // would otherwise guess light and paint a white pane in a dark widget.
-          COLORFGBG: '15;0'
+          COLORFGBG: '15;0',
+          TERM_PROGRAM: 'OrcSpace',
+          TERM_PROGRAM_VERSION: '2.0.0',
+          LANG: process.env.LANG || 'en_US.UTF-8',
+          LC_ALL: process.env.LC_ALL || process.env.LANG || 'en_US.UTF-8'
         }
       })
       record.pty = child
       record.rootPid = child.pid
       this.preferredId = id
 
-      // Keep the disposer handles so we can release them at teardown — otherwise
-      // the closures stay pinned by the native listener table for the lifetime
-      // of the (already-killed) pty, which matters when many shells cycle in a
-      // single session.
       record.ptyDisposers.push(
         child.onData((chunk) => {
           const current = this.terminals.get(id)
@@ -262,6 +253,7 @@ export class TerminalManager extends EventEmitter {
           this.handlePtyExit(id, child, exitCode)
         })
       )
+      this.emit('spawn', id)
       return { ok: true }
     } catch (err) {
       console.error(`failed to spawn terminal ${id}`, err)
@@ -417,6 +409,7 @@ export class TerminalManager extends EventEmitter {
     if (this.disposed.has(id)) return
     this.disposed.add(id)
     this.disposedOrder.push(id)
+    this.emit('banned', id)
     if (this.disposedOrder.length <= TerminalManager.DISPOSED_CAP) return
     const drop = this.disposedOrder.splice(0, 1_024)
     for (const old of drop) this.disposed.delete(old)
@@ -486,19 +479,51 @@ export class TerminalManager extends EventEmitter {
 
   /**
    * Resolves once the pty for `id` is actually running, or times out.
-   * Bails out early when the id was disposed while waiting: another actor's
-   * close means no widget will ever mount it, and polling out the whole
-   * timeout would only delay the create/write command's honest failure.
+   * Event-based: listens for `spawn` instead of polling every 50ms.
+   * Still bails early when the id is banned or the signal aborts.
    */
   async waitUntilRunning(id: string, timeoutMs = 3000, signal?: AbortSignal): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
-      if (this.disposed.has(id)) return false
-      if (signal?.aborted) return false
-      if (this.isRunning(id)) return true
-      await new Promise((resolve) => setTimeout(resolve, 50))
-    }
-    return this.isRunning(id)
+    if (this.disposed.has(id)) return false
+    if (signal?.aborted) return false
+    if (this.isRunning(id)) return true
+    return new Promise<boolean>((resolve) => {
+      let settled = false
+      let timer: ReturnType<typeof setTimeout> | null = null
+      const cleanup = (): void => {
+        if (settled) return
+        settled = true
+        if (timer !== null) clearTimeout(timer)
+        this.off('spawn', onSpawn)
+        this.off('banned', onBanned)
+        signal?.removeEventListener('abort', onAbort)
+      }
+      const onSpawn = (spawnedId: string): void => {
+        if (spawnedId !== id) return
+        cleanup()
+        resolve(true)
+      }
+      const onBanned = (bannedId: string): void => {
+        if (bannedId !== id) return
+        cleanup()
+        resolve(false)
+      }
+      const onAbort = (): void => {
+        cleanup()
+        resolve(false)
+      }
+      timer = setTimeout(() => {
+        cleanup()
+        resolve(this.isRunning(id))
+      }, timeoutMs)
+      timer.unref?.()
+      this.on('spawn', onSpawn)
+      this.on('banned', onBanned)
+      signal?.addEventListener('abort', onAbort, { once: true })
+      if (signal?.aborted) {
+        cleanup()
+        resolve(false)
+      }
+    })
   }
 }
 

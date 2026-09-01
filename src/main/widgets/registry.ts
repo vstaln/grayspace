@@ -115,10 +115,4 @@ export function registerBuiltinWidgets(): void {
     defaultSize: { w: 460, h: 330 },
     commands: ['widget.update', 'widget.remove']
   })
-  registerWidgetType({
-    kind: 'id-generator',
-    label: 'ID Generator',
-    defaultSize: { w: 420, h: 360 },
-    commands: ['widget.update', 'widget.remove']
-  })
 }

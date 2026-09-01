@@ -1,6 +1,7 @@
 import * as os from 'os'
 import { ipcMain } from './shims.ts'
 import { getCpuMeta, getCpuUsagePercent } from './cpuSampler.ts'
+import { getAgentUsageStats } from '../agentUsage.ts'
 import type { IpcDeps } from './types.ts'
 
 export function registerSystemIpc(deps: IpcDeps): void {
@@ -19,6 +20,7 @@ export function registerSystemIpc(deps: IpcDeps): void {
         agentOwned: t.id.startsWith('agent-')
       }))
       const procMem = process.memoryUsage()
+      const agents = await getAgentUsageStats(deps)
 
       return {
         cpuPercent,
@@ -44,7 +46,8 @@ export function registerSystemIpc(deps: IpcDeps): void {
         activeTerminals,
         nodeVersion: process.versions.node,
         electronVersion: process.versions.electron,
-        bus: deps.core.bus.stats()
+        bus: deps.core.bus.stats(),
+        agents
       }
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) }

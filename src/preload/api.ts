@@ -408,7 +408,7 @@ export interface BrainApi {
 export interface CanvasWidget {
   id: string
   title: string
-  kind?: 'terminal' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'id-generator' | 'orchestration'
+  kind?: 'terminal' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration'
   x: number
   y: number
   w: number
@@ -457,7 +457,7 @@ export interface CodeSession {
   title?: string
 }
 
-export type WorkView = 'canvas' | 'code' | 'browser'
+export type WorkView = 'canvas' | 'code' | 'chat'
 
 export interface CodeSnapshot {
   schemaVersion: number
@@ -563,6 +563,34 @@ export interface BusStats {
   busyLanes: number
 }
 
+export interface AgentUsageWindow {
+  percent: number
+  remainingPercent?: number
+  usedPercent?: number
+  requests: number
+  tokens?: number
+  limit: number
+  resetInfo?: string
+  resetAt?: number
+  refreshesIn?: string
+}
+
+export interface AgentUsageItem {
+  id: string
+  name: string
+  command: string
+  isOpen: boolean
+  openCount: number
+  fiveHour: AgentUsageWindow
+  weekly: AgentUsageWindow
+  monthly?: AgentUsageWindow
+  lastActiveAt?: number
+  hasExactQuota?: boolean
+  accountEmail?: string
+  modelName?: string
+  tierName?: string
+}
+
 export interface SystemStats {
   cpuPercent: number
   cpuCount: number
@@ -584,11 +612,13 @@ export interface SystemStats {
   nodeVersion: string
   electronVersion: string
   bus?: BusStats
+  agents?: AgentUsageItem[]
   error?: string
 }
 
 export interface SystemApi {
   stats(): Promise<SystemStats | { error: string }>
+  onPersistError(cb: (payload: { store: string; message: string; at: number }) => void): () => void
 }
 
 export interface BrowserApi {

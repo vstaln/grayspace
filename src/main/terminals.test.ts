@@ -1,6 +1,8 @@
 import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
+import * as fs from 'node:fs'
 import { TerminalManager } from './terminals.ts'
+import { defaultShell } from './config.ts'
 
 describe('TerminalManager', () => {
   test('reserve keeps explicit agent names and numbers unnamed agents', () => {
@@ -159,5 +161,17 @@ describe('TerminalManager', () => {
     assert.equal(manager.has(term2.id), true)
 
     manager.disposeAll()
+  })
+
+  test('defaultShell resolves existing absolute executable on Windows', () => {
+    const cmd = defaultShell('cmd')
+    assert.ok(cmd)
+    const ps = defaultShell('powershell')
+    assert.ok(ps)
+    if (process.platform === 'win32') {
+      assert.ok(fs.existsSync(cmd), `cmd path must exist: ${cmd}`)
+      assert.ok(fs.existsSync(ps), `powershell path must exist: ${ps}`)
+      assert.match(ps.toLowerCase(), /powershell\.exe|pwsh\.exe/)
+    }
   })
 })

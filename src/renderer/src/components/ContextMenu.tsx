@@ -1,6 +1,6 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Clipboard, Cpu, Fingerprint, FolderOpen, Globe, ListTodo, Music2, Network, Terminal, Timer } from 'lucide-react'
+import { Clipboard, Cpu, FolderOpen, Globe, ListTodo, Music2, Network, Terminal, Timer } from 'lucide-react'
 import { Point } from '../types'
 
 interface Props {
@@ -13,7 +13,6 @@ interface Props {
   onPickBrowser: () => void
   onPickLinks: () => void
   onPickMusicPlayer: () => void
-  onPickIdGenerator: () => void
   onPickOrchestration: () => void
   favoriteWidgets: string[]
   onClose: () => void
@@ -40,7 +39,6 @@ export default function ContextMenu({
   onPickBrowser,
   onPickLinks,
   onPickMusicPlayer,
-  onPickIdGenerator,
   onPickOrchestration,
   favoriteWidgets,
   onClose
@@ -115,9 +113,6 @@ export default function ContextMenu({
         hint: 'Watch the agent fleet: tasks, workers and their questions',
         icon: <Network size={15} className="text-accent" />,
         onSelect: onPickOrchestration
-      },
-      {
-        id: 'id-generator', label: 'ID Generator', hint: 'Generate safe random identifiers', icon: <Fingerprint size={15} className="text-accent" />, onSelect: onPickIdGenerator
       }
     ].filter((item) => favoriteWidgets.includes(item.id)),
     [
@@ -129,7 +124,6 @@ export default function ContextMenu({
       onPickBrowser,
       onPickLinks,
       onPickMusicPlayer,
-      onPickIdGenerator,
       onPickOrchestration,
       favoriteWidgets
     ]

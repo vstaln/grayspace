@@ -15,6 +15,9 @@ import {
   type ResourceId,
   type ResourceLock
 } from './core/index.ts'
+import { TASK_LOCK_TTL_MS, TaskLockManager } from './taskLockManager.ts'
+import { notifyPersistError } from './persistNotifier.ts'
+export { TASK_LOCK_TTL_MS } from './taskLockManager.ts'
 
 export const TASK_STATES = ['backlog', 'queued', 'in_progress', 'review', 'done', 'cancelled'] as const
 export type TaskState = (typeof TASK_STATES)[number]
@@ -63,8 +66,6 @@ export interface CoordinationSnapshot {
   locks: ResourceLock[]
 }
 
-/** How long a claimed task's file locks live before a heartbeat is required. */
-const TASK_LOCK_TTL_MS = 10 * 60_000
 /** A manager that hasn't acted in this long is presumed gone. */
 const MANAGER_TTL = 15 * 60_000
 
@@ -78,6 +79,7 @@ export class CoordinationStore extends EventEmitter {
   private managerSeenAt: number | null = null
   private readonly tasks = new Map<string, Task>()
   private readonly locks: LockManager
+  private readonly taskLocks: TaskLockManager
   private readonly isActorAlive: ((actorId: string) => boolean) | null
   private counter = 0
   private loaded = false
@@ -104,6 +106,7 @@ export class CoordinationStore extends EventEmitter {
   constructor(locks: LockManager, isActorAlive?: (actorId: string) => boolean) {
     super()
     this.locks = locks
+    this.taskLocks = new TaskLockManager(locks)
     this.isActorAlive = isActorAlive ?? null
   }
 
@@ -386,7 +389,7 @@ export class CoordinationStore extends EventEmitter {
       this.syncFlushedSeq = this.writeSeq
       this.eventsSinceSnapshot = 0
     } catch (err) {
-      console.error('failed to persist task board', err)
+      notifyPersistError('board', err)
     }
   }
 
@@ -411,7 +414,7 @@ export class CoordinationStore extends EventEmitter {
         try {
           await writeJsonAtomicAsync(this.file, snapshot)
         } catch (err) {
-          console.error('failed to persist task board', err)
+          notifyPersistError('board', err)
           return
         }
         // An in-flight rename cannot be aborted: if the shutdown flush ran
@@ -422,7 +425,7 @@ export class CoordinationStore extends EventEmitter {
             writeJsonAtomic(this.file, this.payloadForPersist())
             this.syncFlushedSeq = this.writeSeq
           } catch (err) {
-            console.error('failed to persist task board', err)
+            notifyPersistError('board', err)
           }
         }
       })
@@ -450,8 +453,7 @@ export class CoordinationStore extends EventEmitter {
       const assignee = task.assignee
       if (assignee === USER_AUTHOR || assignee === 'user') continue
       if (task.files.length > 0) {
-        const stillHeld = task.files.some((path) => this.locks.isHeldBy(fileResource(path), assignee))
-        if (stillHeld) continue
+        if (this.taskLocks.isTaskLocksHeld(task, assignee)) continue
       } else if (this.isActorAlive?.(assignee)) {
         continue
       } else if (!this.isActorAlive) {
@@ -614,23 +616,12 @@ claimManager(agentId: string): { managerId: string; role: 'manager' } {
     this.pruneStale()
     const task = this.tasks.get(taskId)
     if (!task) throw new CommandError('not_found', 'task not found')
-    const worker = agentId?.trim()
-    if (!worker) throw new CommandError('invalid', 'agentId is required')
-    if (!this.isManager(worker) && worker !== task.assignee) {
-      throw new CommandError('forbidden', 'only the manager or assigned worker may lock extra files')
-    }
-    if (task.state !== 'in_progress') {
-      throw new CommandError('conflict', 'task is not in progress', { task })
-    }
+    this.taskLocks.assertCanLock(task, agentId, (id) => this.isManager(id))
+    const worker = agentId.trim()
     const filePath = path?.trim()
     if (!filePath) throw new CommandError('invalid', 'path is required')
     const resource = fileResource(filePath)
-    const lock = this.locks.acquire({
-      resource,
-      actorId: worker,
-      ttlMs: typeof ttlMs === 'number' ? ttlMs : TASK_LOCK_TTL_MS,
-      reason: `task ${taskId}`
-    })
+    const lock = this.taskLocks.acquireExtraFile(taskId, filePath, worker, typeof ttlMs === 'number' ? ttlMs : TASK_LOCK_TTL_MS)
     if (!task.files.includes(filePath) && !task.files.some((f) => fileResource(f) === resource)) {
       task.files = [...task.files, filePath]
       task.updatedAt = Date.now()
@@ -651,23 +642,9 @@ claimManager(agentId: string): { managerId: string; role: 'manager' } {
     if (task.state !== 'queued' && task.state !== 'backlog')
       throw new CommandError('conflict', 'task is not available', { task })
 
-    const taken: string[] = []
     try {
-      for (const path of task.files) {
-        const resource = fileResource(path)
-        this.locks.acquire({ resource, actorId: worker, ttlMs: TASK_LOCK_TTL_MS, reason: `task ${taskId}` })
-        taken.push(resource)
-      }
+      this.taskLocks.acquireForTask(taskId, task.files, worker, TASK_LOCK_TTL_MS)
     } catch (err) {
-      // Roll back what was taken; a failing release must not abort the loop
-      // and leak the remaining locks until their 10-minute TTL expires.
-      for (const resource of taken) {
-        try {
-          this.locks.release(resource, worker)
-        } catch {
-          /* TTL will reclaim it */
-        }
-      }
       throw err
     }
 
@@ -739,10 +716,7 @@ claimManager(agentId: string): { managerId: string; role: 'manager' } {
         if (state === 'queued') task.assignee = undefined
         this.releaseTaskLocks(task)
       } else if (task.assignee) {
-        for (const path of task.files) {
-          const resource = fileResource(path)
-          if (this.locks.isHeldBy(resource, task.assignee)) this.locks.renew(resource, task.assignee, TASK_LOCK_TTL_MS)
-        }
+        this.taskLocks.renewForTask(task)
       }
     }
     task.updatedAt = Date.now()
@@ -750,14 +724,7 @@ claimManager(agentId: string): { managerId: string; role: 'manager' } {
   }
 
   private releaseTaskLocks(task: Task): void {
-    const owner = task.assignee
-    for (const path of task.files) {
-      const resource = fileResource(path)
-      const holder = this.locks.holder(resource)
-      if (holder && holder.reason === `task ${task.id}` && (!owner || holder.actorId === owner)) {
-        this.locks.release(resource, holder.actorId)
-      }
-    }
+    this.taskLocks.releaseForTask(task)
   }
 
   deleteTask(taskId: string, overlayId?: string): void {
