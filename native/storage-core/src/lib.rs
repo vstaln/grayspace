@@ -158,6 +158,17 @@ fn strip_ansi(text: &str) -> String {
     out
 }
 
+/// Public, chat-facing twin of the internal stripper: one string in, one
+/// string out. The napi bridge for a single `String` is one UTF-16 → UTF-8
+/// copy — the cheap kind of bridge (see the note on `write_text_atomic`) —
+/// while the per-character scan itself runs in Rust. The chat pane routes
+/// every streamed chunk of every CLI reply through here, which used to be a
+/// regex-heavy JavaScript pass per chunk on the renderer's main thread.
+#[napi]
+pub fn strip_ansi_text(text: String) -> String {
+    strip_ansi(&text)
+}
+
 /// Keeps at most the last `limit` UTF-8 bytes, cut at a line boundary so the
 /// top is not half a line — byte-sliced, because `chars().count()` semantics
 /// would let Cyrillic or box-drawing output blow past its budget.

@@ -6,13 +6,26 @@ import * as electron from 'electron'
  * hand-rolled ipcMain. Resolved once at first import and shared by every
  * registrar module.
  */
-const electronAny = electron as unknown as Record<string, any>
-const mockAny = (globalThis as unknown as Record<string, any>).__electronMock || {}
+function resolveElectronModule<T extends object>(name: string): T {
+  return new Proxy({} as T, {
+    get(_target, prop) {
+      const electronAny = electron as unknown as Record<string, any>
+      const mockAny = (globalThis as unknown as Record<string, any>).__electronMock || {}
+      const target = electronAny[name] ?? mockAny[name]
+      const val = target?.[prop]
+      if (typeof val === 'function') {
+        return val.bind(target)
+      }
+      return val
+    }
+  })
+}
 
-export const ipcMain = (electronAny.ipcMain ?? mockAny.ipcMain) as typeof electron.ipcMain
-export const app = (electronAny.app ?? mockAny.app) as typeof electron.app
-export const dialog = (electronAny.dialog ?? mockAny.dialog) as typeof electron.dialog
-export const shell = (electronAny.shell ?? mockAny.shell) as typeof electron.shell
-export const BrowserWindow = (electronAny.BrowserWindow ?? mockAny.BrowserWindow) as typeof electron.BrowserWindow
-export const session = (electronAny.session ?? mockAny.session) as typeof electron.session
+export const ipcMain = resolveElectronModule<typeof electron.ipcMain>('ipcMain')
+export const app = resolveElectronModule<typeof electron.app>('app')
+export const dialog = resolveElectronModule<typeof electron.dialog>('dialog')
+export const shell = resolveElectronModule<typeof electron.shell>('shell')
+export const BrowserWindow = resolveElectronModule<typeof electron.BrowserWindow>('BrowserWindow')
+export const session = resolveElectronModule<typeof electron.session>('session')
+
 

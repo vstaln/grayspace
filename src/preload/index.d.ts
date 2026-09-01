@@ -8,6 +8,7 @@ export * from './api'
 import type {
   BrowserApi,
   CanvasApi,
+  ChatApi,
   CodeApi,
   ControlApi,
   CoordinationApi,
@@ -40,6 +41,7 @@ declare global {
       fs: FsApi
       system: SystemApi
       browser: BrowserApi
+      chat: ChatApi
       window: WindowApi
     }
   }

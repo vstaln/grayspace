@@ -565,4 +565,5 @@ if (!nativeBinding) {
 
 module.exports = nativeBinding
 module.exports.sanitizeScrollback = nativeBinding.sanitizeScrollback
+module.exports.stripAnsiText = nativeBinding.stripAnsiText
 module.exports.writeTextAtomic = nativeBinding.writeTextAtomic

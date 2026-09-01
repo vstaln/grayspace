@@ -10,6 +10,16 @@
 export declare function sanitizeScrollback(text: string, limit: number): string
 
 /**
+ * Public, chat-facing twin of the internal stripper: one string in, one
+ * string out. The napi bridge for a single `String` is one UTF-16 → UTF-8
+ * copy — the cheap kind of bridge (see the note on `write_text_atomic`) —
+ * while the per-character scan itself runs in Rust. The chat pane routes
+ * every streamed chunk of every CLI reply through here, which used to be a
+ * regex-heavy JavaScript pass per chunk on the renderer's main thread.
+ */
+export declare function stripAnsiText(text: string): string
+
+/**
  * JS-facing entry point: looks synchronous but returns a `Promise` backed by
  * `AsyncTask`, so the file write + fsync + rename run off the Node/Electron
  * main thread and never block IPC, PTY output, or the renderer's canvas.save

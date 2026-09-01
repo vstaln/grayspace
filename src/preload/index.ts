@@ -10,6 +10,9 @@ import type {
   BrowserApi,
   CanvasApi,
   CanvasSnapshot,
+  ChatApi,
+  ChatExitPayload,
+  ChatModelId,
   CodeApi,
   CodeSnapshot,
   ControlApi,
@@ -262,6 +265,23 @@ const system: SystemApi = {
     onBroadcast('system:persistError', cb)
 }
 
+const chat: ChatApi = {
+  send: (threadId: string, model: ChatModelId, prompt: string): Promise<{ ok: true } | { error: string }> =>
+    ipcRenderer.invoke('chat:send', threadId, model, prompt),
+  stop: (threadId: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('chat:stop', threadId),
+  dispose: (threadId: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('chat:dispose', threadId),
+  onData: (cb: (threadId: string, chunk: string) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, threadId: string, chunk: string): void => cb(threadId, chunk)
+    ipcRenderer.on('chat:onData', listener)
+    return () => ipcRenderer.removeListener('chat:onData', listener)
+  },
+  onExit: (cb: (threadId: string, payload: ChatExitPayload) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, threadId: string, payload: ChatExitPayload): void => cb(threadId, payload)
+    ipcRenderer.on('chat:onExit', listener)
+    return () => ipcRenderer.removeListener('chat:onExit', listener)
+  }
+}
+
 contextBridge.exposeInMainWorld('api', {
   terminal,
   control,
@@ -277,5 +297,7 @@ contextBridge.exposeInMainWorld('api', {
   fs,
   system,
   browser,
+  chat,
   window: windowControls
 })
+

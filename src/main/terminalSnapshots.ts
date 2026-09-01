@@ -2,6 +2,7 @@ import * as fs from 'fs'
 import { promises as fsp } from 'fs'
 import { join } from 'path'
 import { readStoreJson, sanitizeScrollbackNative, writeJsonAtomic, writeJsonAtomicAsync, writeTextAtomic, writeTextAtomicAsync } from './storage.ts'
+import { stripAnsi } from './ansi.ts'
 import { getUserDataDir } from './userData.ts'
 
 export const TERMINAL_SCHEMA_VERSION = 1
@@ -175,8 +176,8 @@ export class TerminalSnapshots {
     // re-run their effects then (OSC 52 sets the clipboard, CSI repaints
     // cursor state). Only the text that was on screen is kept (P5).
     // Rust path first (one zero-copy scan instead of two per-char JS passes);
-    // `tail(sanitizeAnsi(...))` below is the byte-identical TS fallback.
-    const text = sanitizeScrollbackNative(input.scrollback, MAX_SCROLLBACK_BYTES) ?? tail(sanitizeAnsi(input.scrollback), MAX_SCROLLBACK_BYTES)
+    // `tail(stripAnsi(...))` below is the byte-identical TS fallback.
+    const text = sanitizeScrollbackNative(input.scrollback, MAX_SCROLLBACK_BYTES) ?? tail(stripAnsi(input.scrollback), MAX_SCROLLBACK_BYTES)
     return {
       text,
       entry: {
@@ -268,73 +269,6 @@ function tail(text: string, limit: number): string {
 }
 
 /**
- * Removes ANSI escape sequences, keeping only the visible text. Covers CSI
- * (`ESC [ … final-byte`), OSC (`ESC ] … BEL|ST`) and the character-set
- * selectors (`ESC ( X`), because a scrollback that is later fed back into a
- * terminal must not re-execute side effects such as clipboard writes (OSC 52).
+ * ANSI stripping lives in ./ansi.ts (Rust binding first, JS twin second) —
+ * the chat stream cleaner shares the exact same implementation.
  */
-function sanitizeAnsi(text: string): string {
-  // Runs of plain text are collected as slices, not built one character at a
-  // time: this walks the whole scrollback (up to OUTPUT_BUFFER_LIMIT) on every
-  // terminal close, and a `out += ch` loop meant tens of thousands of string
-  // concatenations on the Electron main thread each time.
-  const parts: string[] = []
-  let plainFrom = 0
-  let i = 0
-  const n = text.length
-  const isFinal = (code: number): boolean => code >= 0x40 && code <= 0x7e
-  const cut = (upTo: number, resumeAt: number): void => {
-    if (upTo > plainFrom) parts.push(text.slice(plainFrom, upTo))
-    plainFrom = resumeAt
-  }
-  while (i < n) {
-    const ch = text[i]
-    if (ch === '\x1b' && i + 1 < n) {
-      const next = text[i + 1]
-      if (next === '[') {
-        const start = i
-        i += 2
-        while (i < n && !isFinal(text.charCodeAt(i))) i += 1
-        i += i < n ? 1 : 0
-        cut(start, i)
-        continue
-      }
-      if (next === ']') {
-        const start = i
-        i += 2
-        while (i < n && text[i] !== '\x07' && !(text[i] === '\x1b' && text[i + 1] === '\\')) i += 1
-        if (i >= n) {
-          cut(start, i)
-          continue
-        }
-        i += text[i] === '\x07' ? 1 : 2
-        cut(start, i)
-        continue
-      }
-      if (next === '(' || next === ')' || next === '*' || next === '+') {
-        const start = i
-        i += Math.min(3, n - i)
-        cut(start, i)
-        continue
-      }
-      // DCS / SOS / PM / APC: ESC P / X / ^ / _ … ST
-      if (next === 'P' || next === 'X' || next === '^' || next === '_') {
-        const start = i
-        i += 2
-        while (i < n && !(text[i] === '\x1b' && text[i + 1] === '\\')) i += 1
-        i += i < n ? 2 : 0
-        cut(start, i)
-        continue
-      }
-    }
-    const code = text.charCodeAt(i)
-    if (code === 0x9b || code === 0x9d || code === 0x90 || code === 0x9e || code === 0x9f) {
-      cut(i, i + 1)
-      i += 1
-      continue
-    }
-    i += 1
-  }
-  if (i > plainFrom) parts.push(text.slice(plainFrom, i))
-  return parts.join('')
-}

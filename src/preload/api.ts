@@ -633,3 +633,19 @@ export interface WindowApi {
   isMaximized(): Promise<boolean>
   onMaximizeChange(cb: (maximized: boolean) => void): () => void
 }
+
+export type ChatModelId = 'codex' | 'claude' | 'grok' | 'antigravity' | 'opencode'
+
+export interface ChatExitPayload {
+  exitCode: number
+  cancelled?: boolean
+  timedOut?: boolean
+}
+
+export interface ChatApi {
+  send(threadId: string, model: ChatModelId, prompt: string): Promise<{ ok: true } | { error: string }>
+  stop(threadId: string): Promise<{ ok: boolean }>
+  dispose(threadId: string): Promise<{ ok: boolean }>
+  onData(cb: (threadId: string, chunk: string) => void): () => void
+  onExit(cb: (threadId: string, payload: ChatExitPayload) => void): () => void
+}
