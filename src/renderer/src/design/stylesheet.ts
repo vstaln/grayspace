@@ -224,12 +224,14 @@ const componentsLayer: Sheet = {
     '&.is-terminal.is-canvas-terminal': {
       background: palette.terminalGlass,
       backdropFilter: frost.terminal,
-      WebkitBackdropFilter: frost.terminal
+      WebkitBackdropFilter: frost.terminal,
+      boxShadow: `0 0 0 1px ${hairline.glassSoft}`
     },
     'html[data-translucent] &.is-terminal.is-canvas-terminal': {
       background: palette.terminalGlass,
       backdropFilter: frost.terminal,
-      WebkitBackdropFilter: frost.terminal
+      WebkitBackdropFilter: frost.terminal,
+      boxShadow: `0 0 0 1px ${hairline.glassSoft}`
     },
     // Terminal header: fixed graphite surface; the body remains transparent
     // in Canvas and pure black in Code.
@@ -346,10 +348,16 @@ const componentsLayer: Sheet = {
     // The frame owns the surface (opaque black in Code, glass in Canvas), so
     // this wrapper stays clear and does not add a second veil.
     '& .xterm': { height: '100%' },
-    // Keep the xterm layers opaque as well as the canvas theme. Full-screen
-    // TUIs use an alternate buffer; transparent layers can drop glyphs when
-    // the canvas is composited over the wallpaper.
-    '& .xterm, & .xterm-screen, & .xterm-viewport': { background: `${palette.terminalSolid} !important` },
+    // Canvas terminals have transparent xterm layers so the frame's glass shows through
+    '& .xterm, & .xterm-screen, & .xterm-viewport': {
+      background: 'transparent !important',
+      backgroundColor: 'transparent !important'
+    },
+    // Code section terminals stay solid black
+    '&.is-code-term .xterm, &.is-code-term .xterm-screen, &.is-code-term .xterm-viewport, .code-terminal-shell & .xterm, .code-terminal-shell & .xterm-screen, .code-terminal-shell & .xterm-viewport': {
+      background: `${palette.terminalSolid} !important`,
+      backgroundColor: `${palette.terminalSolid} !important`
+    },
     // Scrolling stays fully functional (wheel/trackpad) — only the visible
     // scrollbar track/thumb is hidden, so nothing overlaps the terminal text.
     '& .xterm-viewport::-webkit-scrollbar': { width: '0px' },

@@ -12,11 +12,10 @@ export const palette = {
   /** Opaque Code-terminal fill. Canvas terminals opt into the transparent
    *  xterm theme and use `terminalGlass` for their frame instead. */
   terminalSolid: '#0b0b0d',
-  /** Canvas terminal frame: a dark translucent veil so the wallpaper stays
-   *  readable between glyphs. The xterm canvas itself is transparent in this
-   *  mode (see TerminalWidget's `glass` surface) — Code section terminals
-   *  stay fully black instead. */
-  terminalGlass: 'rgba(10, 10, 12, 0.74)',
+  /** Canvas terminal frame: a dark translucent veil (~20% transparency / 80% opacity)
+   *  so the wallpaper shines through beautifully between glyphs. The xterm canvas
+   *  itself is transparent in this mode — Code section terminals stay solid black instead. */
+  terminalGlass: 'rgba(10, 11, 15, 0.80)',
   /** Fixed title-bar palette: base window, control surface, active control. */
   titleBar: {
     base: '#090a0c',
@@ -47,9 +46,9 @@ export const frost = {
   shell: 'blur(28px) saturate(160%)',
   surface: 'blur(40px) saturate(150%)',
   board: 'blur(30px) saturate(160%)',
-  /** Canvas terminal glass: modest 20px blur plus a 10% dim so text stays
-   *  readable over busy wallpaper. */
-  terminal: 'blur(20px) brightness(0.9)'
+  /** Canvas terminal glass: 18px blur plus ~18% dimming (brightness 0.82) so text stays
+   *  crisp and readable over busy wallpaper. */
+  terminal: 'blur(18px) brightness(0.82)'
 } as const
 
 /** Kanban status tints preserve the semantic colour of each workflow state. */

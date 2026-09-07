@@ -63,15 +63,15 @@ const BASE_COLORS = {
 }
 
 /**
- * One flat fill: xterm paints the exact colour the frame and header use, so
- * the whole shell reads as a single slab in every theme. Keep the xterm canvas
- * opaque: fullscreen TUIs (Gemini, Claude, etc.) repaint through an alternate
- * buffer and transparent canvas layers can lose glyphs against the wallpaper.
+ * Canvas terminals use a transparent xterm canvas so the frosted glass frame
+ * and wallpaper show through with translucent tint. Code section terminals
+ * stay solid black.
  */
 function xtermTheme(_appTheme: ThemeName, surface: 'canvas' | 'code'): ITheme {
+  const isCanvas = surface === 'canvas'
   return {
     ...BASE_COLORS,
-    background: palette.terminalSolid,
+    background: isCanvas ? '#00000000' : palette.terminalSolid,
     cursorAccent: palette.wallpaperBase
   }
 }
@@ -98,6 +98,7 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
 
     const term = new Terminal({
       theme: xtermTheme(theme, surface),
+      allowTransparency: surface === 'canvas',
       fontSize: 13,
       fontFamily: 'Consolas, "Cascadia Mono", monospace',
       lineHeight: 1.15,
@@ -730,12 +731,14 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
       }
       if (termRef.current === term) termRef.current = null
     }
-  }, [id])
+  }, [id, surface])
 
   return (
     <div
       ref={containerRef}
-      className="term-shell term relative h-full w-full p-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 focus-within:ring-1 focus-within:ring-inset focus-within:ring-text-faint/50"
+      className={`term-shell term relative h-full w-full p-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 focus-within:ring-1 focus-within:ring-inset focus-within:ring-text-faint/50 ${
+        surface === 'canvas' ? 'is-canvas-term' : 'is-code-term'
+      }`}
       data-testid="terminal-xterm"
     >
       {connecting && (
