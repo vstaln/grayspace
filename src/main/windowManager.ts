@@ -100,7 +100,11 @@ export function createWindow(): BrowserWindow {
     // (including a downloaded one) load with preload/IPC attached.
     const devUrl = process.env['ELECTRON_RENDERER_URL']
     const controlOrigin = `http://127.0.0.1:${CONTROL_PORT}/`
-    let isAppUrl = Boolean(devUrl && url.startsWith(devUrl)) || url.startsWith('orc://app') || url === controlOrigin || url.startsWith(controlOrigin)
+    let isAppUrl =
+      Boolean(devUrl && (url.startsWith(devUrl) || url.startsWith('http://localhost:20222') || url.startsWith('http://127.0.0.1:20222'))) ||
+      url.startsWith('orc://app') ||
+      url === controlOrigin ||
+      url.startsWith(controlOrigin)
     if (!isAppUrl) {
       try {
         const parsed = new URL(url)
