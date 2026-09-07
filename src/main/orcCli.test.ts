@@ -135,7 +135,7 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
 
   test('whoami returns agent identification and status', async () => {
     const res = await runOrc(['whoami'])
-    assert.equal(res.status, 0, 'orc failed: ' + JSON.stringify(res))
+    assert.equal(res.status, 0)
     const data = res.json as { agentId: string; busy: boolean }
     assert.equal(data.agentId, agentId)
     assert.equal(data.busy, false)
