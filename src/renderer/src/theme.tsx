@@ -46,7 +46,7 @@ const ThemeContext = createContext<ThemeValue>({
   setTheme: () => {},
   background: null,
   backgroundLoaded: false,
-  dim: 45,
+  dim: 20,
   setDim: () => {},
   blur: 40,
   setBlur: () => {},
@@ -73,7 +73,7 @@ export function wallpaperBackgroundImage(background: string | null): string | un
   const [theme, setTheme] = useState<ThemeName>(readStoredTheme)
   const [background, setBackground] = useState<string | null>(null)
   const [backgroundLoaded, setBackgroundLoaded] = useState(false)
-  const [dim, setDimState] = useState(45)
+  const [dim, setDimState] = useState(20)
   const [blur, setBlurState] = useState(40)
   const [error, setError] = useState<string | null>(null)
   const backgroundRequestRef = useRef(0)

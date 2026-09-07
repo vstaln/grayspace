@@ -46,9 +46,9 @@ export const frost = {
   shell: 'blur(28px) saturate(160%)',
   surface: 'blur(40px) saturate(150%)',
   board: 'blur(30px) saturate(160%)',
-  /** Canvas terminal glass: 18px blur plus ~18% dimming (brightness 0.82) so text stays
-   *  crisp and readable over busy wallpaper. */
-  terminal: 'blur(18px) brightness(0.82)'
+  /** Canvas terminal glass: 16px blur plus subtle ~12% dimming (brightness 0.88) so text stays
+   *  crisp and readable without darkening the wallpaper excessively. */
+  terminal: 'blur(16px) brightness(0.88)'
 } as const
 
 /** Kanban status tints preserve the semantic colour of each workflow state. */
