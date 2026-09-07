@@ -208,7 +208,8 @@ if (hasInstanceLock) {
       state,
       rendererDir: process.env['ELECTRON_RENDERER_URL'] ? undefined : join(__dirname, '../renderer'),
       defaultCwd: () => state.workspaceDir,
-      broadcast: (channel, payload) => send(channel, payload)
+      broadcast: (channel, payload) => send(channel, payload),
+      onPortAssigned: () => doPublishPresence()
     })
 
     ensureOrcExecutable()

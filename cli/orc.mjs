@@ -86,7 +86,56 @@ function getAllCandidateTokens(stopAtFirst = false) {
   return tokens
 }
 
-const defaultPort = process.env.WORKSPACE_CONTROL_PORT || 20220
+function getDiscoveredPort() {
+  const envPort = Number(process.env.WORKSPACE_CONTROL_PORT)
+  if (Number.isInteger(envPort) && envPort >= 1 && envPort <= 65535) {
+    return envPort
+  }
+  if (process.env.ORCSPACE_URL) {
+    try {
+      const u = new URL(process.env.ORCSPACE_URL)
+      if (u.port) return Number(u.port)
+    } catch {
+      /* ignore invalid URL */
+    }
+  }
+
+  const candidateDirs = [
+    path.join(process.cwd(), '.dev-user-data'),
+    process.env.ORCSPACE_DEV_USER_DATA,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'OrcSpace') : null,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'Orcspace') : null,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'orcspace') : null,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'com.orcspace.app') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'OrcSpace') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Orcspace') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'orcspace') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'com.orcspace.app') : null,
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.dev-user-data'),
+    path.join(os.homedir(), '.config', 'OrcSpace'),
+    path.join(os.homedir(), '.config', 'Orcspace'),
+    path.join(os.homedir(), '.config', 'orcspace'),
+    path.join(os.homedir(), 'Library', 'Application Support', 'OrcSpace'),
+    path.join(os.homedir(), 'Library', 'Application Support', 'Orcspace')
+  ].filter(Boolean)
+
+  for (const dir of candidateDirs) {
+    try {
+      const runtimePath = path.join(dir, 'runtime.json')
+      if (fs.existsSync(runtimePath)) {
+        const raw = JSON.parse(fs.readFileSync(runtimePath, 'utf8'))
+        if (raw && typeof raw.controlPort === 'number' && raw.controlPort >= 1 && raw.controlPort <= 65535) {
+          return raw.controlPort
+        }
+      }
+    } catch {
+      /* try next candidate */
+    }
+  }
+  return 20220
+}
+
+const defaultPort = getDiscoveredPort()
 const BASE = (process.env.ORCSPACE_URL || `http://127.0.0.1:${defaultPort}`).replace(/\/+$/, '')
 const AGENT_ID = process.env.ORCSPACE_AGENT_ID || process.env.ORCSPACE_TERMINAL_ID || 'cli'
 let workingToken = null

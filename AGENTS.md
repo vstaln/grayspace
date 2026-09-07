@@ -79,4 +79,14 @@ orc board update <id> done                   # complete a task (moves to Done an
 `orc board`, `orc terminal`, `orc git`, `orc journal`. Add `--json` for parseable
 output. Prefer putting results on the canvas or a task over loose files —
 the user is looking at the canvas, not at your scrollback.
+
+**Ports, Networking & Build Invariants (MANDATORY FOR ALL AGENTS):**
+- **Strict Loopback Binding:** The backend control server, MCP and renderer MUST always bind to `127.0.0.1` — NEVER bind to bare `localhost` or public hostnames (avoids Windows IPv6 `::1` DNS resolution delays and network leakage).
+- **Default Ports & Isolation:**
+  - Production / Installed app (`OrcSpace.exe`): default `20220` with user data in `%APPDATA%\OrcSpace`.
+  - Dev mode (`dev.bat`): default `20224` with user data in `.dev-user-data`.
+- **Dynamic Free Port Fallback:** If a default port is already occupied (e.g. `EADDRINUSE`), the app and build/dev runner must automatically bind to an available free port on `127.0.0.1` (`server.listen(0, '127.0.0.1')`) rather than crashing or terminating existing processes.
+- **Port Stability:** Never arbitrarily change or hardcode different default ports in future code or scripts. Keep standard ports predictable so tools, shortcuts, and existing builds never break.
+- **Auto-Discovery:** The active port is always written to `runtime.json` (`controlPort`). The `orc` CLI and client agents automatically discover it from `runtime.json` or `WORKSPACE_CONTROL_PORT` / `ORCSPACE_URL`.
+- **Coexistence:** Production and Dev mode must always be capable of running simultaneously without conflicting, colliding ports, or killing each other.
 <!-- END ORCSPACE (managed) -->

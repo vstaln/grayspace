@@ -5,7 +5,7 @@
 All supported agents use the same MCP endpoint:
 
 ```text
-http://localhost:20220/mcp
+http://127.0.0.1:20220/mcp
 ```
 
 Supported clients: Codex, Claude Code, Cursor, Grok, Antigravity, Kimi Code, OpenCode, Windsurf, and Cline.

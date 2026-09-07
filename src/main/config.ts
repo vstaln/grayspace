@@ -15,7 +15,19 @@ function configuredPort(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65_535 ? parsed : fallback
 }
 
-export const CONTROL_PORT = configuredPort(process.env.WORKSPACE_CONTROL_PORT, isDev ? 20224 : 20220)
+let activeControlPort = configuredPort(process.env.WORKSPACE_CONTROL_PORT, isDev ? 20224 : 20220)
+
+export function getActiveControlPort(): number {
+  return activeControlPort
+}
+
+export function setActiveControlPort(port: number): void {
+  if (Number.isInteger(port) && port >= 1 && port <= 65_535) {
+    activeControlPort = port
+  }
+}
+
+export const CONTROL_PORT = activeControlPort
 
 /** Keeps the per-terminal scrollback that agents can read back over HTTP bounded. */
 export const OUTPUT_BUFFER_LIMIT = 50_000

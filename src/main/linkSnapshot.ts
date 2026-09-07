@@ -1,4 +1,4 @@
-import { CONTROL_PORT } from './config.ts'
+import { CONTROL_PORT, getActiveControlPort } from './config.ts'
 
 export const APP_VERSION = '2.0.0'
 
@@ -45,7 +45,7 @@ export function buildPresence(input: {
     app: 'orcspace',
     version: APP_VERSION,
     pid: input.pid ?? process.pid,
-    controlPort: CONTROL_PORT,
+    controlPort: getActiveControlPort(),
     workspaceDir: input.workspaceDir ?? null
   }
 }

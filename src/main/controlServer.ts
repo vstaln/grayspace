@@ -1,7 +1,7 @@
 import * as http from 'http'
 import * as fs from 'fs'
 import { extname, join, normalize, resolve, sep } from 'path'
-import { CONTROL_PORT, MAX_TERMINAL_WRITE_BYTES } from './config.ts'
+import { CONTROL_PORT, MAX_TERMINAL_WRITE_BYTES, getActiveControlPort, setActiveControlPort } from './config.ts'
 import { CoordinationStore, USER_AUTHOR } from './coordination.ts'
 import { TerminalManager } from './terminals.ts'
 import { CanvasStore } from './canvasState.ts'
@@ -65,6 +65,8 @@ interface ControlDeps {
   /** Optional packaged renderer directory; served by this same listener. */
   rendererDir?: string
   broadcast?(channel: string, payload: unknown): void
+  /** Called whenever the server successfully binds, passing the assigned port. */
+  onPortAssigned?(port: number): void
 }
 
 /** How a failed command maps onto HTTP for callers that only speak status codes. */
@@ -133,17 +135,31 @@ export function startControlServer(deps: ControlDeps): http.Server {
       }
     })
   })
+  let activePort = port
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
-      console.error(
-        `control port ${port} is already in use — another OrcSpace instance is probably running.`
+      console.warn(
+        `control port ${activePort} is already in use — falling back to an available free port on 127.0.0.1.`
       )
+      // Listen on 0 to let OS assign an available free port on 127.0.0.1
+      server.listen(0, '127.0.0.1', () => {
+        const address = server.address()
+        const assigned = typeof address === 'object' && address ? address.port : 0
+        if (assigned) {
+          activePort = assigned
+          setActiveControlPort(assigned)
+          console.log(`control server fallback listening on http://127.0.0.1:${assigned}`)
+          deps.onPortAssigned?.(assigned)
+        }
+      })
       return
     }
     console.error('control server error', err)
   })
   server.listen(port, '127.0.0.1', () => {
+    setActiveControlPort(port)
     console.log(`control server listening on http://127.0.0.1:${port}`)
+    deps.onPortAssigned?.(port)
   })
   return server
 }
@@ -297,7 +313,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       app: 'orcspace',
       server: 'orcspace-control',
       version: APP_VERSION,
-      controlPort: CONTROL_PORT,
+      controlPort: getActiveControlPort(),
       workspaceDir: deps.defaultCwd() ?? null,
       terminals: terminals.list().length,
       managerId: coordination.managerId,
