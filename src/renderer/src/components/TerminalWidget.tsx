@@ -357,90 +357,78 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
     }
 
     // Refit on zoom / DPR change: subscribe window resize + matchMedia(resolution) change -> fit.fit()
-    useEffect(() => {
-      const handleResize = (): void => {
-        if (!mounted || container.clientWidth === 0 || container.clientHeight === 0) return
-        try { fit.fit() } catch {}
-      }
-      const handleResolution = (): void => {
-        if (!mounted) return
-        try { fit.fit() } catch {}
-      }
-      window.addEventListener('resize', handleResize)
-      window.matchMedia('(resolution: 96dpi)').addEventListener('change', handleResolution)
-      handleResize()
-      return () => {
-        window.removeEventListener('resize', handleResize)
-        window.matchMedia('(resolution: 96dpi)').removeEventListener('change', handleResolution)
-      }
-    }, [mounted, container, fit])
+    const handleResize = (): void => {
+      if (!mounted || container.clientWidth === 0 || container.clientHeight === 0) return
+      try { fit.fit() } catch {}
+    }
+    const handleResolution = (): void => {
+      if (!mounted) return
+      try { fit.fit() } catch {}
+    }
+    window.addEventListener('resize', handleResize)
+    const mediaQuery = window.matchMedia('(resolution: 96dpi)')
+    mediaQuery.addEventListener('change', handleResolution)
+    handleResize()
 
     // Copy / Paste hotkeys: Ctrl+Shift+C / Ctrl+Shift+V (Windows/Linux) and
     // Cmd+Shift+C / Cmd+Shift+V (macOS) with Shift as the cross-platform
     // modifier that works alongside Ctrl/Cmd. Existing native Ctrl+C/X/V and
     // Cmd+C/V remain functional for their standard roles.
-    useEffect(() => {
-      const handler = (e: KeyboardEvent): void => {
-        if ((e.ctrlKey || e.metaKey) && !e.shiftKey) return // standard Ctrl/Cmd+C/V, let native handle
-        if ((e.ctrlKey || e.metaKey) && e.shiftKey) {
-          e.preventDefault()
-          const key = e.key.toLowerCase()
-          if (key === 'c') {
-            const selection = term.getSelection()
-            if (selection) {
-              void navigator.clipboard.writeText(selection).catch(() => {})
-              term.clearSelection()
-            }
+    const onKeyShortcut = (e: KeyboardEvent): void => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey) return // standard Ctrl/Cmd+C/V, let native handle
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey) {
+        e.preventDefault()
+        const key = e.key.toLowerCase()
+        if (key === 'c') {
+          const selection = term.getSelection()
+          if (selection) {
+            void navigator.clipboard.writeText(selection).catch(() => {})
+            term.clearSelection()
           }
-          if (key === 'v') {
-            void navigator.clipboard.readText().then((text) => term.paste(text)).catch(() => {})
-          }
-          if (key === 'x') {
-            const selection = term.getSelection()
-            if (selection) {
-              void navigator.clipboard.writeText(selection).catch(() => {})
-              term.clearSelection()
-            }
-          }
-          return
         }
-        // Without modifier — fallback to copy last selection via input or do nothing
+        if (key === 'v') {
+          void navigator.clipboard.readText().then((text) => term.paste(text)).catch(() => {})
+        }
+        if (key === 'x') {
+          const selection = term.getSelection()
+          if (selection) {
+            void navigator.clipboard.writeText(selection).catch(() => {})
+            term.clearSelection()
+          }
+        }
+        return
       }
-      document.addEventListener('keydown', handler)
-      return () => document.removeEventListener('keydown', handler)
-    }, [term])
+    }
+    document.addEventListener('keydown', onKeyShortcut)
 
     // Minimal context menu on right-click: Copy/Paste on terminal selection
-    useEffect(() => {
-      const handler = (e: MouseEvent): void => {
-        if (e.button !== 2) return
-        e.preventDefault()
-        const selection = term.getSelection()
-        const hasSelection = !!selection?.trim()
-        const menu = document.createElement('div')
-        menu.style.position = 'fixed'
-        menu.style.right = '10px'
-        menu.style.bottom = '10px'
-        menu.style.background = 'var(--bg-raise)'
-        menu.style.border = '1px solid var(--border-line-soft)'
-        menu.style.borderRadius = '6px'
-        menu.style.padding = '8px'
-        menu.style.boxShadow = '0 4px 12px rgba(0,0,0,.15)'
-        menu.style.zIndex = '99999'
-        menu.innerHTML = `
-          ${hasSelection
-            ? `<button style="width:100%;margin-bottom:4px;padding:4px;border:none;border-radius:4px;background:#3182ce;color:white;font-size:12px;cursor:pointer;" onclick="void navigator.clipboard.writeText('${selection}')">Copy</button>`
-            : ''}
-          ${!hasSelection
-            ? `<button style="width:100%;padding:4px;border:none;border-radius:4px;background:#e2e8f0;font-size:12px;cursor:pointer;" onclick="void navigator.clipboard.readText().then(t=>term.paste(t)).catch(()=>{})">Paste</button>`
-            : ''}
-        `
-        document.body.appendChild(menu)
-        setTimeout(() => document.body.removeChild(menu), 1200)
-      }
-      container.addEventListener('contextmenu', handler)
-      return () => container.removeEventListener('contextmenu', handler)
-    }, [term])
+    const onContextMenu = (e: MouseEvent): void => {
+      if (e.button !== 2) return
+      e.preventDefault()
+      const selection = term.getSelection()
+      const hasSelection = !!selection?.trim()
+      const menu = document.createElement('div')
+      menu.style.position = 'fixed'
+      menu.style.right = '10px'
+      menu.style.bottom = '10px'
+      menu.style.background = 'var(--bg-raise)'
+      menu.style.border = '1px solid var(--border-line-soft)'
+      menu.style.borderRadius = '6px'
+      menu.style.padding = '8px'
+      menu.style.boxShadow = '0 4px 12px rgba(0,0,0,.15)'
+      menu.style.zIndex = '99999'
+      menu.innerHTML = `
+        ${hasSelection
+          ? `<button style="width:100%;margin-bottom:4px;padding:4px;border:none;border-radius:4px;background:#3182ce;color:white;font-size:12px;cursor:pointer;" onclick="void navigator.clipboard.writeText('${selection}')">Copy</button>`
+          : ''}
+        ${!hasSelection
+          ? `<button style="width:100%;padding:4px;border:none;border-radius:4px;background:#e2e8f0;font-size:12px;cursor:pointer;" onclick="void navigator.clipboard.readText().then(t=>term.paste(t)).catch(()=>{})">Paste</button>`
+          : ''}
+      `
+      document.body.appendChild(menu)
+      setTimeout(() => document.body.removeChild(menu), 1200)
+    }
+    container.addEventListener('contextmenu', onContextMenu)
 
     // The main process intercepts Ctrl+C/X/A/Z while a terminal holds focus
     // (menu accelerators would otherwise win over the pty), so it needs to
@@ -709,6 +697,10 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
       if (resizeRestoreTimerShort) clearTimeout(resizeRestoreTimerShort)
       if (resizeRestoreTimerLong) clearTimeout(resizeRestoreTimerLong)
       observer.disconnect()
+      window.removeEventListener('resize', handleResize)
+      mediaQuery.removeEventListener('change', handleResolution)
+      document.removeEventListener('keydown', onKeyShortcut)
+      container.removeEventListener('contextmenu', onContextMenu)
       container.removeEventListener('paste', onPaste, true)
       container.removeEventListener('dragenter', onDragEnter)
       container.removeEventListener('dragover', onDragOver)

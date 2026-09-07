@@ -1,11 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Maximize2, Minimize2, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
-import TerminalWidget from './TerminalWidget'
+import TerminalWidget, { forgetTerminalViewport } from './TerminalWidget'
 import BrowserWidget from './BrowserWidget'
 import CodeLauncher, { CODE_AGENTS, CodeAgent } from './CodeLauncher'
 import { queueInitialCommand } from '../lib/pendingTerminalCommands'
-import { forgetTerminalViewport } from './TerminalWidget.tsx'
-import { forgetAgentSelection } from './WidgetFrame.tsx'
+import { forgetAgentSelection } from './WidgetFrame'
 
 interface Session {
   id: string
