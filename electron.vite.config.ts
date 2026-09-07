@@ -21,7 +21,7 @@ export default defineConfig({
   },
   renderer: {
     server: {
-      host: 'localhost',
+      host: '127.0.0.1',
       port: 20222,
       strictPort: true
     },
