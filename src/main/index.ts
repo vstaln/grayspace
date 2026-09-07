@@ -104,7 +104,7 @@ if (hasInstanceLock) {
 
   app.whenReady().then(() => {
     if (process.platform === 'win32') {
-      app.setAppUserModelId('com.orcspace.app')
+      app.setAppUserModelId(app.isPackaged ? 'com.orcspace.app' : 'com.orcspace.app.dev')
     }
     Menu.setApplicationMenu(
       Menu.buildFromTemplate(

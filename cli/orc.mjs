@@ -86,7 +86,8 @@ function getAllCandidateTokens(stopAtFirst = false) {
   return tokens
 }
 
-const BASE = (process.env.ORCSPACE_URL || 'http://127.0.0.1:20220').replace(/\/+$/, '')
+const defaultPort = process.env.WORKSPACE_CONTROL_PORT || 20220
+const BASE = (process.env.ORCSPACE_URL || `http://127.0.0.1:${defaultPort}`).replace(/\/+$/, '')
 const AGENT_ID = process.env.ORCSPACE_AGENT_ID || process.env.ORCSPACE_TERMINAL_ID || 'cli'
 let workingToken = null
 

@@ -1,7 +1,8 @@
 import * as fs from 'fs'
 import { join } from 'path'
 
-export const APP_TITLE = 'OrcSpace'
+const isDev = Boolean(process.env['ELECTRON_RENDERER_URL'] || process.env.NODE_ENV === 'development')
+export const APP_TITLE = isDev ? 'OrcSpace (Dev)' : 'OrcSpace'
 
 /**
  * Name MCP clients see, and the key used in every generated config snippet.
@@ -14,7 +15,7 @@ function configuredPort(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65_535 ? parsed : fallback
 }
 
-export const CONTROL_PORT = configuredPort(process.env.WORKSPACE_CONTROL_PORT, 20220)
+export const CONTROL_PORT = configuredPort(process.env.WORKSPACE_CONTROL_PORT, isDev ? 20224 : 20220)
 
 /** Keeps the per-terminal scrollback that agents can read back over HTTP bounded. */
 export const OUTPUT_BUFFER_LIMIT = 50_000
