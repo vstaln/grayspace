@@ -4,7 +4,6 @@ import { join } from 'path'
 import { createHash } from 'crypto'
 import { readStoreJson, writeJsonAtomic, writeJsonAtomicAsync } from './storage.ts'
 import { getUserDataDir } from './userData.ts'
-import { registerCanvasWorkspaceListener } from './canvasState.ts'
 
 export const CODE_SCHEMA_VERSION = 1
 const EMPTY_WORKSPACE_SLOT = '__no-workspace__'
@@ -16,6 +15,7 @@ export interface CodeSession {
   label: string
   command: string
   title?: string
+  status?: 'active' | 'finished'
 }
 
 export type WorkView = 'canvas' | 'code' | 'chat'
@@ -42,12 +42,14 @@ function sanitizeSession(raw: unknown): CodeSession | null {
   if (!isString(v.label) || !v.label.trim()) return null
   if (!isString(v.command)) return null
   const title = isString(v.title) && v.title.trim() ? v.title.trim().slice(0, 128) : undefined
+  const status = v.status === 'finished' ? 'finished' : 'active'
   return {
     id: v.id,
     agentId: String(v.agentId).slice(0, 64),
     label: String(v.label).slice(0, 64),
     command: String(v.command).slice(0, 512),
-    title
+    title,
+    status
   }
 }
 
@@ -95,32 +97,28 @@ export class CodeStore extends EventEmitter {
   private writeChain: Promise<void> = Promise.resolve()
   private writeSeq = 0
   private syncFlushSeq = 0
-  private workspaceDir: string | undefined
+  /** Code workspaces are logical containers and are intentionally independent
+   * from the filesystem folder used by Canvas. */
+  private workspaceScope = 'code-default'
+  private legacyFolder: string | undefined
 
-  constructor() {
-    super()
-    registerCanvasWorkspaceListener((dir) => this.switchWorkspace(dir))
-  }
+  constructor() { super() }
 
   private get file(): string {
-    const slot = this.workspaceSlot(this.workspaceDir ?? this.readActiveWorkspaceDir())
+    const slot = this.workspaceSlot(this.workspaceScope)
     return join(getUserDataDir(), `workspace-code-${slot}.json`)
   }
 
-  private workspaceSlot(dir: string | undefined): string {
-    if (!dir) return EMPTY_WORKSPACE_SLOT
-    return createHash('sha256').update(dir).digest('hex').slice(0, 32)
+  private workspaceSlot(scope: string): string {
+    if (!scope) return EMPTY_WORKSPACE_SLOT
+    return createHash('sha256').update(scope).digest('hex').slice(0, 32)
   }
 
-  private readActiveWorkspaceDir(): string | undefined {
-    const raw = readStoreJson<Record<string, unknown>>(join(getUserDataDir(), 'workspace-state.json'), {})
-    return typeof raw.workspaceDir === 'string' && raw.workspaceDir ? raw.workspaceDir : undefined
-  }
-
-  private switchWorkspace(dir: string | undefined): void {
-    if (this.workspaceDir === dir && this.loaded) return
+  setWorkspaceScope(scope: string, legacyFolder?: string): void {
+    if (!scope || (this.workspaceScope === scope && this.loaded)) return
     if (this.loaded) this.flush()
-    this.workspaceDir = dir
+    this.workspaceScope = scope
+    this.legacyFolder = legacyFolder
     this.loaded = false
     this.sessions.clear()
     this.featuredId = null
@@ -131,17 +129,26 @@ export class CodeStore extends EventEmitter {
     this.emit('change', snapshot)
   }
 
+  activeWorkspaceScope(): string { return this.workspaceScope }
+  activeWorkspaceId(): string {
+    const separator = this.workspaceScope.lastIndexOf('\u0000')
+    return separator >= 0 ? this.workspaceScope.slice(separator + 1) : this.workspaceScope
+  }
+
   private ensure(): void {
     if (this.loaded) return
-    const workspaceDir = this.workspaceDir ?? this.readActiveWorkspaceDir()
-    this.workspaceDir = workspaceDir
     const raw = readStoreJson<Record<string, unknown>>(this.file, {})
     // Also try legacy global file if per-workspace empty and global exists
     let source: Record<string, unknown> = raw
     if (Object.keys(raw).length === 0) {
+      if (this.legacyFolder) {
+        const oldFolderFile = join(getUserDataDir(), `workspace-code-${this.workspaceSlot(this.legacyFolder)}.json`)
+        const oldFolderRaw = readStoreJson<Record<string, unknown>>(oldFolderFile, {})
+        if (Object.keys(oldFolderRaw).length > 0) source = oldFolderRaw
+      }
       const legacyGlobal = join(getUserDataDir(), 'workspace-code.json')
       try {
-        if (fs.existsSync(legacyGlobal) && this.workspaceSlot(workspaceDir) !== EMPTY_WORKSPACE_SLOT) {
+        if (Object.keys(source).length === 0 && fs.existsSync(legacyGlobal) && this.workspaceScope !== 'code-default') {
           // For initial migration from global, copy over if slot file empty
           const globalRaw = readStoreJson<Record<string, unknown>>(legacyGlobal, {})
           if (Object.keys(globalRaw).length > 0) {
@@ -189,7 +196,7 @@ export class CodeStore extends EventEmitter {
       const incoming = (input.sessions.map(sanitizeSession).filter(Boolean) as CodeSession[]).slice(0, MAX_SESSIONS)
       const sessionsDiffer = incoming.length !== this.sessions.size || incoming.some(s => {
         const existing = this.sessions.get(s.id)
-        return !existing || existing.agentId !== s.agentId || existing.label !== s.label || existing.command !== s.command || (existing.title ?? '') !== (s.title ?? '')
+        return !existing || existing.agentId !== s.agentId || existing.label !== s.label || existing.command !== s.command || (existing.title ?? '') !== (s.title ?? '') || (existing.status ?? 'active') !== (s.status ?? 'active')
       })
       let orderingDiffers = false
       if (!sessionsDiffer) {
@@ -273,18 +280,26 @@ export class CodeStore extends EventEmitter {
     this.writeSeq += 1
     const seq = this.writeSeq
     const snapshot = this.snapshotForPersist()
+    // Capture the workspace-specific destination now, not when the serialized
+    // write reaches the tail of `writeChain`. A workspace switch can happen
+    // while an earlier save is queued and must never redirect that old state
+    // into the newly selected workspace file.
+    const file = this.file
     this.writeChain = this.writeChain
       .catch(() => {})
       .then(async (): Promise<boolean> => {
         if (seq <= this.syncFlushSeq) return false
-        await writeJsonAtomicAsync(this.file, snapshot)
+        await writeJsonAtomicAsync(file, snapshot)
         return true
       })
       .then((wrote) => {
         if (!wrote) return
-        if (this.syncFlushSeq >= seq) {
+        // Do not copy the current workspace's in-memory state back into an
+        // older workspace's file when a switch happened while this write was
+        // in flight. The old synchronous flush already repaired that file.
+        if (this.syncFlushSeq >= seq && file === this.file) {
           try {
-            writeJsonAtomic(this.file, this.snapshotForPersist())
+            writeJsonAtomic(file, this.snapshotForPersist())
           } catch (err) {
             console.error('failed to persist code layout', err)
           }

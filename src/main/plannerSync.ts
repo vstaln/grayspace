@@ -12,6 +12,12 @@ import type { PlannerStore, PlanItem } from './plannerStore.ts'
  */
 export function initPlannerSync(planner: PlannerStore, coordination: CoordinationStore): () => void {
   let isSyncing = false
+  // Ids the sync has actually seen on each side. Deletion propagation only
+  // removes ids known to have existed there: a board task created concurrently
+  // with a planner event (or by a path that bypasses the planner) must not be
+  // treated as "deleted in planner" just because it is absent from that event.
+  const knownPlanIds = new Set<string>()
+  const knownTaskIds = new Set<string>()
 
   const syncPlanItemToBoard = (item: PlanItem): void => {
     const task = coordination.task(item.id)
@@ -90,6 +96,8 @@ export function initPlannerSync(planner: PlannerStore, coordination: Coordinatio
         syncBoardTaskToPlanner(task)
       }
     }
+    for (const item of planner.list()) knownPlanIds.add(item.id)
+    for (const task of coordination.snapshot().tasks) knownTaskIds.add(task.id)
   } finally {
     isSyncing = false
   }
@@ -103,13 +111,22 @@ export function initPlannerSync(planner: PlannerStore, coordination: Coordinatio
       for (const item of items) {
         syncPlanItemToBoard(item)
       }
-      // Remove any tasks on board that were deleted in planner
+      // Remove board tasks deleted in planner — but only ids this sync has
+      // seen on the board before. Anything else (created concurrently with
+      // this event, or a momentarily-empty source snapshot after a restart) is
+      // not evidence of a deletion.
       const boardTasks = coordination.snapshot().tasks
       for (const task of boardTasks) {
-        if (!currentIds.has(task.id)) {
+        if (!currentIds.has(task.id) && knownTaskIds.has(task.id)) {
           coordination.deleteTask(task.id)
+          knownTaskIds.delete(task.id)
+        } else {
+          // Tasks just created above (or concurrently) join the known set so
+          // a later planner deletion still propagates to them.
+          knownTaskIds.add(task.id)
         }
       }
+      for (const id of currentIds) knownPlanIds.add(id)
     } finally {
       isSyncing = false
     }
@@ -124,13 +141,18 @@ export function initPlannerSync(planner: PlannerStore, coordination: Coordinatio
       for (const task of snapshot.tasks) {
         syncBoardTaskToPlanner(task)
       }
-      // Remove any items in planner that were deleted on board
+      // Same known-id rule on this side: only planner items previously seen
+      // may be treated as deleted on the board.
       const planItems = planner.list()
       for (const item of planItems) {
-        if (!currentTaskIds.has(item.id)) {
+        if (!currentTaskIds.has(item.id) && knownPlanIds.has(item.id)) {
           planner.deleteItem(item.id)
+          knownPlanIds.delete(item.id)
+        } else {
+          knownPlanIds.add(item.id)
         }
       }
+      for (const id of currentTaskIds) knownTaskIds.add(id)
     } finally {
       isSyncing = false
     }

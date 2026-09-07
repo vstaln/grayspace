@@ -293,19 +293,24 @@ export function readJournalTail(file: string, limit = 2_000): { lastSeq: number;
   // Walk from the end so a trailing newline (every successful flush writes one)
   // or a torn last line cannot make lastSeq look like 0. Callers that pass
   // `limit: 1` still need the highest real sequence, not the empty final slot.
+  // lastSeq is the max over the WHOLE file, not just the returned tail: with
+  // more than `limit` lines on disk, deriving it from the tail alone reuses
+  // sequence numbers and collides with existing entries after a restart.
   const lines = text.split('\n')
-  for (let i = lines.length - 1; i >= 0 && entries.length < limit; i -= 1) {
+  let lastSeq = 0
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = lines[i]
     if (!line.trim()) continue
     try {
       const entry = JSON.parse(line) as JournalEntry
-      if (typeof entry.seq === 'number' && typeof entry.type === 'string') entries.push(entry)
+      if (typeof entry.seq !== 'number' || typeof entry.type !== 'string') continue
+      if (entry.seq > lastSeq) lastSeq = entry.seq
+      if (entries.length < limit) entries.push(entry)
     } catch {
       // A torn final line is expected after a hard kill — skip it rather than
       // treating the whole journal as corrupt.
     }
   }
   entries.reverse()
-  const lastSeq = entries.reduce((max, entry) => Math.max(max, entry.seq), 0)
   return { lastSeq, entries }
 }

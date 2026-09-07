@@ -37,6 +37,24 @@ export default defineConfig({
   },
   projects: [
     { name: 'local', retries: 0 },
-    { name: 'ci', retries: 2 }
+    { name: 'ci', retries: 2 },
+    {
+      name: 'ink',
+      testMatch: '**/*.spec.ts',
+      use: {
+        ...use,
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor: 2,
+        hasTouch: true,
+      },
+    },
+    {
+      name: 'min',
+      testMatch: '**/*.spec.ts',
+      use: {
+        ...use,
+        viewport: { width: 800, height: 560 },
+      },
+    },
   ]
 })

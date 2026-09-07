@@ -15,7 +15,12 @@ export function notifyPersistError(store: string, error: unknown): void {
     at: Date.now()
   }
   console.error(`[persist:${store}] failed to persist`, error)
-  emitter.emit('persistError', payload)
+  try {
+    emitter.emit('persistError', payload)
+  } catch (err) {
+    // A throwing UI listener must not propagate back into the store write path.
+    console.error('[persistError] listener threw', err)
+  }
 }
 
 export function onPersistError(listener: (payload: PersistError) => void): () => void {

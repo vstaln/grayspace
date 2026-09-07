@@ -1,10 +1,20 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { ExternalLink, Music2, Pause, Play, Plus, RotateCcw, SkipBack, SkipForward, SquareStop, Trash2, Volume2, VolumeX } from 'lucide-react'
+import { ExternalLink, Loader2, Music2, Pause, Play, Plus, RotateCcw, SkipBack, SkipForward, SquareStop, Trash2, Volume2, VolumeX } from 'lucide-react'
 import { isSafeUrl, sanitizeUrl } from '../lib/sanitizeUrl'
+import {
+  coerceList,
+  formatDuration as format,
+  provider,
+  sanitizeAudioSrc,
+  spotifyEmbed,
+  titleFor,
+  videoId,
+  yandexEmbed,
+  type Playlist,
+  type Provider,
+  type Track
+} from '../lib/music'
 
-type Provider = 'youtube' | 'yandex' | 'spotify' | 'audio'
-type Track = { id: string; url: string; title: string; provider: Provider }
-type Playlist = { id: string; name: string; tracks: Track[] }
 type Player = {
   destroy(): void
   playVideo(): void
@@ -65,7 +75,7 @@ function youtubeApi(): Promise<YTApi> {
       }, 10000)
 
       const prevHandler = window.onYouTubeIframeAPIReady
-      window.onYouTubeIframeAPIReady = () => {
+      const wrappedHandler = (): void => {
         clearTimeout(timeout)
         if (typeof prevHandler === 'function') {
           try {
@@ -79,6 +89,9 @@ function youtubeApi(): Promise<YTApi> {
           reject(new Error('YouTube API unavailable'))
         }
       }
+      // Preserve existing queue: chain instead of overwrite. The previous
+      // handler runs exactly once, inside wrappedHandler.
+      window.onYouTubeIframeAPIReady = wrappedHandler
 
       if (!document.querySelector('script[src*="youtube.com/iframe_api"]')) {
         const script = document.createElement('script')
@@ -87,10 +100,6 @@ function youtubeApi(): Promise<YTApi> {
         script.onerror = () => {
           clearTimeout(timeout)
           apiPromise = null
-          // Leaving the dead tag in the document would make the next attempt
-          // skip the `querySelector` branch below and wait out the full
-          // timeout against a script that is never going to load, so Retry
-          // gets a clean slate instead.
           script.remove()
           reject(new Error('YouTube unavailable'))
         }
@@ -99,114 +108,6 @@ function youtubeApi(): Promise<YTApi> {
     })
   }
   return apiPromise
-}
-
-const SUPPORTED_AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'flac', 'aac', 'm4a', 'opus', 'weba'])
-
-function provider(url: string): Provider | null {
-  try {
-    const trimmed = url.trim()
-    if (!trimmed) return null
-    const u = new URL(trimmed.startsWith('http://') || trimmed.startsWith('https://') ? trimmed : `https://${trimmed}`)
-    const host = u.hostname.replace(/^www\./, '').toLowerCase()
-    if (host === 'youtube.com' || host === 'youtu.be' || host === 'm.youtube.com' || host === 'music.youtube.com') return 'youtube'
-    if (host === 'open.spotify.com' || host === 'spotify.com') return 'spotify'
-    if (host === 'music.yandex.ru' || host === 'music.yandex.com') return 'yandex'
-    // Direct link to an audio file streams through <audio> — only if extension matches
-    // the six required formats plus common containers. No generic http fallback:
-    // treating every https URL as audio misclassifies pages as tracks and
-    // makes <audio> issue a CORS/noise request for HTML.
-    const ext = u.pathname.split('.').pop()?.split('?')[0]?.toLowerCase() ?? ''
-    if (SUPPORTED_AUDIO_EXTS.has(ext)) return 'audio'
-    if (/\.(mp3|ogg|oga|wav|m4a|flac|aac|opus|weba)($|\?)/i.test(u.pathname)) return 'audio'
-  } catch {}
-  return null
-}
-
-function isSupportedAudioUrl(url: string): boolean {
-  try {
-    const u = new URL(url)
-    const ext = u.pathname.split('.').pop()?.split('?')[0]?.toLowerCase() ?? ''
-    return SUPPORTED_AUDIO_EXTS.has(ext)
-  } catch {
-    return false
-  }
-}
-
-function sanitizeAudioSrc(url: string): string | null {
-  if (!url) return null
-  const trimmed = url.trim()
-  if (!trimmed) return null
-  // Allow blob: and data:audio/* for cached / locally-imported audio; otherwise require safe http(s)
-  if (trimmed.startsWith('blob:')) return trimmed
-  if (trimmed.startsWith('data:audio/')) return trimmed
-  // Fall back to the shared sanitizer which blocks javascript:, file:, etc.
-  const sanitized = sanitizeUrl(trimmed)
-  if (!sanitized || !isSafeUrl(sanitized)) return null
-  // Extra gate: must be http(s) and ideally have a supported extension, but
-  // allow extension-less streaming URLs (e.g. HLS) — the <audio> element will
-  // error gracefully if the format is truly unsupported.
-  try {
-    const u = new URL(sanitized)
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
-  } catch {
-    return null
-  }
-  return sanitized
-}
-
-function videoId(url: string): string | null {
-  try {
-    const trimmed = url.trim()
-    const u = new URL(trimmed.startsWith('http://') || trimmed.startsWith('https://') ? trimmed : `https://${trimmed}`)
-    if (u.hostname.includes('youtu.be')) {
-      const id = u.pathname.slice(1).split('/')[0]?.split('?')[0]
-      return id && /^[\w-]{11}$/.test(id) ? id : null
-    }
-    const v = u.searchParams.get('v')
-    if (v && /^[\w-]{11}$/.test(v)) return v
-    const m = u.pathname.match(/\/(embed|v|shorts|live)\/([\w-]{11})/)
-    if (m && m[2]) return m[2]
-    const last = u.pathname.split('/').filter(Boolean).pop()?.split('?')[0]
-    if (last && /^[\w-]{11}$/.test(last)) return last
-    return null
-  } catch {
-    return null
-  }
-}
-
-/** Yandex's public embed widget streams the track itself — no auth, no download. */
-function yandexEmbed(url: string): string | null {
-  try {
-    const u = new URL(url)
-    const withAlbum = u.pathname.match(/\/album\/(\d+)\/track\/(\d+)/)
-    if (withAlbum) return `https://music.yandex.ru/iframe/#track/${withAlbum[2]}/${withAlbum[1]}`
-    const trackOnly = u.pathname.match(/\/track\/(\d+)/)
-    if (trackOnly) return `https://music.yandex.ru/iframe/#track/${trackOnly[1]}`
-  } catch {}
-  return null
-}
-
-/** Spotify's oEmbed-style iframe — plays preview inline. */
-function spotifyEmbed(url: string): string | null {
-  try {
-    const u = new URL(url)
-    const m = u.pathname.match(/\/(track|album|playlist|episode)\/([A-Za-z0-9]+)/)
-    if (m) return `https://open.spotify.com/embed/${m[1]}/${m[2]}`
-  } catch {}
-  return null
-}
-
-function titleFor(kind: Provider, url: string): string {
-  if (kind === 'audio') {
-    try {
-      const name = decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).pop() || 'Audio track')
-      return name.replace(/\.[a-z0-9]+$/i, '')
-    } catch {
-      return 'Audio track'
-    }
-  }
-  return kind === 'youtube' ? 'YouTube track' : kind === 'spotify' ? 'Spotify track' : 'Yandex Music track'
 }
 
 async function fetchTrackTitle(kind: Provider, url: string): Promise<string | null> {
@@ -222,46 +123,16 @@ async function fetchTrackTitle(kind: Provider, url: string): Promise<string | nu
   return null
 }
 
-/** A playlist that survived a round-trip through localStorage, or null. */
-function coerceList(value: unknown): Playlist | null {
-  if (!value || typeof value !== 'object') return null
-  const raw = value as Partial<Playlist>
-  if (typeof raw.id !== 'string' || typeof raw.name !== 'string') return null
-  const tracks = Array.isArray(raw.tracks)
-    ? raw.tracks.filter(
-        (t): t is Track =>
-          !!t &&
-          typeof t === 'object' &&
-          typeof t.id === 'string' &&
-          typeof t.url === 'string' &&
-          typeof t.title === 'string' &&
-          (t.provider === 'youtube' || t.provider === 'yandex' || t.provider === 'spotify' || t.provider === 'audio')
-      )
-    : []
-  return { id: raw.id, name: raw.name, tracks }
-}
-
 function read(key: string): Playlist[] {
   const fallback = (): Playlist[] => [{ id: crypto.randomUUID(), name: 'My playlist', tracks: [] }]
   try {
     const v: unknown = JSON.parse(localStorage.getItem(key) || '[]')
-    // Anything hand-edited, half-written or left by an older build reaches
-    // this widget as `lists`, and a single entry without a `tracks` array
-    // would take the whole render down with it.
     if (!Array.isArray(v)) return fallback()
     const lists = v.map(coerceList).filter((p): p is Playlist => p !== null)
     return lists.length ? lists : fallback()
   } catch {
     return fallback()
   }
-}
-
-const format = (value: number): string => {
-  if (!Number.isFinite(value)) return '--:--'
-  const n = Math.max(0, Math.floor(value))
-  return n >= 3600
-    ? `${Math.floor(n / 3600)}:${String(Math.floor(n / 60) % 60).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`
-    : `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`
 }
 
 export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): React.JSX.Element {
@@ -301,6 +172,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
   const audioRef = useRef<HTMLAudioElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
   const dragging = useRef(false)
+  const aliveRef = useRef(true)
   const list = lists[listIndex] ?? lists[0]
   const track = list?.tracks[trackIndex]
   const id = track?.provider === 'youtube' ? videoId(track.url) : null
@@ -356,14 +228,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
             rel: 0,
             playsinline: 1,
             enablejsapi: 1,
-            // Must be the page's real http(s) origin — the IFrame API embeds
-            // it as a literal query param and validates postMessage commands
-            // (play/pause/seek) against it, rejecting the whole embed
-            // (error 2) if it isn't a well-formed http(s) origin. The main
-            // process now always serves the app over http://localhost (see
-            // serveRenderer in src/main/index.ts), so this is safe to send
-            // unconditionally in both dev and the packaged app.
-            origin: window.location.origin
+            origin: (window.location.origin && window.location.origin.startsWith('http')) ? window.location.origin : 'https://www.youtube.com'
           },
           events: {
             onReady: () => {
@@ -473,6 +338,8 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
         } catch {}
       }
     }, 500)
+    // Do not keep Electron alive when widget is hidden/minimized
+    ;(timer as unknown as { unref?: () => void }).unref?.()
     return () => window.clearInterval(timer)
   }, [ready])
 
@@ -486,6 +353,8 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
       setMediaError('Unsupported or unsafe audio link — use mp3, wav, ogg, flac, aac or m4a over https.')
     }
   }, [track?.id, track?.url, track?.provider])
+
+  const preMuteVolume = useRef(volume)
 
   useEffect(() => {
     try {
@@ -502,7 +371,9 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
   // Unmount audio cleanup: pause, revoke src, and abandon any pending play
   // promise so the widget does not leak a playing <audio> after removal.
   useEffect(() => {
+    aliveRef.current = true
     return () => {
+      aliveRef.current = false
       const a = audioRef.current
       if (a) {
         try {
@@ -539,6 +410,22 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
       } catch {}
     }
   }, [volume, muted, ready, track?.id])
+
+  // Pause and revoke the previous audio element before switching tracks. The
+  // `<audio key={track.id}>` remounts on its own, but a remount alone leaves the
+  // old element's decoder and network stream alive until GC — pausing first
+  // keeps the audio thread from leaking across every track change.
+  useEffect(() => {
+    if (track?.provider !== 'audio' || !audioSrc) return
+    const prev = audioRef.current
+    if (prev) {
+      try {
+        prev.pause()
+        prev.removeAttribute('src')
+        prev.load()
+      } catch {}
+    }
+  }, [track?.id, track?.url, track?.provider])
 
   const audioSrc = track?.provider === 'audio' ? sanitizeAudioSrc(track.url) : null
   const controllable = !!id || (track?.provider === 'audio' && !!audioSrc)
@@ -669,7 +556,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
 
     // Fetch real title in background if available
     void fetchTrackTitle(kind, url).then((fetchedTitle) => {
-      if (fetchedTitle) {
+      if (aliveRef.current && fetchedTitle) {
         setLists((prev) =>
           prev.map((p) => ({
             ...p,
@@ -703,7 +590,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
   const embed = track ? (track.provider === 'yandex' ? yandexEmbed(track.url) : track.provider === 'spotify' ? spotifyEmbed(track.url) : null) : null
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2.5 overflow-y-auto p-3" data-testid="music-player-widget">
+    <div className="flex h-full min-h-0 flex-col gap-2.5 overflow-hidden p-3" data-testid="music-player-widget">
       <div className="flex items-center gap-2">
         <Music2 size={16} className="text-accent" />
         <select
@@ -742,12 +629,18 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
         />
-        <button className="rounded bg-accent px-2 text-bg" type="submit" title="Add track" aria-label="Add track">
+        <button
+          className="rounded bg-accent px-2 text-bg disabled:cursor-not-allowed disabled:opacity-40"
+          type="submit"
+          title="Add track"
+          aria-label="Add track"
+          disabled={!draft.trim()}
+        >
           <Plus size={13} />
         </button>
       </form>
 
-      <div className="min-h-[64px] flex-1 overflow-auto rounded border border-line bg-bg/50 p-1">
+      <div className="min-h-[64px] flex-1 overflow-auto rounded border border-line bg-bg p-1">
         {list.tracks.length === 0 ? (
           <div className="p-4 text-center text-[11px] text-text-faint">
             Add a song link to this playlist — it starts playing as soon as you add it.
@@ -763,7 +656,13 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
                   else setTrackIndex(i)
                 }}
               >
-                {i === trackIndex && playing ? <Play size={9} className="mr-1 inline text-accent" /> : null}
+                {i === trackIndex && playing ? (
+                  <span className="mr-1 inline-flex items-end gap-[1.5px]" aria-label="Now playing" role="img">
+                    <span className="w-[2px] animate-pulse rounded-full bg-accent" style={{ height: 7 }} />
+                    <span className="w-[2px] animate-pulse rounded-full bg-accent" style={{ height: 11, animationDelay: '150ms' }} />
+                    <span className="w-[2px] animate-pulse rounded-full bg-accent" style={{ height: 5, animationDelay: '300ms' }} />
+                  </span>
+                ) : null}
                 {t.title} <span className="text-[9px] uppercase text-text-faint">· {t.provider}</span>
               </button>
               <button className="p-1 text-text-faint hover:text-danger" title={`Remove ${t.title}`} aria-label={`Remove ${t.title}`} onClick={() => removeTrack(t.id)}>
@@ -827,9 +726,9 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
               }
             }}
           />
-          <div ref={hostRef} className="pointer-events-none absolute inset-0 opacity-0" />
+          <div ref={hostRef} className="pointer-events-none absolute inset-0 opacity-[0.01]" />
           {ytError ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-bg/80 p-2 text-center">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-bg p-2 text-center">
               <span className="text-[10px] text-danger">{ytError}</span>
               <button
                 className="flex h-6 items-center gap-1 rounded bg-accent px-2 text-[10px] text-bg shadow hover:brightness-110"
@@ -842,14 +741,21 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
               </button>
             </div>
           ) : (
-            <button
-              className="absolute inset-0 m-auto h-9 w-9 rounded-full bg-accent text-bg shadow transition hover:brightness-110 active:scale-90 disabled:opacity-50"
-              disabled={!ready}
-              onClick={togglePlay}
-              title={playing ? 'Pause' : 'Play'}
-            >
-              {playing ? <Pause size={15} className="mx-auto" /> : <Play size={15} className="mx-auto translate-x-[1px]" />}
-            </button>
+            <>
+              <button
+                className="absolute inset-0 m-auto h-9 w-9 rounded-full bg-accent text-bg shadow transition hover:brightness-110 active:scale-90 disabled:opacity-50"
+                disabled={!ready}
+                onClick={togglePlay}
+                title={playing ? 'Pause' : 'Play'}
+              >
+                {playing ? <Pause size={15} className="mx-auto" /> : <Play size={15} className="mx-auto translate-x-[1px]" />}
+              </button>
+              {!ready && (
+                <div role="status" className="absolute inset-0 flex items-center justify-center gap-1.5 bg-bg/80 text-[10px] text-text-faint">
+                  <Loader2 size={12} className="animate-spin text-accent" /> Loading player…
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -887,28 +793,31 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
 
       {controllable && (
         <div className="flex items-center justify-end gap-1.5">
-          <button
-            className="rounded p-1 text-text-faint transition hover:text-text"
-            title={muted ? 'Unmute' : 'Mute'}
-            onClick={() => setMuted((m) => !m)}
-          >
-            {muted || volume === 0 ? <VolumeX size={13} /> : <Volume2 size={13} />}
-          </button>
-          <input
-            aria-label="Volume"
-            className="w-24 cursor-pointer"
-            type="range"
-            min={0}
-            max={100}
-            value={muted ? 0 : volume}
-            onChange={(e) => {
-              const v = Number(e.target.value)
-              setVolume(v)
-              setMuted(v === 0)
-            }}
-            style={{ accentColor: 'var(--tok-color-accent)' }}
-          />
-          <span className="w-8 text-[10px] tabular-nums text-text-faint">{muted ? 'off' : `${volume}%`}</span>
+            <button
+              className="rounded p-1 text-text-faint transition hover:text-text"
+              title={muted ? 'Unmute' : 'Mute'}
+              onClick={() => {
+                if (!muted) preMuteVolume.current = volume
+                setMuted((m) => !m)
+              }}
+            >
+              {muted || volume === 0 ? <VolumeX size={13} /> : <Volume2 size={13} />}
+            </button>
+            <input
+              aria-label="Volume"
+              className="w-24 cursor-pointer"
+              type="range"
+              min={0}
+              max={100}
+              value={volume}
+              onChange={(e) => {
+                const v = Number(e.target.value)
+                setVolume(v)
+                setMuted(v === 0)
+              }}
+              style={{ accentColor: 'var(--tok-color-accent)' }}
+            />
+            <span className="w-8 text-[10px] tabular-nums text-text-faint">{muted ? `${preMuteVolume.current}%` : `${volume}%`}</span>
         </div>
       )}
 
@@ -956,24 +865,30 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
       )}
 
       {track?.provider === 'youtube' && !id && (
-        <div className="rounded border border-line bg-bg/50 p-2 text-[10px] text-text-faint">
+        <div className="rounded border border-line bg-bg p-2 text-[10px] text-text-faint">
           Could not read a video id from this YouTube link — use a normal watch, youtu.be or shorts URL.
         </div>
       )}
 
       {(track?.provider === 'yandex' || track?.provider === 'spotify') &&
         (embed ? (
-          <iframe
-            key={track.id}
-            title={track.title}
-            src={embed}
-            className="w-full rounded border border-line"
-            style={{ height: track.provider === 'spotify' ? 80 : 100 }}
-            frameBorder={0}
-            allow="autoplay; encrypted-media; clipboard-write"
-          />
+          <>
+            <div className="rounded border border-line bg-bg p-2 text-[10px] text-text-faint">
+              Controls live in embed below — use the player directly.
+            </div>
+            <iframe
+              key={track.id}
+              title={track.title}
+              src={embed}
+              className="w-full rounded border border-line"
+              style={{ height: track.provider === 'spotify' ? 80 : 100 }}
+              frameBorder={0}
+              allow="autoplay; encrypted-media; clipboard-write"
+              tabIndex={0}
+            />
+          </>
         ) : (
-          <div className="rounded border border-line bg-bg/50 p-2 text-[10px] text-text-faint">
+          <div className="rounded border border-line bg-bg p-2 text-[10px] text-text-faint">
             Could not detect a playable track id in this link — open it directly instead.
           </div>
         ))}

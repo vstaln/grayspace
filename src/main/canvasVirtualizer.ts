@@ -75,6 +75,12 @@ export function bboxesIntersect(a: BoundingBox, b: BoundingBox): boolean {
 
 /**
  * Converts screen viewport into world coordinate bounding box.
+ * Note: this helper assumes camera.x/y is the world center (main-process
+ * convention). The renderer stores camera as translate offset — see
+ * App.tsx worldViewport memo. This file is a main-process reuse/benchmark
+ * helper, not wired into the renderer culling path (which is intentional:
+ * terminal widgets need PTY reconnect, browser widgets lose state on unmount).
+ * Keep the formula here documented, not silently diverged.
  */
 export function viewportToWorldBox(
   camera: CanvasCamera,
@@ -90,6 +96,24 @@ export function viewportToWorldBox(
     maxX: camera.x + halfW,
     maxY: camera.y + halfH
   }
+}
+
+/**
+ * Renderer-compatible viewport box: camera is translate offset (App.tsx).
+ * Use this when comparing with the renderer's culling logic.
+ */
+export function viewportToWorldBoxForRenderer(
+  camera: CanvasCamera,
+  viewport: Viewport,
+  padding = 100
+): BoundingBox {
+  const zoom = camera.zoom || 1
+  const pad = padding / zoom
+  const minX = (-viewport.width - camera.x) / zoom - pad
+  const minY = (-viewport.height - camera.y) / zoom - pad
+  const maxX = (2 * viewport.width - camera.x) / zoom + pad
+  const maxY = (2 * viewport.height - camera.y) / zoom + pad
+  return { minX, minY, maxX, maxY }
 }
 
 /**
@@ -124,6 +148,9 @@ export class CanvasVirtualizer {
     camera: CanvasCamera,
     viewport: Viewport
   ): VirtualizationResult {
+    // NOTE: main uses center-convention (viewportToWorldBox), renderer uses translate-convention
+    // (viewportToWorldBoxForRenderer). This cull is for main/benchmark use only; do not call
+    // it to drive renderer visibility or culling will be wrong.
     const worldBox = viewportToWorldBox(camera, viewport, this.options.padding)
     const lod = this.getLOD(camera.zoom)
 

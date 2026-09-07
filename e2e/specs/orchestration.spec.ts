@@ -33,15 +33,6 @@ test.afterAll(async () => {
   await closeOrcSpace(ctx)
 })
 
-/**
- * Command separator for the shell the app actually spawns.
- *
- * `defaultShell()` is ComSpec on Windows — cmd.exe, where `;` is not a
- * separator but part of the argument, so `orc status; echo X` reaches the CLI
- * as the single command `status;`. This bit the test before it bit anyone else.
- */
-const SEP = process.platform === 'win32' ? ' & ' : '; '
-
 /** Quotes an argument for whichever shell this platform spawns. */
 const q = (text: string): string => (process.platform === 'win32' ? `"${text}"` : `'${text}'`)
 
@@ -65,7 +56,22 @@ async function openTerminal(title: string): Promise<string> {
  * naive check returns the prompt instead of the result.
  */
 function sentinelPrinted(text: string, sentinel: string): boolean {
-  return new RegExp(`(^|[\r\n])[^\S\r\n]*${sentinel}[^\S\r\n]*(\r|\n)`).test(text)
+  // A Windows PTY can emit a bare carriage return while wrapping the echoed
+  // command. Treating `\r` as a line boundary makes the sentinel in that
+  // command look like the later `echo` result and lets polling return early.
+  // Newline is the stable boundary for an actual command result.
+  const at = text.lastIndexOf(sentinel)
+  if (at < 0) return false
+  const lineStart = text.lastIndexOf('\n', at - 1) + 1
+  const before = text.slice(lineStart, at)
+  // The command itself is echoed as `... & echo <sentinel>`. A wrapped
+  // command can put that suffix after a newline, so reject any candidate
+  // whose current line still contains the shell's `echo` keyword.
+  if (/\becho\s*$/i.test(before.trim()) || /\becho\s+/i.test(before)) return false
+  // The output may be followed by a prompt or cursor-padding controls, so
+  // there is no useful trailing-boundary assertion once the second occurrence
+  // has been found and the echoed command candidate was rejected above.
+  return true
 }
 
 /**
@@ -78,9 +84,19 @@ function sentinelPrinted(text: string, sentinel: string): boolean {
 async function run(terminalId: string, command: string, timeoutMs = 30_000): Promise<string> {
   const sentinel = `__ORC_DONE_${Math.random().toString(36).slice(2, 8)}__`
   const before = (await readTerminalOutput(ctx, terminalId)).length
+  // Send the command and completion marker as two PTY submissions. Putting
+  // both on one long Windows `cmd` line lets ConPTY wrap the marker into the
+  // echoed input, which is indistinguishable from a real result. A second
+  // write is queued by the shell while a long-poll command is running and is
+  // executed immediately after it returns.
   await controlSend(ctx, 'POST', `/terminal/${terminalId}/write`, {
     agentId: 'e2e',
-    text: `${command}${SEP}echo ${sentinel}`,
+    text: command,
+    pressEnter: true
+  })
+  await controlSend(ctx, 'POST', `/terminal/${terminalId}/write`, {
+    agentId: 'e2e',
+    text: `echo ${sentinel}`,
     pressEnter: true
   })
   const out = await waitForTerminalOutput(
@@ -200,7 +216,12 @@ test('check --wait blocks and returns the moment a worker reports', async () => 
   const before = (await readTerminalOutput(ctx, coordinator)).length
   await controlSend(ctx, 'POST', `/terminal/${coordinator}/write`, {
     agentId: 'e2e',
-    text: `orc check --wait --types worker_done --timeout-ms 60000${SEP}echo ${sentinel}`,
+    text: 'orc check --wait --types worker_done --timeout-ms 60000',
+    pressEnter: true
+  })
+  await controlSend(ctx, 'POST', `/terminal/${coordinator}/write`, {
+    agentId: 'e2e',
+    text: `echo ${sentinel}`,
     pressEnter: true
   })
 

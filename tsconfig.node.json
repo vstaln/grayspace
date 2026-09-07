@@ -9,7 +9,7 @@
     // stripping, whose ESM resolver needs the real extension on every
     // relative import. Vite resolves the same specifiers unchanged.
     "allowImportingTsExtensions": true,
-    "lib": ["ES2023"],
+    "lib": ["ES2023", "DOM"],
     "types": ["node"],
     "strict": true,
     "noEmit": true,
@@ -24,6 +24,8 @@
     "src/preload/**/*",
     "src/renderer/src/lib/markdown.ts",
     "src/renderer/src/lib/sanitizeUrl.ts",
-    "src/renderer/src/lib/canvasMetrics.ts"
+    "src/renderer/src/lib/canvasMetrics.ts",
+    "src/renderer/src/lib/music.ts",
+    "src/renderer/src/lib/paste.ts"
   ]
 }

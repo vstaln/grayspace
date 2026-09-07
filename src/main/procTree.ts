@@ -1,4 +1,5 @@
 import { execFile } from 'child_process'
+import type { ChildProcess } from 'child_process'
 import { defaultShell } from './config.ts'
 
 /**
@@ -29,7 +30,14 @@ import { defaultShell } from './config.ts'
 const pendingRoots = new Map<number, number>()
 let sweepTimer: ReturnType<typeof setTimeout> | null = null
 let sweepInFlight = false
+let sweepProcess: ChildProcess | null = null
 let lastSweepEndedAt = 0
+/**
+ * Bumped by every cancel (shutdown). An in-flight sweep that finishes after a
+ * cancel must not reschedule or touch shared state: its pids may already be
+ * recycled by the next app instance.
+ */
+let sweepGeneration = 0
 
 /** How long to gather roots before sweeping — also the settle delay of old. */
 const SWEEP_DEBOUNCE_MS = 1_200
@@ -80,9 +88,18 @@ function runSweep(): void {
   const roots = Array.from(pendingRoots, ([pid, requestedAt]) => ({ pid, requestedAt }))
   pendingRoots.clear()
   sweepInFlight = true
+  const generation = sweepGeneration
 
   const finish = (): void => {
+    // A cancel (shutdown) happened while this sweep ran: leave everything to
+    // the fresh generation instead of rescheduling against recycled pids.
+    if (generation !== sweepGeneration) {
+      sweepInFlight = false
+      sweepProcess = null
+      return
+    }
     sweepInFlight = false
+    sweepProcess = null
     lastSweepEndedAt = Date.now()
     // Roots that arrived while this sweep was running still need one.
     if (pendingRoots.size > 0) scheduleSweep(SWEEP_DEBOUNCE_MS)
@@ -92,7 +109,7 @@ function runSweep(): void {
   try {
     const encoded = Buffer.from(buildSweepScript(roots), 'utf16le').toString('base64')
     spawned = true
-    execFile(
+    sweepProcess = execFile(
       defaultShell('powershell'),
       ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
       { windowsHide: true, timeout: 15_000 },
@@ -111,6 +128,30 @@ function runSweep(): void {
       if (pendingRoots.size > 0) scheduleSweep(SWEEP_DEBOUNCE_MS)
     }
   }
+}
+
+/**
+ * Cancels all delayed descendant sweeps before the app exits. The native pty
+ * close path has already handled the console process list; allowing a queued
+ * WMI sweep to outlive Electron could act on a recycled PID belonging to a
+ * different process.
+ */
+export function cancelPendingProcessTreeSweeps(): void {
+  sweepGeneration += 1
+  if (sweepTimer !== null) {
+    clearTimeout(sweepTimer)
+    sweepTimer = null
+  }
+  pendingRoots.clear()
+  if (sweepProcess !== null) {
+    try {
+      sweepProcess.kill()
+    } catch {
+      /* already gone */
+    }
+    sweepProcess = null
+  }
+  sweepInFlight = false
 }
 
 /** Roots still queued for the next sweep. Exported for tests. */

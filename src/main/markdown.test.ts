@@ -12,7 +12,7 @@ describe('renderMarkdownSafe — markdown rendering and security', () => {
   test('renders italic and code formatting with entities intact', () => {
     const input = '*A < B* and `C > D`'
     const output = renderMarkdownSafe(input)
-    assert.equal(output, '<em>A &lt; B</em> and <code>C &gt; D</code>')
+    assert.equal(output, '<em>A &lt; B</em> and <code style="overflow-wrap:anywhere">C &gt; D</code>')
   })
 
   test('sanitizes unsafe javascript URLs in links', () => {
@@ -26,7 +26,7 @@ describe('renderMarkdownSafe — markdown rendering and security', () => {
     const output = renderMarkdownSafe(input)
     assert.equal(
       output,
-      '<a href="https://orcspace.dev" target="_blank" rel="noreferrer noopener">OrcSpace</a>'
+      '<a href="https://orcspace.dev" target="_blank" rel="noreferrer noopener" style="overflow-wrap:anywhere">OrcSpace</a>'
     )
   })
 
@@ -41,14 +41,14 @@ describe('renderMarkdownSafe — markdown rendering and security', () => {
     const output = renderMarkdownSafe(input)
     assert.equal(
       output,
-      '<a href="https://en.wikipedia.org/wiki/Python_(programming_language)" target="_blank" rel="noreferrer noopener">Python</a>'
+      '<a href="https://en.wikipedia.org/wiki/Python_(programming_language)" target="_blank" rel="noreferrer noopener" style="overflow-wrap:anywhere">Python</a>'
     )
   })
 
   test('renders safe images with loading="lazy"', () => {
     const input = '![Logo](https://example.com/logo.png)'
     const output = renderMarkdownSafe(input)
-    assert.equal(output, '<img src="https://example.com/logo.png" alt="Logo" loading="lazy" />')
+    assert.equal(output, '<img src="https://example.com/logo.png" alt="Logo" loading="lazy" style="max-width:100%" />')
   })
 
   test('sanitizes unsafe image sources to alt text', () => {

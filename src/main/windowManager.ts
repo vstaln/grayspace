@@ -1,7 +1,7 @@
 import { app, BrowserWindow } from 'electron'
 import * as fs from 'fs'
 import { dirname, join } from 'path'
-import { APP_TITLE } from './config'
+import { APP_TITLE, CONTROL_PORT } from './config.ts'
 import { getPreloadPath, IS_MAC } from './bootstrap.ts'
 import { isLocalPath } from './media.ts'
 import { syncOrcGuide } from './orchestration/guide.ts'
@@ -18,7 +18,15 @@ export function setMainWindow(win: BrowserWindow | null): void {
 }
 
 export function send(channel: string, ...args: unknown[]): void {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args)
+  try {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send(channel, ...args)
+    }
+  } catch (err) {
+    // A renderer crash between the isDestroyed check and send must not take
+    // down the main process (terminal batch flushes call this per frame).
+    console.warn(`failed to send ${channel}`, err)
+  }
 }
 
 export function publishPresence(state: AppState, writeFn: (payload: { workspaceDir: string | null }) => void): void {
@@ -40,7 +48,10 @@ export function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
-    minWidth: 800,
+    // Min width 1024: TitleBar centre island (~40px controls each side) +
+    // rail (56px) + board minimum (~900px). Updated from 800 to 1024 to accommodate
+    // the combined TitleBar + rail + board layout.
+    minWidth: 1024,
     minHeight: 560,
     show: true,
     titleBarStyle: 'hidden',
@@ -49,7 +60,7 @@ export function createWindow(): BrowserWindow {
     autoHideMenuBar: true,
     transparent: false,
     hasShadow: true,
-    backgroundColor: '#0e0e11',
+    backgroundColor: '#080808',
     title: APP_TITLE,
     webPreferences: {
       preload: getPreloadPath(),
@@ -66,8 +77,12 @@ export function createWindow(): BrowserWindow {
     win.focus()
   })
 
+  // Forward renderer errors only (level 3 === error; 0 verbose / 1 info /
+  // 2 warning stay in the renderer devtools). Forwarding every console-message
+  // at info level drowned real failures in noise.
   win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
-    console.log(`[Renderer:${level}] ${message} (${sourceId}:${line})`)
+    if (level < 3) return
+    console.error(`[Renderer:${level}] ${message} (${sourceId}:${line})`)
   })
 
   win.webContents.on('render-process-gone', (_event, details) => {
@@ -79,10 +94,24 @@ export function createWindow(): BrowserWindow {
   })
 
   win.webContents.on('will-navigate', (e, url) => {
-    const isAppUrl =
-      (process.env['ELECTRON_RENDERER_URL'] && url.startsWith(process.env['ELECTRON_RENDERER_URL'])) ||
-      url.endsWith('index.html') ||
-      url.startsWith('file://')
+    // Only the app's own entry points may navigate the privileged window:
+    // the dev server, the packaged control-server origin, or the exact
+    // packaged index file. A suffix match lets any local .../index.html
+    // (including a downloaded one) load with preload/IPC attached.
+    const devUrl = process.env['ELECTRON_RENDERER_URL']
+    const controlOrigin = `http://127.0.0.1:${CONTROL_PORT}/`
+    let isAppUrl = Boolean(devUrl && url.startsWith(devUrl)) || url === controlOrigin || url.startsWith(controlOrigin)
+    if (!isAppUrl) {
+      try {
+        const parsed = new URL(url)
+        if (parsed.protocol === 'file:') {
+          const expected = join(__dirname, '../renderer/index.html').replace(/\\/g, '/').toLowerCase()
+          isAppUrl = decodeURIComponent(parsed.pathname).replace(/\\/g, '/').toLowerCase() === expected
+        }
+      } catch {
+        isAppUrl = false
+      }
+    }
     if (!isAppUrl) {
       e.preventDefault()
       if (url.startsWith('https:') || url.startsWith('http:')) {
@@ -100,6 +129,11 @@ export function createWindow(): BrowserWindow {
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  } else if (app.isPackaged) {
+    // A real HTTP origin is required by embedded media providers. Loading the
+    // packaged renderer with file:// gives it Origin: null, which YouTube and
+    // other iframe players reject for API/control messages.
+    win.loadURL(`http://127.0.0.1:${CONTROL_PORT}/`)
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
@@ -135,6 +169,19 @@ export function handleSecondInstanceArgs(
 
 export function setupWebContentsHandlers(sendFn: (channel: string, ...args: unknown[]) => void): void {
   app.on('web-contents-created', (_event, contents) => {
+    // Harden every <webview> guest at attach time (fires on the embedder):
+    // strip any renderer-supplied preload and force a locked-down sandbox.
+    contents.on('will-attach-webview', (e, webPreferences, params) => {
+      delete (params as Record<string, unknown>).preload
+      delete (params as Record<string, unknown>).preloadURL
+      ;(webPreferences as Record<string, unknown>).nodeIntegration = false
+      ;(webPreferences as Record<string, unknown>).contextIsolation = true
+      ;(webPreferences as Record<string, unknown>).sandbox = true
+      // webviewTag inside a guest would allow nesting untrusted guests.
+      ;(webPreferences as Record<string, unknown>).webviewTag = false
+      void e
+    })
+
     if (contents.getType() !== 'webview') return
 
     let isDestroyed = false
@@ -148,6 +195,37 @@ export function setupWebContentsHandlers(sendFn: (channel: string, ...args: unkn
     contents.on('will-prevent-unload', (event) => {
       event.preventDefault()
     })
+
+    // Guest top-level navigation guard: only http(s) may navigate the guest
+    // (plus the blank initial document). javascript:/data:/file:/blob: and
+    // anything else non-http(s) is denied — the embedder allowlists nothing.
+    contents.on('will-navigate', (e, url) => {
+      if (url === 'about:blank') return
+      let ok = false
+      try {
+        const proto = new URL(url).protocol
+        ok = proto === 'http:' || proto === 'https:'
+      } catch {
+        ok = false
+      }
+      if (!ok) e.preventDefault()
+    })
+
+    // Browser guests get no privileged capabilities: deny media capture,
+    // geolocation and notifications outright; leave the rest (fullscreen,
+    // pointer lock, …) to the Chromium default handling.
+    try {
+      contents.session.setPermissionRequestHandler((webContents, permission, callback) => {
+        void webContents
+        if (permission === 'media' || permission === 'geolocation' || permission === 'notifications') {
+          callback(false)
+          return
+        }
+        callback(true)
+      })
+    } catch {
+      /* session may be torn down during shutdown */
+    }
 
     contents.setWindowOpenHandler(({ url }) => {
       if (isDestroyed || contents.isDestroyed()) return { action: 'deny' }

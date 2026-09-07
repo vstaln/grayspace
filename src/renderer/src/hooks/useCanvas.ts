@@ -8,13 +8,19 @@ import {
   Stroke,
   Widget,
   WidgetKind,
-  WIDGET_H,
-  WIDGET_W
+  WIDGET_DEFAULTS
 } from '../types'
+import { clearTimerPersist } from '../lib/timerPersist'
 
 let localCounter = 0
-const makeLocalId = (kind: WidgetKind = 'terminal'): string => `${kind}-${Date.now()}-${++localCounter}`
-const makeStrokeId = (): string => `stroke-${Date.now()}-${++localCounter}`
+const makeLocalId = (kind: WidgetKind = 'terminal'): string => {
+  try { if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return `${kind}-${crypto.randomUUID()}` } catch {}
+  return `${kind}-${Date.now()}-${++localCounter}-${Math.random().toString(36).slice(2, 6)}`
+}
+const makeStrokeId = (): string => {
+  try { if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return `stroke-${crypto.randomUUID()}` } catch {}
+  return `stroke-${Date.now()}-${++localCounter}-${Math.random().toString(36).slice(2, 6)}`
+}
 
 /**
  * Mirror of MAX_WIDGETS in main's canvasState: the store refuses to accept a
@@ -24,20 +30,6 @@ const makeStrokeId = (): string => `stroke-${Date.now()}-${++localCounter}`
  * heals. Refuse the addition up front instead (CANV-07).
  */
 export const MAX_WIDGETS = 200
-
-/** Default title and size per widget type, used when the caller gives none. */
-const WIDGET_DEFAULTS: Record<WidgetKind, { title: string; w: number; h: number }> = {
-  terminal: { title: 'Terminal', w: WIDGET_W, h: WIDGET_H },
-  timer: { title: 'Timer', w: 300, h: 220 },
-  board: { title: 'Task Board', w: 900, h: 520 },
-  planner: { title: 'Planner', w: 420, h: 520 },
-  files: { title: 'Files', w: 580, h: 480 },
-  'sys-monitor': { title: 'System Monitor', w: 460, h: 380 },
-  browser: { title: 'Browser', w: 720, h: 480 },
-  links: { title: 'Links', w: 420, h: 360 },
-  'music-player': { title: 'Music Player', w: 460, h: 420 },
-  orchestration: { title: 'Orchestration', w: 520, h: 560 }
-}
 
 interface StrokeBounds {
   minX: number
@@ -90,8 +82,22 @@ function strokeBounds(stroke: Stroke): StrokeBounds {
 const WIDGET_STORAGE_PREFIXES = [
   'orcspace-links:',
   'orcspace-music-playlists:',
-  'orcspace-music-volume:'
+  'orcspace-music-volume:',
+  'orcspace-music-muted:'
 ] as const
+
+/** Remove data left by the deleted canvas note widget. */
+function clearRemovedNoteStorage(): void {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const key = localStorage.key(i)
+      if (key?.startsWith('orcspace-note:')) localStorage.removeItem(key)
+    }
+  } catch {
+    // Storage may be unavailable in a restricted profile; the feature is gone
+    // regardless, so there is nothing actionable to surface to the user.
+  }
+}
 
 const makeConnectionId = (): string => `conn-${Date.now()}-${++localCounter}`
 
@@ -157,6 +163,7 @@ export function useCanvas() {
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const workspaceDirRef = useRef<string | null>(null)
+  const workspaceSyncSeqRef = useRef(0)
   // A load can overlap an MCP/agent write. If a change broadcast arrives while
   // the read is in flight, applying the older read afterwards would erase the
   // freshly created or renamed widget from the renderer (stale-load race).
@@ -213,9 +220,13 @@ export function useCanvas() {
   }, [])
 
   useEffect(() => {
+    clearRemovedNoteStorage()
+    let mounted = true
+    const requestSeq = workspaceSyncSeqRef.current
     void window.api.workspace
       .getDir()
       .then((dir) => {
+        if (!mounted || workspaceSyncSeqRef.current !== requestSeq) return
         workspaceDirRef.current = dir
       })
       .catch((err) => {
@@ -224,18 +235,27 @@ export function useCanvas() {
       .finally(() => {
         // Hydration must not depend on getDir() succeeding: a rejected call
         // would otherwise leave the canvas unhydrated for the whole session.
-        hydrate()
+        if (mounted && workspaceSyncSeqRef.current === requestSeq) hydrate()
       })
     const unbindDir = window.api.workspace.onDirChange((dir) => {
       if (workspaceDirRef.current === dir) return
+      workspaceSyncSeqRef.current += 1
       workspaceDirRef.current = dir
       hydrate()
     })
     return () => {
+      mounted = false
+      workspaceSyncSeqRef.current += 1
       unbindDir()
       if (retryTimerRef.current !== null) {
         clearTimeout(retryTimerRef.current)
         retryTimerRef.current = null
+      }
+      // A debounced canvas.save must not fire after unmount: it would write a
+      // stale snapshot over newer state on next mount's hydration race.
+      if (saveTimerRef.current !== null) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
       }
       if (strokeRafRef.current !== null) {
         cancelAnimationFrame(strokeRafRef.current)
@@ -377,22 +397,31 @@ export function useCanvas() {
       // right after the dispatch was unreliable ("canvas full" go unnoticed,
       // widget silently staying local-only). The updater re-checks as a
       // backstop against same-tick bursts.
-      if (widgetsRef.current.length >= MAX_WIDGETS) return false
-      // The store refuses to accept a 201st widget and slices imports to 200,
-      // so a widget added past the limit would never persist and the merge
-      // would re-add it forever (CANV-07). Refuse up front, inside the updater,
-      // so the pending-creates bookkeeping below never happens for a widget
-      // that doesn't actually get added.
+      // Reserve slots/ids synchronously as well as checking the rendered list.
+      // Several control messages can arrive before React flushes the first
+      // updater; without this guard every call reported success against the
+      // same stale length and the overflow requests could create dangling
+      // connection records.
+      if (
+        widgetsRef.current.length + pendingCreatesRef.current.size >= MAX_WIDGETS ||
+        widgetsRef.current.some((widget) => widget.id === id) ||
+        pendingCreatesRef.current.has(id)
+      ) return false
+      // Register pending create synchronously before the updater so concurrent
+      // onChange that lands before React flushes the updater still sees it (COR-2).
+      pendingCreatesRef.current.add(id)
+      // Allocate the z-index before entering the updater. Mutating the z
+      // counter from a state updater is unsafe under StrictMode, where React
+      // may evaluate the updater more than once.
+      const z = nextZ()
       let added = true
       setWidgets((prev) => {
-        if (prev.length >= MAX_WIDGETS) {
+        if (prev.length >= MAX_WIDGETS || prev.some((widget) => widget.id === id)) {
+          // Back out the optimistic pending entry — widget never made it into state.
+          pendingCreatesRef.current.delete(id)
           added = false
           return prev
         }
-        // Main hasn't seen this widget yet; remember it so a broadcast snapshot
-        // that merely hasn't caught up to it cannot be mistaken for a main-side
-        // deletion (CANV-01). Cleared once the id appears in an incoming snapshot.
-        pendingCreatesRef.current.add(id)
         widgetsDirtyRef.current = true
         return [
           ...prev,
@@ -408,7 +437,7 @@ export function useCanvas() {
             y: point.y - 16,
             w: defaults.w,
             h: defaults.h,
-            z: nextZ(),
+            z,
             version: 0
           }
         ]
@@ -444,6 +473,7 @@ export function useCanvas() {
         /* private mode, quota, cleared site data — nothing to recover */
       }
     }
+    if ((target?.kind ?? 'terminal') === 'timer') clearTimerPersist(id)
     if (target && (target.kind ?? 'terminal') === 'terminal') {
       // An agent holding the terminal's lock makes this reject — expected,
       // and the parked pty is reclaimed when the widget remounts.
@@ -577,8 +607,10 @@ export function useCanvas() {
     // Radius is specified in screen px; the ink layer lives in world space
     // (scale(zoom)), so the hit-test radius must be widened as you zoom out
     // to keep the eraser footprint constant on screen (CANV-10).
+    // Clamp worldRadius to avoid huge eraser at zoom 0.2 (70px) wiping half the drawing — UX-7.
     const zoom = Math.max(0.1, cameraRef.current.zoom || 1)
-    pendingEraseRef.current = { point, worldRadius: radius / zoom }
+    const clampedRadius = Math.min(radius, 28)
+    pendingEraseRef.current = { point, worldRadius: clampedRadius / zoom }
     if (eraseRafRef.current !== null) return
     eraseRafRef.current = requestAnimationFrame(() => {
       eraseRafRef.current = null
@@ -679,7 +711,11 @@ export function useCanvas() {
       const point = kind && typeof x === 'number' && typeof y === 'number'
         ? { x, y }
         : screenToWorld(90 + col * 60, 90 + row * 60)
-      const added = addWidget(point, id, title, (kind as WidgetKind | undefined) ?? 'terminal')
+      // Old callers could still send the removed note kind. Ignore unknown
+      // widget requests instead of turning them into a broken local frame.
+      const requestedKind = typeof kind === 'string' ? kind : undefined
+      if (requestedKind === 'note' || (requestedKind && !(requestedKind in WIDGET_DEFAULTS))) return
+      const added = addWidget(point, id, title, (requestedKind as WidgetKind | undefined) ?? 'terminal')
       // `from` is the shell the request came from — draw the line that says so.
       // A dangling id (its widget already closed) draws nothing rather than an
       // arc anchored on empty canvas. `addWidget` refusing (canvas at

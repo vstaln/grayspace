@@ -1,6 +1,6 @@
-import React, { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Clipboard, Cpu, FolderOpen, Globe, ListTodo, Music2, Network, Terminal, Timer } from 'lucide-react'
+import { Clipboard, Cpu, FolderOpen, Globe, Kanban, ListTodo, Music2, Network, Terminal, Timer } from 'lucide-react'
 import { Point } from '../types'
 
 interface Props {
@@ -10,6 +10,7 @@ interface Props {
   onPickSysMonitor: () => void
   onPickTimer: () => void
   onPickPlanner: () => void
+  onPickBoard: () => void
   onPickBrowser: () => void
   onPickLinks: () => void
   onPickMusicPlayer: () => void
@@ -36,6 +37,7 @@ export default function ContextMenu({
   onPickSysMonitor,
   onPickTimer,
   onPickPlanner,
+  onPickBoard,
   onPickBrowser,
   onPickLinks,
   onPickMusicPlayer,
@@ -44,7 +46,11 @@ export default function ContextMenu({
   onClose
 }: Props): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState(at)
+  const clampInitial = (p: Point): Point => ({
+    x: Math.max(4, Math.min(p.x, window.innerWidth - 264)),
+    y: Math.max(4, Math.min(p.y, window.innerHeight - 200))
+  })
+  const [pos, setPos] = useState<Point>(() => clampInitial(at))
   const [selectedIndex, setSelectedIndex] = useState(0)
 
   // Widgets that land on the canvas first, then the panels that open over it —
@@ -87,6 +93,13 @@ export default function ContextMenu({
         onSelect: onPickPlanner
       },
       {
+        id: 'board',
+        label: 'Kanban Board',
+        hint: 'Interactive task board for agents and todos',
+        icon: <Kanban size={15} className="text-accent" />,
+        onSelect: onPickBoard
+      },
+      {
         id: 'browser',
         label: 'Browser',
         hint: 'Embedded web page pinned to the canvas',
@@ -114,13 +127,14 @@ export default function ContextMenu({
         icon: <Network size={15} className="text-accent" />,
         onSelect: onPickOrchestration
       }
-    ].filter((item) => favoriteWidgets.includes(item.id)),
+    ].filter((item) => (favoriteWidgets && favoriteWidgets.length > 0 ? favoriteWidgets.includes(item.id) : true)),
     [
       onPickTerminal,
       onPickFiles,
       onPickSysMonitor,
       onPickTimer,
       onPickPlanner,
+      onPickBoard,
       onPickBrowser,
       onPickLinks,
       onPickMusicPlayer,
@@ -139,6 +153,10 @@ export default function ContextMenu({
       y: Math.max(4, Math.min(at.y, window.innerHeight - rect.height - 4))
     })
   }, [at, items.length])
+
+  useEffect(() => {
+    setSelectedIndex(0)
+  }, [items.length])
 
   useLayoutEffect(() => {
     const onDown = (e: MouseEvent): void => {
@@ -196,7 +214,7 @@ export default function ContextMenu({
 
       {/* Items List */}
       <div className="max-h-[360px] space-y-0.5 overflow-y-auto">
-        {items.length === 0 && <div className="px-2.5 py-3 text-[11px] text-text-faint">No favorite widgets selected. Choose them in Settings.</div>}
+        {items.length === 0 && <div className="px-2.5 py-3 text-[11px] text-text-faint">No favorites match</div>}
         {items.map((item, i) => {
           const isSelected = i === selectedIndex
           const isPanelGroupStart = item.group === 'panel' && items[i - 1]?.group !== 'panel'

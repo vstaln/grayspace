@@ -1,66 +1,31 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Pause, Play, RotateCcw } from 'lucide-react'
+import { timerPersist } from '../lib/timerPersist'
 
 const PRESETS = [5, 15, 25, 45]
 
 /**
  * A countdown, and a stopwatch when it runs out.
  *
- * Deliberately the simplest widget in the app: all of its state is in this
- * component, nothing is persisted, and closing it forgets the timer. A timer
- * that survived restarts would have to answer "how much time passed while the
- * app was shut?", and every honest answer to that is useless.
- *
  * Time is tracked as a deadline, not by decrementing a counter on an interval:
  * a background tab throttles its timers, and a counter that ticks slower than
  * a second is a clock that lies.
  */
-interface TimerPersist {
-  totalMs: number
-  remaining: number
-  running: boolean
-  deadline: number
-  rang: boolean
-  isCustom: boolean
-  customHours: string
-  customMinutes: string
-  customSeconds: string
-}
-
-const timerPersist = new Map<string, TimerPersist>()
-
-export function clearTimerPersist(id: string): void {
-  timerPersist.delete(id)
-}
-
 export default function TimerWidget({ widgetId }: { widgetId?: string }): React.JSX.Element {
   const persistKey = widgetId ?? '__singleton__'
   const cached = timerPersist.get(persistKey)
   const [totalMs, setTotalMs] = useState(() => cached?.totalMs ?? 25 * 60_000)
-  const [remaining, setRemaining] = useState(() => {
-    if (!cached) return 25 * 60_000
-    if (cached.running) return cached.deadline - Date.now()
-    return cached.remaining
-  })
+  const [remaining, setRemaining] = useState(() => cached?.remaining ?? 25 * 60_000)
   const [running, setRunning] = useState(() => cached?.running ?? false)
   const [isCustom, setIsCustom] = useState(() => cached?.isCustom ?? false)
   const [customHours, setCustomHours] = useState(() => cached?.customHours ?? '0')
   const [customMinutes, setCustomMinutes] = useState(() => cached?.customMinutes ?? '25')
   const [customSeconds, setCustomSeconds] = useState(() => cached?.customSeconds ?? '0')
+  const [customError, setCustomError] = useState<string | null>(null)
   const hoursInputRef = useRef<HTMLInputElement>(null)
   const deadline = useRef<number>(cached?.deadline ?? 0)
   const rang = useRef(cached?.rang ?? false)
   const titleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  // Persist state so a maximize-triggered remount restores the running countdown
-  // instead of resetting to 25:00. Closing the widget forgets the timer — that
-  // cleanup lives in useCanvas's removeWidget which clears widget-specific
-  // storage; the in-memory entry is left to be GC'd after reload (the timer
-  // is intentionally not persisted across restarts).
-  const syncPersist = useRef(false)
-  // placeholder to keep linter happy
-  void syncPersist
-  // sync on every render-relevant change
 
   // A minimized timer's body is display:none; ticking (and re-rendering) 5×/s
   // for a number nobody can see is pure waste. Time is kept as a deadline, so
@@ -76,21 +41,6 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
       }
     }
   }, [])
-
-  useEffect(() => {
-    if (!widgetId) return
-    timerPersist.set(persistKey, {
-      totalMs,
-      remaining,
-      running,
-      deadline: deadline.current,
-      rang: rang.current,
-      isCustom,
-      customHours,
-      customMinutes,
-      customSeconds
-    })
-  }, [persistKey, widgetId, totalMs, remaining, running, isCustom, customHours, customMinutes, customSeconds])
 
   useEffect(() => {
     if (isCustom) {
@@ -113,6 +63,20 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
       // up after that, so without this gate it would re-fire every 200ms.
       if (left <= 0 && !rang.current) {
         rang.current = true
+        // Persist the rang flip so a remount doesn't re-ring.
+        if (widgetId) {
+          timerPersist.set(persistKey, {
+            totalMs,
+            remaining: left,
+            running,
+            deadline: deadline.current,
+            rang: true,
+            isCustom,
+            customHours,
+            customMinutes,
+            customSeconds
+          })
+        }
         try {
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
             new Notification('OrcSpace', { body: 'Timer finished' })
@@ -140,7 +104,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
     tick()
     const timer = setInterval(tick, 200)
     return () => clearInterval(timer)
-  }, [running])
+  }, [running, widgetId, persistKey, totalMs, isCustom, customHours, customMinutes, customSeconds])
 
   const start = (): void => {
     setIsCustom(false)
@@ -171,6 +135,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
   }
 
   const openCustom = (): void => {
+    if (running) return
     const totalSec = Math.max(0, Math.floor(totalMs / 1000))
     const h = Math.floor(totalSec / 3600)
     const m = Math.floor((totalSec % 3600) / 60)
@@ -187,7 +152,12 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
     const m = Math.max(0, Math.min(59, parseInt(customMinutes, 10) || 0))
     const s = Math.max(0, Math.min(59, parseInt(customSeconds, 10) || 0))
     const totalSec = h * 3600 + m * 60 + s
-    const ms = Math.max(1000, totalSec * 1000)
+    if (totalSec === 0) {
+      setCustomError('Enter a duration greater than 0')
+      return
+    }
+    setCustomError(null)
+    const ms = totalSec * 1000
     reset(ms)
     setIsCustom(false)
   }
@@ -223,24 +193,27 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
 
   return (
     <div ref={rootRef} className="flex h-full flex-col items-center justify-center gap-3 p-3">
-      <div
-        className={`font-mono text-[34px] leading-none tabular-nums ${over ? 'text-danger' : 'text-text'} ${
-          !running ? 'cursor-pointer select-none hover:opacity-80' : ''
-        }`}
-        role="timer"
-        aria-live="off"
+      <button
+        type="button"
+        disabled={running}
+        className={`font-mono text-[clamp(20px,4vw,34px)] leading-none tabular-nums ${over ? 'text-danger' : 'text-text'} ${
+          !running ? 'cursor-pointer select-none hover:opacity-80' : 'cursor-default'
+        } disabled:cursor-default`}
+        aria-label={!running ? 'Timer value. Activate to set custom duration' : 'Timer value'}
         onClick={() => {
           if (!running) openCustom()
         }}
         title={!running ? 'Click to set custom duration' : undefined}
       >
-        {over && '+'}
-        {format(shown, totalMs)}
-      </div>
+        <span role="timer" aria-live="off">
+          {over && '+'}
+          {format(shown, totalMs)}
+        </span>
+      </button>
 
-      <div className="h-1 w-full overflow-hidden rounded-full bg-bg-hover" aria-hidden>
+      <div className="h-2 w-full overflow-hidden rounded-[9999px] bg-bg-hover" aria-hidden>
         <div
-          className={`h-full rounded-full transition-[width] duration-200 ease-out ${over ? 'bg-danger' : 'bg-accent/70'}`}
+          className={`h-full rounded-[9999px] transition-[width] duration-200 ease-out ${over ? 'bg-danger' : 'bg-accent/70'}`}
           style={{ width: `${progress * 100}%` }}
         />
       </div>
@@ -283,7 +256,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
                 onFocus={(e) => e.target.select()}
                 onKeyDown={(e) => handleKeyDown(e, setCustomHours, 99)}
                 placeholder="0"
-                className="h-6 w-9 rounded-[6px] border border-line bg-bg-raise/40 text-center text-xs text-text outline-none transition-colors focus:border-accent"
+                className="h-6 w-9 rounded-[6px] border border-line bg-bg-raise text-center text-xs text-text outline-none transition-colors focus:border-accent"
                 aria-label="Hours"
                 title="Hours (0-99)"
               />
@@ -301,7 +274,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
                 onFocus={(e) => e.target.select()}
                 onKeyDown={(e) => handleKeyDown(e, setCustomMinutes, 59)}
                 placeholder="0"
-                className="h-6 w-9 rounded-[6px] border border-line bg-bg-raise/40 text-center text-xs text-text outline-none transition-colors focus:border-accent"
+                className="h-6 w-9 rounded-[6px] border border-line bg-bg-raise text-center text-xs text-text outline-none transition-colors focus:border-accent"
                 aria-label="Minutes"
                 title="Minutes (0-59)"
               />
@@ -319,7 +292,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
                 onFocus={(e) => e.target.select()}
                 onKeyDown={(e) => handleKeyDown(e, setCustomSeconds, 59)}
                 placeholder="0"
-                className="h-6 w-9 rounded-[6px] border border-line bg-bg-raise/40 text-center text-xs text-text outline-none transition-colors focus:border-accent"
+                className="h-6 w-9 rounded-[6px] border border-line bg-bg-raise text-center text-xs text-text outline-none transition-colors focus:border-accent"
                 aria-label="Seconds"
                 title="Seconds (0-59)"
               />
@@ -335,24 +308,33 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
             </button>
             <button
               type="button"
-              onClick={() => setIsCustom(false)}
+              onClick={() => {
+                setCustomError(null)
+                setIsCustom(false)
+              }}
               className="rounded-[6px] border border-line bg-bg-hover/40 px-2.5 py-0.5 text-[11px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
             >
               Cancel
             </button>
           </div>
+          {customError && (
+            <div role="alert" className="text-[11px] text-danger">
+              {customError}
+            </div>
+          )}
         </form>
       ) : (
         <div className="flex flex-wrap justify-center gap-1" role="group" aria-label="Presets">
           {PRESETS.map((min) => (
             <button
               key={min}
-              className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-colors duration-150 ${
+              className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-colors duration-150 disabled:cursor-default disabled:opacity-40 ${
                 totalMs === min * 60_000 && isPresetActive
                   ? 'border-line text-text'
                   : 'border-line-soft text-text-faint hover:text-text-dim'
               }`}
               aria-pressed={totalMs === min * 60_000 && isPresetActive}
+              disabled={running}
               onClick={() => {
                 setIsCustom(false)
                 reset(min * 60_000)
@@ -362,12 +344,13 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
             </button>
           ))}
           <button
-            className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-colors duration-150 ${
+            className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-colors duration-150 disabled:cursor-default disabled:opacity-40 ${
               !isPresetActive
                 ? 'border-line text-text'
                 : 'border-line-soft text-text-faint hover:text-text-dim'
             }`}
             aria-pressed={!isPresetActive}
+            disabled={running}
             onClick={openCustom}
             title="Set custom duration (hours, minutes, seconds)"
           >

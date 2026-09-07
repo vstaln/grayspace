@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
-import { registerChatIpc } from './chat.ts'
+import { parseAgyModels, parseGrokModels, parseOpenCodeZenModels, registerChatIpc } from './chat.ts'
 import type { IpcDeps } from './types.ts'
 
 describe('registerChatIpc', () => {
@@ -34,6 +34,7 @@ describe('registerChatIpc', () => {
     assert.ok(handlers.has('chat:send'))
     assert.ok(handlers.has('chat:stop'))
     assert.ok(handlers.has('chat:dispose'))
+    assert.ok(handlers.has('chat:models'))
 
     const sendHandler = handlers.get('chat:send')!
     // Validate invalid input
@@ -50,5 +51,22 @@ describe('registerChatIpc', () => {
     assert.deepEqual(disposeHandler({}, 'th-non-existent'), { ok: true })
 
     ;(globalThis as any).__electronMock = oldElectronMock
+  })
+})
+
+describe('chat model discovery parsers', () => {
+  test('uses current Antigravity CLI ids and labels', () => {
+    const models = parseAgyModels('Fetching available models...\ngemini-3.7-flash-high\tGemini 3.7 Flash (High)\nclaude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)')
+    assert.deepEqual(models.map((model) => model.id), ['gemini-3.7-flash-high', 'claude-sonnet-4-6'])
+  })
+
+  test('keeps only models that Grok marks available', () => {
+    const models = parseGrokModels('Default model: grok-4.6\n\nAvailable models:\n  * grok-4.6 (default)')
+    assert.deepEqual(models.map((model) => model.id), ['grok-4.6'])
+  })
+
+  test('keeps only the OpenCode Zen provider', () => {
+    const models = parseOpenCodeZenModels('opencode/big-pickle\nanthropic/claude-sonnet\nopencode/mimo-v2.5-free')
+    assert.deepEqual(models.map((model) => model.id), ['opencode/big-pickle', 'opencode/mimo-v2.5-free'])
   })
 })

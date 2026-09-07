@@ -285,6 +285,11 @@ export class CoordinationStore extends EventEmitter {
       if (task.state !== 'in_progress') continue
       task.state = 'queued'
       task.assignee = undefined
+      // Same bookkeeping as pruneStale: without a version bump + updatedAt, a
+      // client holding the pre-restart version sees no conflict and silently
+      // overwrites the reset (lost update against its own stale copy).
+      task.updatedAt = Date.now()
+      task.version = this.versions.bump(task.id)
       resetInFlight = true
     }
     this.pruneStale()
@@ -427,9 +432,11 @@ export class CoordinationStore extends EventEmitter {
           } catch (err) {
             notifyPersistError('board', err)
           }
+        } else {
+          this.eventsSinceSnapshot = 0
         }
       })
-    this.eventsSinceSnapshot = 0
+      .catch((err) => notifyPersistError('board', err))
   }
 
   private touchManager(agentId: string): void {

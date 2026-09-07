@@ -112,9 +112,10 @@ if (flags.reinstall) {
   }
 }
 
-// 4. App Dependencies
-if (!existsSync(join(root, 'node_modules'))) {
-  console.log('\n ==> Installing app dependencies...')
+// 4. App Dependencies — also detect broken install (folder exists but no .bin/electron)
+if (!existsSync(join(root, 'node_modules')) || !existsSync(join(root, 'node_modules', '.bin')) || !existsSync(join(root, 'node_modules', 'electron'))) {
+  const msg = existsSync(join(root, 'node_modules')) ? 'broken install detected — reinstalling...' : 'Installing app dependencies...'
+  console.log(`\n ==> ${msg}`)
   if (!sh(npmCommand, ['ci', '--no-fund', '--no-audit'])) {
     console.error(' [x] npm install failed.')
     process.exit(1)
@@ -125,13 +126,17 @@ if (!existsSync(join(root, 'node_modules'))) {
 }
 
 // 5. Native Accelerators
-console.log(' ==> Building native accelerators (best-effort)...')
-sh('npm', ['run', 'build:native'])
+console.log(' ==> Building native accelerators...')
+if (!sh(npmCommand, ['run', 'build:native'])) {
+  console.error(' [x] Native accelerator build failed.')
+  console.error('     Run with --no-start to inspect the compiler output, then retry setup.')
+  process.exit(1)
+}
 
 // 6. Production Build mode
 if (flags.build) {
   const distScript = process.platform === 'darwin' ? 'dist:mac' : 'dist'
-  if (!sh('npm', ['run', distScript])) {
+  if (!sh(npmCommand, ['run', distScript])) {
     console.error(' [x] Distribution build failed.')
     process.exit(1)
   }
@@ -151,7 +156,14 @@ if (isRunning) {
   console.log(`\n [ok] OrcSpace is already live on :${APP_PORT} — no second instance needed.`)
 } else if (!flags.check) {
   console.log(`\n ==> Starting OrcSpace (npm run dev)... leave this window open.\n`)
-  spawn(npmCommand, ['run', 'dev'], { cwd: root, shell: process.platform === 'win32', stdio: 'inherit', detached: false })
+  const child = spawn(npmCommand, ['run', 'dev'], {
+    cwd: root,
+    shell: process.platform === 'win32',
+    stdio: 'inherit',
+    detached: false,
+    windowsHide: false
+  })
+  child.on('error', (error) => console.error(` [x] Failed to start OrcSpace: ${error.message}`))
 
   console.log(` Waiting for http://127.0.0.1:${APP_PORT}/presence ...`)
   for (let i = 0; i < 45; i++) {

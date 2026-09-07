@@ -30,6 +30,10 @@ function mondayIndex(d: Date): number {
   return (d.getDay() + 6) % 7
 }
 
+function addDays(d: Date, delta: number): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + delta)
+}
+
 interface Props {
   /** `YYYY-MM-DD`, or empty for "no date chosen". */
   value: string
@@ -73,17 +77,28 @@ export default function DatePicker({
 
   useLayoutEffect(() => {
     if (!open) return
-    const rect = triggerRef.current?.getBoundingClientRect()
-    if (!rect) return
     const width = 264
-    // The calendar is ~320px tall; a trigger near the bottom edge would push
-    // it past the viewport and get clipped. Flip it above instead.
-    const below = rect.bottom + 4
-    const top = below + PANEL_H > window.innerHeight ? Math.max(4, rect.top - PANEL_H - 4) : below
-    setPos({
-      left: Math.max(4, Math.min(rect.left, window.innerWidth - width - 4)),
-      top
-    })
+    const reposition = (): void => {
+      const rect = triggerRef.current?.getBoundingClientRect()
+      if (!rect) return
+      // The calendar is ~320px tall; a trigger near the bottom edge would push
+      // it past the viewport and get clipped. Flip it above instead. Re-run
+      // this when the window moves/resizes so a portal never drifts away from
+      // its trigger.
+      const below = rect.bottom + 4
+      const top = below + PANEL_H > window.innerHeight ? Math.max(4, rect.top - PANEL_H - 4) : below
+      setPos({
+        left: Math.max(4, Math.min(rect.left, window.innerWidth - width - 4)),
+        top
+      })
+    }
+    reposition()
+    window.addEventListener('resize', reposition)
+    window.addEventListener('scroll', reposition, true)
+    return () => {
+      window.removeEventListener('resize', reposition)
+      window.removeEventListener('scroll', reposition, true)
+    }
   }, [open])
 
   useEffect(() => {
@@ -149,15 +164,16 @@ export default function DatePicker({
       </button>
 
       {open &&
-        pos &&
         createPortal(
           <div
             ref={panelRef}
             role="dialog"
             aria-modal="true"
             aria-label="Choose date"
-            className="fixed z-[9800] w-[264px] rounded-[12px] border border-line-soft bg-bg-panel p-2.5 shadow-2xl glass:bg-bg-panel/90 glass:backdrop-blur-2xl"
-            style={{ left: pos.left, top: pos.top }}
+            className="fixed z-[9800] w-[264px] max-w-[calc(100vw-8px)] rounded-[12px] border border-line-soft bg-bg-panel p-2.5 shadow-2xl"
+            // Rendered on open but hidden until the layout effect measures the
+            // trigger — avoids a first-frame pop-in at the fallback position.
+            style={{ left: pos?.left ?? 0, top: pos?.top ?? 0, visibility: pos ? 'visible' : 'hidden' }}
             // Portal bubbles through the widget tree to <main>: without this a
             // click in the panel also triggers canvas draw/erase/pan gestures.
             onPointerDown={(e) => e.stopPropagation()}
@@ -185,7 +201,31 @@ export default function DatePicker({
               </button>
             </div>
 
-            <div className="grid grid-cols-7 gap-0.5">
+            <div
+              className="grid grid-cols-7 gap-0.5"
+              role="grid"
+              aria-label="Choose date"
+              onKeyDown={(e) => {
+                const active = document.activeElement as HTMLElement | null
+                const curKey = active?.dataset?.date
+                const cur = curKey ? fromKey(curKey) : null
+                if (!cur) return
+                let next: Date | null = null
+                if (e.key === 'ArrowRight') next = addDays(cur, 1)
+                else if (e.key === 'ArrowLeft') next = addDays(cur, -1)
+                else if (e.key === 'ArrowDown') next = addDays(cur, 7)
+                else if (e.key === 'ArrowUp') next = addDays(cur, -7)
+                else return
+                e.preventDefault()
+                if (next.getFullYear() !== viewMonth.getFullYear() || next.getMonth() !== viewMonth.getMonth()) {
+                  setViewMonth(new Date(next.getFullYear(), next.getMonth(), 1))
+                }
+                const target = toKey(next)
+                requestAnimationFrame(() => {
+                  panelRef.current?.querySelector<HTMLButtonElement>(`[data-date="${target}"]`)?.focus()
+                })
+              }}
+            >
               {WEEKDAYS.map((w) => (
                 <div key={w} className="grid h-6 place-items-center text-[10px] text-text-faint">
                   {w}
@@ -200,6 +240,10 @@ export default function DatePicker({
                   <button
                     key={i}
                     type="button"
+                    data-date={key}
+                    // Roving tabindex: the selected day (else today) is the tab
+                    // stop; arrows move focus within the grid.
+                    tabIndex={isSelected || (!value && isToday) ? 0 : -1}
                     onClick={() => pick(d)}
                     aria-current={isToday ? 'date' : undefined}
                     aria-pressed={isSelected}

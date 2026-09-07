@@ -65,7 +65,7 @@ test('right-click offers every canvas action and places widgets on the canvas', 
   await openContextMenu()
   // Every widget in the default favourites list (useSettings.ts) — the menu
   // renders exactly those, so this count moves whenever that list does.
-  await expect(page.getByRole('menu', { name: 'Context Menu' }).getByRole('menuitem')).toHaveCount(10)
+  await expect(page.getByRole('menu', { name: 'Context Menu' }).getByRole('menuitem')).toHaveCount(9)
 
   // A stateless widget lands instantly.
   await page.getByTestId('cm-timer').click()

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, CircleDot, Clock, HelpCircle, Send, ShieldAlert, XCircle } from 'lucide-react'
+import { CheckCircle2, CircleDot, Clock, HelpCircle, Send, ShieldAlert, X, XCircle } from 'lucide-react'
 import type { OrcDispatch, OrcMessage, OrcSnapshot, OrcTask, OrcTaskStatus } from '../../../preload/index.d'
 
 const EMPTY: OrcSnapshot = { runs: [], tasks: [], dispatches: [], messages: [], gates: [] }
@@ -28,12 +28,33 @@ const STATUS_STYLE: Record<OrcTaskStatus, { label: string; className: string }> 
 export default function OrchestrationWidget(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<OrcSnapshot>(EMPTY)
   const [draft, setDraft] = useState<Record<string, string>>({})
-  const [busy, setBusy] = useState<string | null>(null)
+  // One key per in-flight action: concurrent actions on different buttons must
+  // not overwrite each other the way a single `busy: string | null` did.
+  const [busyKeys, setBusyKeys] = useState<string[]>([])
+  const [actionError, setActionError] = useState<string | null>(null)
+  // True until the first snapshot() returns — without this the EMPTY default
+  // flashes a false "No run yet" on every mount.
+  const [loading, setLoading] = useState(true)
+  const firstLoadRef = useRef(true)
   const alive = useRef(true)
+  const refreshSeqRef = useRef(0)
+  // Per-action keys: a slow IPC on one button must not silently swallow clicks
+  // on every other button for its whole duration.
+  const busyKeysRef = useRef<Set<string>>(new Set())
 
   const refresh = useCallback(async () => {
-    const next = await window.api.orchestration.snapshot()
-    if (alive.current) setSnapshot(next ?? EMPTY)
+    const seq = ++refreshSeqRef.current
+    try {
+      const next = await window.api.orchestration.snapshot()
+      if (alive.current && seq === refreshSeqRef.current) setSnapshot(next ?? EMPTY)
+    } catch {
+      // The next change notification or user action will retry the snapshot.
+    } finally {
+      if (firstLoadRef.current) {
+        firstLoadRef.current = false
+        if (alive.current) setLoading(false)
+      }
+    }
   }, [])
 
   useEffect(() => {
@@ -45,6 +66,7 @@ export default function OrchestrationWidget(): React.JSX.Element {
     const off = window.api.orchestration.onChange(() => void refresh())
     return () => {
       alive.current = false
+      refreshSeqRef.current += 1
       off()
     }
   }, [refresh])
@@ -73,13 +95,39 @@ export default function OrchestrationWidget(): React.JSX.Element {
   const running = useMemo(() => dispatches.filter((d) => d.state === 'running'), [dispatches])
 
   const act = async (key: string, fn: () => Promise<unknown>): Promise<void> => {
-    setBusy(key)
+    if (busyKeysRef.current.has(key)) return
+    busyKeysRef.current.add(key)
+    setBusyKeys(Array.from(busyKeysRef.current))
     try {
-      await fn()
+      const result = await fn()
+      if (result && typeof result === 'object') {
+        const reply = result as { ok?: unknown; error?: unknown }
+        if (reply.ok === false || reply.error) {
+          setActionError(String(reply.error || 'Action was rejected'))
+          return
+        }
+      }
+      setActionError(null)
       await refresh()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
     } finally {
-      if (alive.current) setBusy(null)
+      busyKeysRef.current.delete(key)
+      if (alive.current) setBusyKeys(Array.from(busyKeysRef.current))
     }
+  }
+
+  const isBusy = (key: string): boolean => busyKeys.includes(key)
+
+  if (loading) {
+    return (
+      <div className="flex h-full flex-col gap-2 overflow-hidden px-3 py-2" role="status" aria-label="Loading orchestration">
+        <div className="h-4 w-2/3 animate-pulse rounded bg-bg-hover" />
+        <div className="h-3 w-1/3 animate-pulse rounded bg-bg-hover" />
+        <div className="h-16 animate-pulse rounded-[8px] bg-bg-hover/50" />
+        <div className="h-16 animate-pulse rounded-[8px] bg-bg-hover/50" />
+      </div>
+    )
   }
 
   if (!run) {
@@ -108,6 +156,20 @@ export default function OrchestrationWidget(): React.JSX.Element {
           {running.length} running · {tasks.filter((t) => t.status === 'ready').length} ready
         </p>
       </header>
+      {actionError && (
+        <div role="alert" className="flex flex-none items-center justify-between gap-2 border-b border-red-900/50 bg-red-950/20 px-3 py-1.5 text-[11px] text-red-300">
+          <span className="min-w-0 flex-1 truncate">{actionError}</span>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            aria-label="Dismiss error"
+            title="Dismiss"
+            className="grid h-5 w-5 flex-none place-items-center rounded text-red-300/70 hover:bg-red-950/40 hover:text-red-200"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto px-3 py-2">
         {/* Things that need a person come first — everything else is agents' work. */}
@@ -118,11 +180,12 @@ export default function OrchestrationWidget(): React.JSX.Element {
                 key={ask.id}
                 ask={ask}
                 value={draft[ask.id] ?? ''}
-                busy={busy === ask.id}
+                busy={isBusy(ask.id)}
                 onChange={(value) => setDraft((d) => ({ ...d, [ask.id]: value }))}
-                onSend={() =>
+                onSend={(text) =>
                   act(ask.id, async () => {
-                    await window.api.orchestration.reply(ask.id, draft[ask.id] ?? '')
+                    const replyBody = text !== undefined ? text : (draft[ask.id] ?? '')
+                    await window.api.orchestration.reply(ask.id, replyBody)
                     setDraft((d) => ({ ...d, [ask.id]: '' }))
                   })
                 }
@@ -140,7 +203,7 @@ export default function OrchestrationWidget(): React.JSX.Element {
                   {(gate.options.length ? gate.options : ['ok']).map((option, optIdx) => (
                     <button
                       key={`${option}-${optIdx}`}
-                      disabled={busy === gate.id}
+                      disabled={isBusy(gate.id)}
                       className="rounded-[6px] border border-line bg-bg-raise px-2 py-1 text-[11px] text-text transition-colors hover:bg-bg-hover disabled:opacity-50"
                       onClick={() => act(gate.id, () => window.api.orchestration.resolveGate(gate.id, option))}
                     >
@@ -167,14 +230,14 @@ export default function OrchestrationWidget(): React.JSX.Element {
                 </span>
                 <span className="flex flex-none gap-1">
                   <button
-                    disabled={busy === dispatch.id}
+                    disabled={isBusy(dispatch.id)}
                     className="rounded-[6px] border border-line px-2 py-0.5 text-[11px] text-text-dim hover:bg-bg-hover disabled:opacity-50"
                     onClick={() => act(dispatch.id, () => window.api.orchestration.account(dispatch.id, 'retained'))}
                   >
                     Keep
                   </button>
                   <button
-                    disabled={busy === dispatch.id}
+                    disabled={isBusy(dispatch.id)}
                     className="rounded-[6px] border border-line px-2 py-0.5 text-[11px] text-text-dim hover:bg-bg-hover disabled:opacity-50"
                     onClick={() =>
                       act(dispatch.id, () => window.api.orchestration.account(dispatch.id, 'released', true))
@@ -199,15 +262,20 @@ export default function OrchestrationWidget(): React.JSX.Element {
         </Section>
 
         <Section icon={<Clock size={12} />} title="Recent mail">
-          {snapshot.messages
-            .slice(-12)
-            .reverse()
-            .map((message) => (
-              <p key={message.id} className="mb-1 truncate text-[11px] text-text-faint">
-                <span className="text-text-dim">{message.type}</span> · {message.from} → {message.to} ·{' '}
-                {message.subject}
-              </p>
-            ))}
+          {snapshot.messages.length === 0 ? (
+            <p className="text-[11px] text-text-faint">No messages yet</p>
+          ) : (
+            snapshot.messages
+              .slice(-12)
+              .reverse()
+              .map((message) => (
+                <p key={message.id} title={message.subject} className="mb-1 truncate text-[11px] text-text-faint">
+                  <span className="text-text-dim">{message.type}</span> · {message.from} → {message.to} ·{' '}
+                  {message.subject}
+                  <span className="ml-1.5 tabular-nums">{new Date(message.createdAt).toLocaleTimeString()}</span>
+                </p>
+              ))
+          )}
         </Section>
       </div>
     </div>
@@ -258,7 +326,7 @@ function AskCard({
   value: string
   busy: boolean
   onChange(value: string): void
-  onSend(): void
+  onSend(text?: string): void
 }): React.JSX.Element {
   return (
     <div className="mb-2 rounded-[8px] border border-line-soft bg-bg-hover/25 p-2">
@@ -277,7 +345,7 @@ function AskCard({
               onClick={() => {
                 onChange(option)
                 // Picking an option is answering it — one click, not two.
-                queueMicrotask(onSend)
+                onSend(option)
               }}
             >
               {option}
@@ -299,7 +367,7 @@ function AskCard({
         <button
           disabled={busy || !value.trim()}
           className="grid h-[26px] w-[26px] flex-none place-items-center rounded-[6px] border border-line bg-bg-raise text-text-dim hover:bg-bg-hover disabled:opacity-40"
-          onClick={onSend}
+          onClick={() => onSend()}
           title="Send reply"
         >
           <Send size={12} />

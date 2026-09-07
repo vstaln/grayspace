@@ -27,7 +27,6 @@ Supported clients: Codex, Claude Code, Cursor, Grok, Antigravity, Kimi Code, Ope
 
 ## Tools
 
-`brain` — notes and search  
 `terminal` — open, send, read, and close terminals  
 `terminal_permission` — terminal permissions  
 `canvas` — widgets and camera  

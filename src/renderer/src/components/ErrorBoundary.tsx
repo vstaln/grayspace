@@ -24,10 +24,11 @@ export default class ErrorBoundary extends React.Component<{ children: React.Rea
 
   render(): React.ReactNode {
     if (!this.state.error) return this.props.children
+    const message = this.state.error instanceof Error ? this.state.error.message : String(this.state.error)
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 bg-bg p-8 text-center text-text">
+      <div role="alert" className="flex min-h-full flex-1 flex-col items-center justify-center gap-3 bg-bg p-8 text-center text-text">
         <h1 className="text-lg font-semibold">Something went wrong</h1>
-        <p className="max-w-md text-sm text-text-dim">{this.state.error.message}</p>
+        <p className="max-w-md text-sm text-text-dim">{message}</p>
         <button
           className="mt-2 rounded-[10px] border border-line px-4 py-2 text-sm hover:bg-bg-hover"
           onClick={() => this.setState({ error: null })}

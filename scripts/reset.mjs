@@ -26,15 +26,44 @@ const wantLocks = args.includes('--locks') || args.includes('--all')
 function controlToken() {
   const env = (process.env.ORCSPACE_CONTROL_TOKEN || '').trim()
   if (env) return env
-  const file =
-    process.env.ORCSPACE_CONTROL_TOKEN_FILE ||
-    path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'orcspace', 'control-token')
-  try {
-    const raw = fs.readFileSync(file, 'utf8').trim()
-    return raw.length >= 32 ? raw : ''
-  } catch {
-    return ''
+  if (process.env.ORCSPACE_CONTROL_TOKEN_FILE) {
+    try {
+      const raw = fs.readFileSync(process.env.ORCSPACE_CONTROL_TOKEN_FILE, 'utf8').trim()
+      if (raw.length >= 32) return raw
+    } catch {
+      /* fall through to candidate probing */
+    }
   }
+  // Same candidate directories as cli/orc.mjs: the profile folder name varies
+  // (OrcSpace/Orcspace/orcspace/com.orcspace.app) and probing only one casing
+  // misses the token on case-sensitive filesystems (macOS/Linux).
+  const candidates = [
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'OrcSpace', 'control-token') : null,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'Orcspace', 'control-token') : null,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'orcspace', 'control-token') : null,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'com.orcspace.app', 'control-token') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'OrcSpace', 'control-token') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Orcspace', 'control-token') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'orcspace', 'control-token') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'com.orcspace.app', 'control-token') : null,
+    path.join(os.homedir(), 'Library', 'Application Support', 'OrcSpace', 'control-token'),
+    path.join(os.homedir(), 'Library', 'Application Support', 'Orcspace', 'control-token'),
+    path.join(os.homedir(), '.config', 'OrcSpace', 'control-token'),
+    path.join(os.homedir(), '.config', 'Orcspace', 'control-token'),
+    path.join(os.homedir(), '.config', 'orcspace', 'control-token'),
+    path.join(os.homedir(), 'AppData', 'Roaming', 'OrcSpace', 'control-token'),
+    path.join(os.homedir(), 'AppData', 'Roaming', 'Orcspace', 'control-token'),
+    path.join(os.homedir(), 'AppData', 'Roaming', 'orcspace', 'control-token')
+  ].filter(Boolean)
+  for (const file of candidates) {
+    try {
+      const raw = fs.readFileSync(file, 'utf8').trim()
+      if (raw.length >= 32) return raw
+    } catch {
+      /* try next candidate */
+    }
+  }
+  return ''
 }
 
 async function api(pathname, init) {

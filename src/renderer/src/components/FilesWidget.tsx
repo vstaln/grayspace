@@ -104,23 +104,31 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
   const [search, setSearch] = useState('')
   const [showHidden, setShowHidden] = useState(false)
   const [previewFile, setPreviewFile] = useState<FileReadResult | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
   const [actionNotice, setActionNotice] = useState<string | null>(null)
 
   // Creation modals / inputs
   const [creatingType, setCreatingType] = useState<'file' | 'dir' | null>(null)
   const [newItemName, setNewItemName] = useState('')
+  const [createBusy, setCreateBusy] = useState(false)
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
   const [renamingName, setRenamingName] = useState('')
   const renameCancelled = useRef(false)
   const renameInFlightRef = useRef(false)
   const fsActionBusyRef = useRef(false)
   const previewRef = useRef<HTMLDivElement>(null)
+  const aliveRef = useRef(true)
   useFocusTrap(previewRef, Boolean(previewFile))
 
   // Request sequencing: a slower earlier `fs.list`/`fs.readFile` response must
   // not overwrite the result of a newer navigation or preview.
   const dirSeq = useRef(0)
   const previewSeq = useRef(0)
+  const closePreview = useCallback((): void => {
+    // A late read response must not reopen a preview the user already closed.
+    previewSeq.current += 1
+    setPreviewFile(null)
+  }, [])
 
   // Sync on WORKSPACE CHANGE only. Clamping here on every navigation used to
   // fight the user: fs.list is not scoped to the workspace, so stepping above
@@ -144,11 +152,11 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
       e.preventDefault()
       e.stopPropagation()
       e.stopImmediatePropagation()
-      setPreviewFile(null)
+      closePreview()
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [previewFile])
+  }, [previewFile, closePreview])
 
   const loadDir = useCallback(async (dir?: string | null): Promise<void> => {
     const seq = ++dirSeq.current
@@ -179,12 +187,24 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
 
   const noticeTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const showNotice = (msg: string): void => {
+    if (!aliveRef.current) return
     setActionNotice(msg)
     if (noticeTimer.current) clearTimeout(noticeTimer.current)
     noticeTimer.current = setTimeout(() => setActionNotice(null), 3500)
   }
   useEffect(() => () => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current)
+  }, [])
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+      // Invalidate an in-flight list/preview reply when the widget is removed;
+      // otherwise a late IPC response can set state on an unmounted widget or
+      // reopen a preview after the user closed the frame.
+      dirSeq.current += 1
+      previewSeq.current += 1
+    }
   }, [])
 
   const navigateUp = (): void => {
@@ -221,15 +241,18 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
     const name = newItemName.trim()
     if (!name || !currentPath || !creatingType || fsActionBusyRef.current) return
     fsActionBusyRef.current = true
+    setCreateBusy(true)
     const targetPath = joinChildPath(currentPath, name)
     if (!targetPath) {
       showNotice('Name cannot contain path separators or “..”')
       fsActionBusyRef.current = false
+      if (aliveRef.current) setCreateBusy(false)
       return
     }
     try {
       if (creatingType === 'file') {
         const res = await window.api.fs.createFile(targetPath)
+        if (!aliveRef.current) return
         if (res.error) showNotice(`Failed to create file: ${res.error}`)
         else {
           showNotice(`Created file "${name}"`)
@@ -239,6 +262,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
         }
       } else {
         const res = await window.api.fs.createDir(targetPath)
+        if (!aliveRef.current) return
         if (res.error) showNotice(`Failed to create folder: ${res.error}`)
         else {
           showNotice(`Created folder "${name}"`)
@@ -251,6 +275,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
       showNotice(String(err))
     } finally {
       fsActionBusyRef.current = false
+      if (aliveRef.current) setCreateBusy(false)
     }
   }
 
@@ -270,7 +295,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
     // `onBlur` from the unmounting input; without this gate both paths would
     // race to rename the same entry twice (the second hit reading the now
     // cleared `renamingPath` and bailing out — but only after a wasted IPC).
-    if (renameInFlightRef.current) return
+    if (renameInFlightRef.current || fsActionBusyRef.current) return
     if (renameCancelled.current) {
       renameCancelled.current = false
       return
@@ -278,6 +303,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
     const name = renamingName.trim()
     if (!name || !renamingPath || !currentPath || fsActionBusyRef.current) return
     renameInFlightRef.current = true
+    fsActionBusyRef.current = true
     try {
       const targetPath = joinChildPath(currentPath, name)
       if (!targetPath) {
@@ -285,6 +311,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
         return
       }
       const res = await window.api.fs.rename(renamingPath, targetPath)
+      if (!aliveRef.current) return
       if (res.error) showNotice(`Failed to rename: ${res.error}`)
       else {
         showNotice(`Renamed to "${name}"`)
@@ -302,22 +329,27 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
   }
 
   const handleDelete = async (entry: FileEntry): Promise<void> => {
-    const ok = await confirm(`Delete ${entry.isDirectory ? 'folder' : 'file'} "${entry.name}"?`, {
-      danger: true,
-      title: 'Delete Confirmation',
-      confirmLabel: 'Delete'
-    })
-    if (!ok) return
+    if (fsActionBusyRef.current) return
+    fsActionBusyRef.current = true
     try {
+      const ok = await confirm(`Delete ${entry.isDirectory ? 'folder' : 'file'} "${entry.name}"?`, {
+        danger: true,
+        title: 'Delete Confirmation',
+        confirmLabel: 'Delete'
+      })
+      if (!ok) return
       const res = await window.api.fs.delete(entry.path)
+      if (!aliveRef.current) return
       if (res.error) showNotice(`Delete error: ${res.error}`)
       else {
         showNotice(`Deleted "${entry.name}"`)
-        if (previewFile?.path === entry.path) setPreviewFile(null)
+        if (previewFile?.path === entry.path) closePreview()
         void loadDir(currentPath)
       }
     } catch (err) {
       showNotice(String(err))
+    } finally {
+      fsActionBusyRef.current = false
     }
   }
 
@@ -329,31 +361,6 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
       showNotice('Failed to copy path')
     }
   }
-
-  /* Removed: Second Brain file import. */
-  /* const createNoteFromFile = async (entry: FileEntry): Promise<void> => {
-    try {
-      const res = await window.api.fs.readFile(entry.path)
-      if ('content' in res && typeof res.content === 'string') {
-        const note = await window.api.brain.create({
-          title: entry.name,
-          content: res.content,
-          tags: ['imported', entry.ext.replace(/^\./, '') || 'file'],
-          projectDir: workspaceDir || undefined
-        })
-        if (note && !('error' in note)) {
-          showNotice(`Created Note "${entry.name}" in Second Brain`)
-        } else {
-          // Bus failures resolve with `{ error }` instead of throwing — say so
-          // instead of leaving a click that visibly did nothing (UI-audit).
-          const reason = note && 'error' in note ? note.error : 'unknown error'
-          showNotice(`Failed to create note from file: ${reason}`)
-        }
-      }
-    } catch {
-      showNotice('Failed to create note from file')
-    }
-  } */
 
   const filteredItems = useMemo(() => {
     if (!search.trim()) return items
@@ -380,7 +387,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
   }, [currentPath])
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg-panel/95 text-text">
+    <div className="flex h-full min-h-0 flex-col bg-bg-panel text-text">
       {/* Top action / navigation bar */}
       <div className="flex flex-none items-center justify-between gap-1.5 border-b border-line-soft px-3 py-2 text-xs">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -469,7 +476,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
         <div className="relative flex min-w-0 flex-1 items-center">
           <Search size={12} className="pointer-events-none absolute left-2 text-text-faint" />
           <input
-            className="h-6 w-full rounded-[6px] border border-line-soft bg-bg-hover/30 pr-6 pl-7 text-[11px] text-text outline-none placeholder:text-text-faint focus:border-line focus:bg-bg-hover/60"
+            className="h-6 w-full rounded-[6px] border border-line-soft bg-bg-hover pr-6 pl-7 text-[11px] text-text outline-none placeholder:text-text-faint focus:border-line focus:bg-bg-hover"
             placeholder="Search files…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -506,14 +513,15 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
 
       {/* Inline Creation Input Bar */}
       {creatingType && (
-        <div className="flex flex-none items-center gap-2 border-b border-line-soft bg-bg-hover/40 px-3 py-1.5">
+        <div className="flex flex-none items-center gap-2 border-b border-line-soft bg-bg-hover px-3 py-1.5">
           {creatingType === 'file' ? <FilePlus size={13} className="text-accent" /> : <FolderPlus size={13} className="text-accent" />}
           <input
             autoFocus
-            className="min-w-0 flex-1 rounded border border-line bg-bg px-2 py-1 text-xs text-text outline-none focus:border-accent"
+            className="min-w-0 flex-1 rounded border border-line bg-bg px-2 py-1 text-xs text-text outline-none focus:border-accent disabled:opacity-50"
             placeholder={creatingType === 'file' ? 'File name (e.g. index.ts)' : 'Folder name'}
             aria-label={creatingType === 'file' ? 'New file name' : 'New folder name'}
             value={newItemName}
+            disabled={createBusy}
             onChange={(e) => setNewItemName(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') void handleCreate()
@@ -521,14 +529,16 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
             }}
           />
           <button
-            className="rounded bg-accent px-2 py-1 text-[11px] font-semibold text-black hover:bg-white disabled:opacity-40"
-            disabled={!newItemName.trim()}
+            className="flex items-center gap-1.5 rounded bg-accent px-2 py-1 text-[11px] font-semibold text-black hover:bg-white disabled:opacity-40"
+            disabled={!newItemName.trim() || createBusy}
             onClick={() => void handleCreate()}
           >
-            Create
+            {createBusy && <RefreshCw size={11} className="animate-spin" aria-hidden />}
+            {createBusy ? 'Creating…' : 'Create'}
           </button>
           <button
-            className="rounded px-2 py-1 text-[11px] text-text-dim hover:text-text"
+            className="rounded px-2 py-1 text-[11px] text-text-dim hover:text-text disabled:opacity-40"
+            disabled={createBusy}
             onClick={() => setCreatingType(null)}
           >
             Cancel
@@ -537,21 +547,31 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
       )}
 
       {/* Main File Table / List */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-auto">
         {error ? (
-          <div className="p-4 text-center text-xs text-danger">{error}</div>
+          <div className="flex flex-col items-center gap-2 p-4 text-center text-xs text-danger">
+            <span>{error}</span>
+            <button
+              type="button"
+              className="rounded-[6px] border border-line px-2.5 py-1 text-[11px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+              onClick={() => void loadDir(currentPath)}
+            >
+              Retry
+            </button>
+          </div>
         ) : filteredItems.length === 0 ? (
           <div className="grid h-full place-items-center p-6 text-center text-xs text-text-faint">
             {loading ? 'Reading folder…' : search ? 'No files match search filter' : 'Folder is empty'}
           </div>
         ) : (
-          <table className="w-full border-collapse text-left text-xs">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[520px] border-collapse text-left text-xs">
             <thead>
               <tr className="border-b border-line-soft text-[10px] tracking-wider text-text-faint uppercase select-none">
-                <th scope="col" className="py-1.5 pr-2 pl-3 font-medium">Name</th>
-                <th scope="col" className="w-20 py-1.5 pr-3 text-right font-medium">Size</th>
-                <th scope="col" className="w-28 py-1.5 pr-3 text-right font-medium">Modified</th>
-                <th scope="col" className="w-20 py-1.5 pr-3 text-right font-medium">Actions</th>
+                <th scope="col" className="min-w-[180px] py-1.5 pr-2 pl-3 font-medium whitespace-nowrap">Name</th>
+                <th scope="col" className="w-20 py-1.5 pr-3 text-right font-medium whitespace-nowrap">Size</th>
+                <th scope="col" className="w-28 py-1.5 pr-3 text-right font-medium whitespace-nowrap">Modified</th>
+                <th scope="col" className="w-20 py-1.5 pr-3 text-right font-medium whitespace-nowrap">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -562,7 +582,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                     key={entry.path}
                     className="group border-b border-line-soft/40 transition-colors hover:bg-bg-hover/50"
                   >
-                    <td className="py-1.5 pr-2 pl-3">
+                    <td className="min-w-[180px] py-1.5 pr-2 pl-3">
                       {isRenaming ? (
                         <div className="flex items-center gap-1.5">
                           {getFileIcon(entry)}
@@ -583,8 +603,26 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                                 setRenamingPath(null)
                               }
                             }}
-                            onBlur={() => void handleRename()}
                           />
+                          <button
+                            type="button"
+                            className="flex-none rounded bg-accent px-1.5 py-0.5 text-[10px] font-semibold text-black hover:bg-white"
+                            onClick={() => void handleRename()}
+                            aria-label="Save new name"
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            className="flex-none rounded px-1.5 py-0.5 text-[10px] text-text-dim hover:text-text"
+                            onClick={() => {
+                              renameCancelled.current = true
+                              setRenamingPath(null)
+                            }}
+                            aria-label="Cancel rename"
+                          >
+                            Cancel
+                          </button>
                         </div>
                       ) : (
                         <button
@@ -610,7 +648,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                       {formatDate(entry.mtime)}
                     </td>
                     <td className="py-1.5 pr-3 text-right">
-                      <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                      <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100">
                         {!entry.isDirectory && (
                           <button
                             className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
@@ -655,6 +693,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 
@@ -683,7 +722,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
               e.stopPropagation()
-              setPreviewFile(null)
+              closePreview()
             }
           }}
         >
@@ -725,7 +764,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
               )}
               <button
                 className="grid h-7 w-7 place-items-center rounded-[8px] text-text-dim hover:bg-bg-hover hover:text-text"
-                onClick={() => setPreviewFile(null)}
+                onClick={closePreview}
                 title="Close Preview (Esc)"
               >
                 <X size={15} />
@@ -733,7 +772,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-auto rounded-[8px] border border-line-soft bg-black/40 p-3">
+          <div className="min-h-0 flex-1 overflow-auto rounded-[8px] border border-line-soft bg-bg p-3">
             {previewFile.isImage && previewFile.dataUrl ? (
               <div className="grid h-full place-items-center">
                 <img
@@ -754,8 +793,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
               <div className="grid h-full place-items-center text-xs text-text-faint">No content</div>
             )}
           </div>
-        </div>
-        ,
+        </div>,
         document.body
       )}
     </div>

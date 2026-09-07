@@ -1,7 +1,11 @@
 import * as fs from 'fs'
 import { CommandError, fileResource, parseResource } from '../core/index.ts'
 import { isLocalPath } from '../media.ts'
+import { writeTextAtomicAsync } from '../storage.ts'
 import type { CommandDeps } from './index.ts'
+
+/** Largest single file.write payload: generous for real files, bounded against OOM. */
+const MAX_FILE_WRITE_BYTES = 50 * 1024 * 1024
 
 /**
  * Filesystem mutation as commands.
@@ -52,8 +56,14 @@ export function registerFileCommands({ core }: CommandDeps): void {
         const abs = raw.trim()
         if (!isLocalPath(abs)) throw new CommandError('invalid', 'only local absolute paths are allowed')
         assertTargetMatches(command.target, abs)
+        const content = String((command.payload as { content?: unknown }).content ?? '')
+        if (Buffer.byteLength(content, 'utf8') > MAX_FILE_WRITE_BYTES) {
+          throw new CommandError('invalid', `content exceeds ${MAX_FILE_WRITE_BYTES} bytes`)
+        }
         try {
-          await fs.promises.writeFile(abs, String((command.payload as { content?: unknown }).content ?? ''), 'utf8')
+          // Crash-safe write (temp + fsync + rename): a bare writeFile can
+          // leave a truncated file if the app dies mid-flush.
+          await writeTextAtomicAsync(abs, content)
           return { ok: true }
         } catch (err) {
           throw new CommandError('failed', err instanceof Error ? err.message : String(err))

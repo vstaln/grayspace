@@ -25,7 +25,7 @@ const FAVORITES_ALL_MIGRATION_KEY = 'orcspace-favorites-all-enabled'
 /** Reads persisted app settings and writes patches straight through to disk. */
 export function useSettings(): {
   settings: AppSettings
-  update: (patch: Partial<AppSettings>) => Promise<void>
+  update: (patch: Partial<AppSettings>) => Promise<boolean>
   /** Set when the last update() failed to persist, so UI can say so. */
   error: string | null
 } {
@@ -42,18 +42,31 @@ export function useSettings(): {
     const mergeDefaults = (s: AppSettings): AppSettings => ({
       ...DEFAULTS,
       ...s,
-      favoriteWidgets: (s.favoriteWidgets ?? DEFAULTS.favoriteWidgets ?? []).filter((kind) => kind !== 'translator' && kind !== 'id-generator')
+      favoriteWidgets: (s.favoriteWidgets ?? DEFAULTS.favoriteWidgets ?? []).filter((kind) => kind !== 'translator' && kind !== 'id-generator' && kind !== 'note')
     })
 
     void window.api.settings
       .get()
       .then((s) => {
-        if (seq === initSeqRef.current) setSettings(mergeDefaults(s))
+        // Do not let a slow initial read overwrite a change received while it
+        // was in flight, including the migration below.
+        if (seq !== initSeqRef.current) return
+        setSettings(mergeDefaults(s))
         try {
           if (!localStorage.getItem(FAVORITES_ALL_MIGRATION_KEY)) {
             localStorage.setItem(FAVORITES_ALL_MIGRATION_KEY, '1')
-            void window.api.settings.set({ favoriteWidgets: DEFAULTS.favoriteWidgets })
-            setSettings((prev) => ({ ...prev, favoriteWidgets: DEFAULTS.favoriteWidgets }))
+            // Migrate mergingly: don't overwrite user's existing picks, just ensure all defaults present + prune deprecated
+            const needed = (DEFAULTS.favoriteWidgets ?? []).filter((k) => !(s.favoriteWidgets ?? []).includes(k as never))
+            const pruned = (s.favoriteWidgets ?? []).filter((k) => k !== 'translator' && k !== 'id-generator' && k !== 'note')
+            if (needed.length || pruned.length !== (s.favoriteWidgets ?? []).length) {
+              const merged = Array.from(new Set([...pruned, ...needed]))
+              void window.api.settings.set({ favoriteWidgets: merged }).catch((err) => {
+                if (seq === initSeqRef.current) setError(err instanceof Error ? err.message : String(err))
+              })
+              if (seq === initSeqRef.current) {
+                setSettings((prev) => ({ ...prev, favoriteWidgets: merged }))
+              }
+            }
           }
         } catch {}
       })
@@ -68,20 +81,28 @@ export function useSettings(): {
     }
   }, [])
 
-  const update = useCallback(async (patch: Partial<AppSettings>): Promise<void> => {
+  const update = useCallback(async (patch: Partial<AppSettings>): Promise<boolean> => {
     // A mount-time get() still in flight must not overwrite this update.
     const seq = ++initSeqRef.current
     setError(null)
-    setSettings((prev) => ({ ...prev, ...patch }))
+    setSettings((prev) => {
+      // Deep merge for nested localModel so patching one field doesn't drop others
+      if (patch.localModel && typeof patch.localModel === 'object') {
+        return { ...prev, ...patch, localModel: { ...prev.localModel, ...patch.localModel as typeof prev.localModel } }
+      }
+      return { ...prev, ...patch }
+    })
     try {
       const next = (await window.api.settings.set(patch)) as AppSettings
       if (seq === initSeqRef.current && next && typeof next === 'object') {
         setSettings(next)
       }
+      return true
     } catch (err) {
       // Keep the optimistic state, but SAY the write failed — a settings save
       // that dies silently is indistinguishable from a saved one in the UI.
       setError(err instanceof Error ? err.message : String(err))
+      return false
     }
   }, [])
 

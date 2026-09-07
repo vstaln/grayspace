@@ -12,6 +12,8 @@ import type {
   CanvasSnapshot,
   ChatApi,
   ChatExitPayload,
+  ChatSendOptions,
+  ChatModelCatalog,
   ChatModelId,
   CodeApi,
   CodeSnapshot,
@@ -41,13 +43,57 @@ import type {
   WorkspaceApi
 } from './api.ts'
 
-/** Subscribes to an id-scoped channel, filtering out other terminals' traffic. */
-function onScoped<T>(channel: string, id: string, cb: (payload: T) => void): () => void {
-  const listener = (_e: IpcRendererEvent, eventId: string, payload: T): void => {
-    if (eventId === id) cb(payload)
+type ScopedCb<T> = (payload: T) => void
+const scopedChannelMap = new Map<
+  string,
+  {
+    subscribers: Map<string, Set<ScopedCb<any>>>
+    ipcListener: (_e: IpcRendererEvent, eventId: string, payload: any) => void
   }
-  ipcRenderer.on(channel, listener)
-  return () => ipcRenderer.removeListener(channel, listener)
+>()
+
+/** Subscribes to an id-scoped channel, multiplexing through a single IPC listener to prevent leaks. */
+function onScoped<T>(channel: string, id: string, cb: (payload: T) => void): () => void {
+  let entry = scopedChannelMap.get(channel)
+  if (!entry) {
+    const subscribers = new Map<string, Set<ScopedCb<any>>>()
+    const ipcListener = (_e: IpcRendererEvent, eventId: string, payload: any): void => {
+      const set = subscribers.get(eventId)
+      if (set) {
+        for (const fn of set) {
+          try {
+            fn(payload)
+          } catch (err) {
+            console.error(`Error in scoped subscriber for ${channel}:${eventId}`, err)
+          }
+        }
+      }
+    }
+    ipcRenderer.on(channel, ipcListener)
+    entry = { subscribers, ipcListener }
+    scopedChannelMap.set(channel, entry)
+  }
+
+  let idSubscribers = entry.subscribers.get(id)
+  if (!idSubscribers) {
+    idSubscribers = new Set()
+    entry.subscribers.set(id, idSubscribers)
+  }
+  idSubscribers.add(cb as ScopedCb<any>)
+
+  return () => {
+    const cur = scopedChannelMap.get(channel)
+    if (!cur) return
+    const set = cur.subscribers.get(id)
+    if (set) {
+      set.delete(cb as ScopedCb<any>)
+      if (set.size === 0) cur.subscribers.delete(id)
+    }
+    if (cur.subscribers.size === 0) {
+      ipcRenderer.removeListener(channel, cur.ipcListener)
+      scopedChannelMap.delete(channel)
+    }
+  }
 }
 
 function onBroadcast<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -119,6 +165,13 @@ const control: ControlApi = {
 const workspace: WorkspaceApi = {
   getDir: (): Promise<string | null> => ipcRenderer.invoke('workspace:get-dir'),
   pickDir: (): Promise<string | null> => ipcRenderer.invoke('workspace:pick-dir'),
+  create: (name: string): Promise<string | { error: string } | null> => ipcRenderer.invoke('workspace:create', name),
+  rename: (path: string, name: string): Promise<RecentDir[] | { error: string }> => ipcRenderer.invoke('workspace:rename', path, name),
+  codeWorkspaces: () => ipcRenderer.invoke('workspace:code-workspaces'),
+  createCodeWorkspace: (name?: string) => ipcRenderer.invoke('workspace:create-code', name),
+  renameCodeWorkspace: (id: string, name: string) => ipcRenderer.invoke('workspace:rename-code', id, name),
+  selectCodeWorkspace: (id: string) => ipcRenderer.invoke('workspace:select-code', id),
+  onCodeWorkspaceChange: (cb) => onBroadcast('workspace:onCodeWorkspaceChange', cb),
   onDirChange: (cb: (dir: string | null) => void): (() => void) =>
     onBroadcast('workspace:onDirChange', cb),
   // remembered folders
@@ -266,8 +319,9 @@ const system: SystemApi = {
 }
 
 const chat: ChatApi = {
-  send: (threadId: string, model: ChatModelId, prompt: string): Promise<{ ok: true } | { error: string }> =>
-    ipcRenderer.invoke('chat:send', threadId, model, prompt),
+  send: (threadId: string, model: ChatModelId, prompt: string, options?: ChatSendOptions): Promise<{ ok: true } | { error: string }> =>
+    ipcRenderer.invoke('chat:send', threadId, model, prompt, options),
+  listModels: (): Promise<ChatModelCatalog> => ipcRenderer.invoke('chat:models'),
   stop: (threadId: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('chat:stop', threadId),
   dispose: (threadId: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('chat:dispose', threadId),
   onData: (cb: (threadId: string, chunk: string) => void): (() => void) => {
@@ -300,4 +354,3 @@ contextBridge.exposeInMainWorld('api', {
   chat,
   window: windowControls
 })
-

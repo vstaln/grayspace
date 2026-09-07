@@ -59,3 +59,8 @@ opencode.json
 test-results/
 playwright-report/
 playwright/.cache/
+
+# Audit screens & temporary review outputs
+.audit-screens*/
+.ui-review/
+typescript-errors.txt

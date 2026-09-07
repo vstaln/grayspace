@@ -1,12 +1,24 @@
 import { spawn, type ChildProcess } from 'child_process'
 import { EventEmitter } from 'events'
 import * as os from 'os'
+import { StringDecoder } from 'string_decoder'
 import { stripAnsi } from './ansi.ts'
 import { killProcessTree } from './procTree.ts'
 import { quoteWin32CmdArg } from './ipc/shared.ts'
 
 /** Chat models the pane offers — ids match the renderer's ChatPane picker. */
 export type ChatModelId = 'codex' | 'claude' | 'grok' | 'antigravity' | 'opencode'
+
+export type ChatEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
+
+export interface ChatSendOptions {
+  model?: string
+  effort?: ChatEffort
+  /** Absolute image paths for CLIs that support native initial attachments. */
+  images?: string[]
+}
+
+const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$/
 
 interface ModelSpec {
   /** The CLI binary, as typed in a shell. */
@@ -24,7 +36,9 @@ interface ModelSpec {
  */
 const MODELS: Record<ChatModelId, ModelSpec> = {
   claude: { command: 'claude', headlessArgs: ['-p'] },
-  codex: { command: 'codex', headlessArgs: ['exec', '--skip-git-repo-check'] },
+  // JSONL keeps Codex' diagnostic banner, echoed prompt and token accounting
+  // out of the chat bubble. ChatRunner extracts only agent messages below.
+  codex: { command: 'codex', headlessArgs: ['exec', '--skip-git-repo-check', '--json'] },
   grok: { command: 'grok', headlessArgs: ['-p'] },
   antigravity: { command: 'agy', headlessArgs: ['-p'] },
   opencode: { command: 'opencode', headlessArgs: ['run'] }
@@ -36,6 +50,7 @@ const RUN_TIMEOUT_MS = 10 * 60 * 1000
 /** Stream chunks are flushed to the renderer at most once per frame-ish. */
 const FLUSH_INTERVAL_MS = 16
 const MAX_PROMPT_CHARS = 32_000
+const MAX_PENDING_CHARS = 2_000_000
 
 interface ChatRun {
   child: ChildProcess
@@ -69,54 +84,137 @@ interface ResolvedInvocation {
   command: string
   args: string[]
   shell: boolean
+  /** The command is a JavaScript CLI launched through Electron's executable. */
+  useElectronAsNode?: boolean
 }
 
-function resolveInvocation(spec: ModelSpec, prompt: string): ResolvedInvocation {
+export function buildChatProcessEnv(useElectronAsNode = false): Record<string, string> {
+  const env: Record<string, string> = {
+    ...process.env as Record<string, string>,
+    NO_COLOR: '1',
+    FORCE_COLOR: '0',
+    TERM: 'dumb'
+  }
+  // In a packaged Electron app, process.execPath is OrcSpace.exe rather than
+  // node.exe.  npm's Windows .cmd wrappers can be launched directly by
+  // passing their JS entry point to that executable, but Electron otherwise
+  // starts a second OrcSpace instance.  This flag puts Electron in its
+  // Node-compatible mode so the CLI script runs in the child process.
+  if (useElectronAsNode) env.ELECTRON_RUN_AS_NODE = '1'
+  return env
+}
+
+function buildInvocationArgs(spec: ModelSpec, prompt: string, options?: ChatSendOptions): string[] {
+  const args = [...spec.headlessArgs]
+  if (options?.model) args.push('--model', options.model)
+  if (options?.effort) {
+    // Codex CLI 0.152+ removed the old --effort flag. Its equivalent is a
+    // TOML config override; passing --effort makes `codex exec` fail before it
+    // ever sees the prompt (the error shown in Chat).
+    if (spec.command === 'codex') args.push('--config', `model_reasoning_effort=${options.effort}`)
+    else args.push('--effort', options.effort)
+  }
+  // Codex consumes images as repeatable --image arguments before the prompt.
+  // Other providers are left untouched until their installed CLI advertises a
+  // stable equivalent; blindly adding this flag would recreate the same
+  // provider-specific startup failure we are fixing here.
+  if (spec.command === 'codex' && options?.images) {
+    for (const image of options.images) args.push('--image', image)
+  }
+  args.push(prompt)
+  return args
+}
+
+/** Pure command builder kept public so provider-specific flags stay covered by tests. */
+export function buildChatInvocationArgs(model: ChatModelId, prompt: string, options?: ChatSendOptions): string[] {
+  return buildInvocationArgs(MODELS[model], prompt, options)
+}
+
+function resolveInvocation(spec: ModelSpec, prompt: string, options?: ChatSendOptions): ResolvedInvocation {
+  const invocationArgs = buildInvocationArgs(spec, prompt, options)
   if (!IS_WIN) {
-    return { command: spec.command, args: [...spec.headlessArgs, prompt], shell: false }
+    return { command: spec.command, args: invocationArgs, shell: false }
   }
 
   // On Windows, try resolving executable or npm wrapper directly so multiline
-  // prompts are not corrupted by cmd.exe line splitting.
+  // prompts are not corrupted by cmd.exe line splitting. Cap PATH scan to 60 entries to avoid hang on network drives.
   const pathext = (process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';')
-  const pathDirs = (process.env.PATH || '').split(path.delimiter)
+  const pathDirs = (process.env.PATH || '').split(path.delimiter).slice(0, 60)
 
   for (const dir of pathDirs) {
     if (!dir) continue
     for (const ext of pathext) {
       const fullPath = path.join(dir, spec.command + ext)
-      if (fs.existsSync(fullPath)) {
-        const extLower = ext.toLowerCase()
-        if (extLower === '.exe') {
-          return { command: fullPath, args: [...spec.headlessArgs, prompt], shell: false }
-        }
-        if (extLower === '.cmd' || extLower === '.bat') {
-          try {
-            const content = fs.readFileSync(fullPath, 'utf8')
-            const m = /"%_prog%"\s+"([^"]+\.js)"/i.exec(content) || /node(?:\.exe)?"\s+"([^"]+\.js)"/i.exec(content)
-            if (m) {
-              const scriptPath = m[1].replace(/%dp0%/gi, path.dirname(fullPath))
-              if (fs.existsSync(scriptPath)) {
-                return { command: process.execPath, args: [scriptPath, ...spec.headlessArgs, prompt], shell: false }
+      let exists = false
+      try { exists = fs.existsSync(fullPath) } catch { continue }
+      if (!exists) continue
+      const extLower = ext.toLowerCase()
+      if (extLower === '.exe') {
+        return { command: fullPath, args: invocationArgs, shell: false }
+      }
+      if (extLower === '.cmd' || extLower === '.bat') {
+        try {
+          const content = fs.readFileSync(fullPath, 'utf8')
+          const m = /"%_prog%"\s+"([^"]+\.js)"/i.exec(content) || /node(?:\.exe)?"\s+"([^"]+\.js)"/i.exec(content)
+          if (m) {
+            const scriptPath = m[1].replace(/%dp0%/gi, path.dirname(fullPath))
+            if (fs.existsSync(scriptPath)) {
+              // The npm Codex JS launcher spawns codex.exe without
+              // `windowsHide`. When its parent is a GUI Electron process,
+              // Windows consequently creates the visible console window the
+              // user sees over OrcSpace. Launch the bundled native executable
+              // ourselves so our hidden-process flag applies to the real CLI.
+              if (spec.command === 'codex') {
+                const triple = process.arch === 'arm64'
+                  ? 'aarch64-pc-windows-msvc'
+                  : 'x86_64-pc-windows-msvc'
+                const platformPackage = process.arch === 'arm64'
+                  ? 'codex-win32-arm64'
+                  : 'codex-win32-x64'
+                const codexPackage = path.dirname(path.dirname(scriptPath))
+                const nativeBinary = path.join(
+                  codexPackage,
+                  'node_modules',
+                  '@openai',
+                  platformPackage,
+                  'vendor',
+                  triple,
+                  'bin',
+                  'codex.exe'
+                )
+                if (fs.existsSync(nativeBinary)) {
+                  return { command: nativeBinary, args: invocationArgs, shell: false }
+                }
+              }
+              return {
+                command: process.execPath,
+                args: [scriptPath, ...invocationArgs],
+                shell: false,
+                useElectronAsNode: true
               }
             }
-          } catch {
-            /* ignore read error and fall through */
           }
-          // Default .cmd invocation: pass through cmd.exe /d /s /c
-          return {
-            command: 'cmd.exe',
-            args: ['/d', '/s', '/c', spec.command, ...spec.headlessArgs, quoteWin32CmdArg(prompt)],
-            shell: false
-          }
+        } catch {
+          /* ignore read error and fall through */
+        }
+        // Default .cmd invocation: pass through cmd.exe /d /s /c
+        return {
+          command: 'cmd.exe',
+          args: ['/d', '/s', '/c', spec.command, ...invocationArgs.map(quoteWin32CmdArg)],
+          shell: false
         }
       }
     }
   }
 
-  // Fallback if not found on PATH explicitly:
-  const line = [spec.command, ...spec.headlessArgs, quoteWin32CmdArg(prompt)].join(' ')
-  return { command: line, args: [], shell: true }
+  // Fallback if not found on PATH explicitly: still no shell:true — spawn
+  // cmd.exe with an argv array so prompt quoting stays in quoteWin32CmdArg
+  // instead of a hand-joined command line the shell re-parses.
+  return {
+    command: 'cmd.exe',
+    args: ['/d', '/s', '/c', spec.command, ...invocationArgs.map(quoteWin32CmdArg)],
+    shell: false
+  }
 }
 
 export class ChatRunner extends EventEmitter {
@@ -131,7 +229,7 @@ export class ChatRunner extends EventEmitter {
    * still in flight) the headless CLI for one thread. Resolves once the
    * process actually spawned; the answer itself arrives through `data`/`exit`.
    */
-  send(threadId: string, model: ChatModelId, prompt: string, cwd?: string): { ok: true } | { error: string } {
+  send(threadId: string, model: ChatModelId, prompt: string, cwd?: string, options?: ChatSendOptions): { ok: true } | { error: string } {
     if (typeof threadId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(threadId)) {
       return { error: 'invalid thread id' }
     }
@@ -141,36 +239,29 @@ export class ChatRunner extends EventEmitter {
     if (prompt.length > MAX_PROMPT_CHARS) {
       return { error: `prompt exceeds ${MAX_PROMPT_CHARS} characters` }
     }
+    if (options?.model !== undefined && !MODEL_NAME_RE.test(options.model)) {
+      return { error: 'invalid model id' }
+    }
     // A new message replaces whatever the thread was still generating.
     this.stop(threadId)
 
     let child: ChildProcess
     try {
-      const invocation = resolveInvocation(spec, prompt)
+      const invocation = resolveInvocation(spec, prompt, options)
       if (invocation.shell) {
         child = spawn(invocation.command, {
           shell: true,
           cwd: cwd || undefined,
           stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
-          env: {
-            ...process.env,
-            NO_COLOR: '1',
-            FORCE_COLOR: '0',
-            TERM: 'dumb'
-          }
+          env: buildChatProcessEnv(invocation.useElectronAsNode)
         })
       } else {
         child = spawn(invocation.command, invocation.args, {
           cwd: cwd || undefined,
           stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: true,
-          env: {
-            ...process.env,
-            NO_COLOR: '1',
-            FORCE_COLOR: '0',
-            TERM: 'dumb'
-          }
+          env: buildChatProcessEnv(invocation.useElectronAsNode)
         })
       }
     } catch (err) {
@@ -188,29 +279,95 @@ export class ChatRunner extends EventEmitter {
     }
     this.runs.set(threadId, run)
 
-    const collect = (raw: Buffer): void => {
-      const chunk = stripAnsi(raw.toString('utf8'))
+    let pendingChars = 0
+    const stdoutDecoder = new StringDecoder('utf8')
+    const stderrDecoder = new StringDecoder('utf8')
+    let codexJsonBuffer = ''
+    let codexStderrBuffer = ''
+    let codexMessageCount = 0
+    const collectText = (rawStr: string): void => {
+      if (pendingChars > MAX_PENDING_CHARS) return
+      const chunk = stripAnsi(rawStr)
         .replace(/\r\n/g, '\n')
         .replace(/\r/g, '\n')
       if (!chunk) return
       run.pending.push(chunk)
+      pendingChars += chunk.length
+      if (pendingChars > MAX_PENDING_CHARS) run.pending.push('\n\n[Output truncated — exceeded 2M chars]')
       if (run.flushTimer === null) {
         run.flushTimer = setTimeout(() => this.flush(threadId), FLUSH_INTERVAL_MS)
         run.flushTimer.unref?.()
       }
     }
 
-    child.stdout?.on('data', collect)
+    const collectStdout = (raw: Buffer): void => {
+      const decoded = stdoutDecoder.write(raw.length > 512_000 ? raw.subarray(0, 512_000) : raw)
+      if (model !== 'codex') {
+        collectText(decoded + (raw.length > 512_000 ? '\n[truncated chunk]' : ''))
+        return
+      }
+      codexJsonBuffer += decoded
+      const lines = codexJsonBuffer.split(/\r?\n/)
+      codexJsonBuffer = lines.pop() ?? ''
+      for (const line of lines) {
+        const message = extractCodexJsonLine(line)
+        if (message) {
+          collectText(`${codexMessageCount > 0 ? '\n\n' : ''}${message}`)
+          codexMessageCount++
+        }
+      }
+    }
+
+    const collectStderr = (raw: Buffer): void => {
+      const decoded = stderrDecoder.write(raw.length > 512_000 ? raw.subarray(0, 512_000) : raw)
+      if (model !== 'codex') {
+        collectText(decoded + (raw.length > 512_000 ? '\n[truncated chunk]' : ''))
+        return
+      }
+      codexStderrBuffer += decoded
+      const lines = codexStderrBuffer.split(/\r?\n/)
+      codexStderrBuffer = lines.pop() ?? ''
+      for (const line of lines) {
+        const diagnostic = cleanCodexStderrLine(line)
+        if (diagnostic) collectText(`${diagnostic}\n`)
+      }
+    }
+
+    child.stdout?.on('data', collectStdout)
     // Errors (bad flags, not logged in, missing binary) stream on stderr —
     // surfaced in the bubble rather than dying in a console the user never
     // opens.
-    child.stderr?.on('data', collect)
+    child.stderr?.on('data', collectStderr)
     child.on('error', (err) => {
       // ENOENT and friends arrive here: the CLI is simply not installed.
+      const stdoutTail = stdoutDecoder.end()
+      const stderrTail = stderrDecoder.end()
+      if (model === 'codex') codexJsonBuffer += stdoutTail
+      else if (stdoutTail) run.pending.push(stdoutTail)
+      if (model === 'codex') {
+        const diagnostic = cleanCodexStderrLine(codexStderrBuffer + stderrTail)
+        if (diagnostic) run.pending.push(diagnostic)
+      } else if (stderrTail) run.pending.push(stderrTail)
       run.pending.push(`\n\n[${spec.command} failed to start: ${err.message}]`)
       this.finish(threadId, run, { code: 1 })
     })
     child.on('close', (code) => {
+      const stdoutTail = stdoutDecoder.end()
+      const stderrTail = stderrDecoder.end()
+      if (model === 'codex') {
+        codexJsonBuffer += stdoutTail
+        const message = extractCodexJsonLine(codexJsonBuffer)
+        if (message) run.pending.push(`${codexMessageCount > 0 ? '\n\n' : ''}${message}`)
+      } else if (stdoutTail) {
+        const cleaned = stripAnsi(stdoutTail).replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+        if (cleaned) run.pending.push(cleaned)
+      }
+      if (model === 'codex') {
+        const diagnostic = cleanCodexStderrLine(codexStderrBuffer + stderrTail)
+        if (diagnostic) run.pending.push(diagnostic)
+      } else if (stderrTail) {
+        run.pending.push(stripAnsi(stderrTail).replace(/\r\n/g, '\n').replace(/\r/g, '\n'))
+      }
       this.finish(threadId, run, { code: code ?? 0 })
     })
 
@@ -245,9 +402,16 @@ export class ChatRunner extends EventEmitter {
   }
 
   private killRun(run: ChatRun): void {
+    // child.kill() is the cross-platform stop: killProcessTree is a Windows
+    // no-op on mac/Linux, where the old branch leaked the CLI process.
+    // On Windows the tree sweep still runs for detached grandchildren.
+    try {
+      run.child.kill()
+    } catch {
+      /* already gone */
+    }
     try {
       if (typeof run.child.pid === 'number') killProcessTree(run.child.pid)
-      else run.child.kill()
     } catch {
       /* already gone */
     }
@@ -301,6 +465,41 @@ export class ChatRunner extends EventEmitter {
     }
     if (this.runs.get(threadId) === run) this.runs.delete(threadId)
   }
+}
+
+/** Convert one Codex `exec --json` event into user-facing chat text. */
+export function extractCodexJsonLine(line: string): string {
+  if (!line.trim()) return ''
+  try {
+    const event = JSON.parse(line) as {
+      type?: string
+      message?: string
+      error?: { message?: string }
+      item?: { type?: string; text?: string }
+    }
+    if (event.type === 'item.completed' && event.item?.type === 'agent_message' && typeof event.item.text === 'string') {
+      return event.item.text
+    }
+    if (event.type === 'turn.failed' || event.type === 'error') {
+      const message = event.error?.message || event.message
+      return message ? `\n\n[Codex error: ${message}]` : ''
+    }
+    return ''
+  } catch {
+    // JSON mode should only emit JSON on stdout. Ignore malformed diagnostic
+    // fragments instead of putting the CLI protocol back into the UI.
+    return ''
+  }
+}
+
+/** Remove known Codex infrastructure chatter while preserving real failures. */
+export function cleanCodexStderrLine(line: string): string {
+  const cleaned = stripAnsi(line).trim()
+  if (cleaned === 'Reading additional input from stdin...') return ''
+  if (/^\d{4}-\d{2}-\d{2}T\S+\s+WARN\s+codexskills::interface:\s+ignoring interface\.icon(?:small|large):/i.test(cleaned)) return ''
+  if (/^\d{4}-\d{2}-\d{2}T\S+\s+WARN\s+codexcore::shellsnapshot:\s+Failed to create shell snapshot for powershell:/i.test(cleaned)) return ''
+  if (/^\d{4}-\d{2}-\d{2}T\S+\s+WARN\s+codex_core::tasks:\s+failed to flush rollout after emitting terminal turn event:/i.test(cleaned)) return ''
+  return cleaned
 }
 
 /** The one runner behind the chat IPC surface. */

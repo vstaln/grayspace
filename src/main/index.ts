@@ -3,6 +3,7 @@ import { config as loadEnvFile } from 'dotenv'
 loadEnvFile()
 
 import { app, Menu } from 'electron'
+import { join } from 'path'
 import { IS_MAC, initAppSwitches, requestInstanceLock, initAutoUpdater } from './bootstrap.ts'
 import { createAppStores } from './appStores.ts'
 import {
@@ -24,6 +25,7 @@ import { clearRuntimePresence, writeRuntimePresence } from './runtimePresence'
 import { registerIpc, originTerminalId, forgetTerminalOrigin } from './ipc'
 import { registerCommands } from './commands/index.ts'
 import { onPersistError } from './persistNotifier.ts'
+import { chatRunner } from './chatRunner.ts'
 
 // --- bootstrap ---
 initAppSwitches()
@@ -83,6 +85,7 @@ setupLifecycle({
   planner,
   canvas,
   code,
+  chat: chatRunner,
   core,
   orchestration,
   disposePlannerSync,
@@ -177,13 +180,16 @@ if (hasInstanceLock) {
         const previous = state.workspaceDir
         state.setWorkspaceDir(dir)
         if ((dir || undefined) === previous) return
+        const codeWorkspace = state.codeWorkspaceState(dir)
+        code.setWorkspaceScope(
+          state.activeCodeWorkspaceScope(dir),
+          codeWorkspace.activeId === codeWorkspace.workspaces[0]?.id ? dir : undefined
+        )
         if (dir) syncAgentConfigsFor(dir)
         send('workspace:onDirChange', dir ?? null)
+        send('workspace:onCodeWorkspaceChange', state.codeWorkspaceState(dir))
       }
     })
-
-    ensureOrcExecutable()
-    createWindow()
 
     controlServer = startControlServer({
       core,
@@ -193,9 +199,13 @@ if (hasInstanceLock) {
       orchestration,
       canvas,
       state,
+      rendererDir: process.env['ELECTRON_RENDERER_URL'] ? undefined : join(__dirname, '../renderer'),
       defaultCwd: () => state.workspaceDir,
       broadcast: (channel, payload) => send(channel, payload)
     })
+
+    ensureOrcExecutable()
+    createWindow()
 
     doPublishPresence()
     initAutoUpdater()

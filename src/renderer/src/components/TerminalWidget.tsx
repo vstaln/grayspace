@@ -1,19 +1,36 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Terminal, ITheme } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
-import { WebglAddon } from 'xterm-addon-webgl'
 import 'xterm/css/xterm.css'
 import { ThemeName, useTheme } from '../theme'
-import { pasteHasImage, saveImageFromPaste } from '../lib/paste'
+import { pasteHasImage } from '../lib/paste'
 import { takeInitialCommand } from '../lib/pendingTerminalCommands'
 import { IS_MAC } from '../lib/platform'
 import { palette } from '../design'
 
-/** Windows conpty wants CRLF for "Enter" to actually submit the line. */
-const cachedSubmit = typeof navigator !== 'undefined' && /windows/i.test(navigator.userAgent) ? '\r\n' : '\r'
+/** A carriage return is the portable terminal keycode for Enter. */
+const cachedSubmit = '\r'
+
+// WidgetFrame can temporarily unmount a terminal while moving it between the
+// canvas and the maximized layer. Keep the viewport independent from xterm's
+// DOM lifetime so a remount does not unexpectedly jump to the top or bottom.
+const terminalViewportById = new Map<string, { line: number; atBottom: boolean }>()
+const MAX_VIEWPORT_ENTRIES = 300
+function rememberViewport(id: string, entry: { line: number; atBottom: boolean }): void {
+  terminalViewportById.set(id, entry)
+  if (terminalViewportById.size > MAX_VIEWPORT_ENTRIES) {
+    const oldest = terminalViewportById.keys().next().value as string | undefined
+    if (oldest) terminalViewportById.delete(oldest)
+  }
+}
+export function forgetTerminalViewport(id: string): void {
+  terminalViewportById.delete(id)
+}
 
 interface Props {
   id: string
+  /** Canvas terminals use the wallpaper as their surface; Code terminals do not. */
+  surface?: 'canvas' | 'code'
   /** Called once the underlying process exits on its own (not via the widget's
    *  own close button) — lets the widget remove itself instead of sitting on
    *  the canvas as a dead shell showing only "[Process exited]". */
@@ -27,7 +44,7 @@ const BASE_COLORS = {
   foreground: '#e8e8ea',
   cursor: '#e8e8ea',
   selectionBackground: 'rgba(120, 160, 255, 0.35)',
-  black: '#1a1a1e',
+  black: '#050506',
   red: '#f07178',
   green: '#7fd99a',
   yellow: '#e6c07b',
@@ -47,16 +64,24 @@ const BASE_COLORS = {
 
 /**
  * One flat fill: xterm paints the exact colour the frame and header use, so
- * the whole shell reads as a single slab in every theme. Opaque is safe for
- * TUI detection too — OSC 11 reports the RGB alone, which reads as dark.
+ * the whole shell reads as a single slab in every theme. Keep the xterm canvas
+ * opaque: fullscreen TUIs (Gemini, Claude, etc.) repaint through an alternate
+ * buffer and transparent canvas layers can lose glyphs against the wallpaper.
  */
-function xtermTheme(_appTheme: ThemeName): ITheme {
-  return { ...BASE_COLORS, background: palette.terminalSolid, cursorAccent: palette.wallpaperBase }
+function xtermTheme(_appTheme: ThemeName, surface: 'canvas' | 'code'): ITheme {
+  return {
+    ...BASE_COLORS,
+    background: palette.terminalSolid,
+    cursorAccent: palette.wallpaperBase
+  }
 }
 
-function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
+function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
+  // True until terminal.create() resolves — the pane would otherwise sit blank
+  // with no indication that a shell is on its way.
+  const [connecting, setConnecting] = useState(true)
   const { theme } = useTheme()
   // Mount effect is once-per-id; keep the latest exit handler without re-spawning xterm.
   const onProcessExitRef = useRef(onProcessExit)
@@ -64,28 +89,117 @@ function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
 
   // Re-theme in place on toggle so scrollback and the running shell survive.
   useEffect(() => {
-    if (termRef.current) termRef.current.options.theme = xtermTheme(theme)
-  }, [theme])
+    if (termRef.current) termRef.current.options.theme = xtermTheme(theme, surface)
+  }, [theme, surface])
 
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
 
     const term = new Terminal({
-      theme: xtermTheme(theme),
+      theme: xtermTheme(theme, surface),
       fontSize: 13,
       fontFamily: 'Consolas, "Cascadia Mono", monospace',
       lineHeight: 1.15,
       scrollback: 5000,
       cursorBlink: true,
+      // A background terminal must not advertise a fake blinking input caret
+      // while an agent (for example Codex) owns the session. Keep the normal
+      // blinking cursor only when this terminal is focused for user input.
+      cursorInactiveStyle: 'none',
       convertEol: false
     })
     termRef.current = term
     let mounted = true
     const fit = new FitAddon()
     term.loadAddon(fit)
+    const pendingWrites: string[] = []
+    let writeRaf: number | null = null
+    const flushWrites = (): void => {
+      writeRaf = null
+      if (pendingWrites.length === 0) return
+      const batch = pendingWrites.splice(0, pendingWrites.length).join('')
+      term.write(batch)
+    }
+    const batchedWrite = (data: string): void => {
+      pendingWrites.push(data)
+      if (writeRaf === null) writeRaf = requestAnimationFrame(flushWrites)
+    }
+    const restoreViewport = (saved?: { line: number; atBottom: boolean }): void => {
+      const viewport = saved ?? terminalViewportById.get(id)
+      if (!viewport) return
+      if (viewport.atBottom) term.scrollToBottom()
+      else term.scrollToLine(Math.min(viewport.line, term.buffer.active.baseY))
+    }
+    // Moving a maximized widget between the canvas layer and the overlay can
+    // cause one or two layout passes after xterm has painted. Restore again on
+    // the next frames so FitAddon cannot leave a previously scrolled terminal
+    // at line zero.
+    const restoreViewportAfterLayout = (): void => {
+      if (!mounted) return
+      restoreViewport()
+      requestAnimationFrame(() => {
+        if (!mounted) return
+        restoreViewport()
+        requestAnimationFrame(() => {
+          if (mounted) restoreViewport()
+        })
+      })
+    }
+    type ViewportAnchor = { line: number; atBottom: boolean }
+    const captureViewportAnchor = (): ViewportAnchor => {
+      const activeBuffer = term.buffer.active
+      return {
+        line: activeBuffer.viewportY,
+        atBottom: activeBuffer.viewportY >= activeBuffer.baseY
+      }
+    }
+    const applyViewportAnchor = (anchor: ViewportAnchor): void => {
+      if (!mounted) return
+      if (anchor.atBottom) term.scrollToBottom()
+      else term.scrollToLine(Math.min(anchor.line, term.buffer.active.baseY))
+    }
 
-    const dataUnsub = window.api.terminal.onData(id, (data) => term.write(data))
+    // fit.fit() first resizes xterm locally and then terminal.resize reaches
+    // the PTY. Full-screen CLIs repaint asynchronously in response to that
+    // second step; their clear/redraw sequence can reset xterm's viewport
+    // after our immediate restoration. Keep the pre-resize anchor alive for
+    // the short repaint window and re-apply it after parsed output as well.
+    let resizeAnchor: ViewportAnchor | null = null
+    let resizeAnchorGeneration = 0
+    let resizeRestoreUntil = 0
+    let resizeRestoreTimerShort: ReturnType<typeof setTimeout> | null = null
+    let resizeRestoreTimerLong: ReturnType<typeof setTimeout> | null = null
+    const restoreResizeAnchor = (generation: number): void => {
+      if (generation !== resizeAnchorGeneration || !resizeAnchor) return
+      applyViewportAnchor(resizeAnchor)
+    }
+    const scheduleResizeAnchorRestore = (anchor: ViewportAnchor): void => {
+      resizeAnchor = anchor
+      resizeAnchorGeneration++
+      const generation = resizeAnchorGeneration
+      resizeRestoreUntil = performance.now() + 300
+      if (resizeRestoreTimerShort) clearTimeout(resizeRestoreTimerShort)
+      if (resizeRestoreTimerLong) clearTimeout(resizeRestoreTimerLong)
+      applyViewportAnchor(anchor)
+      requestAnimationFrame(() => restoreResizeAnchor(generation))
+      resizeRestoreTimerShort = setTimeout(() => restoreResizeAnchor(generation), 60)
+      resizeRestoreTimerLong = setTimeout(() => restoreResizeAnchor(generation), 180)
+    }
+    const writeParsedDisposable = term.onWriteParsed(() => {
+      if (!resizeAnchor || performance.now() > resizeRestoreUntil) return
+      const generation = resizeAnchorGeneration
+      requestAnimationFrame(() => restoreResizeAnchor(generation))
+    })
+    const scrollDisposable = term.onScroll(() => {
+      const activeBuffer = term.buffer.active
+      rememberViewport(id, {
+        line: activeBuffer.viewportY,
+        atBottom: activeBuffer.viewportY >= activeBuffer.baseY
+      })
+    })
+
+    const dataUnsub = window.api.terminal.onData(id, (data) => batchedWrite(data))
     let closeTimer: ReturnType<typeof setTimeout> | null = null
     let initialCmdTimer: ReturnType<typeof setTimeout> | null = null
     const exitUnsub = window.api.terminal.onExit(id, (code) => {
@@ -118,21 +232,20 @@ function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
     term.onData((data) => writePty(data))
     term.onResize(({ cols, rows }) => window.api.terminal.resize(id, cols, rows))
 
-    let imageCounter = 0
-
     const isImageFile = (f: { name?: string; type?: string }): boolean => {
       if (f.type && f.type.startsWith('image/')) return true
       const name = (f.name || '').toLowerCase()
       return /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|tiff?)$/i.test(name)
     }
 
-    /** Formats pasted/dropped picture as [Image N] token. */
-    const writeImageToken = (image: { name: string; path: string } | null, addTrailingSpace = false): void => {
+    /** Put a dropped image's saved path into the agent's input. */
+    const writeImagePath = (image: { path: string } | null, addTrailingSpace = false): void => {
       if (!image) return void term.write('\r\n\x1b[33m[No image in clipboard]\x1b[0m\r\n')
-      imageCounter += 1
-      const token = `[Image ${imageCounter}]`
-      writePty(addTrailingSpace ? `${token} ` : token)
-      term.write(`\x1b[90m[${token}: ${image.name}]\x1b[0m`)
+      // Keep the path as one input value even when the user's profile or
+      // workspace contains spaces. Quotes are understood by the CLI prompt
+      // parser and do not turn the path into several unrelated words.
+      const pathText = /\s/.test(image.path) ? `"${image.path.replace(/"/g, '\\"')}"` : image.path
+      writePty(addTrailingSpace ? `${pathText} ` : pathText)
     }
 
     term.attachCustomKeyEventHandler((event) => {
@@ -176,7 +289,7 @@ function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
       if (!IS_MAC && event.altKey && !event.ctrlKey && event.key.toLowerCase() === 'v') {
         void window.api.media
           .saveClipboardScratch()
-          .then((img) => writeImageToken(img, false))
+          .then((img) => writeImagePath(img, false))
           .catch((err) => {
             term.write(
               `\r\n\x1b[31m[${err instanceof Error ? err.message : 'Failed to save image'}]\x1b[0m\r\n`
@@ -231,24 +344,9 @@ function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
       return true
     })
 
-    let webglAddon: WebglAddon | null = null
     try {
       term.open(container)
       if (container.clientWidth > 0 && container.clientHeight > 0) fit.fit()
-      try {
-        webglAddon = new WebglAddon()
-        webglAddon.onContextLoss(() => {
-          try {
-            webglAddon?.dispose()
-          } catch {
-            /* ignore context loss dispose */
-          }
-          webglAddon = null
-        })
-        term.loadAddon(webglAddon)
-      } catch {
-        webglAddon = null
-      }
       term.focus()
     } catch (err) {
       // A canvas redraw can detach the host between React's effect and xterm's
@@ -258,11 +356,91 @@ function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
       term.write('\r\n\x1b[31m[Terminal could not be initialised; retrying is safe]\x1b[0m\r\n')
     }
 
-    // Ensure clicking anywhere within the terminal container immediately focuses the xterm instance
-    const onPointerDown = (): void => {
-      term.focus()
-    }
-    container.addEventListener('pointerdown', onPointerDown)
+    // Refit on zoom / DPR change: subscribe window resize + matchMedia(resolution) change -> fit.fit()
+    useEffect(() => {
+      const handleResize = (): void => {
+        if (!mounted || container.clientWidth === 0 || container.clientHeight === 0) return
+        try { fit.fit() } catch {}
+      }
+      const handleResolution = (): void => {
+        if (!mounted) return
+        try { fit.fit() } catch {}
+      }
+      window.addEventListener('resize', handleResize)
+      window.matchMedia('(resolution: 96dpi)').addEventListener('change', handleResolution)
+      handleResize()
+      return () => {
+        window.removeEventListener('resize', handleResize)
+        window.matchMedia('(resolution: 96dpi)').removeEventListener('change', handleResolution)
+      }
+    }, [mounted, container, fit])
+
+    // Copy / Paste hotkeys: Ctrl+Shift+C / Ctrl+Shift+V (Windows/Linux) and
+    // Cmd+Shift+C / Cmd+Shift+V (macOS) with Shift as the cross-platform
+    // modifier that works alongside Ctrl/Cmd. Existing native Ctrl+C/X/V and
+    // Cmd+C/V remain functional for their standard roles.
+    useEffect(() => {
+      const handler = (e: KeyboardEvent): void => {
+        if ((e.ctrlKey || e.metaKey) && !e.shiftKey) return // standard Ctrl/Cmd+C/V, let native handle
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey) {
+          e.preventDefault()
+          const key = e.key.toLowerCase()
+          if (key === 'c') {
+            const selection = term.getSelection()
+            if (selection) {
+              void navigator.clipboard.writeText(selection).catch(() => {})
+              term.clearSelection()
+            }
+          }
+          if (key === 'v') {
+            void navigator.clipboard.readText().then((text) => term.paste(text)).catch(() => {})
+          }
+          if (key === 'x') {
+            const selection = term.getSelection()
+            if (selection) {
+              void navigator.clipboard.writeText(selection).catch(() => {})
+              term.clearSelection()
+            }
+          }
+          return
+        }
+        // Without modifier — fallback to copy last selection via input or do nothing
+      }
+      document.addEventListener('keydown', handler)
+      return () => document.removeEventListener('keydown', handler)
+    }, [term])
+
+    // Minimal context menu on right-click: Copy/Paste on terminal selection
+    useEffect(() => {
+      const handler = (e: MouseEvent): void => {
+        if (e.button !== 2) return
+        e.preventDefault()
+        const selection = term.getSelection()
+        const hasSelection = !!selection?.trim()
+        const menu = document.createElement('div')
+        menu.style.position = 'fixed'
+        menu.style.right = '10px'
+        menu.style.bottom = '10px'
+        menu.style.background = 'var(--bg-raise)'
+        menu.style.border = '1px solid var(--border-line-soft)'
+        menu.style.borderRadius = '6px'
+        menu.style.padding = '8px'
+        menu.style.boxShadow = '0 4px 12px rgba(0,0,0,.15)'
+        menu.style.zIndex = '99999'
+        menu.innerHTML = `
+          ${hasSelection
+            ? `<button style="width:100%;margin-bottom:4px;padding:4px;border:none;border-radius:4px;background:#3182ce;color:white;font-size:12px;cursor:pointer;" onclick="void navigator.clipboard.writeText('${selection}')">Copy</button>`
+            : ''}
+          ${!hasSelection
+            ? `<button style="width:100%;padding:4px;border:none;border-radius:4px;background:#e2e8f0;font-size:12px;cursor:pointer;" onclick="void navigator.clipboard.readText().then(t=>term.paste(t)).catch(()=>{})">Paste</button>`
+            : ''}
+        `
+        document.body.appendChild(menu)
+        setTimeout(() => document.body.removeChild(menu), 1200)
+      }
+      container.addEventListener('contextmenu', handler)
+      return () => container.removeEventListener('contextmenu', handler)
+    }, [term])
 
     // The main process intercepts Ctrl+C/X/A/Z while a terminal holds focus
     // (menu accelerators would otherwise win over the pty), so it needs to
@@ -328,35 +506,20 @@ function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
     const onPaste = (event: ClipboardEvent): void => {
       event.preventDefault()
       event.stopPropagation()
-      // Ctrl+V / Cmd+V on a picture writes [Image N] token so CLI agents receive the image reference.
+      // The image bytes cannot travel through a PTY. Forward the original
+      // Ctrl+V control character instead; the active CLI reads the same OS
+      // clipboard and creates its own real image attachment. Sending a text
+      // token such as `[Image #1]` loses the attachment completely.
       if (pasteHasImage(event)) {
-        void saveImageFromPaste(event, { scratch: true })
-          .then((img) => writeImageToken(img, false))
-          .catch((err) =>
-            term.write(
-              `\r\n\x1b[31m[${err instanceof Error ? err.message : 'Failed to save image'}]\x1b[0m\r\n`
-            )
-          )
+        writePty('\x16')
         return
       }
       const text = event.clipboardData?.getData('text/plain')
       if (!text) {
-        // Nothing in the event's own payload. That is the normal shape of a
-        // macOS screenshot (Cmd+Shift+4) and of an image copied out of some
-        // apps: the bitmap reaches Electron's native clipboard but never gets
-        // exposed as a clipboardData item, so pasteHasImage() above cannot see
-        // it and an image paste would silently do nothing. Ask the native
-        // clipboard directly before giving up — this is what makes pasting a
-        // screenshot into a Code session work the same on macOS as on Windows.
-        void window.api.media
-          .saveClipboardScratch()
-          .then((image) => {
-            // Genuinely empty clipboard: stay silent rather than nagging.
-            if (image) writeImageToken(image, false)
-          })
-          .catch(() => {
-            /* nothing usable on the clipboard — a paste of nothing is not an error */
-          })
+        // Some screenshot tools expose only the native clipboard bitmap, not
+        // a ClipboardEvent file item. Forward Ctrl+V for that shape too; an
+        // empty clipboard is harmless and remains a no-op in the CLI.
+        writePty('\x16')
         return
       }
       // term.paste(), not a raw pty write. Writing the text straight through
@@ -373,7 +536,7 @@ function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
     container.addEventListener('paste', onPaste, true)
 
     // Dropping a file (a screenshot dragged off the desktop, an image from
-    // Finder/Explorer, anything) writes [Image N] for images or quoted path for documents.
+    // Finder/Explorer, anything) writes its path for images or quoted path for documents.
     const onDragEnter = (event: DragEvent): void => {
       event.preventDefault()
       event.stopPropagation()
@@ -410,7 +573,7 @@ function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
               const ext = file.name.includes('.') ? file.name.split('.').pop()! : file.type.split('/')[1] || 'png'
               const saved = await window.api.media.saveBytesScratch(bytes, ext)
               if (saved && 'path' in saved) {
-                writeImageToken(saved, true)
+                writeImagePath(saved, true)
               } else if (saved && 'error' in saved) {
                 term.write(`\r\n\x1b[31m[${saved.error}]\x1b[0m\r\n`)
               }
@@ -457,10 +620,17 @@ function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
         // No shell to type into — drain so a dead spawn doesn't leave the
         // queued command in the map forever.
         takeInitialCommand(id)
+        if (mounted) setConnecting(false)
         return
       }
+      let viewportRestoredAfterWrite = false
       if (result.scrollback) {
-        term.write(result.scrollback)
+        // xterm parses large writes asynchronously. Restoring immediately after
+        // `write()` is too early: the parser can finish afterward and move the
+        // viewport again. Use its completion callback so reconnects in Code and
+        // Canvas preserve the user's actual scroll position.
+        term.write(result.scrollback, () => restoreViewportAfterLayout())
+        viewportRestoredAfterWrite = true
         if (!result.live) {
           term.write('\r\n\x1b[90m[Session restored — new process started]\x1b[0m\r\n')
         }
@@ -468,11 +638,20 @@ function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
       // Nudge full-screen TUIs (Claude Code, etc.) to reflow against this pane.
       if (result.live && container.clientWidth > 0 && container.clientHeight > 0) {
         try {
+          const anchor = captureViewportAnchor()
           fit.fit()
+          scheduleResizeAnchorRestore(anchor)
         } catch {
           /* host may have unmounted mid-reconnect */
         }
       }
+      // A persisted Code session may reconnect to a still-live PTY. Drain the
+      // restart command in that case so it cannot remain queued and execute
+      // unexpectedly on a later remount.
+      if (result.live) takeInitialCommand(id)
+      // Restoring the saved scrollback can itself move xterm's viewport. Do it
+      // after the reconnect paint and after any PTY reflow has been requested.
+      if (!viewportRestoredAfterWrite) restoreViewportAfterLayout()
       // A fresh shell (never a reconnect — retyping into a resumed session
       // would double-launch whatever the user had running) gets its queued
       // command, if the Code launcher left one. Delayed a beat so the shell
@@ -485,10 +664,14 @@ function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
           }, 300)
         }
       }
+      if (mounted) setConnecting(false)
     }).catch(() => {
       // Same leak concern as the !ok branch: drain whatever was queued.
       takeInitialCommand(id)
-      if (mounted) term.write('\r\n\x1b[31m[Failed to launch terminal]\x1b[0m\r\n')
+      if (mounted) {
+        term.write('\r\n\x1b[31m[Failed to launch terminal]\x1b[0m\r\n')
+        setConnecting(false)
+      }
     })
 
     let resizeRaf: number | null = null
@@ -499,13 +682,12 @@ function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
         resizeRaf = null
         if (!mounted || container.clientWidth === 0 || container.clientHeight === 0) return
         try {
-          // xterm can move the viewport when the number of rows changes. Keep
-          // a live chat pinned to the bottom across pane resizes, while
-          // respecting an intentional scrollback position.
-          const activeBuffer = term.buffer.active
-          const wasAtBottom = activeBuffer.viewportY >= activeBuffer.baseY
+          // xterm can reset the viewport to the top when the number of rows
+          // changes. Preserve the exact scroll position across canvas resize;
+          // only a terminal that was already at the bottom remains at bottom.
+          const anchor = captureViewportAnchor()
           fit.fit()
-          if (wasAtBottom) term.scrollToBottom()
+          scheduleResizeAnchorRestore(anchor)
         } catch (err) {
           // Ignore a resize queued for a node that has just been unmounted.
           console.warn('terminal resize skipped', err)
@@ -516,14 +698,22 @@ function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
 
     return () => {
       mounted = false
+      const activeBuffer = term.buffer.active
+      rememberViewport(id, {
+        line: activeBuffer.viewportY,
+        atBottom: activeBuffer.viewportY >= activeBuffer.baseY
+      })
+      if (writeRaf !== null) { cancelAnimationFrame(writeRaf); writeRaf = null; pendingWrites.length = 0 }
       if (resizeRaf !== null) cancelAnimationFrame(resizeRaf)
+      resizeAnchorGeneration++
+      if (resizeRestoreTimerShort) clearTimeout(resizeRestoreTimerShort)
+      if (resizeRestoreTimerLong) clearTimeout(resizeRestoreTimerLong)
       observer.disconnect()
       container.removeEventListener('paste', onPaste, true)
       container.removeEventListener('dragenter', onDragEnter)
       container.removeEventListener('dragover', onDragOver)
       container.removeEventListener('drop', onDrop)
       container.removeEventListener('wheel', onWheel, true)
-      container.removeEventListener('pointerdown', onPointerDown)
       container.removeEventListener('focusin', onFocusIn)
       container.removeEventListener('focusout', onFocusOut)
       window.api.terminal.setFocused(false, id)
@@ -532,15 +722,9 @@ function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
       if (initialCmdTimer) clearTimeout(initialCmdTimer)
       dataUnsub()
       exitUnsub()
+      scrollDisposable.dispose()
+      writeParsedDisposable.dispose()
       try {
-        if (webglAddon) {
-          try {
-            webglAddon.dispose()
-          } catch {
-            /* ignore */
-          }
-          webglAddon = null
-        }
         term.dispose()
       } catch (err) {
         // xterm-addon-webgl's teardown hook rebuilds the DOM renderer via
@@ -556,7 +740,21 @@ function TerminalWidget({ id, onProcessExit }: Props): React.JSX.Element {
     }
   }, [id])
 
-  return <div ref={containerRef} className="term-shell term h-full w-full py-1.5 pr-0 pl-2" data-testid="terminal-xterm" />
+  return (
+    <div
+      ref={containerRef}
+      className="term-shell term relative h-full w-full p-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 focus-within:ring-1 focus-within:ring-inset focus-within:ring-text-faint/50"
+      data-testid="terminal-xterm"
+    >
+      {connecting && (
+        <div role="status" className="pointer-events-none absolute inset-0 grid place-items-center">
+          <span className="animate-pulse rounded bg-bg-raise px-2.5 py-1 text-[11px] text-text-faint">
+            Connecting…
+          </span>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default React.memo(TerminalWidget)

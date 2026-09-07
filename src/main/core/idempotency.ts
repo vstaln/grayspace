@@ -86,15 +86,20 @@ export class IdempotencyCache {
 
   private prune(): void {
     const now = this.now()
-    if (this.entries.size >= this.maxEntries) {
-      // Remove expired or oldest items; in-flight commands are never evicted,
-      // otherwise a retry of the same key could run the command twice.
-      for (const [k, v] of this.entries.entries()) {
-        if (v.inFlight !== undefined) continue
-        if (now - v.at > this.ttlMs || this.entries.size >= this.maxEntries) {
-          this.entries.delete(k)
-        }
-      }
+    // 1) always evict expired entries, even when under capacity, to avoid unbounded growth of stale inFlight
+    for (const [k, v] of this.entries.entries()) {
+      if (now - v.at > this.ttlMs) this.entries.delete(k)
+    }
+    if (this.entries.size < this.maxEntries) return
+    // 2) at capacity: evict oldest completed entries first. In-flight entries
+    // are NEVER evicted: dropping one means a late completion finds no record
+    // and the client's retry executes the command a second time. If only
+    // in-flight entries remain, the map grows by one instead — bounded in
+    // practice by the bus queue depth, unlike a retry-duplicated side effect.
+    for (const [k, v] of this.entries.entries()) {
+      if (v.inFlight !== undefined) continue
+      this.entries.delete(k)
+      if (this.entries.size < this.maxEntries) return
     }
   }
 }

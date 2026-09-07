@@ -44,7 +44,7 @@ export function registerCanvasCommands({
 
   bus.registerDefinition<WidgetCreatePayload, CanvasWidget>({
     type: 'widget.create',
-    description: 'Create a canvas widget (note, terminal, timer, board, …).',
+    description: 'Create a canvas widget (terminal, timer, board, …).',
     targetScheme: 'widget',
     ignoreVersion: true,
     payloadSchema: {
@@ -106,7 +106,6 @@ export function registerCanvasCommands({
       type: 'object',
       properties: {
         title: { type: 'string' },
-        noteId: { type: 'string' },
         x: { type: 'number' },
         y: { type: 'number' },
         w: { type: 'number' },

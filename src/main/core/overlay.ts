@@ -146,7 +146,7 @@ export class OverlayManager {
     }
 
     for (const [target, record] of overlay.entries()) {
-      if (record.deleted || !record.value) continue
+      if (record.deleted || record.value == null) continue
       const val = record.value as T
       if (val && typeof val.id === 'string') {
         itemMap.set(val.id, val)

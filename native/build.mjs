@@ -2,8 +2,9 @@ import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { patchWindowsPtyAgents } from '../scripts/patch-pty.mjs'
 
-const CRATES = ['canvas-core', 'brain-core', 'storage-core']
+const CRATES = ['canvas-core', 'storage-core']
 const ELECTRON_VERSION = '43.3.0'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -12,10 +13,16 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
  * Rebuild the PTY native addon for Electron's ABI.
  * On Windows it compiles conpty.node; on macOS/Linux it compiles pty.node.
  * This guarantees terminal widgets work in Electron regardless of npmRebuild: false.
+ *
+ * The Windows agent patch runs FIRST, before any early return: node_modules
+ * survives across builds, so a repeat build finds conpty.node already built
+ * and returns early — gating the patch behind that return left upgraded
+ * installs unpatched (and the 5s kill hang in place) forever.
  */
 function ensureElectronPty() {
   try {
     const packageDir = join(repoRoot, 'node_modules', '@homebridge', 'node-pty-prebuilt-multiarch')
+    patchWindowsPtyAgents(packageDir)
     const addonName = process.platform === 'win32' ? 'conpty.node' : 'pty.node'
     const addon = join(packageDir, 'build', 'Release', addonName)
     if (existsSync(addon)) return
@@ -40,6 +47,8 @@ function ensureElectronPty() {
     if (result.status !== 0 || !existsSync(addon)) {
       console.warn(`[pty] Non-fatal: Failed to build ${addonName}; using standard fallback.`)
     }
+    // A fresh compile drops pristine agent sources — re-apply the patch.
+    patchWindowsPtyAgents(packageDir)
   } catch (err) {
     console.warn(`[pty] ensureElectronPty warning:`, err.message)
   }
@@ -92,7 +101,9 @@ for (const crate of CRATES) {
   }
 
   if (!existsSync(join(crateDir, 'loader.cjs'))) {
-    throw new Error(`[native] ${crate} loader is missing`)
+    console.warn(`[native] ${crate} loader missing — falling back to TS`)
+    failed.push(crate)
+    continue
   }
 }
 

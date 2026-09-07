@@ -15,10 +15,20 @@ import { TerminalRingBuffer } from './terminalBuffer.ts'
  * inheriting `Path` and then setting `PATH` hands the shell two variables and
  * lets it pick, which silently loses the `orc` entry about half the time.
  */
-function withoutPath(env: Record<string, string>): Record<string, string> {
+function terminalBaseEnv(env: Record<string, string>): Record<string, string> {
   const copy: Record<string, string> = {}
   for (const [key, value] of Object.entries(env)) {
-    if (key.toUpperCase() === 'PATH') continue
+    const upper = key.toUpperCase()
+    // Rebuild PATH below and never inherit colour-disabling flags from the
+    // Electron/dev process. Interactive PTYs advertise their own capabilities.
+    if (
+      upper === 'PATH' ||
+      upper === 'NO_COLOR' ||
+      upper === 'FORCE_COLOR' ||
+      upper === 'TERM' ||
+      upper === 'COLORTERM' ||
+      upper === 'COLORFGBG'
+    ) continue
     copy[key] = value
   }
   return copy
@@ -36,6 +46,15 @@ export interface SpawnResult {
   error?: string
   /** True when the widget reattached to a process that never died. */
   reconnected?: boolean
+}
+
+export interface ReleaseOptions {
+  /**
+   * Whether to run the best-effort Windows descendant sweep after releasing
+   * the pty. The native pty owns its console process list, so app shutdown
+   * can safely skip the delayed global PID sweep.
+   */
+  killDescendants?: boolean
 }
 
 interface TerminalRecord {
@@ -217,6 +236,10 @@ export class TerminalManager extends EventEmitter {
         lastDataAt: 0
       }
       this.terminals.set(id, record)
+    } else if (cwd && !record.pty) {
+      // Reserved with stale cwd (e.g. workspace switch) — honor fresh cwd before spawn
+      const resolved = this.resolveCwd(cwd)
+      if (resolved !== record.cwd) record.cwd = resolved
     }
 
     try {
@@ -226,10 +249,13 @@ export class TerminalManager extends EventEmitter {
         rows: isPositiveInt(rows) ? rows : 24,
         cwd: record.cwd,
         env: {
-          ...withoutPath(process.env as Record<string, string>),
+          ...terminalBaseEnv(process.env as Record<string, string>),
           ...orcTerminalEnv(id),
           ORCSPACE: '1',
           ORCSPACE_TERMINAL_ID: id,
+          TERM: 'xterm-256color',
+          COLORTERM: 'truecolor',
+          FORCE_COLOR: '3',
           COLORFGBG: '15;0',
           TERM_PROGRAM: 'OrcSpace',
           TERM_PROGRAM_VERSION: '2.0.0',
@@ -270,8 +296,9 @@ export class TerminalManager extends EventEmitter {
       return { ok: false, error: 'invalid write' }
     }
     // A cap keeps an oversized write from growing the pty buffer unboundedly (SEC-010).
-    if (data.length > MAX_TERMINAL_WRITE_BYTES) {
-      return { ok: false, error: `write exceeds ${MAX_TERMINAL_WRITE_BYTES} characters` }
+    // Use byteLength: 1 emoji = 4 bytes but 2 chars, length check undercounts.
+    if (Buffer.byteLength(data, 'utf8') > MAX_TERMINAL_WRITE_BYTES) {
+      return { ok: false, error: `write exceeds ${MAX_TERMINAL_WRITE_BYTES} bytes` }
     }
     const record = this.terminals.get(id)
     if (!record) return { ok: false, error: `terminal ${id} not found` }
@@ -357,6 +384,18 @@ export class TerminalManager extends EventEmitter {
   }
 
   /**
+   * Tail of the scrollback for non-widget readers (agent roster, fingerprint
+   * scans). Avoids joining the entire buffer: 50 KB of scrollback for every
+   * terminal on every `orc workers` was the slowest part of that command.
+   * Defaults to 4 KB, enough to spot the active prompt in a typical pty.
+   */
+  tailOutput(id: string, maxBytes = 4_000): string | null {
+    const record = this.terminals.get(id)
+    if (!record) return null
+    return record.output.tail(maxBytes)
+  }
+
+  /**
    * When this pty last printed something, or 0 if it never has. The usage
    * watcher uses it to tell a shell sitting at an idle prompt from one that is
    * mid-generation, so an automatic `/usage` never lands in the middle of a
@@ -421,7 +460,10 @@ export class TerminalManager extends EventEmitter {
    * a new process (ids must stay spawnable). Emits `release` so callers can
    * persist scrollback before the buffer is gone.
    */
-  release(id: string): { id: string; title: string; cwd: string; scrollback: string } | null {
+  release(
+    id: string,
+    options: ReleaseOptions = {}
+  ): { id: string; title: string; cwd: string; scrollback: string } | null {
     const record = this.terminals.get(id)
     if (!record) return null
     const scrollback = record.output.toString()
@@ -451,7 +493,7 @@ export class TerminalManager extends EventEmitter {
     // console session) escapes the pty tree-kill and keeps running unseen.
     // On Windows its WMI ancestry still chains to the pty's root, so every
     // surviving descendant is swept after the tree kill settles.
-    if (wasRunning) killProcessTree(record.rootPid)
+    if (wasRunning && options.killDescendants !== false) killProcessTree(record.rootPid)
     const info = { id, title: record.title, cwd: record.cwd, scrollback }
     this.emit('release', info)
     return info
@@ -471,10 +513,10 @@ export class TerminalManager extends EventEmitter {
     void _graceMs
   }
 
-  disposeAll(): void {
+  disposeAll(options: ReleaseOptions = {}): void {
     // Soft-release: a renderer crash/reload must be able to re-spawn the same
     // canvas widget ids. Intentional closes already banned those ids via dispose.
-    for (const id of Array.from(this.terminals.keys())) this.release(id)
+    for (const id of Array.from(this.terminals.keys())) this.release(id, options)
   }
 
   /**

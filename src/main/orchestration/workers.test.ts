@@ -4,12 +4,16 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { test, describe, beforeEach, afterEach } from 'node:test'
 import { OrchestrationStore } from './store.ts'
-import { listWorkers, resolveRecipient, resolveWorker } from './workers.ts'
+import { detectRunning, listWorkers, resolveRecipient, resolveWorker } from './workers.ts'
 
 /** Just enough TerminalManager for the resolver: it only reads `list()`. */
-function fakeTerminals(rows: { id: string; title: string }[]): never {
+function fakeTerminals(
+  rows: { id: string; title: string; cwd?: string; alive?: boolean; output?: string; activeAt?: number }[]
+): never {
   return {
-    list: () => rows.map((r) => ({ ...r, cwd: '', running: true }))
+    list: () => rows.map((r) => ({ cwd: '', alive: true, ...r, running: true })),
+    fullOutput: (id: string) => rows.find((r) => r.id === id)?.output ?? null,
+    lastDataAt: (id: string) => rows.find((r) => r.id === id)?.activeAt ?? 0
   } as never
 }
 
@@ -27,7 +31,7 @@ describe('worker resolution', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  const deps = (rows: { id: string; title: string }[]): never =>
+  const deps = (rows: { id: string; title: string; cwd?: string; alive?: boolean; output?: string; activeAt?: number }[]): never =>
     ({ terminals: fakeTerminals(rows), orchestration }) as never
 
   const three = [
@@ -44,6 +48,52 @@ describe('worker resolution', () => {
       [false, true, false]
     )
     assert.equal(workers[2].name, 'term-3', 'an unnamed terminal falls back to its id')
+  })
+
+  test('reports cwd, aliveness and a shell fallback when nothing is detected', () => {
+    const d = deps([{ id: 'term-1', title: 'backend', cwd: 'C:\\proj', alive: true }])
+    const [w] = listWorkers(d)
+    assert.equal(w.cwd, 'C:\\proj')
+    assert.equal(w.alive, true)
+    assert.equal(w.busy, false)
+    assert.equal(w.running, 'shell')
+    assert.equal(w.taskTitle, undefined)
+  })
+
+  test('a dispatched worker reports its agent and task title as fact', () => {
+    const runId = orchestration.createRun({ objective: 'x', coordinator: 'coord' }).id
+    const task = orchestration.createTask({ runId, spec: 'a', title: 'Build API', createdBy: 'coord' })
+    orchestration.createDispatch({ taskId: task.id, terminalId: 'term-1', agent: 'claude', preamble: 'p' })
+    const [w] = listWorkers(deps([{ id: 'term-1', title: 'claude: Build API' }]))
+    assert.equal(w.busy, true)
+    assert.equal(w.agent, 'claude')
+    assert.equal(w.running, 'claude')
+    assert.equal(w.taskTitle, 'Build API')
+  })
+
+  test('an undispatched terminal guesses its tool from output, marked uncertain', () => {
+    const d = deps([{ id: 'term-1', title: 'Agent Terminal 1', output: '$ antigravity chat\nhello' }])
+    const [w] = listWorkers(d)
+    assert.equal(w.busy, false)
+    assert.equal(w.agent, undefined)
+    assert.equal(w.running, '~antigravity')
+  })
+
+  test('detectRunning reads title prefixes and strips ANSI from output', () => {
+    assert.equal(detectRunning('codex: fix tests', null), '~codex')
+    assert.equal(detectRunning('Agent Terminal 1', '\x1b[32mGemini\x1b[0m ready'), '~gemini')
+    assert.equal(detectRunning('Agent Terminal 1', 'plain bash prompt $ '), undefined)
+    assert.equal(detectRunning('random: stuff', null), undefined)
+  })
+
+  test('detectRunning does not match substrings or prose words', () => {
+    assert.equal(detectRunning('Agent Terminal 1', 'request declined by server'), undefined)
+    assert.equal(detectRunning('Agent Terminal 1', 'move cursor position 0,0'), undefined)
+    assert.equal(detectRunning('Agent Terminal 1', 'myclaudefork ready'), undefined)
+    assert.equal(detectRunning('Agent Terminal 1', 'welcome to claude!'), '~claude')
+    // Title prefixes stay broad: `cursor: …` is a deliberate label, not prose.
+    assert.equal(detectRunning('cursor: fix login', null), '~cursor')
+    assert.equal(detectRunning('cline: refactor', null), '~cline')
   })
 
   test('resolves by exact name, id, @handle, case and prefix', () => {

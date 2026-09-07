@@ -18,7 +18,10 @@ export function registerCanvasIpc(deps: IpcDeps): void {
       snapshot && typeof snapshot === 'object' ? (snapshot as { workspaceDir?: string | null }).workspaceDir : undefined
     const current = deps.getWorkspaceDir() ?? null
     const intended = stamped === undefined ? current : stamped ?? null
-    if (intended !== current) return { ok: true }
+    if (intended !== current) {
+      console.warn(`canvas:save discarded — workspace changed ${String(intended)} → ${String(current)}`)
+      return { ok: true, discarded: true }
+    }
     return unwrap(await send('canvas.import', CANVAS_TARGET, snapshot ?? {}))
   })
 }

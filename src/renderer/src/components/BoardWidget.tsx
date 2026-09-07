@@ -20,7 +20,24 @@ export default function BoardWidget(): React.JSX.Element {
   const confirm = useConfirm()
 
   return (
-    <Suspense fallback={null}>
+    <Suspense
+      fallback={
+        <div
+          className="grid h-full grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-4 p-4"
+          role="status"
+          aria-label="Loading board"
+        >
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="flex min-w-0 flex-col gap-2">
+              <div className="h-5 w-24 animate-pulse rounded bg-bg-hover/60" />
+              <div className="h-20 animate-pulse rounded-[10px] bg-bg-hover/40" />
+              <div className="h-20 animate-pulse rounded-[10px] bg-bg-hover/40" />
+              <div className="h-20 animate-pulse rounded-[10px] bg-bg-hover/40" />
+            </div>
+          ))}
+        </div>
+      }
+    >
       <KanbanBoard
       embedded
       snapshot={coordination.snapshot}

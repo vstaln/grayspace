@@ -5,7 +5,13 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static COUNTER: AtomicU64 = AtomicU64::new(0);
+fn rand_suffix() -> u64 {
+    COUNTER.fetch_add(1, Ordering::Relaxed) ^ (process::id() as u64).wrapping_mul(0x9E3779B97F4A7C15)
+}
 
 /// Same crash-safety contract as `storage.ts`'s `writeAtomic`: write to a
 /// sibling temp file, fsync, copy the previous good file to `.bak`, then
@@ -20,7 +26,7 @@ fn write_atomic_sync(path: &str, text: &str, keep_backup: bool) -> std::result::
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or_default();
-    let temp = dir.join(format!(".{nanos}-{}.tmp", process::id()));
+    let temp = dir.join(format!(".{nanos}-{}-{}.tmp", process::id(), rand_suffix()));
 
     {
         let mut file = fs::OpenOptions::new()

@@ -64,7 +64,12 @@ export function registerSettingsIpc(deps: IpcDeps): void {
           /* a locked leftover must not block the new pick */
         }
       }
-      const target = join(dir, `background-${Date.now()}${extname(source).toLowerCase() || '.png'}`)
+      const rawExt = extname(source).toLowerCase() || '.png'
+      // Dialog `filters` are advisory — the picker still accepts any file when
+      // the user types a name. Only persist real image extensions so a picked
+      // .exe/.html can never land in backgrounds/ and be served back as a URL.
+      const safeExt = media.IMAGE_EXTENSIONS.includes(rawExt.slice(1)) ? rawExt : '.png'
+      const target = join(dir, `background-${Date.now()}${safeExt}`)
       await fs.promises.copyFile(source, target)
       state.patchSettings({ backgroundImage: target })
       return { dataUrl: await backgroundDataUrl() }
@@ -72,10 +77,13 @@ export function registerSettingsIpc(deps: IpcDeps): void {
       return { error: `Failed to read file: ${String(err)}` }
     }
   })
-  ipcMain.handle('settings:clear-background', () => {
+  ipcMain.handle('settings:clear-background', async () => {
     state.patchSettings({ backgroundImage: null })
     try {
-      fs.rmSync(backgroundDir(), { recursive: true, force: true })
+      // Removing a copied wallpaper can involve a sizeable file. Keep this
+      // off Electron's main thread so clearing it cannot freeze PTY output or
+      // other IPC while the settings dialog is open.
+      await fs.promises.rm(backgroundDir(), { recursive: true, force: true })
     } catch {
       /* the setting is already cleared; a stale copy on disk is harmless */
     }

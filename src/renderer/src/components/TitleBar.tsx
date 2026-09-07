@@ -143,6 +143,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
   const [gitOpen, setGitOpen] = useState(false)
   const [usageStats, setUsageStats] = useState<SystemStats | null>(null)
   const [usageOpen, setUsageOpen] = useState(false)
+  const [usageError, setUsageError] = useState<string | null>(null)
   const rightIslandRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -234,14 +235,24 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
     }
   }, [refreshGit])
 
+  const usageSeqRef = useRef(0)
   const refreshUsage = useCallback(async (): Promise<void> => {
+    const seq = ++usageSeqRef.current
     try {
       const res = await window.api.system.stats()
+      // A slower poll must not overwrite a newer sample (for example after
+      // the window becomes visible again). The sequence also invalidates
+      // replies that arrive after this component has unmounted.
+      if (seq !== usageSeqRef.current) return
       if (res && !('error' in res)) {
         setUsageStats(res as SystemStats)
+        setUsageError(null)
+      } else {
+        setUsageError((res as { error?: string })?.error || 'Failed to load usage stats')
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      if (seq !== usageSeqRef.current) return
+      setUsageError(err instanceof Error ? err.message : String(err))
     }
   }, [])
 
@@ -261,6 +272,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
     window.addEventListener('focus', onFocus)
     return () => {
       clearInterval(timer)
+      usageSeqRef.current += 1
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onFocus)
     }
@@ -286,7 +298,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
   }, [])
 
   const dirtyCount = gitStatus
-    ? gitStatus.modified + gitStatus.untracked + gitStatus.staged + gitStatus.conflicted
+    ? (gitStatus.modified ?? 0) + (gitStatus.untracked ?? 0) + (gitStatus.staged ?? 0) + (gitStatus.conflicted ?? 0)
     : 0
 
   const openAgents = (usageStats?.agents || []).filter((a) => a.isOpen)
@@ -324,7 +336,25 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
 
       {/* Centre island: Canvas / Chat / Code switch the visible surface. */}
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <div className={`${ISLAND} pointer-events-auto`} style={noDrag} role="tablist" aria-label="Workspace View">
+        <div
+          className={`${ISLAND} pointer-events-auto`}
+          style={noDrag}
+          role="tablist"
+          aria-label="Workspace View"
+          onKeyDown={(e) => {
+            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return
+            e.preventDefault()
+            const tabs = Array.from((e.currentTarget as HTMLElement).querySelectorAll('[role="tab"]')) as HTMLElement[]
+            if (tabs.length === 0) return
+            const idx = tabs.indexOf(document.activeElement as HTMLElement)
+            let next = 0
+            if (e.key === 'ArrowRight') next = (idx + 1 + tabs.length) % tabs.length
+            else if (e.key === 'ArrowLeft') next = (idx - 1 + tabs.length) % tabs.length
+            else if (e.key === 'Home') next = 0
+            else next = tabs.length - 1
+            tabs[next]?.focus()
+          }}
+        >
           <button
             type="button"
             role="tab"
@@ -366,6 +396,8 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
           {/* Usage button */}
           <button
             type="button"
+            aria-haspopup="dialog"
+            aria-expanded={usageOpen}
             className={`${PILL} ${usageOpen ? ON : QUIET} max-w-[340px]`}
             onClick={() => {
               setUsageOpen((open) => !open)
@@ -429,13 +461,13 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                         : 'text-text-dim'
                   }`}
                 />
-                <span className="truncate">Usage</span>
+                <span className="truncate hidden lg:inline">Usage</span>
               </>
             )}
           </button>
 
           {usageOpen && (
-            <div className="absolute right-2 top-[38px] z-[60000] w-[370px] max-h-[82vh] overflow-y-auto rounded-[12px] border border-line-soft bg-bg-panel/95 p-3 text-left shadow-2xl glass:backdrop-blur-xl">
+            <div className="absolute right-2 top-[38px] z-[60000] w-[370px] max-h-[82vh] overflow-y-auto rounded-[12px] border border-line-soft bg-bg-panel p-3 text-left shadow-2xl">
               <div className="mb-2.5 flex items-center justify-between gap-3 border-b border-line-soft pb-2">
                 <div className="flex items-center gap-1.5">
                   <span className="text-[12px] font-semibold text-text">AI & Resource Usage</span>
@@ -456,7 +488,22 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
               </div>
 
               {!usageStats ? (
-                <p className="text-[12px] text-text-dim">Loading usage stats…</p>
+                usageError ? (
+                  <div className="flex flex-col gap-2">
+                    <p className="text-[12px] text-danger">{usageError}</p>
+                    <div>
+                      <button
+                        type="button"
+                        className="rounded-md border border-line-soft px-2 py-1 text-[11px] text-text-dim hover:bg-bg-hover hover:text-text"
+                        onClick={() => void refreshUsage()}
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-[12px] text-text-dim">Loading usage stats…</p>
+                )
               ) : (
                 <div className="space-y-3 text-[12px]">
                   {/* Active AI Sessions Section */}
@@ -497,7 +544,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                                   </span>
                                   <span className="font-semibold text-text truncate text-xs">{ag.name}</span>
                                 </div>
-                                <span className="rounded-full border border-line-soft bg-bg-hover/40 px-1.5 py-0.2 text-[9px] text-text-dim">
+                                <span className="rounded-full border border-line-soft bg-bg-hover/40 px-1.5 py-0.5 text-[9px] text-text-dim">
                                   Idle
                                 </span>
                               </div>
@@ -594,7 +641,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                                       <span className="truncate text-text-faint">({ag.accountEmail})</span>
                                     )}
                                     {ag.tierName && (
-                                      <span className="rounded bg-bg-hover px-1 py-0.2 text-[9px] text-text-dim">{ag.tierName}</span>
+                                      <span className="rounded bg-bg-hover px-1 py-0.5 text-[9px] text-text-dim">{ag.tierName}</span>
                                     )}
                                   </div>
                                 )}
@@ -757,6 +804,8 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
           {/* Git button */}
           <button
             type="button"
+            aria-haspopup="dialog"
+            aria-expanded={gitOpen}
             className={`${PILL} ${gitOpen ? ON : QUIET}`}
             onClick={() => {
               setGitOpen((open) => !open)
@@ -783,7 +832,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
           </button>
 
           {gitOpen && (
-            <div className="absolute right-2 top-[38px] z-[60000] w-[310px] rounded-[12px] border border-line-soft bg-bg-panel/95 p-3 text-left shadow-2xl glass:backdrop-blur-xl">
+            <div className="absolute right-2 top-[38px] z-[60000] w-[310px] rounded-[12px] border border-line-soft bg-bg-panel p-3 text-left shadow-2xl">
               <div className="mb-2 flex items-center justify-between gap-3">
                 <span className="text-[12px] font-semibold text-text">Git status</span>
                 <button
@@ -841,7 +890,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                 className={`${ICON} ${QUIET}`}
                 title="Minimize"
                 aria-label="Minimize"
-                onClick={() => window.api.window.minimize()}
+                onClick={() => void Promise.resolve(window.api.window.minimize()).catch(() => {})}
               >
                 <Minus size={14} strokeWidth={2.2} />
               </button>
@@ -849,7 +898,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                 className={`${ICON} ${QUIET}`}
                 title={maximized ? 'Restore' : 'Maximize'}
                 aria-label={maximized ? 'Restore' : 'Maximize'}
-                onClick={() => window.api.window.toggleMaximize()}
+                onClick={() => void Promise.resolve(window.api.window.toggleMaximize()).catch(() => {})}
               >
                 {maximized ? <Copy size={13} strokeWidth={2} /> : <Square size={13} strokeWidth={2} />}
               </button>
@@ -857,7 +906,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                 className={`${ICON} text-text-dim hover:bg-[#e04343] hover:text-white`}
                 title="Close"
                 aria-label="Close"
-                onClick={() => window.api.window.close()}
+                onClick={() => void Promise.resolve(window.api.window.close()).catch(() => {})}
               >
                 <X size={14} strokeWidth={2.2} />
               </button>

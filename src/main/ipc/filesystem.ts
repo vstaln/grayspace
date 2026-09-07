@@ -61,8 +61,12 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
       // the output order identical to readdir's, and each entry keeps its own
       // zero-size fallback when its stat fails (PERF-fs-list).
       const visible = dirEntries.filter((entry) => options?.showHidden || !entry.name.startsWith('.'))
+      // A huge directory (node_modules, build output) must not OOM the main
+      // process with one stat per entry: cap the listing and say so.
+      const MAX_LIST_ENTRIES = 2_000
+      const truncated = visible.length > MAX_LIST_ENTRIES
       const items = await Promise.all(
-        visible.map(async (entry) => {
+        visible.slice(0, MAX_LIST_ENTRIES).map(async (entry) => {
           const fullPath = join(targetDir, entry.name)
           const base = {
             name: entry.name,
@@ -91,10 +95,13 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
       return {
         currentPath: targetDir,
         parentPath,
-        items
+        items,
+        truncated
       }
-    } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err) }
+    } catch {
+      // Raw fs errors carry absolute paths/errno; log them main-side and hand
+      // the renderer a generic message instead.
+      return { error: 'Unable to list this folder' }
     }
   })
 
@@ -108,12 +115,18 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
       const ext = extname(target).toLowerCase()
       const isImg = media.hasImageExtension(target)
       if (isImg) {
-        const dataUrl = await media.dataUrl(target)
+        // Read the bytes directly: media.dataUrl() only serves the app's own
+        // userData dir (SEC-006), so routing a workspace preview through it
+        // always came back null and broke image previews in Files.
+        if (stat.size > media.MAX_MEDIA_BYTES) {
+          return { error: `File is too large to preview (${(stat.size / (1024 * 1024)).toFixed(1)} MB).` }
+        }
+        const buffer = await fs.promises.readFile(target)
         return {
           path: target,
           name: basename(target),
           isImage: true,
-          dataUrl,
+          dataUrl: `data:${media.mimeTypeForPath(target)};base64,${buffer.toString('base64')}`,
           size: stat.size,
           mtime: stat.mtimeMs,
           ext
@@ -124,7 +137,22 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
           error: `File is too large to preview (${(stat.size / (1024 * 1024)).toFixed(1)} MB). Limit is ${(cap / (1024 * 1024)).toFixed(0)} MB.`
         }
       }
-      const buffer = await fs.promises.readFile(target)
+      // Read through an fd capped at cap+1 bytes instead of stat-then-readFile:
+      // a file that grows between the two calls (log being written, TOCTOU)
+      // could otherwise blow past the preview budget into an OOM.
+      const handle = await fs.promises.open(target, 'r')
+      let buffer: Buffer
+      try {
+        const { bytesRead, buffer: buf } = await handle.read(Buffer.allocUnsafe(cap + 1), 0, cap + 1, 0)
+        buffer = buf.subarray(0, bytesRead)
+      } finally {
+        await handle.close().catch(() => {})
+      }
+      if (buffer.length > cap) {
+        return {
+          error: `File is too large to preview. Limit is ${(cap / (1024 * 1024)).toFixed(0)} MB.`
+        }
+      }
       const isBinary = buffer.includes(0)
       if (isBinary) {
         return {
@@ -145,8 +173,8 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
         mtime: stat.mtimeMs,
         ext
       }
-    } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err) }
+    } catch {
+      return { error: 'Unable to read this file' }
     }
   })
 
@@ -180,20 +208,31 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
         return { ok: true }
       }
       return { error: 'File or folder does not exist' }
-    } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err) }
+    } catch {
+      return { error: 'Unable to reveal this path' }
     }
   })
+
+  /** Extensions that execute code when opened with the default handler. */
+  const EXECUTABLE_EXTENSIONS = new Set([
+    '.exe', '.bat', '.cmd', '.com', '.scr', '.msi', '.ps1', '.vbs', '.vbe',
+    '.js', '.jse', '.wsf', '.wsh', '.jar', '.sh', '.bash', '.lnk', '.reg'
+  ])
 
   ipcMain.handle('fs:open-path', async (_e, targetPath: string) => {
     try {
       const target = resolveTarget(targetPath)
       if (!target) return { error: 'Invalid path' }
+      // shell.openPath executes the default handler: opening an .exe/.bat
+      // from a click (or from renderer XSS) runs code with the user's rights.
+      if (EXECUTABLE_EXTENSIONS.has(extname(target).toLowerCase())) {
+        return { error: 'Executable files cannot be opened from here' }
+      }
       const err = await shell.openPath(target)
-      if (err) return { error: err }
+      if (err) return { error: 'Unable to open this path' }
       return { ok: true }
-    } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err) }
+    } catch {
+      return { error: 'Unable to open this path' }
     }
   })
 }

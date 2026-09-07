@@ -43,16 +43,26 @@ function dropPoisonedKeys(key: string, value: unknown): unknown {
  * object with a plain object. Cheaper than deep-cloning and safe for
  * arbitrary JSON shapes including arrays and primitives.
  */
+/** Deep store JSON nests far below this; deeper means attack, not data. */
+const MAX_WALK_DEPTH = 200
+
 export function sanitizeParsed<T>(value: T): T {
-  return walk(value, new WeakSet()) as T
+  try {
+    return walk(value, new WeakSet(), 0) as T
+  } catch {
+    // Absurd depth (or a getter throwing mid-walk) degrades to the raw value
+    // rather than a RangeError propagating into a store load path.
+    return value
+  }
 }
 
-function walk(value: unknown, seen: WeakSet<object>): unknown {
+function walk(value: unknown, seen: WeakSet<object>, depth: number): unknown {
   if (value === null || typeof value !== 'object') return value
+  if (depth > MAX_WALK_DEPTH) throw new Error('walk depth exceeded')
   if (seen.has(value as object)) return value
   seen.add(value as object)
   if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i += 1) value[i] = walk(value[i], seen)
+    for (let i = 0; i < value.length; i += 1) value[i] = walk(value[i], seen, depth + 1)
     return value
   }
   // For every poisoned key, copy the value into a same-named own property on
@@ -65,7 +75,7 @@ function walk(value: unknown, seen: WeakSet<object>): unknown {
     if (!Object.prototype.hasOwnProperty.call(value, k)) continue
     const v = (value as Record<string, unknown>)[k]
     try {
-      Object.defineProperty(value, k, { value: walk(v, seen), writable: true, enumerable: true, configurable: true })
+      Object.defineProperty(value, k, { value: walk(v, seen, depth + 1), writable: true, enumerable: true, configurable: true })
     } catch {
       // The host object is frozen or the descriptor is read-only; we still
       // copy any non-poisoned keys below, so failure here is recoverable.
@@ -75,7 +85,8 @@ function walk(value: unknown, seen: WeakSet<object>): unknown {
     if (POISONED_KEYS.has(key)) continue
     ;(value as Record<string, unknown>)[key] = walk(
       (value as Record<string, unknown>)[key],
-      seen
+      seen,
+      depth + 1
     )
   }
   return value

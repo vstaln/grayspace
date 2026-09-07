@@ -27,6 +27,8 @@ interface ThemeValue {
   setTheme: (theme: ThemeName) => void
   /** Data URL of the wallpaper, or null when the user has not picked one. */
   background: string | null
+  /** True once getBackground has resolved (even with null) — gates the CTA to avoid flicker. */
+  backgroundLoaded: boolean
   /** 0–90: percent of black laid over the wallpaper. */
   dim: number
   setDim: (dim: number) => void
@@ -43,6 +45,7 @@ const ThemeContext = createContext<ThemeValue>({
   theme: 'dark',
   setTheme: () => {},
   background: null,
+  backgroundLoaded: false,
   dim: 45,
   setDim: () => {},
   blur: 40,
@@ -52,13 +55,29 @@ const ThemeContext = createContext<ThemeValue>({
   error: null
 })
 
-/** Applies the theme to <html data-theme> (CSS hooks into that) and persists it. */
-export function ThemeProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
+/**
+ * Only safe image data-URLs from main's media picker. Reject anything else so
+ * a poisoned value (settings file, devtools, compromised IPC) cannot inject
+ * CSS via `url("...")` (quotes, `)`, etc.). Shared by App's wallpaper and the
+ * Sidebar background preview — both must enforce the same rule.
+ */
+export function wallpaperBackgroundImage(background: string | null): string | undefined {
+  if (!background) return undefined
+  if (!/^data:image\/(png|jpe?g|gif|webp|avif|bmp);base64,[A-Za-z0-9+/=]+$/i.test(background)) {
+    return undefined
+  }
+  return `url("${background}")`
+}
+
+/** Applies the theme to <html data-theme> (CSS hooks into that) and persists it. */export function ThemeProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const [theme, setTheme] = useState<ThemeName>(readStoredTheme)
   const [background, setBackground] = useState<string | null>(null)
+  const [backgroundLoaded, setBackgroundLoaded] = useState(false)
   const [dim, setDimState] = useState(45)
   const [blur, setBlurState] = useState(40)
   const [error, setError] = useState<string | null>(null)
+  const backgroundRequestRef = useRef(0)
+  const settingsRequestRef = useRef(0)
 
   useEffect(() => {
     const root = document.documentElement
@@ -76,14 +95,28 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
   // The wallpaper and its dim live in the main process (they outgrow localStorage
   // and must survive a cache clear), so they are loaded once on mount.
   useEffect(() => {
+    const settingsRequest = ++settingsRequestRef.current
     void window.api.settings.get().then(
       (s) => {
+        // A slider can be used before this IPC read resolves. Keep the
+        // user's newer value instead of restoring the stale startup snapshot.
+        if (settingsRequest !== settingsRequestRef.current) return
         setDimState(s.backgroundDim ?? 45)
         setBlurState(s.backgroundBlur ?? 40)
       },
       () => {}
     )
-    void window.api.settings.getBackground().then(setBackground, () => setBackground(null))
+    const backgroundRequest = ++backgroundRequestRef.current
+    void window.api.settings.getBackground().then(
+      (value) => {
+        if (backgroundRequest === backgroundRequestRef.current) setBackground(value)
+        if (backgroundRequest === backgroundRequestRef.current) setBackgroundLoaded(true)
+      },
+      () => {
+        if (backgroundRequest === backgroundRequestRef.current) setBackground(null)
+        if (backgroundRequest === backgroundRequestRef.current) setBackgroundLoaded(true)
+      }
+    )
   }, [])
 
   // PERF-003: the dim slider fires on every step; keep the UI instant but
@@ -92,6 +125,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
   const dimTimerRef = useRef<number | null>(null)
   const setDim = useCallback((next: number): void => {
     const clamped = Math.min(90, Math.max(0, Math.round(next)))
+    ++settingsRequestRef.current
     setDimState(clamped)
     if (dimTimerRef.current !== null) clearTimeout(dimTimerRef.current)
     dimTimerRef.current = window.setTimeout(() => {
@@ -109,6 +143,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
 
   const setBlur = useCallback((next: number): void => {
     const clamped = Math.min(90, Math.max(0, Math.round(next)))
+    ++settingsRequestRef.current
     setBlurState(clamped)
     if (blurTimerRef.current !== null) clearTimeout(blurTimerRef.current)
     blurTimerRef.current = window.setTimeout(() => {
@@ -117,13 +152,17 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
   }, [])
 
   const pickBackground = useCallback(async (): Promise<string | null> => {
+    const request = ++backgroundRequestRef.current
     let result: { dataUrl?: string | null; error?: string }
     try {
       result = await window.api.settings.pickBackground()
     } catch (err) {
-      setError(`Failed to pick background: ${err instanceof Error ? err.message : String(err)}`)
+      if (request === backgroundRequestRef.current) {
+        setError(`Failed to pick background: ${err instanceof Error ? err.message : String(err)}`)
+      }
       return null
     }
+    if (request !== backgroundRequestRef.current) return result.dataUrl ?? null
     if (result.error) {
       setError(result.error)
       return null
@@ -137,10 +176,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
   }, [])
 
   const clearBackground = useCallback(async (): Promise<void> => {
+    ++backgroundRequestRef.current
     setError(null)
+    // Update the visible state immediately. A slow delete must not leave the
+    // old image displayed, nor can its completion race a newer pick.
+    setBackground(null)
     try {
       await window.api.settings.clearBackground()
-      setBackground(null)
     } catch (err) {
       setError(`Failed to remove background: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -148,7 +190,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }): Reac
 
   return (
     <ThemeContext.Provider
-      value={{ theme, setTheme, background, dim, setDim, blur, setBlur, pickBackground, clearBackground, error }}
+      value={{ theme, setTheme, background, backgroundLoaded, dim, setDim, blur, setBlur, pickBackground, clearBackground, error }}
     >
       {children}
     </ThemeContext.Provider>

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Copy,
   Check,
@@ -12,7 +13,8 @@ import {
   Square,
   FileCode,
   Wrench,
-  Loader2
+  Loader2,
+  ChevronDown
 } from 'lucide-react'
 import CodexIcon from './CodexIcon'
 import ClaudeIcon from './ClaudeIcon'
@@ -20,7 +22,10 @@ import GrokIcon from './GrokIcon'
 import AntigravityIcon from './AntigravityIcon'
 import OpenCodeIcon from './OpenCodeIcon'
 import { renderMarkdownSafe } from '../lib/markdown'
-import type { ChatModelId } from '../../../preload/index.d'
+import { insertAt, pasteHasImage, saveImageFromPaste } from '../lib/paste'
+import { useConfirm } from './ConfirmDialog'
+import type { ChatModelId, ChatEffort, ChatModelCatalog } from '../../../preload/index.d'
+import type { MediaFile } from '../../../preload/index.d'
 
 type ChatModel = ChatModelId
 
@@ -37,6 +42,8 @@ interface ChatThread {
   id: string
   title: string
   model: ChatModel
+  modelName?: string
+  effort?: ChatEffort
   messages: ChatMessage[]
   at: number
 }
@@ -48,6 +55,45 @@ const MODELS: { id: ChatModel; label: string; Icon: React.ComponentType<{ size?:
   { id: 'grok', label: 'Grok', Icon: GrokIcon, desc: 'Fast' },
   { id: 'opencode', label: 'OpenCode', Icon: OpenCodeIcon, desc: 'Local' }
 ]
+
+const MODEL_OPTIONS: Record<ChatModel, string[]> = {
+  codex: ['gpt-5.6-luna'],
+  claude: ['claude-sonnet-5'],
+  grok: ['grok-4.6'],
+  antigravity: ['gemini-3.7-flash-medium'],
+  opencode: ['opencode/big-pickle']
+}
+const EFFORT_OPTIONS: Record<ChatModel, ChatEffort[]> = {
+  codex: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  claude: ['low', 'medium', 'high', 'xhigh', 'max'],
+  grok: ['low', 'medium', 'high', 'xhigh', 'max'],
+  antigravity: ['low', 'medium', 'high'],
+  opencode: ['minimal', 'low', 'medium', 'high', 'max']
+}
+function modelsFor(catalog: ChatModelCatalog, provider: ChatModel): string[] {
+  const discovered = catalog[provider]?.models.map((entry) => entry.id).filter(Boolean) ?? []
+  return discovered.length ? discovered : MODEL_OPTIONS[provider]
+}
+function preferredModel(catalog: ChatModelCatalog, provider: ChatModel): string {
+  const options = modelsFor(catalog, provider)
+  const preferred = MODEL_OPTIONS[provider][0]
+  if (options.includes(preferred)) return preferred
+  const configured = catalog[provider]?.defaultModel
+  return configured && options.includes(configured) ? configured : options[0]
+}
+function defaultEffort(forModel: ChatModel): ChatEffort | undefined {
+  return EFFORT_OPTIONS[forModel][1] ?? EFFORT_OPTIONS[forModel][0]
+}
+function preferredEffort(catalog: ChatModelCatalog, provider: ChatModel, selectedModel: string): ChatEffort | undefined {
+  const options = effortOptionsFor(catalog, provider, selectedModel)
+  if (provider === 'codex' && options.includes('medium')) return 'medium'
+  return catalog[provider]?.defaultEffort && options.includes(catalog[provider].defaultEffort)
+    ? catalog[provider].defaultEffort
+    : options[0]
+}
+function effortOptionsFor(catalog: ChatModelCatalog, provider: ChatModel, selectedModel: string): ChatEffort[] {
+  return catalog[provider]?.models.find((entry) => entry.id === selectedModel)?.efforts ?? EFFORT_OPTIONS[provider]
+}
 
 const MODEL_COMMAND: Record<ChatModel, string> = {
   codex: 'codex',
@@ -65,11 +111,24 @@ function loadThreads(): ChatThread[] {
     if (!raw) return []
     const parsed = JSON.parse(raw) as ChatThread[]
     if (!Array.isArray(parsed)) return []
-    // Clean up any dangling isStreaming flags from past sessions
-    return parsed.slice(0, 50).map((t) => ({
-      ...t,
-      messages: (t.messages || []).map((m) => ({ ...m, isStreaming: false }))
-    }))
+    // Treat localStorage as untrusted: one malformed entry must not discard
+    // every otherwise healthy conversation or crash the whole Chat pane.
+    return parsed.slice(0, 50).flatMap((t) => {
+      if (!t || typeof t !== 'object' || typeof t.id !== 'string' || typeof t.title !== 'string' || !Array.isArray(t.messages)) return []
+      const model = MODELS.some((entry) => entry.id === t.model) ? t.model : 'codex'
+      const messages = t.messages.flatMap((m) => {
+        if (!m || typeof m !== 'object' || (m.role !== 'user' && m.role !== 'assistant') || typeof m.content !== 'string' || typeof m.at !== 'number') return []
+        const messageModel = typeof m.model === 'string' && MODELS.some((entry) => entry.id === m.model) ? m.model : model
+        return [{ ...m, model: messageModel, isStreaming: false }]
+      })
+      return [{
+        ...t,
+        model,
+        title: t.title.slice(0, 200),
+        modelName: typeof t.modelName === 'string' ? t.modelName.slice(0, 128) : undefined,
+        messages
+      }]
+    })
   } catch {
     return []
   }
@@ -79,29 +138,43 @@ function saveThreads(threads: ChatThread[]): void {
   try {
     const sanitized = threads.slice(0, 50).map((t) => ({
       ...t,
-      messages: t.messages.map(({ isStreaming: _s, ...m }) => m)
+      // Cap per-thread history to avoid quota blow-up (was unbounded — a long chat could exceed 5MB and silently lose all threads).
+      messages: t.messages.slice(-120).map(({ isStreaming: _s, ...m }) => ({ ...m, content: m.content.slice(0, 48_000) }))
     }))
-    localStorage.setItem(LS_KEY, JSON.stringify(sanitized))
+    const payload = JSON.stringify(sanitized)
+    // Guard against localStorage quota (typically 5-10MB) — leave 256KB headroom.
+    if (payload.length > 4_500_000) {
+      const trimmed = sanitized.map((t) => ({ ...t, messages: t.messages.slice(-40) }))
+      localStorage.setItem(LS_KEY, JSON.stringify(trimmed))
+      return
+    }
+    localStorage.setItem(LS_KEY, payload)
   } catch {}
 }
 
 function makeId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  } catch {}
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 }
 
-function MessageContent({ text }: { text: string }): React.JSX.Element {
+const MessageContent = React.memo(function MessageContent({ text }: { text: string }): React.JSX.Element {
   const parts = useMemo(() => {
+    const src = text
     const segs: { type: 'text' | 'code'; value: string; lang?: string }[] = []
     const re = /```(\w*)\n?([\s\S]*?)```/g
     let last = 0
     let m: RegExpExecArray | null
-    while ((m = re.exec(text)) !== null) {
-      if (m.index > last) segs.push({ type: 'text', value: text.slice(last, m.index) })
+    // Cap parsing at 80k chars to avoid hangs on huge streamed answers (was unbounded).
+    const capped = src.length > 80_000 ? src.slice(0, 80_000) + '\n\n_[truncated]_' : src
+    while ((m = re.exec(capped)) !== null) {
+      if (m.index > last) segs.push({ type: 'text', value: capped.slice(last, m.index) })
       segs.push({ type: 'code', value: m[2], lang: m[1] || 'txt' })
       last = m.index + m[0].length
     }
-    if (last < text.length) segs.push({ type: 'text', value: text.slice(last) })
-    if (segs.length === 0) segs.push({ type: 'text', value: text })
+    if (last < capped.length) segs.push({ type: 'text', value: capped.slice(last) })
+    if (segs.length === 0) segs.push({ type: 'text', value: capped })
     return segs
   }, [text])
 
@@ -120,20 +193,25 @@ function MessageContent({ text }: { text: string }): React.JSX.Element {
       )}
     </div>
   )
-}
+})
 
-function CodeBlock({ code, lang }: { code: string; lang?: string }): React.JSX.Element {
+const CodeBlock = React.memo(function CodeBlock({ code, lang }: { code: string; lang?: string }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (timerRef.current !== null) clearTimeout(timerRef.current)
+  }, [])
   const copy = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(code)
       setCopied(true)
-      setTimeout(() => setCopied(false), 1200)
+      if (timerRef.current !== null) clearTimeout(timerRef.current)
+      timerRef.current = setTimeout(() => setCopied(false), 1200)
     } catch {}
   }, [code])
   return (
     <div className="overflow-hidden rounded-[8px] border border-line-soft bg-[#0f0f11]">
-      <div className="flex h-7 items-center justify-between border-b border-line-soft bg-bg-raise/60 px-2.5">
+      <div className="flex h-7 items-center justify-between border-b border-line-soft bg-bg-raise px-2.5">
         <span className="flex items-center gap-1.5 text-[11px] font-medium text-text-faint">
           <FileCode size={12} /> {lang || 'code'}
         </span>
@@ -148,22 +226,145 @@ function CodeBlock({ code, lang }: { code: string; lang?: string }): React.JSX.E
       <pre className="overflow-x-auto p-3 font-mono text-[12px] leading-[1.55] text-[#d6d6d8]">{code.trimEnd()}</pre>
     </div>
   )
+})
+
+function ChatSelect<T extends string>({
+  value,
+  options,
+  onChange,
+  title,
+  className = ''
+}: {
+  value: T
+  options: Array<{ value: T; label: string }>
+  onChange: (value: T) => void
+  title: string
+  className?: string
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const selected = options.find((option) => option.value === value) ?? options[0]
+
+  useEffect(() => {
+    if (!open) return
+    const closeOutside = (event: PointerEvent): void => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  // Flip to top if near viewport top (was always bottom, could overflow off-screen — UI bug).
+  const [dropUp, setDropUp] = useState(true)
+  useEffect(() => {
+    if (!open || !rootRef.current) return
+    const rect = rootRef.current.getBoundingClientRect()
+    setDropUp(rect.top > 220)
+  }, [open])
+  return (
+    <div ref={rootRef} className={`relative min-w-0 ${className}`}>
+      <button
+        type="button"
+        title={title}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        className="flex h-7 w-full min-w-0 items-center justify-between gap-1 rounded-[7px] border border-transparent bg-transparent px-2 text-[11px] text-text-faint outline-none transition-colors hover:border-line-soft hover:bg-bg-hover hover:text-text"
+      >
+        <span className="truncate font-medium">{selected?.label || value}</span>
+        <ChevronDown size={12} className={`flex-none transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div
+          role="listbox"
+        className={`absolute left-0 z-[70000] max-h-64 min-w-full overflow-y-auto rounded-[9px] border border-line bg-bg-panel p-1 shadow-[0_14px_40px_rgba(0,0,0,0.45)] ${dropUp ? 'bottom-[calc(100%+6px)]' : 'top-[calc(100%+6px)]'}`}
+        >
+          {options.map((option) => (
+            <button
+              type="button"
+              role="option"
+              aria-selected={option.value === value}
+              key={option.value}
+              onClick={() => {
+                onChange(option.value)
+                setOpen(false)
+              }}
+              className={`flex w-full items-center justify-between gap-3 whitespace-nowrap rounded-[6px] px-2.5 py-1.5 text-left text-[11px] transition-colors ${
+                option.value === value ? 'bg-bg-hover text-text' : 'text-text-dim hover:bg-bg-hover/70 hover:text-text'
+              }`}
+            >
+              <span>{option.label}</span>
+              {option.value === value && <Check size={12} className="text-accent" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ThinkingIndicator({ command }: { command: string }): React.JSX.Element {
+  return (
+    <span className="inline-flex items-center gap-2 text-[12px] text-text-faint">
+      <Loader2 size={12} className="animate-spin text-accent" />
+      <span>Thinking with <code className="font-mono text-text">{command}</code>…</span>
+    </span>
+  )
 }
 
 interface Props {
   active: boolean
 }
 
+function SidebarPortal({
+  target,
+  children
+}: {
+  target: HTMLElement | null
+  children: React.ReactNode
+}): React.JSX.Element {
+  return target ? createPortal(children, target) : <>{children}</>
+}
+
 export default function ChatPane({ active }: Props): React.JSX.Element {
+  const confirm = useConfirm()
   const [threads, setThreads] = useState<ChatThread[]>(() => loadThreads())
   const [activeThreadId, setActiveThreadId] = useState<string | null>(() => threads[0]?.id ?? null)
   const [model, setModel] = useState<ChatModel>(() => threads[0]?.model ?? 'codex')
+  const [modelName, setModelName] = useState(() => threads[0]?.modelName ?? MODEL_OPTIONS[threads[0]?.model ?? 'codex'][0])
+  const [effort, setEffort] = useState<ChatEffort | undefined>(() => threads[0]?.effort ?? defaultEffort(threads[0]?.model ?? 'codex'))
+  const [modelCatalog, setModelCatalog] = useState<ChatModelCatalog>({})
   const [query, setQuery] = useState('')
   const [input, setInput] = useState('')
+  const [pendingImage, setPendingImage] = useState<MediaFile | null>(null)
+  const [imageError, setImageError] = useState<string | null>(null)
+  // Ephemeral composer errors (e.g. overlong prompt) — never written into threads.
+  const [promptError, setPromptError] = useState<string | null>(null)
+  // A message typed while a reply is still streaming — auto-sent when it ends.
+  const [queued, setQueued] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sharedSidebarTarget, setSharedSidebarTarget] = useState<HTMLElement | null>(null)
   const [runningThreads, setRunningThreads] = useState<Set<string>>(new Set())
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const chatPinnedToBottomRef = useRef(true)
+  const sendInFlightRef = useRef(false)
+  const pasteSeqRef = useRef(0)
+
+  useEffect(() => {
+    if (!active) {
+      setSharedSidebarTarget(null)
+      return
+    }
+    setSharedSidebarTarget(document.querySelector<HTMLElement>('[data-chat-sidebar-slot]'))
+  }, [active])
 
   const activeThread = useMemo(
     () => threads.find((t) => t.id === activeThreadId) ?? null,
@@ -171,29 +372,94 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
   )
 
   const isGenerating = Boolean(activeThreadId && runningThreads.has(activeThreadId))
+  const modelSelectOptions = modelsFor(modelCatalog, model)
+  const configuredEfforts = effortOptionsFor(modelCatalog, model, modelName)
+  const contextPercent = useMemo(() => {
+    if (!activeThread) return 0
+    // Rough token estimate: ~4 chars per token, 128k context → show char-based % with clamp, not /320 magic (was wildly jumping).
+    const chars = activeThread.messages.reduce((total, message) => total + message.content.length, 0)
+    const estTokens = chars / 4
+    return Math.min(99, Math.round((estTokens / 128_000) * 100))
+  }, [activeThread])
 
   useEffect(() => {
-    saveThreads(threads)
+    const timer = window.setTimeout(() => saveThreads(threads), 250)
+    return () => window.clearTimeout(timer)
   }, [threads])
 
   useEffect(() => {
+    let mounted = true
+    const modelLoader = typeof window.api.chat.listModels === 'function'
+      ? window.api.chat.listModels()
+      : Promise.resolve<ChatModelCatalog>({})
+    void modelLoader.then((catalog) => {
+      if (mounted && catalog && typeof catalog === 'object') {
+        setModelCatalog(catalog)
+        setThreads((current) => current.map((thread) => {
+          const availableModels = modelsFor(catalog, thread.model)
+          const nextModelName = thread.modelName && availableModels.includes(thread.modelName)
+            ? thread.modelName
+            : preferredModel(catalog, thread.model)
+          const availableEfforts = effortOptionsFor(catalog, thread.model, nextModelName)
+          const nextEffort = thread.effort && availableEfforts.includes(thread.effort)
+            ? thread.effort
+            : preferredEffort(catalog, thread.model, nextModelName)
+          return { ...thread, modelName: nextModelName, effort: nextEffort }
+        }))
+
+        // Only reconcile global picker if user hasn't already switched thread/model
+        // (avoid overwriting a choice made while catalog was loading).
+        setModel((prevModel) => {
+          const catalogModels = catalog[prevModel]?.models
+          if (!catalogModels?.length) return prevModel
+          return prevModel
+        })
+      }
+    }).catch(() => {
+      // Static safe defaults remain available when a CLI has no local settings.
+    })
+    return () => { mounted = false }
+  }, [])
+
+  useEffect(() => {
     if (!active) return
-    setTimeout(() => inputRef.current?.focus(), 80)
+    const t = window.setTimeout(() => inputRef.current?.focus(), 80)
+    return () => window.clearTimeout(t)
   }, [active])
 
   // Sync model with active thread when switching
   useEffect(() => {
     if (activeThread?.model) {
       setModel(activeThread.model)
+      const availableModels = modelsFor(modelCatalog, activeThread.model)
+      const nextModelName = activeThread.modelName && availableModels.includes(activeThread.modelName)
+        ? activeThread.modelName
+        : preferredModel(modelCatalog, activeThread.model)
+      const availableEfforts = effortOptionsFor(modelCatalog, activeThread.model, nextModelName)
+      setModelName(nextModelName)
+      setEffort(activeThread.effort && availableEfforts.includes(activeThread.effort)
+        ? activeThread.effort
+        : preferredEffort(modelCatalog, activeThread.model, nextModelName))
     }
-  }, [activeThreadId, activeThread?.model])
+  }, [activeThreadId, activeThread?.model, activeThread?.modelName, activeThread?.effort, modelCatalog])
 
-  // Auto-scroll on messages change or active thread switch
+  // A thread switch starts at its newest message. During streaming, preserve
+  // the reader's viewport once they deliberately scroll away from the bottom.
   useEffect(() => {
-    if (listRef.current) {
-      listRef.current.scrollTop = listRef.current.scrollHeight
-    }
-  }, [activeThreadId, activeThread?.messages.length, isGenerating])
+    chatPinnedToBottomRef.current = true
+    const raf = requestAnimationFrame(() => {
+      if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [activeThreadId])
+
+  useEffect(() => {
+    if (!chatPinnedToBottomRef.current) return
+    const raf = requestAnimationFrame(() => {
+      if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [activeThread?.messages.length, isGenerating])
 
   // Subscribe to chat stream data and exit events from window.api.chat
   useEffect(() => {
@@ -206,19 +472,22 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
           const msgs = [...t.messages]
           const lastIdx = msgs.findLastIndex((m) => m.role === 'assistant')
           if (lastIdx !== -1) {
+            const MAX_STREAM_CHARS = 180_000
+            const nextContent = msgs[lastIdx].content + chunk
             msgs[lastIdx] = {
               ...msgs[lastIdx],
-              content: msgs[lastIdx].content + chunk,
+              content: nextContent.length > MAX_STREAM_CHARS
+                ? nextContent.slice(0, MAX_STREAM_CHARS) + '\n\n_[truncated — exceeded 180k chars]_'
+                : nextContent,
               isStreaming: true
             }
           }
           return { ...t, messages: msgs, at: Date.now() }
         })
       )
-      // Scroll down during streaming
-      if (listRef.current) {
-        listRef.current.scrollTop = listRef.current.scrollHeight
-      }
+      if (chatPinnedToBottomRef.current) requestAnimationFrame(() => {
+        if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight
+      })
     })
 
     const offExit = window.api.chat.onExit(
@@ -266,50 +535,95 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
         id: makeId(),
         title: 'New chat',
         model: initialModel,
+        modelName: preferredModel(modelCatalog, initialModel),
+        effort: preferredEffort(modelCatalog, initialModel, preferredModel(modelCatalog, initialModel)) ?? defaultEffort(initialModel),
         messages: [],
         at: Date.now()
       }
       setThreads((prev) => [t, ...prev])
       setActiveThreadId(t.id)
       setModel(initialModel)
-      setTimeout(() => inputRef.current?.focus(), 50)
+      const tId = window.setTimeout(() => inputRef.current?.focus(), 50)
+      // Timer intentionally short; clear on unmount via effect not needed — one-shot focus.
+      void tId
     },
-    [model]
+    [model, modelCatalog]
   )
 
   const deleteThread = useCallback(
-    (id: string) => {
-      void window.api?.chat?.dispose(id).catch(() => {})
-      setRunningThreads((prev) => {
-        const next = new Set(prev)
-        next.delete(id)
-        return next
-      })
-      setThreads((prev) => {
-        const next = prev.filter((t) => t.id !== id)
-        if (activeThreadId === id) setActiveThreadId(next[0]?.id ?? null)
-        return next
+    (id: string): void => {
+      const thread = threads.find((t) => t.id === id)
+      const label = thread?.title ? `"${thread.title.slice(0, 40)}"` : 'this chat'
+      void confirm(`Delete ${label}? This cannot be undone.`, {
+        danger: true,
+        title: 'Delete chat',
+        confirmLabel: 'Delete'
+      }).then((ok) => {
+        if (!ok) return
+        void window.api?.chat?.dispose(id).catch(() => {})
+        setRunningThreads((prev) => {
+          const next = new Set(prev)
+          next.delete(id)
+          return next
+        })
+        // Compute the fallback outside the updater: calling another setter
+        // from inside an updater is impure (updaters may re-run) — and
+        // `threads` is already a dep of this callback, so it is current here.
+        const remaining = threads.filter((t) => t.id !== id)
+        setThreads(remaining)
+        setActiveThreadId((current) => (current === id ? remaining[0]?.id ?? null : current))
       })
     },
-    [activeThreadId]
+    [confirm, threads]
   )
+
+  useEffect(() => {
+    const createFromSidebar = (): void => createThread()
+    window.addEventListener('orcspace:new-chat', createFromSidebar)
+    return () => window.removeEventListener('orcspace:new-chat', createFromSidebar)
+  }, [createThread])
 
   const stopCurrent = useCallback(() => {
     if (!activeThreadId) return
     void window.api?.chat?.stop(activeThreadId).catch(() => {})
   }, [activeThreadId])
 
-  const send = useCallback(async () => {
-    const text = input.trim()
-    if (!text || isGenerating) return
+  const send = useCallback(async (override?: string) => {
+    const text = (override ?? input).trim()
+    const image = override !== undefined ? null : pendingImage
+    if (!text && !image) return
+    const prompt = text || 'Please analyze the attached image.'
+    if (text.length > 32_000) {
+      // Ephemeral inline error — the prompt is rejected without mutating threads.
+      setPromptError('Prompt too long — keep it under 32,000 characters.')
+      return
+    }
+    if (sendInFlightRef.current) return
+    if (isGenerating && override === undefined) {
+      // Queue the draft instead of blocking it: auto-sent when the reply ends.
+      if (text) {
+        setQueued((prev) => (prev ? `${prev}\n${text}` : text))
+        setInput('')
+        if (inputRef.current) inputRef.current.style.height = 'auto'
+      }
+      return
+    }
+    if (isGenerating) return
+    sendInFlightRef.current = true
+    // A paste can still be saving its bitmap while the user presses Send.
+    // Invalidate that response so an old clipboard image cannot reappear as a
+    // new attachment after this message has already been sent.
+    pasteSeqRef.current += 1
 
     let threadId = activeThreadId
     let threadModel = model
     if (!threadId) {
       const t: ChatThread = {
         id: makeId(),
-        title: text.slice(0, 36) || 'New chat',
+        title: text.slice(0, 36) || 'Image chat',
         model,
+        modelName,
+        effort,
         messages: [],
         at: Date.now()
       }
@@ -319,7 +633,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
       setActiveThreadId(t.id)
     }
 
-    const userMsg: ChatMessage = { id: makeId(), role: 'user', content: text, at: Date.now() }
+    const userMsg: ChatMessage = { id: makeId(), role: 'user', content: text || '[Image attached]', at: Date.now() }
     const assistantId = makeId()
     const assistantPlaceholder: ChatMessage = {
       id: assistantId,
@@ -331,6 +645,8 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
     }
 
     setInput('')
+    setPendingImage(null)
+    setImageError(null)
     if (inputRef.current) inputRef.current.style.height = 'auto'
 
     setRunningThreads((prev) => new Set(prev).add(threadId!))
@@ -339,8 +655,10 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
         t.id === threadId
           ? {
               ...t,
-              title: t.messages.length === 0 ? text.slice(0, 36) : t.title,
+              title: t.messages.length === 0 ? (text.slice(0, 36) || 'Image chat') : t.title,
               model: threadModel,
+              modelName,
+              effort,
               messages: [...t.messages, userMsg, assistantPlaceholder],
               at: Date.now()
             }
@@ -349,7 +667,11 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
     )
 
     try {
-      const result = await window.api.chat.send(threadId, threadModel, text)
+      const result = await window.api.chat.send(threadId, threadModel, prompt, {
+        model: modelName,
+        effort: effortOptionsFor(modelCatalog, threadModel, modelName).includes(effort as ChatEffort) ? effort : undefined,
+        images: image ? [image.path] : undefined
+      })
       if (result && 'error' in result) {
         setRunningThreads((prev) => {
           const next = new Set(prev)
@@ -399,42 +721,118 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
             : t
         )
       )
+    } finally {
+      sendInFlightRef.current = false
+      setTimeout(() => inputRef.current?.focus(), 30)
     }
+  }, [input, pendingImage, isGenerating, activeThreadId, model, modelName, effort, modelCatalog])
 
-    setTimeout(() => inputRef.current?.focus(), 30)
-  }, [input, isGenerating, activeThreadId, model])
+  // Flush a queued draft once the running reply finishes (and the thread still
+  // exists) — this is what makes the composer non-blocking.
+  const sendRef = useRef(send)
+  sendRef.current = send
+  useEffect(() => {
+    if (isGenerating || queued === null) return
+    if (!activeThreadId || !threads.some((t) => t.id === activeThreadId)) return
+    const q = queued
+    setQueued(null)
+    void sendRef.current(q)
+  }, [isGenerating, queued, activeThreadId, threads])
+
+  const onPaste = useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const pasteSeq = ++pasteSeqRef.current
+    const nativeEvent = event.nativeEvent
+    const hasAdvertisedImage = pasteHasImage(nativeEvent)
+    const plainText = nativeEvent.clipboardData?.getData('text/plain') ?? ''
+    const start = event.currentTarget.selectionStart ?? input.length
+    const end = event.currentTarget.selectionEnd ?? start
+
+    // Windows sometimes gives Chromium only an accessibility label such as
+    // "Image #1" while Electron's native clipboard still contains the bitmap.
+    // Check the native clipboard for every paste. If it is plain text after
+    // all, reinsert it exactly where the browser would have done so.
+    event.preventDefault()
+    setImageError(null)
+    void saveImageFromPaste(nativeEvent, { scratch: true }).then((image) => {
+      if (pasteSeq !== pasteSeqRef.current) return
+      if (image) {
+        setPendingImage(image)
+        return
+      }
+      if (hasAdvertisedImage) {
+        setImageError('Could not read the image from the clipboard')
+        return
+      }
+      if (plainText) {
+        setInput((current) => insertAt(current, start, end, plainText).value)
+        requestAnimationFrame(() => {
+          const caret = start + plainText.length
+          inputRef.current?.setSelectionRange(caret, caret)
+        })
+      }
+    }).catch((error) => {
+      setImageError(error instanceof Error ? error.message : 'Could not save the image')
+    })
+  }, [input.length])
 
   const selectModel = useCallback(
     (newModel: ChatModel) => {
+      const nextModelName = preferredModel(modelCatalog, newModel)
+      const nextEffort = preferredEffort(modelCatalog, newModel, nextModelName) ?? defaultEffort(newModel)
       setModel(newModel)
+      setModelName(nextModelName)
+      setEffort(nextEffort)
       if (activeThreadId) {
         setThreads((prev) =>
-          prev.map((t) => (t.id === activeThreadId ? { ...t, model: newModel } : t))
+          prev.map((t) => (t.id === activeThreadId ? { ...t, model: newModel, modelName: nextModelName, effort: nextEffort } : t))
         )
       }
     },
-    [activeThreadId]
+    [activeThreadId, modelCatalog]
   )
 
+  const updateModelName = useCallback((value: string) => {
+    setModelName(value)
+    if (activeThreadId) setThreads((prev) => prev.map((t) => t.id === activeThreadId ? { ...t, modelName: value } : t))
+  }, [activeThreadId])
+
+  const updateEffort = useCallback((value: string) => {
+    const next = value as ChatEffort
+    setEffort(next)
+    if (activeThreadId) setThreads((prev) => prev.map((t) => t.id === activeThreadId ? { ...t, effort: next } : t))
+  }, [activeThreadId])
+
+  const [debouncedQuery, setDebouncedQuery] = useState(query)
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQuery(query), 180)
+    return () => window.clearTimeout(t)
+  }, [query])
   const filtered = useMemo(() => {
-    if (!query.trim()) return threads
-    const q = query.toLowerCase()
+    const q = debouncedQuery.trim().toLowerCase()
+    if (!q) return threads
+    // Cap scan per thread to last 20 messages and 2k chars to avoid hangs on long histories (was scanning all messages fully).
     return threads.filter(
       (t) =>
         t.title.toLowerCase().includes(q) ||
-        t.messages.some((m) => m.content.toLowerCase().includes(q))
+        t.messages.slice(-20).some((m) => m.content.slice(0, 2000).toLowerCase().includes(q))
     )
-  }, [threads, query])
+  }, [threads, debouncedQuery])
 
   const ModelIcon = MODELS.find((m) => m.id === model)?.Icon ?? CodexIcon
 
   return (
     <div
-      className={`absolute inset-y-0 right-0 left-rail z-[40000] flex flex-col bg-[#0a0a0b] pt-10 ${
+      // Shared full-pane left offset: the pane is only visible when the app
+      // sidebar is expanded, which is 240px in chat (see
+      // geometry.sidebarExpandedChat in design/tokens.ts). Matches the
+      // expanded sidebar so pane content never slides underneath it.
+      className={`absolute inset-y-0 right-0 left-[240px] z-[40000] flex flex-col bg-bg pt-10 ${
         active ? '' : 'pointer-events-none invisible'
       }`}
       aria-hidden={!active}
     >
+      <style>{`@property --orc-chat-angle { syntax: '<angle>'; inherits: false; initial-value: 0deg; } @keyframes orc-chat-border-shimmer { from { --orc-chat-angle: 0deg; } to { --orc-chat-angle: 360deg; } } .orc-chat-border-shimmer { padding: 1px; background: conic-gradient(from var(--orc-chat-angle), transparent 0deg 315deg, rgba(255,255,255,.22) 332deg, rgba(255,255,255,.98) 348deg, transparent 360deg); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask-composite: exclude; animation: orc-chat-border-shimmer 5.8s linear infinite; }`}</style>
+      <style>{`.orc-chat-thread-title::before { content: attr(data-chat-title); }`}</style>
       <div className="flex h-9 flex-none items-center justify-between gap-2 border-b border-line-soft bg-bg-panel px-2.5">
         <div className="flex items-center gap-2">
           <button
@@ -453,7 +851,20 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
           </span>
         </div>
         <div className="flex items-center gap-1.5">
-          <div className="hidden sm:flex items-center gap-1 rounded-full border border-line-soft bg-bg-raise p-[2px]">
+          {/* Compact fallback under sm, where the pill row is hidden. */}
+          <select
+            aria-label="Model"
+            value={model}
+            onChange={(e) => selectModel(e.target.value as ChatModel)}
+            className="h-7 rounded-full border border-line-soft bg-bg-raise px-2 text-[12px] text-text sm:hidden"
+          >
+            {MODELS.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+          <div className="hidden max-w-full items-center gap-1 overflow-x-auto rounded-full border border-line-soft bg-bg-raise p-[2px] sm:flex">
             {MODELS.map((m) => {
               const isActive = m.id === model
               return (
@@ -479,11 +890,12 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
         {sidebarOpen && (
-          <aside className="flex w-[280px] flex-none flex-col border-r border-line-soft bg-[#121214]">
-            <div className="p-2.5">
-              <label className="relative flex items-center">
+          <SidebarPortal target={sharedSidebarTarget}>
+            <aside className="flex h-full max-h-full w-[240px] min-h-0 flex-none flex-col border-r border-line-soft bg-bg-panel max-sm:absolute max-sm:inset-y-0 max-sm:left-0 max-sm:z-20 max-sm:shadow-[0_8px_30px_rgba(0,0,0,0.5)]">
+            <div className="flex items-center gap-1.5 p-2.5">
+              <label className="relative flex min-w-0 flex-1 items-center">
                 <Search size={13} className="pointer-events-none absolute left-2.5 text-text-faint" />
                 <input
                   value={query}
@@ -492,6 +904,15 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                   className="h-8 w-full rounded-[8px] border border-line-soft bg-bg-raise pl-8 pr-2.5 text-[12px] text-text placeholder:text-text-faint outline-none focus:border-line"
                 />
               </label>
+              <button
+                type="button"
+                onClick={() => setSidebarOpen(false)}
+                aria-label="Close chat sidebar"
+                title="Close sidebar"
+                className="grid h-8 w-8 flex-none place-items-center rounded-[8px] text-text-faint hover:bg-bg-hover hover:text-text sm:hidden"
+              >
+                <PanelLeftClose size={14} />
+              </button>
             </div>
             <div className="flex-1 overflow-y-auto px-2 pb-2">
               {filtered.length === 0 ? (
@@ -514,47 +935,58 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                         const MIcon = MODELS.find((m) => m.id === t.model)?.Icon ?? Sparkles
                         const running = runningThreads.has(t.id)
                         return (
-                          <button
+                          <article
                             key={t.id}
-                            onClick={() => setActiveThreadId(t.id)}
-                            className={`group flex w-full flex-col gap-1 rounded-[8px] border px-2.5 py-2 text-left transition-colors ${
-                              isActive
-                                ? 'border-line bg-bg-hover text-text'
-                                : 'border-transparent bg-transparent text-text hover:bg-bg-hover/60 hover:text-text'
+                            aria-label={`${t.title}${running ? ' (running)' : ''}`}
+                            className={`group relative flex w-full flex-col gap-1 overflow-hidden rounded-[8px] border px-2.5 py-2 text-left transition-colors ${
+                              running
+                                ? 'border-line bg-bg-raise text-text'
+                                : isActive
+                                  ? 'border-line bg-bg-hover text-text'
+                                  : 'border-transparent bg-transparent text-text hover:bg-bg-hover/60 hover:text-text'
                             }`}
                           >
-                            <span className="flex w-full items-center justify-between gap-2">
-                              <span className="flex items-center gap-1.5 truncate text-[13px] font-medium">
-                                <span className="grid h-5 w-5 place-items-center rounded-[6px] border border-line-soft bg-bg-raise text-text-faint">
-                                  {running ? (
-                                    <Loader2 size={11} className="animate-spin text-accent" />
-                                  ) : (
-                                    <MIcon size={11} />
-                                  )}
-                                </span>
-                                <span className="truncate">{t.title}</span>
-                              </span>
+                            {running && (
                               <span
-                                role="button"
-                                tabIndex={0}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  deleteThread(t.id)
-                                }}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    e.stopPropagation()
-                                    deleteThread(t.id)
-                                  }
-                                }}
-                                className="grid h-5 w-5 place-items-center rounded text-text-faint opacity-0 hover:bg-bg-raise hover:text-text group-hover:opacity-100"
-                                title="Delete chat"
-                              >
-                                <Trash2 size={11} />
+                                aria-hidden="true"
+                                className="orc-chat-border-shimmer pointer-events-none absolute inset-0 z-0 rounded-[8px]"
+                              />
+                            )}
+                            <span className="relative z-10 flex flex-col gap-1 rounded-[6px]">
+                              <span className="flex w-full items-center justify-between gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveThreadId(t.id)}
+                                  aria-current={isActive}
+                                  aria-label={t.title}
+                                  className="flex min-w-0 flex-1 items-center gap-1.5 truncate rounded text-left text-[13px] font-medium outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
+                                >
+                                  <span className="grid h-5 w-5 flex-none place-items-center rounded-[6px] border border-line-soft bg-bg-raise text-text-faint">
+                                    {running ? (
+                                      <Loader2 size={11} className="animate-spin text-accent" />
+                                    ) : (
+                                      <MIcon size={11} />
+                                    )}
+                                  </span>
+                                  <span
+                                    className="orc-chat-thread-title truncate"
+                                    data-chat-title={t.title}
+                                    aria-hidden="true"
+                                  />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteThread(t.id)}
+                                  className="grid h-5 w-5 flex-none place-items-center rounded text-text-faint opacity-0 hover:bg-bg-raise hover:text-text group-hover:opacity-100 focus:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100"
+                                  title="Delete chat"
+                                  aria-label={`Delete chat ${t.title}`}
+                                >
+                                  <Trash2 size={11} />
+                                </button>
                               </span>
+                              <span className="line-clamp-1 text-[11px] text-text-faint">{preview}</span>
                             </span>
-                            <span className="line-clamp-1 text-[11px] text-text-faint">{preview}</span>
-                          </button>
+                          </article>
                         )
                       })}
                     </div>
@@ -570,11 +1002,19 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                 Executes via <code className="font-mono text-accent">{MODEL_COMMAND[model]}</code> with streaming output
               </span>
             </div>
-          </aside>
+            </aside>
+          </SidebarPortal>
         )}
 
-        <main className="flex min-h-0 flex-1 flex-col bg-[#0a0a0b]">
-          <div ref={listRef} className="flex-1 overflow-y-auto">
+        <main className="flex min-h-0 flex-1 flex-col bg-bg">
+          <div
+            ref={listRef}
+            className="flex-1 overflow-y-auto"
+            onScroll={(event) => {
+              const element = event.currentTarget
+              chatPinnedToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48
+            }}
+          >
             {!activeThread || activeThread.messages.length === 0 ? (
               <div className="mx-auto flex max-w-[760px] flex-col gap-6 px-6 py-10">
                 <div className="rounded-[12px] border border-line-soft bg-bg-panel p-5">
@@ -644,15 +1084,12 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                     <div
                       className={`max-w-[78%] rounded-[12px] border px-3.5 py-3 ${
                         m.role === 'user'
-                          ? 'border-line bg-[#1c1c1f] text-text'
+                          ? 'border-line bg-bg-raise text-text'
                           : 'border-line-soft bg-bg-panel text-text'
                       }`}
                     >
                       {m.role === 'assistant' && m.content === '' && m.isStreaming ? (
-                        <span className="inline-flex items-center gap-2 text-[12px] text-text-faint">
-                          <Loader2 size={12} className="animate-spin text-accent" />
-                          Running <code className="font-mono">{MODEL_COMMAND[m.model || model]}</code> — waiting for output…
-                        </span>
+                        <ThinkingIndicator command={MODEL_COMMAND[m.model || model]} />
                       ) : (
                         <MessageContent text={m.content} />
                       )}
@@ -674,7 +1111,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                                   await navigator.clipboard.writeText(m.content)
                                 } catch {}
                               }}
-                              className="opacity-0 group-hover:opacity-100 rounded px-1.5 py-0.5 text-[11px] text-text-faint hover:bg-bg-hover hover:text-text transition-opacity"
+                              className="rounded px-1.5 py-0.5 text-[11px] text-text-faint opacity-0 transition-opacity hover:bg-bg-hover hover:text-text group-hover:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100"
                             >
                               Copy
                             </button>
@@ -693,27 +1130,48 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
             )}
           </div>
 
-          <div className="border-t border-line-soft bg-[#121214] p-3">
+          <div className="border-t border-line-soft bg-bg-panel p-3">
             <div className="mx-auto max-w-[760px]">
+              {queued !== null && (
+                <div role="status" className="mb-1.5 flex items-center justify-between gap-2 rounded-[8px] border border-line-soft bg-bg-raise px-2.5 py-1.5 text-[11px] text-text-dim">
+                  <span className="truncate">Queued — sends when the current reply finishes</span>
+                  <button type="button" onClick={() => setQueued(null)} className="flex-none text-text-faint hover:text-text">
+                    Cancel
+                  </button>
+                </div>
+              )}
+              {promptError && (
+                <div role="alert" className="mb-1.5 rounded-[8px] border border-red-900/50 bg-red-950/20 px-2.5 py-1.5 text-[11px] text-red-300">
+                  {promptError}
+                </div>
+              )}
               <div className="rounded-[12px] border border-line bg-bg-panel shadow-[0_8px_30px_rgba(0,0,0,0.35)] focus-within:border-line">
                 <textarea
                   ref={inputRef}
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => {
+                    setInput(e.target.value)
+                    if (promptError) setPromptError(null)
+                  }}
+                  onPaste={onPaste}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault()
                       void send()
                     }
+                    if (e.key === 'Escape' && isGenerating) {
+                      e.preventDefault()
+                      stopCurrent()
+                    }
                   }}
                   rows={1}
                   placeholder={
                     isGenerating
-                      ? `Generating response from ${MODEL_COMMAND[model]}…`
+                      ? `Generating response from ${MODEL_COMMAND[model]}… (keep typing — sends next)`
                       : `Message ${MODELS.find((m) => m.id === model)?.label} (${MODEL_COMMAND[model]}) — Shift+Enter for new line`
                   }
-                  disabled={isGenerating}
-                  className="max-h-[140px] min-h-[44px] w-full resize-none bg-transparent px-3.5 py-3 text-[13px] text-text placeholder:text-text-faint outline-none disabled:opacity-60"
+                  aria-label="Chat message"
+                  className="max-h-[140px] min-h-[44px] w-full resize-none bg-transparent px-3.5 py-3 text-[13px] text-text placeholder:text-text-faint outline-none"
                   style={{ height: 'auto' }}
                   onInput={(e) => {
                     const el = e.target as HTMLTextAreaElement
@@ -721,11 +1179,30 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                     el.style.height = Math.min(el.scrollHeight, 140) + 'px'
                   }}
                 />
-                <div className="flex items-center justify-between gap-2 border-t border-line-soft px-2 py-2">
-                  <div className="flex items-center gap-1">
-                    <span className="hidden sm:inline-flex items-center gap-1 rounded-full border border-line-soft bg-bg-raise px-2 py-1 text-[11px] text-text-faint">
-                      <Wrench size={11} /> CLI: {MODEL_COMMAND[model]}
-                    </span>
+                <div className="flex items-center justify-between gap-2 border-t border-line-soft px-2 py-1.5">
+                  <div className="flex min-w-0 items-center gap-1">
+                    <ChatSelect
+                      value={modelName}
+                      onChange={updateModelName}
+                      title="CLI model"
+                      className="w-[min(220px,32vw)]"
+                      options={modelSelectOptions.map((name) => ({
+                        value: name,
+                        label: modelCatalog[model]?.models.find((entry) => entry.id === name)?.label || name
+                      }))}
+                    />
+            {configuredEfforts.length > 0 && (
+                      <ChatSelect
+                        value={(effort ?? configuredEfforts[0]) as ChatEffort}
+                        onChange={updateEffort}
+                        title="Reasoning effort"
+                        className="w-[96px]"
+                        options={configuredEfforts.map((level) => ({
+                          value: level,
+                          label: level[0].toUpperCase() + level.slice(1)
+                        }))}
+                      />
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5">
                     {isGenerating ? (
@@ -738,7 +1215,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                     ) : (
                       <button
                         onClick={() => void send()}
-                        disabled={!input.trim()}
+                        disabled={!input.trim() && !pendingImage}
                         className="flex items-center gap-1.5 rounded-[8px] bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-bg hover:opacity-90 disabled:opacity-40 transition-opacity"
                       >
                         <Send size={13} /> Send
@@ -746,6 +1223,21 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                     )}
                   </div>
                 </div>
+              </div>
+              {(pendingImage || imageError) && (
+                <div className="mt-1.5 flex items-center justify-between gap-2 px-1 text-[11px]">
+                  <span className={imageError ? 'text-red-400' : 'text-text-faint'}>
+                    {imageError || `Image attached: ${pendingImage?.name}`}
+                  </span>
+                  {pendingImage && (
+                    <button type="button" className="text-text-faint hover:text-text" onClick={() => setPendingImage(null)}>
+                      Remove
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="mt-1.5 flex items-center justify-end px-1 text-[10px] text-text-faint">
+                <span>Context {contextPercent}%</span>
               </div>
               <p className="mt-2 text-center text-[11px] text-text-faint">
                 Runs locally against your installed CLI in headless mode with real-time stream rendering.

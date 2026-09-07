@@ -145,7 +145,8 @@ export class Journal extends EventEmitter {
     let expectedPrevHash = entries.length > 0 && entries[0].prevHash ? entries[0].prevHash : GENESIS_HASH
     for (let i = 0; i < entries.length; i += 1) {
       const entry = entries[i]
-      if (entry.prevHash && entry.prevHash !== expectedPrevHash) {
+      const actualPrev = entry.prevHash || GENESIS_HASH
+      if (actualPrev !== expectedPrevHash) {
         return {
           valid: false,
           totalEntries: entries.length,
@@ -153,7 +154,7 @@ export class Journal extends EventEmitter {
           reason: `prevHash mismatch at seq ${entry.seq}: expected ${expectedPrevHash}, got ${entry.prevHash}`
         }
       }
-      const calculatedHash = computeEntryHash(entry.prevHash || expectedPrevHash, entry)
+      const calculatedHash = computeEntryHash(actualPrev, entry)
       if (entry.hash && entry.hash !== calculatedHash) {
         return {
           valid: false,

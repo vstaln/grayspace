@@ -1,7 +1,9 @@
 import * as fs from 'fs'
+import * as pathModule from 'path'
 import { dialog, ipcMain } from './shims.ts'
 import type { IpcDeps } from './types.ts'
 import { isLocalPath } from '../media.ts'
+import { getUserDataDir } from '../userData.ts'
 
 export function registerWorkspaceIpc(deps: IpcDeps): void {
   ipcMain.handle('workspace:get-dir', () => deps.getWorkspaceDir() ?? null)
@@ -13,6 +15,61 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     if (result.canceled || !result.filePaths[0]) return deps.getWorkspaceDir() ?? null
     deps.setWorkspaceDir(result.filePaths[0])
     return result.filePaths[0]
+  })
+
+  /** Creates a logical Workspace backed by its own private working folder.
+   * One Workspace owns the whole screen; terminals are sessions inside it. */
+  ipcMain.handle('workspace:create', async (_e, rawName: unknown) => {
+    const name = typeof rawName === 'string' ? rawName.trim() : ''
+    if (!name || name.length > 80 || name === '.' || name === '..' || /[<>:"/\\|?*\u0000-\u001f]/.test(name) || /[. ]$/.test(name)) {
+      return { error: 'Enter a valid workspace name.' }
+    }
+    try {
+      const root = pathModule.join(getUserDataDir(), 'workspaces')
+      await fs.promises.mkdir(root, { recursive: true })
+      const target = pathModule.join(root, name)
+      await fs.promises.mkdir(target)
+      deps.setWorkspaceDir(target)
+      return target
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code === 'EEXIST') return { error: 'A workspace with this name already exists.' }
+      return { error: err instanceof Error ? err.message : 'Could not create workspace.' }
+    }
+  })
+
+  ipcMain.handle('workspace:rename', (_e, rawPath: unknown, rawName: unknown) => {
+    if (typeof rawPath !== 'string' || !isLocalPath(rawPath) || typeof rawName !== 'string') return { error: 'Invalid workspace.' }
+    return deps.state.renameRecent(rawPath, rawName)
+  })
+
+  ipcMain.handle('workspace:code-workspaces', () => deps.state.codeWorkspaceState(deps.getWorkspaceDir()))
+  ipcMain.handle('workspace:create-code', (_e, rawName: unknown) => {
+    const folder = deps.getWorkspaceDir()
+    const result = deps.state.createCodeWorkspace(folder, typeof rawName === 'string' ? rawName : undefined)
+    if ('error' in result) return result
+    deps.code.setWorkspaceScope(deps.state.activeCodeWorkspaceScope(folder))
+    const next = deps.state.codeWorkspaceState(folder)
+    deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', next)
+    return result
+  })
+  ipcMain.handle('workspace:rename-code', (_e, rawId: unknown, rawName: unknown) => {
+    if (typeof rawId !== 'string' || typeof rawName !== 'string') return { error: 'Invalid workspace.' }
+    const result = deps.state.renameCodeWorkspace(deps.getWorkspaceDir(), rawId, rawName)
+    if (!('error' in result)) deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', result)
+    return result
+  })
+  ipcMain.handle('workspace:select-code', (_e, rawId: unknown) => {
+    if (typeof rawId !== 'string') return { error: 'Invalid workspace.' }
+    const folder = deps.getWorkspaceDir()
+    const result = deps.state.setActiveCodeWorkspace(folder, rawId)
+    if ('error' in result) return result
+    deps.code.setWorkspaceScope(
+      deps.state.activeCodeWorkspaceScope(folder),
+      result.activeId === result.workspaces[0]?.id ? folder : undefined
+    )
+    deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', result)
+    return result
   })
 
   // ---- remembered project folders ----------------------------------------

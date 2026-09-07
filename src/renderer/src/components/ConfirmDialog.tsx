@@ -1,5 +1,5 @@
-import React, { createContext, useCallback, useContext, useRef, useState } from 'react'
-import { useFocusTrap } from '../hooks/useFocusTrap'
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { useFocusTrap, isTopTrap, nextTrapId } from '../hooks/useFocusTrap'
 
 interface ConfirmOptions {
   title?: string
@@ -12,6 +12,7 @@ interface ConfirmOptions {
 interface PendingConfirm extends ConfirmOptions {
   message: string
   resolve(value: boolean): void
+  hashCode?: number
 }
 
 type Confirm = (message: string, options?: ConfirmOptions) => Promise<boolean>
@@ -27,24 +28,52 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
   const [pending, setPending] = useState<PendingConfirm | null>(null)
   const pendingRef = useRef<PendingConfirm | null>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
-  useFocusTrap(dialogRef, pending !== null)
+  const [pendingQueue, setPendingQueue] = useState<PendingConfirm[]>([])
+  const trapId = useFocusTrap(dialogRef, pending !== null)
 
   const confirm = useCallback<Confirm>(
     (message, options) => {
-      pendingRef.current?.resolve(false)
-      return new Promise((resolve) => {
-        const next = { message, resolve, ...options }
-        pendingRef.current = next
-        setPending(next)
+      // Queue new confirms when one is already pending
+      if (pendingRef.current) {
+        return new Promise<boolean>((resolve) => {
+          setPendingQueue((prev) => [...prev, { message, resolve, ...options } as PendingConfirm])
+        })
+      }
+      // Show immediately
+      return new Promise<boolean>((resolve) => {
+        pendingRef.current = { message, resolve, ...options } as PendingConfirm
+        setPending({ message, resolve, ...options } as PendingConfirm)
       })
     },
     []
   )
 
+  // Window-level Escape handler with frontmost check
+  useEffect(() => {
+    if (!pending) return
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' && trapId !== null && isTopTrap(trapId)) {
+        e.stopPropagation()
+        settle(false)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [pending, trapId])
+
   const settle = (value: boolean): void => {
     pending?.resolve(value)
     pendingRef.current = null
-    setPending(null)
+    
+    // If there are queued confirms, show the next one
+    if (pendingQueue.length > 0) {
+      const next = pendingQueue[0]
+      setPendingQueue((prev) => prev.slice(1))
+      setPending(next)
+      pendingRef.current = next
+    } else {
+      setPending(null)
+    }
   }
 
   return (
@@ -52,7 +81,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
       {children}
       {pending && (
         <div
-          className="fixed inset-0 z-[20000] grid place-items-center bg-black/50 p-3"
+          className="fixed inset-0 z-[70000] grid place-items-center bg-black/50 p-3 backdrop-blur-[2px]"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) settle(false)
           }}
@@ -62,12 +91,12 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
             role="alertdialog"
             aria-modal="true"
             aria-label={pending.title || 'Confirmation'}
-            className="max-h-[calc(100vh-24px)] w-full max-w-[340px] overflow-auto rounded-[10px] border border-line bg-bg-panel p-4 shadow-2xl glass:bg-bg-panel/90 glass:backdrop-blur-2xl"
+            aria-describedby="confirm-msg"
+            className="max-h-[calc(100vh-24px)] w-full max-w-[340px] overflow-auto rounded-[10px] border border-line bg-bg-panel p-4 shadow-2xl"
+            tabIndex={-1}  // Add tabIndex=-1 for focus trapping
             onKeyDown={(e) => {
-              // Otherwise Escape also bubbles to whatever full-screen panel
-              // this dialog is stacked on top of (e.g. Second Brain) and
-              // closes that too, when the user only meant to cancel.
-              if (e.key === 'Escape') {
+              // Only handle Escape if this is the frontmost trap
+              if (e.key === 'Escape' && isTopTrap(pendingRef.current?.hashCode ?? 0)) {
                 e.stopPropagation()
                 settle(false)
               }
@@ -76,7 +105,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
             {pending.title && (
               <h2 className="mb-1.5 truncate text-[13px] font-semibold text-text">{pending.title}</h2>
             )}
-            <p className="max-h-[40vh] overflow-auto text-[12.5px] leading-relaxed break-words text-text-dim">
+            <p id="confirm-msg" className="max-h-[40vh] overflow-auto text-[12.5px] leading-relaxed break-words text-text-dim">
               {pending.message}
             </p>
             <div className="mt-4 flex justify-end gap-2">

@@ -45,6 +45,11 @@ export function createAppStores(): AppStores {
   const coordination = new CoordinationStore(core.locks, (id) => core.actors.isAlive(id))
   const canvas = new CanvasStore()
   const code = new CodeStore()
+  const initialCodeWorkspace = state.codeWorkspaceState()
+  code.setWorkspaceScope(
+    state.activeCodeWorkspaceScope(),
+    initialCodeWorkspace.activeId === initialCodeWorkspace.workspaces[0]?.id ? state.workspaceDir : undefined
+  )
   const planner = new PlannerStore()
   const orchestration = new OrchestrationStore()
   const disposePlannerSync = initPlannerSync(planner, coordination)

@@ -1,7 +1,7 @@
 import * as http from 'http'
 import * as fs from 'fs'
 import { extname, join, normalize, resolve, sep } from 'path'
-import { CONTROL_PORT } from './config.ts'
+import { CONTROL_PORT, MAX_TERMINAL_WRITE_BYTES } from './config.ts'
 import { CoordinationStore, USER_AUTHOR } from './coordination.ts'
 import { TerminalManager } from './terminals.ts'
 import { CanvasStore } from './canvasState.ts'
@@ -15,7 +15,7 @@ import { TASK_MANAGER_TARGET } from './commands/board.ts'
 import { GIT_TARGET } from './commands/git.ts'
 import { NEW } from './commands/index.ts'
 import { applyLoopbackCors, isLoopbackRequest, secretsEqual } from './netGuard.ts'
-import { buildPresence, buildSnapshot } from './linkSnapshot.ts'
+import { APP_VERSION, buildPresence, buildSnapshot } from './linkSnapshot.ts'
 import type { AppState } from './appState.ts'
 import { fileResource, parseResource, type ActorType, type CommandErrorCode, type CommandResult, type Core } from './core/index.ts'
 
@@ -125,7 +125,11 @@ export function startControlServer(deps: ControlDeps): http.Server {
         const status = typeof (err as { statusCode?: unknown })?.statusCode === 'number'
           ? (err as { statusCode: number }).statusCode
           : 500
-        sendJson(res, status, { error: err instanceof Error ? err.message : String(err) })
+        if (err instanceof URIError) return sendJson(res, 400, { error: 'invalid URL encoding' });
+        const raw = (err as { statusCode?: unknown })?.statusCode
+        const status2 = typeof raw === 'number' && Number.isInteger(raw) && raw >= 400 && raw <= 599 ? (raw as number) : 500
+        const message = status2 >= 500 ? 'internal error' : err instanceof Error ? err.message : String(err)
+        sendJson(res, status2, { error: message })
       }
     })
   })
@@ -150,19 +154,32 @@ function isRendererPath(pathname: string): boolean {
 
 function serveRendererFile(rendererDir: string, pathname: string, res: http.ServerResponse, head: boolean): void {
   let relative: string
-  try { relative = normalize(decodeURIComponent(pathname === '/' ? '/index.html' : pathname)) } catch {
+  try {
+    // URL paths begin with `/`, but a leading slash is a filesystem root on
+    // Windows. Strip it before resolving so `/` and `/assets/*` stay inside
+    // the packaged renderer directory instead of resolving to `C:\index.html`.
+    const decoded = decodeURIComponent(pathname === '/' ? '/index.html' : pathname)
+    relative = normalize(decoded).replace(/^[/\\]+/, '')
+  } catch {
     res.writeHead(400).end(); return
   }
   // Prevent path traversal: resolve and verify the result is within rendererDir
+  // Windows FS is case-insensitive, so compare lower-cased.
   const resolved = resolve(rendererDir, relative)
-  if (!resolved.startsWith(rendererDir + sep) && resolved !== rendererDir) {
+  const lowerResolved = resolved.toLowerCase()
+  const lowerDir = rendererDir.toLowerCase()
+  if (!lowerResolved.startsWith(lowerDir + sep.toLowerCase()) && lowerResolved !== lowerDir) {
     res.writeHead(403).end(); return
   }
   const filePath = resolved
-  fs.readFile(filePath, (err, data) => {
-    if (err) { res.writeHead(404).end(); return }
-    res.writeHead(200, { 'Content-Type': rendererMime[extname(filePath)] ?? 'application/octet-stream', 'Cache-Control': pathname.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache' })
-    if (head) res.end(); else res.end(data)
+  fs.stat(filePath, (statErr, stat) => {
+    if (statErr || !stat.isFile()) { res.writeHead(404).end(); return }
+    if (stat.size > 20 * 1024 * 1024) { res.writeHead(413).end(); return }
+    fs.readFile(filePath, (err, data) => {
+      if (err) { res.writeHead(404).end(); return }
+      res.writeHead(200, { 'Content-Type': rendererMime[extname(filePath)] ?? 'application/octet-stream', 'Cache-Control': pathname.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache' })
+      if (head) res.end(); else res.end(data)
+    })
   })
 }
 
@@ -264,12 +281,22 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     })
   }
 
+  // Authenticated project context lets CLI agents distinguish a filesystem
+  // project from the logical Code Workspace currently selected inside it.
+  if (method === 'GET' && parts[0] === 'workspace' && parts[1] === 'code') {
+    const stateWithCode = deps.state as AppState & { codeWorkspaceState?: (folder?: string) => unknown }
+    return sendJson(res, 200, stateWithCode.codeWorkspaceState
+      ? stateWithCode.codeWorkspaceState(deps.defaultCwd())
+      : { workspaces: [], activeId: null, folder: deps.defaultCwd() ?? null })
+  }
+
   // ---- health ------------------------------------------------------------
   if (method === 'GET' && (parts.length === 0 || parts[0] === 'health')) {
     return sendJson(res, 200, {
       ok: true,
       app: 'orcspace',
       server: 'orcspace-control',
+      version: APP_VERSION,
       controlPort: CONTROL_PORT,
       workspaceDir: deps.defaultCwd() ?? null,
       terminals: terminals.list().length,
@@ -690,17 +717,21 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
 
   if (method === 'POST' && ((parts[0] === 'widgets' && parts[1] === 'terminal') || (parts[0] === 'terminal' && parts.length === 1))) {
     const body = await readJson(req)
+    const title = typeof body.title === 'string' ? body.title.trim().slice(0, 200) : undefined
+    const cwd = typeof body.cwd === 'string' ? body.cwd.slice(0, 1024) : undefined
     return reply(
       await submit(body, 'terminal.create', NEW.terminal, {
-        title: typeof body.title === 'string' ? body.title : undefined,
-        cwd: typeof body.cwd === 'string' ? body.cwd : undefined,
+        title: title || undefined,
+        cwd,
         agentOwned: true
       })
     )
   }
 
   if (method === 'DELETE' && (parts[0] === 'widgets' || parts[0] === 'terminal') && parts[1]) {
-    const id = decodeURIComponent(parts[1])
+    const rawId = safeDecode(parts[1])
+    if (!rawId || !/^[A-Za-z0-9_-]{1,128}$/.test(rawId)) return sendJson(res, 400, { error: 'invalid id' })
+    const id = rawId
     const body = await readJson(req)
     if (terminals.has(id)) return reply(await submit(body, 'terminal.dispose', `terminal:${id}`, {}))
     return reply(await submit(body, 'widget.remove', `widget:${id}`, {}))
@@ -712,8 +743,10 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
   }
 
   if (method === 'PATCH' && parts[0] === 'widgets' && parts[1]) {
+    const rawId = safeDecode(parts[1])
+    if (!rawId || !/^[A-Za-z0-9_-]{1,128}$/.test(rawId)) return sendJson(res, 400, { error: 'invalid id' })
     const body = await readJson(req)
-    return reply(await submit(body, 'widget.update', `widget:${decodeURIComponent(parts[1])}`, body))
+    return reply(await submit(body, 'widget.update', `widget:${rawId}`, body))
   }
 
   if (method === 'POST' && parts[0] === 'canvas' && parts[1] === 'camera') {
@@ -722,18 +755,28 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
   }
 
   if (method === 'POST' && parts[0] === 'terminal' && parts[2] === 'write') {
-    const id = decodeURIComponent(parts[1])
+    const rawId = safeDecode(parts[1])
+    if (!rawId || !/^[A-Za-z0-9_-]{1,128}$/.test(rawId)) return sendJson(res, 400, { error: 'invalid terminal id' })
+    const id = rawId
     const body = await readJson(req)
+    const text = typeof body.text === 'string' ? body.text : ''
+    // Refuse oversized writes here so they never queue on the bus or land in
+    // the journal; the pty layer enforces the same cap as a second gate.
+    if (Buffer.byteLength(text, 'utf8') > MAX_TERMINAL_WRITE_BYTES) {
+      return sendJson(res, 413, { error: `write exceeds ${MAX_TERMINAL_WRITE_BYTES} bytes` })
+    }
     return reply(
       await submit(body, 'terminal.write', `terminal:${id}`, {
-        text: typeof body.text === 'string' ? body.text : '',
+        text,
         pressEnter: body.pressEnter !== false
       })
     )
   }
 
   if (method === 'GET' && parts[0] === 'terminal' && parts[2] === 'output') {
-    const id = decodeURIComponent(parts[1])
+    const rawId = safeDecode(parts[1])
+    if (!rawId || !/^[A-Za-z0-9_-]{1,128}$/.test(rawId)) return sendJson(res, 400, { error: 'invalid terminal id' })
+    const id = rawId
     if (url.searchParams.get('full') === '1') {
       const output = terminals.fullOutput(id)
       if (output === null) return sendJson(res, 404, { error: 'terminal not found' })
@@ -749,7 +792,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
 
 function runTarget(runId: unknown): string {
   const id = String(runId ?? '').trim()
-  return id ? `run:${id}` : NEW.run
+  if (!id) return NEW.run
+  // runIds are generated as `run-<counter>`; reject path-shaped input before
+  // it can become a resource target the lock gate would then honor.
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) {
+    throw Object.assign(new Error('invalid runId'), { statusCode: 400 })
+  }
+  return `run:${id}`
 }
 
 function clampInt(raw: string | null, fallback: number, min: number, max: number): number {
@@ -758,6 +807,19 @@ function clampInt(raw: string | null, fallback: number, min: number, max: number
   return Math.min(max, Math.max(min, Math.trunc(parsed)))
 }
 
+/** decodeURIComponent that returns null instead of throwing on malformed `%`. */
+function safeDecode(part: string): string | null {
+  try {
+    return decodeURIComponent(part)
+  } catch {
+    return null
+  }
+}
+
+/** Active long-poll waiters; caps fd/timer exhaustion with a stolen token. */
+let activeWaiters = 0
+const MAX_WAITERS = 50
+
 function waitForInbox(
   orchestration: OrchestrationStore,
   agentId: string,
@@ -765,11 +827,16 @@ function waitForInbox(
   timeoutMs: number,
   req: http.IncomingMessage
 ): Promise<unknown[]> {
+  // A stolen token must not exhaust fds/timers with hour-long polls: beyond
+  // the cap, answer immediately with whatever is already there (usually []).
+  if (activeWaiters >= MAX_WAITERS) return Promise.resolve(orchestration.inbox(agentId, filter))
+  activeWaiters += 1
   return new Promise((resolve) => {
     let done = false
     const finish = (value: unknown[]): void => {
       if (done) return
       done = true
+      activeWaiters = Math.max(0, activeWaiters - 1)
       clearTimeout(timer)
       orchestration.off('message', onMessage)
       req.off('close', onClose)
@@ -798,11 +865,14 @@ function waitForReply(
   timeoutMs: number,
   req: http.IncomingMessage
 ): Promise<unknown> {
+  if (activeWaiters >= MAX_WAITERS) return Promise.resolve(orchestration.replyTo(askId) ?? null)
+  activeWaiters += 1
   return new Promise((resolve) => {
     let done = false
     const finish = (value: unknown): void => {
       if (done) return
       done = true
+      activeWaiters = Math.max(0, activeWaiters - 1)
       clearTimeout(timer)
       orchestration.off('message', onMessage)
       req.off('close', onClose)
@@ -830,7 +900,8 @@ function readJson(req: http.IncomingMessage): Promise<Json> {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      req.destroy()
+      // Don't destroy — let the caller send JSON error; just stop collecting and drain.
+      req.resume()
       const error = new Error(message) as Error & { statusCode: number }
       error.statusCode = statusCode
       reject(error)
@@ -855,7 +926,9 @@ function readJson(req: http.IncomingMessage): Promise<Json> {
       clearTimeout(timer)
       if (chunks.length === 0) return resolve({})
       try {
-        const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'), (k: string, v: unknown) =>
+          k === '__proto__' || k === 'prototype' || k === 'constructor' ? undefined : v
+        )
         if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
           const error = new Error('request body must be a JSON object') as Error & { statusCode: number }
           error.statusCode = 400

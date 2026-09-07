@@ -327,9 +327,11 @@ export class PlannerStore extends EventEmitter {
           } catch (err) {
             console.error('failed to persist planner', err)
           }
+        } else {
+          this.eventsSinceSnapshot = 0
         }
       })
-    this.eventsSinceSnapshot = 0
+      .catch((err) => console.error('planner flushAsync chain broke', err))
   }
 
   dispose(): void {

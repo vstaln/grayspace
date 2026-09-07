@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Bot, CheckCircle2, Layers, RefreshCw, User, X } from 'lucide-react'
+import { Bot, Layers, User, X } from 'lucide-react'
 import type { CoordinationSnapshot, Task, TaskState } from '../../../preload/index.d'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { useConfirm } from './ConfirmDialog'
-import { frost, lanes, palette } from '../design'
+import { lanes, palette } from '../design'
 
 interface Props {
   snapshot: CoordinationSnapshot
@@ -60,43 +60,60 @@ export default function KanbanBoard({
   const [newTaskTitle, setNewTaskTitle] = useState('')
   const [creating, setCreating] = useState(false)
   const panelRef = useRef<HTMLElement>(null)
+  const busyIdsRef = useRef<Set<string>>(new Set())
+  const maintenanceBusyRef = useRef(false)
+  const creatingRef = useRef(false)
+  const aliveRef = useRef(true)
   const confirm = useConfirm()
+
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+    }
+  }, [])
 
   useFocusTrap(panelRef, !embedded)
 
   const maintenance = async (kind: 'manager' | 'locks'): Promise<void> => {
-    if (maintenanceBusy) return
+    if (maintenanceBusyRef.current) return
+    maintenanceBusyRef.current = true
     setMaintenanceBusy(kind)
     try {
       const result = kind === 'manager' ? await onResetManager() : await onReleaseLocks()
+      if (!aliveRef.current) return
       if (!result.ok) {
         setError(result.error ?? (kind === 'manager' ? 'Manager reset failed' : 'Failed to release locks'))
       } else {
         setError(null)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (aliveRef.current) setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setMaintenanceBusy(null)
+      maintenanceBusyRef.current = false
+      if (aliveRef.current) setMaintenanceBusy(null)
     }
   }
 
   const createTask = async (event: React.FormEvent): Promise<void> => {
     event.preventDefault()
     const title = newTaskTitle.trim()
-    if (!onCreate || !title || creating) return
+    if (!onCreate || !title || creating || creatingRef.current) return
+    creatingRef.current = true
     setCreating(true)
     try {
       const result = await onCreate(title)
+      if (!aliveRef.current) return
       if (!result.ok) setError(result.error ?? 'Task creation failed')
       else {
         setNewTaskTitle('')
         setError(null)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (aliveRef.current) setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setCreating(false)
+      creatingRef.current = false
+      if (aliveRef.current) setCreating(false)
     }
   }
 
@@ -127,10 +144,12 @@ export default function KanbanBoard({
   }, [snapshot])
 
   const run = async (id: string, action: () => Promise<{ ok: boolean; error?: string }>): Promise<void> => {
-    if (busyIds.has(id)) return
+    if (busyIdsRef.current.has(id)) return
+    busyIdsRef.current.add(id)
     setBusyIds((cur) => new Set(cur).add(id))
     try {
       const result = await action()
+      if (!aliveRef.current) return
       if (!result.ok) {
         setOptimisticOverrides((prev) => {
           const next = { ...prev }
@@ -142,6 +161,7 @@ export default function KanbanBoard({
         setError(null)
       }
     } catch (err) {
+      if (!aliveRef.current) return
       setOptimisticOverrides((prev) => {
         const next = { ...prev }
         delete next[id]
@@ -149,11 +169,14 @@ export default function KanbanBoard({
       })
       setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setBusyIds((cur) => {
-        const next = new Set(cur)
-        next.delete(id)
-        return next
-      })
+      busyIdsRef.current.delete(id)
+      if (aliveRef.current) {
+        setBusyIds((cur) => {
+          const next = new Set(cur)
+          next.delete(id)
+          return next
+        })
+      }
     }
   }
 
@@ -178,6 +201,7 @@ export default function KanbanBoard({
   const totalTasks = effectiveTasks.length
   const doneTasks = effectiveTasks.filter((t) => t.state === 'done').length
   const inProgressTasks = effectiveTasks.filter((t) => t.state === 'in_progress' || t.state === 'review').length
+  const hasPending = busyIds.size > 0 || maintenanceBusy !== null || creating
 
   return (
     <section
@@ -191,18 +215,18 @@ export default function KanbanBoard({
           ? 'board-shell flex h-full flex-col overflow-hidden'
           : 'board-shell pop-in fixed inset-[76px_7%_42px] z-[12000] mx-auto flex w-auto min-w-0 max-w-[min(100%,1400px)] flex-col overflow-hidden rounded-[10px] border border-line-soft shadow-[0_28px_80px_rgba(0,0,0,0.7)] sm:min-w-[min(100%,760px)]'
       }
-      style={{ background: palette.graphite, backdropFilter: frost.board, WebkitBackdropFilter: frost.board }}
+      style={{ background: palette.graphite }}
     >
-      <header className="flex min-h-[46px] items-center justify-between gap-3 border-b border-line-soft px-4">
-        <div className="flex items-center gap-2.5 min-w-0">
+      <header className="flex min-h-[46px] flex-wrap items-center justify-between gap-3 border-b border-line-soft px-4">
+        <div className="flex min-w-0 items-center gap-2.5">
           <Layers size={15} className="flex-none text-accent" />
           <h2 className="min-w-0 truncate text-[14px] font-medium text-text">Task Board</h2>
           <span className="flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent border border-accent/20">
-            <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
+            <span className={`h-1.5 w-1.5 rounded-full bg-accent ${hasPending ? 'animate-pulse' : ''}`} />
             Synced with Planner
           </span>
         </div>
-        <div className="flex flex-none items-center gap-2">
+        <div className="flex min-w-0 flex-none flex-wrap items-center gap-2">
           <div className="flex items-center gap-1 text-[12px] text-text-dim tabular-nums">
             {inProgressTasks > 0 && (
               <span className="mr-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-400 font-medium">
@@ -214,7 +238,7 @@ export default function KanbanBoard({
           </div>
           {snapshot?.managerId && (
             <button
-              className="rounded-[8px] border border-line-soft px-2 py-1 text-[11px] text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text disabled:opacity-40"
+              className="hidden min-[420px]:inline-flex items-center rounded-[8px] border border-line-soft px-2 py-1 text-[11px] text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text disabled:opacity-40"
               disabled={maintenanceBusy !== null}
               onClick={() => void maintenance('manager')}
               title="Clear the current lead so any agent can claim the role again"
@@ -223,7 +247,7 @@ export default function KanbanBoard({
             </button>
           )}
           <button
-            className="rounded-[8px] border border-line-soft px-2 py-1 text-[11px] text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text disabled:opacity-40"
+            className="hidden min-[420px]:inline-flex items-center rounded-[8px] border border-line-soft px-2 py-1 text-[11px] text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text disabled:opacity-40"
             disabled={maintenanceBusy !== null}
             onClick={() => void maintenance('locks')}
             title="Force-release every file lock"
@@ -254,25 +278,27 @@ export default function KanbanBoard({
             placeholder="Add a task…"
             aria-label="New task title"
             disabled={creating}
+            maxLength={200}
             className="h-8 min-w-0 flex-1 rounded-[8px] border border-line-soft bg-bg-raise px-2.5 text-[12px] text-text outline-none placeholder:text-text-faint focus:border-accent disabled:opacity-50"
           />
           <button
             type="submit"
             disabled={creating || !newTaskTitle.trim()}
-            className="h-8 rounded-[8px] bg-accent px-3 text-[11px] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
+            className="flex h-8 items-center gap-1.5 rounded-[8px] bg-accent px-3 text-[11px] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
           >
-            Add
+            {creating && <span className="h-3 w-3 animate-spin rounded-full border border-bg/40 border-t-bg" aria-hidden />}
+            {creating ? 'Adding…' : 'Add'}
           </button>
         </form>
       )}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-auto p-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="@container grid min-h-0 flex-1 grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-4 overflow-auto p-4">
         {COLUMNS.map((column) => {
           const tasks = effectiveTasks.filter((t) => column.states.includes(t.state))
           return (
             <div
               key={column.state}
-              className={`flex min-h-0 min-w-[200px] flex-col overflow-hidden rounded-[10px] transition-colors duration-200 ${
+              className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[10px] transition-colors duration-200 ${
                 overColumn === column.state ? 'bg-bg-hover/40 ring-1 ring-accent/30' : ''
               }`}
               onDragOver={(e) => {
@@ -377,7 +403,7 @@ function TaskCard({
           {task.title}
         </span>
         <button
-          className="absolute top-2.5 right-2 flex h-5 w-5 items-center justify-center rounded-[8px] bg-transparent text-text-dim opacity-0 transition-all duration-150 hover:bg-danger hover:text-white group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+          className="absolute top-2.5 right-2 flex h-5 w-5 items-center justify-center rounded-[8px] bg-transparent text-text-dim opacity-0 transition-all duration-150 hover:bg-danger hover:text-white group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100"
           disabled={busy}
           onClick={onDelete}
           title="Delete"

@@ -48,6 +48,9 @@ const baseLayer: Sheet = {
     color: 'var(--tok-color-text)',
     background: 'var(--tok-color-bg)'
   },
+  'body.is-dragging iframe, body.is-dragging webview, body.is-dragging embed': {
+    pointerEvents: 'none !important'
+  },
   // The blanket `user-select: none` above is what keeps a drag on the canvas
   // from painting a text selection across the whole shell — but it inherits
   // into real content too, and on macOS (where selecting and copying text is a
@@ -70,12 +73,12 @@ const baseLayer: Sheet = {
     background: 'transparent'
   },
   '::-webkit-scrollbar-thumb': {
-    background: '#3a3f4a',
+    background: palette.scrollThumb,
     borderRadius: '6px',
     backgroundClip: 'padding-box',
     border: '2px solid transparent'
   },
-  '::-webkit-scrollbar-thumb:hover': { background: '#4a5160' },
+  '::-webkit-scrollbar-thumb:hover': { background: palette.scrollThumbHover },
   '::-webkit-scrollbar-corner': { background: 'transparent' },
   // A translucent theme lets the desktop show through the window itself.
   'html[data-translucent], html[data-translucent] body, html[data-translucent] #root': {
@@ -94,8 +97,19 @@ const componentsLayer: Sheet = {
   '.rail-shell': {
     background: palette.graphite,
     boxShadow: `inset -1px 0 0 ${hairline.faint}`,
+    // The whole rail is a draggable caption area. Every interactive control
+    // inside it must opt out of that region or Chromium treats clicks as window
+    // drags (the expanded Workspace plus/Open folder looked completely dead).
+    'button, input, textarea, select, [role="button"]': {
+      WebkitAppRegion: 'no-drag'
+    },
     'html[data-translucent] &': {
       background: palette.graphite,
+      backdropFilter: frost.shell,
+      WebkitBackdropFilter: frost.shell
+    },
+    '&.is-expanded': {
+      background: 'rgba(9, 10, 12, 0.94)',
       backdropFilter: frost.shell,
       WebkitBackdropFilter: frost.shell
     }
@@ -198,18 +212,31 @@ const componentsLayer: Sheet = {
       boxShadow: `0 0 0 1px ${hairline.glassSoft}`
     },
     'html[data-translucent] &.is-active': { boxShadow: `0 0 0 1px ${hairline.activeGlass}` },
-    // A terminal is a text surface, not a window onto the wallpaper: it keeps
-    // one opaque fill in every theme. The explicit translucent-theme rule is
-    // required to out-rank `html[data-translucent] .widget-shell` above.
+    // Canvas terminals are glass: the wallpaper remains visible behind a
+    // restrained black veil and 20px frost. Code terminals use their own
+    // opaque black shell below.
     '&.is-terminal': { background: palette.terminalSolid },
     'html[data-translucent] &.is-terminal': {
       background: palette.terminalSolid,
       backdropFilter: 'none',
       WebkitBackdropFilter: 'none'
     },
-    // One flat slab: the header drops its own graphite coat and its underline
-    // hairline, so frame, header and terminal body are a single tone.
-    '&.is-terminal .widget-header-shell': { background: 'transparent', boxShadow: 'none' }
+    '&.is-terminal.is-canvas-terminal': {
+      background: palette.terminalGlass,
+      backdropFilter: frost.terminal,
+      WebkitBackdropFilter: frost.terminal
+    },
+    'html[data-translucent] &.is-terminal.is-canvas-terminal': {
+      background: palette.terminalGlass,
+      backdropFilter: frost.terminal,
+      WebkitBackdropFilter: frost.terminal
+    },
+    // Terminal header: fixed graphite surface; the body remains transparent
+    // in Canvas and pure black in Code.
+    '&.is-terminal .widget-header-shell': {
+      background: palette.titleBar.surface,
+      boxShadow: `inset 0 -1px 0 ${hairline.soft}`
+    },
   },
 
   '.widget-header-shell': {
@@ -316,18 +343,26 @@ const componentsLayer: Sheet = {
 
 
   '.term-shell': {
-    // The terminal's frame (.widget-shell.is-terminal) is fully opaque in every
-    // theme, so this wrapper stays clear — no fill and no frosting of its own;
-    // the wallpaper can no longer show through the body.
+    // The frame owns the surface (opaque black in Code, glass in Canvas), so
+    // this wrapper stays clear and does not add a second veil.
     '& .xterm': { height: '100%' },
-    // xterm paints its own background on a canvas CSS can't reach — see
-    // TerminalWidget.tsx's xtermTheme, which uses the frame's exact
-    // `terminalSolid`. These wrapper divs just stay out of the way.
-    '& .xterm, & .xterm-screen, & .xterm-viewport': { background: 'transparent !important' },
+    // Keep the xterm layers opaque as well as the canvas theme. Full-screen
+    // TUIs use an alternate buffer; transparent layers can drop glyphs when
+    // the canvas is composited over the wallpaper.
+    '& .xterm, & .xterm-screen, & .xterm-viewport': { background: `${palette.terminalSolid} !important` },
     // Scrolling stays fully functional (wheel/trackpad) — only the visible
     // scrollbar track/thumb is hidden, so nothing overlaps the terminal text.
     '& .xterm-viewport::-webkit-scrollbar': { width: '0px' },
     '& .xterm-viewport': { scrollbarWidth: 'none' }
+  },
+
+  // Code sessions are intentionally a pure black work surface even when the
+  // app is using the photo/translucent theme.
+  '.code-terminal-shell': {
+    background: '#0b0b0d',
+    borderColor: hairline.soft,
+    '& .code-session-header': { background: palette.titleBar.surface },
+    '& .code-session-header:hover': { background: palette.titleBar.active }
   },
 
   // The lit cable between an agent's terminal and the one it opened. A thin
@@ -359,8 +394,7 @@ const componentsLayer: Sheet = {
   '.conn-idle-dot': {
     filter: 'drop-shadow(0 0 3px rgba(200,215,255,0.75))'
   },
-  // Kanban lanes keep a faint colour identity per status — a low-alpha tint over
-  // the flat fill rather than a gradient, so they stay legible without glowing.
+  // Kanban lanes retain restrained semantic colour while the surfaces stay neutral.
   '.lane-blue': { background: lanes.blue.fill, borderColor: lanes.blue.border },
   '.lane-amber': { background: lanes.amber.fill, borderColor: lanes.amber.border },
   '.lane-green': { background: lanes.green.fill, borderColor: lanes.green.border },

@@ -122,6 +122,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
 
   const fetchStats = useCallback(async (): Promise<void> => {
     const seq = ++statsSeqRef.current
+    setLoading(true)
     try {
       const res = await window.api.system.stats()
       if (seq !== statsSeqRef.current) return
@@ -138,6 +139,8 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
     } catch (err) {
       if (seq !== statsSeqRef.current) return
       showNotice(err instanceof Error ? err.message : String(err))
+    } finally {
+      if (seq === statsSeqRef.current) setLoading(false)
     }
   }, [showNotice])
 
@@ -155,6 +158,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
     document.addEventListener('visibilitychange', onVisible)
     return () => {
       clearInterval(interval)
+      statsSeqRef.current += 1
       document.removeEventListener('visibilitychange', onVisible)
       if (noticeTimerRef.current !== null) {
         clearTimeout(noticeTimerRef.current)
@@ -180,7 +184,11 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
     })
     if (!ok) return
     try {
-      await window.api.coordination.releaseLocks()
+      const result = await window.api.coordination.releaseLocks()
+      if (result && typeof result === 'object' && 'error' in result && result.error) {
+        showNotice(`Failed to release locks: ${String(result.error)}`)
+        return
+      }
       showNotice('All resource locks released')
     } catch {
       showNotice('Failed to release locks')
@@ -195,7 +203,11 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
     })
     if (!ok) return
     try {
-      await window.api.terminal.dispose(id)
+      const result = await window.api.terminal.dispose(id)
+      if (result && typeof result === 'object' && 'error' in result && result.error) {
+        showNotice(`Failed to close ${title}: ${String(result.error)}`)
+        return
+      }
       showNotice(`Closed ${title}`)
       void fetchStats()
     } catch {
@@ -209,7 +221,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
   return (
     <div
       ref={rootRef}
-      className="flex h-full min-h-0 flex-col bg-bg-panel/95 text-text"
+      className="flex h-full min-h-0 flex-col bg-bg-panel text-text"
       data-canvas-scroll-lock="true"
       onWheel={(e) => e.stopPropagation()}
     >
@@ -279,7 +291,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
             title="Refresh now"
             aria-label="Refresh stats"
           >
-            <RefreshCw size={12} />
+            <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
       </div>
@@ -305,7 +317,10 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
               </span>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {/* Widget-width grid, not viewport breakpoints: an md: split inside a
+                narrow widget squeezed every card. auto-fit keeps one column
+                when narrow and fills the row when wide. */}
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-2">
               {stats.agents
                 .filter((a) => a.isOpen || a.fiveHour.requests > 0 || a.weekly.requests > 0)
                 .map((ag) => {
@@ -330,7 +345,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
                             <span className="font-semibold text-text truncate text-xs">{ag.name}</span>
                           </div>
                           <span
-                            className={`flex items-center gap-1 rounded-full px-1.5 py-0.2 text-[10px] font-medium border ${
+                            className={`flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium border ${
                               ag.isOpen
                                 ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
                                 : 'border-line-soft bg-bg-hover/40 text-text-dim'
@@ -349,7 +364,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
                               <span className="truncate text-text-faint">({ag.accountEmail})</span>
                             )}
                             {ag.tierName && (
-                              <span className="rounded bg-bg-hover px-1 py-0.2 text-[9px] text-text-dim">{ag.tierName}</span>
+                              <span className="rounded bg-bg-hover px-1 py-0.5 text-[9px] text-text-dim">{ag.tierName}</span>
                             )}
                           </div>
                         )}
@@ -523,7 +538,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
             </div>
             <div className="flex justify-between text-text-dim">
               <span>Hostname:</span>
-              <span className="font-medium text-text truncate max-w-[110px]">{stats?.hostname || '—'}</span>
+              <span className="font-medium text-text truncate max-w-[110px]" title={stats?.hostname}>{stats?.hostname || '—'}</span>
             </div>
             <div className="flex justify-between text-text-dim">
               <span>System Uptime:</span>

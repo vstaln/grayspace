@@ -21,10 +21,14 @@ export function useCoordination() {
         // IPC hiccup: keep the empty mirror; the board widget shows its own
         // error banner and the next onChange/retry repopulates it.
       })
-    return window.api.coordination.onChange((s) => {
+    const off = window.api.coordination.onChange((s) => {
       seqRef.current += 1
       setSnapshot(s)
     })
+    return () => {
+      seqRef.current += 1
+      off()
+    }
   }, [])
 
   const createTask = useCallback(async (title: string, brief?: string): Promise<{ ok: boolean; error?: string }> => {
@@ -67,8 +71,12 @@ export function useCoordination() {
   }, [])
 
   const resetManager = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    const seq = ++seqRef.current
     try {
-      setSnapshot(await window.api.coordination.resetManager())
+      const next = await window.api.coordination.resetManager()
+      // An onChange can arrive while the recovery call is in flight. Do not
+      // replace that newer snapshot with the response captured before it.
+      if (seq === seqRef.current) setSnapshot(next)
       return { ok: true }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -76,8 +84,10 @@ export function useCoordination() {
   }, [])
 
   const releaseLocks = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    const seq = ++seqRef.current
     try {
-      setSnapshot(await window.api.coordination.releaseLocks())
+      const next = await window.api.coordination.releaseLocks()
+      if (seq === seqRef.current) setSnapshot(next)
       return { ok: true }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }

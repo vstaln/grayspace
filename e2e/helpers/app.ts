@@ -20,7 +20,31 @@ export interface OrcSpaceFixture {
   controlToken: string
 }
 
-export const appRoot = path.resolve(__dirname, '..', '..')
+// Optional viewport size overrides; when supplied the launched app window
+// will be resized after startup so tests can assert layout at specific scales.
+export type ViewportSize = { width: number; height: number }
+
+export interface LaunchOptions {
+  profileDir?: string
+  viewport?: ViewportSize
+}
+
+// Playwright runs from the package root; cwd avoids ESM/CJS dirname
+// differences and keeps this helper compatible with the e2e tsconfig.
+export const appRoot = path.resolve(process.cwd())
+
+/** Keep polling comparisons in character space, not raw ANSI byte space. */
+function stripTerminalControls(value: string): string {
+  return value
+    // Preserve the UTF-16 length while hiding terminal controls. An OSC/CSI
+    // sequence can be split across PTY chunks; deleting it only after its
+    // terminator arrives would shift every later `slice(before)` offset and
+    // make command polling race itself. Fixed-width spaces keep offsets stable.
+    .replace(/\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g, (match) => ' '.repeat(match.length))
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, (match) => ' '.repeat(match.length))
+    .replace(/\u001b[@-_]/g, (match) => ' '.repeat(match.length))
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ')
+}
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -41,7 +65,7 @@ function freePort(): Promise<number> {
  *   can leak in, and main's MCP auto-config sync is disabled for it.
  * - One free backend port per instance keeps parallel runs isolated.
  */
-export async function launchOrcSpace(options?: { profileDir?: string }): Promise<OrcSpaceFixture> {
+export async function launchOrcSpace(options?: LaunchOptions): Promise<OrcSpaceFixture> {
   const mainJs = path.join(appRoot, 'out', 'main', 'index.js')
   if (!fs.existsSync(mainJs)) {
     throw new Error(`Electron entry not built at ${mainJs} — run "npm run build" first.`)
@@ -64,6 +88,10 @@ export async function launchOrcSpace(options?: { profileDir?: string }): Promise
 
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
+
+  if (options?.viewport) {
+    await page.setViewportSize(options.viewport)
+  }
 
   let controlToken = ''
   for (let i = 0; i < 40 && !controlToken; i++) {
@@ -131,8 +159,12 @@ export async function controlSend(
 
 /** Live pty scrollback of one terminal (reads from the start, never clears). */
 export async function readTerminalOutput(fixture: OrcSpaceFixture, id: string): Promise<string> {
-  const data = await controlGet(fixture, `/terminal/${encodeURIComponent(id)}/output`)
-  return typeof data.output === 'string' ? data.output : ''
+  // The normal endpoint is an incremental agent reader. E2E polling needs a
+  // stable snapshot: repeated polls must not depend on another reader's
+  // offset, and byte-based ring offsets cannot be compared to JS string
+  // lengths when the Windows banner contains Cyrillic characters.
+  const data = await controlGet(fixture, `/terminal/${encodeURIComponent(id)}/output?full=1`)
+  return typeof data.output === 'string' ? stripTerminalControls(data.output) : ''
 }
 
 /** Polls the pty buffer until `predicate` matches, for slow shell startup. */
@@ -143,12 +175,14 @@ export async function waitForTerminalOutput(
   timeoutMs = 20_000
 ): Promise<string> {
   const deadline = Date.now() + timeoutMs
+  let lastOutput = ''
   while (Date.now() < deadline) {
     const output = await readTerminalOutput(fixture, id)
+    lastOutput = output
     if (predicate(output)) return output
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
-  throw new Error(`timed out waiting for terminal ${id} output`)
+  throw new Error(`timed out waiting for terminal ${id} output; last bytes: ${JSON.stringify(lastOutput.slice(-500))}`)
 }
 
 /** Terminals currently live in the app, via `GET /widgets` (shells + widgets). */

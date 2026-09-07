@@ -6,12 +6,12 @@ import TitleBar from './components/TitleBar'
 import type { WorkView } from './components/TitleBar'
 import { useCanvas, MAX_WIDGETS } from './hooks/useCanvas'
 import { useCoordination } from './hooks/useCoordination'
-import { Camera, MIN_H, MIN_W, Point, ResizeDir, Stroke, Widget, WidgetKind } from './types'
+import { Camera, MIN_H, MIN_W, NON_MAXIMIZABLE, Point, ResizeDir, Stroke, Widget, WidgetKind, WIDGET_DEFAULTS, WIDGET_H, WIDGET_W } from './types'
 import Toolbar from './components/Toolbar'
 import ErrorBoundary from './components/ErrorBoundary'
 import StrokesLayer from './components/StrokesLayer'
 import ConnectionsLayer from './components/ConnectionsLayer'
-import { ThemeProvider, useTheme } from './theme'
+import { ThemeProvider, useTheme, wallpaperBackgroundImage } from './theme'
 import { ConfirmProvider, useConfirm } from './components/ConfirmDialog'
 import { useSettings } from './hooks/useSettings'
 import { DRAW_CLICK_THRESHOLD_PX } from './lib/canvasMetrics'
@@ -39,41 +39,48 @@ export default function App(): React.JSX.Element {
   // it pays nothing for the guest process. Same for the Code view.
   const [chatStarted, setChatStarted] = useState(false)
   const [codeStarted, setCodeStarted] = useState(false)
-  const workspaceDirForUiRef = useRef<string | null>(null)
+  const codeWorkspaceIdRef = useRef('code-default')
+  const workspaceViewLoadRef = useRef(0)
 
   // Restore Code sessions + last active view per workspace — so closing the
   // app with Code terminals running brings them back instead of starting empty
   // (user request: "сохранение на вкладку code после закрытия приложения").
   useEffect(() => {
-    void window.api.workspace.getDir().then((dir) => {
-      workspaceDirForUiRef.current = dir
-    }).catch(() => {})
-    const offDir = window.api.workspace.onDirChange((dir) => {
-      workspaceDirForUiRef.current = dir
-    })
-    void window.api.code
-      .load()
-      .then((snap) => {
-        if (snap.sessions && snap.sessions.length > 0) setCodeStarted(true)
-        const av = (snap as unknown as { activeView?: WorkView }).activeView
-        // backward compat: old saves stored 'browser', now 'chat'
-        const normalizedAv = av === ('browser' as unknown as WorkView) ? ('chat' as WorkView) : av
-        if (av === 'code' && snap.sessions.length > 0) {
+    let mounted = true
+    const restoreWorkspaceView = (workspaceId: string): void => {
+      const request = ++workspaceViewLoadRef.current
+      void window.api.code.load().then((snap) => {
+        if (!mounted || request !== workspaceViewLoadRef.current || codeWorkspaceIdRef.current !== workspaceId) return
+        if ((snap?.sessions ?? []).length > 0) setCodeStarted(true)
+        const av = (snap as unknown as { activeView?: WorkView } | null | undefined)?.activeView ?? null
+        // Keep the last surface selected independently for every workspace.
+        if (av === 'code') {
           setCodeStarted(true)
           setActiveView('code')
-        } else if (normalizedAv === 'chat') {
+        } else if (av === 'chat' || av === ('browser' as unknown as WorkView)) {
           setChatStarted(true)
           setActiveView('chat')
-        } else if (normalizedAv === 'canvas') {
+        } else if (av === 'canvas') {
           setActiveView('canvas')
         }
-      })
-      .catch(() => {})
+      }).catch(() => {})
+    }
+    void window.api.workspace.codeWorkspaces().then((state) => {
+      if (!mounted) return
+      codeWorkspaceIdRef.current = state?.activeId ?? 'code-default'
+      restoreWorkspaceView(codeWorkspaceIdRef.current)
+    }).catch(() => {})
+    const offWorkspace = window.api.workspace.onCodeWorkspaceChange((state) => {
+      codeWorkspaceIdRef.current = state?.activeId ?? 'code-default'
+      restoreWorkspaceView(codeWorkspaceIdRef.current)
+    })
     const offCode = window.api.code.onChange((snap) => {
-      if (snap.sessions && snap.sessions.length > 0) setCodeStarted((prev) => prev || true)
+      if ((snap?.sessions ?? []).length > 0) setCodeStarted((prev) => prev || true)
     })
     return () => {
-      offDir()
+      mounted = false
+      workspaceViewLoadRef.current += 1
+      offWorkspace()
       offCode()
     }
   }, [])
@@ -82,7 +89,9 @@ export default function App(): React.JSX.Element {
     if (view === 'chat') setChatStarted(true)
     if (view === 'code') setCodeStarted(true)
     setActiveView(view)
-    void window.api.code.save({ activeView: view, workspaceDir: workspaceDirForUiRef.current }).catch(() => {})
+    // Main validates the active workspace itself. Omitting the optional stamp
+    // avoids dropping a click made before the initial getDir() reply arrives.
+    void window.api.code.save({ activeView: view, codeWorkspaceId: codeWorkspaceIdRef.current }).catch(() => {})
   }, [])
 
   const { toasts, push, dismiss } = useToasts()
@@ -97,19 +106,19 @@ export default function App(): React.JSX.Element {
             <TitleBar activeView={activeView} onViewChange={showView} />
             <div className="flex flex-1 flex-col">
               <ErrorBoundary>
-                <OrcSpaceCanvas active={activeView === 'canvas'} />
+                <OrcSpaceCanvas active={activeView === 'canvas'} activeView={activeView} />
               </ErrorBoundary>
             </div>
             {chatStarted && (
               <ErrorBoundary>
-                <Suspense fallback={null}>
+                <Suspense fallback={<div role="status" className="grid h-full place-items-center text-text-dim">Loading…</div>}>
                   <ChatPane active={activeView === 'chat'} />
                 </Suspense>
               </ErrorBoundary>
             )}
             {codeStarted && (
               <ErrorBoundary>
-                <Suspense fallback={null}>
+                <Suspense fallback={<div role="status" className="grid h-full place-items-center text-text-dim">Loading…</div>}>
                   <CodeView active={activeView === 'code'} />
                 </Suspense>
               </ErrorBoundary>
@@ -123,20 +132,12 @@ export default function App(): React.JSX.Element {
 }
 
 /**
- * Only safe image data-URLs from main's media picker. Reject anything else so a
- * poisoned settings value cannot inject CSS via `url("...")` (quotes, `)`, etc.).
+ * The user's photo, shown behind the whole window in the `photo` theme.
+ * Validation lives in theme.tsx (`wallpaperBackgroundImage`) and is shared
+ * with the Sidebar preview.
  */
-function wallpaperBackgroundImage(background: string | null): string | undefined {
-  if (!background) return undefined
-  if (!/^data:image\/(png|jpe?g|gif|webp|avif|bmp);base64,[A-Za-z0-9+/=]+$/i.test(background)) {
-    return undefined
-  }
-  return `url("${background}")`
-}
-
-/** The user's photo, shown behind the whole window in the `photo` theme. */
 function Wallpaper(): React.JSX.Element | null {
-  const { theme, background, dim, blur, pickBackground } = useTheme()
+  const { theme, background, backgroundLoaded, dim, blur, pickBackground } = useTheme()
   if (theme !== 'photo') return null
   const bgImg = wallpaperBackgroundImage(background)
   const blurPx = Math.round((blur / 100) * 32)
@@ -149,6 +150,8 @@ function Wallpaper(): React.JSX.Element | null {
           className="wallpaper-image"
           style={{
             backgroundImage: bgImg,
+            // Keep the selected artwork in its original colour; only the
+            // user-controlled blur is applied behind the monochrome chrome.
             filter: blurPx > 0 ? `blur(${blurPx}px)` : 'none'
           }}
         />
@@ -159,7 +162,7 @@ function Wallpaper(): React.JSX.Element | null {
           />
         )}
       </div>
-      {!background && (
+      {!background && backgroundLoaded && (
         <div className="pointer-events-none absolute inset-x-0 top-10 z-[900] flex justify-center">
           <button
             type="button"
@@ -174,7 +177,7 @@ function Wallpaper(): React.JSX.Element | null {
   )
 }
 
-function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
+function OrcSpaceCanvas({ active, activeView }: { active: boolean; activeView: WorkView }): React.JSX.Element {
   const { settings } = useSettings()
   const canvas = useCanvas()
   const {
@@ -265,13 +268,17 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
   }, [canvasNotice])
 
   // P2-205: one Escape closes the frontmost transient layer — a widget-title
-  // edit first, then the context menu, board, brain, chat. Text fields keep
-  // the key to themselves so the chat input or note editor isn't yanked away.
+  // edit first, then the context menu, board, chat. Text fields keep
+  // the key to themselves so the chat input isn't yanked away.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
       if (editingRef.current) return setEditingId(null)
       const target = e.target as HTMLElement | null
+      // Check for open menus/contextmenus first
+      if (document.querySelector('[role="menu"]:not([aria-hidden="true"]), [role="contextmenu"]:not([aria-hidden="true"]), [data-menu-open="true"]')) {
+        return
+      }
       // Text fields and terminal keep the key to themselves first: an Escape meant to cancel
       // an autocomplete or clear an input or dismiss a CLI modal (/btw) must not also dismiss the panel. This
       // must run before the board branch or the picker's search box would be
@@ -302,11 +309,39 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
     [canvas.removeWidget]
   )
 
+  // Clamp a spawn point so the new widget lands inside the currently visible
+  // world rect with at least a 32px screen margin on every side.
+  const clampToVisibleWorld = useCallback(
+    (point: Point, w: number, h: number): Point => {
+      const zoom = camera.zoom || 1
+      const viewW = mainSize.w > 0 ? mainSize.w : window.innerWidth
+      const viewH = mainSize.h > 0 ? mainSize.h : window.innerHeight
+      const margin = 32 / zoom
+      const minX = (-camera.x) / zoom + margin
+      const minY = (-camera.y) / zoom + margin
+      const maxX = (viewW - camera.x) / zoom - margin - Math.min(w, viewW / zoom - margin * 2)
+      const maxY = (viewH - camera.y) / zoom - margin - Math.min(h, viewH / zoom - margin * 2)
+      return {
+        x: maxX >= minX ? Math.min(Math.max(point.x, minX), maxX) : minX,
+        y: maxY >= minY ? Math.min(Math.max(point.y, minY), maxY) : minY
+      }
+    },
+    [camera.x, camera.y, camera.zoom, mainSize.w, mainSize.h]
+  )
+
   const spawnTerminalAtCenter = useCallback((): void => {
-    if (!canvas.addWidget(toWorld(window.innerWidth / 2 - 260, window.innerHeight / 2 - 180))) {
+    // Center on the real canvas viewport (mainSize), offset by the true
+    // half-size of a default terminal (WIDGET_W/H = 680/420 → 340/210).
+    const cx = mainSize.w > 0 ? mainSize.w / 2 : window.innerWidth / 2
+    const cy = mainSize.h > 0 ? mainSize.h / 2 : window.innerHeight / 2
+    const halfW = WIDGET_W / 2
+    const halfH = WIDGET_H / 2
+    const world = toWorld(cx - halfW, cy - halfH)
+    const clamped = clampToVisibleWorld(world, WIDGET_W, WIDGET_H)
+    if (!canvas.addWidget(clamped)) {
       setCanvasNotice('Canvas is full — close a widget before adding another.')
     }
-  }, [canvas.addWidget, toWorld])
+  }, [canvas.addWidget, toWorld, mainSize.w, mainSize.h, clampToVisibleWorld])
 
   useEffect(() => {
     const onNewTerminal = (): void => spawnTerminalAtCenter()
@@ -316,36 +351,17 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
 
   const placeWidget = useCallback(
     (kind: WidgetKind, point: Point): void => {
-      if (!canvas.addWidget(point, `${kind}-${Date.now()}-${++localCounter}`, undefined, kind)) {
+      const defaults = WIDGET_DEFAULTS[kind]
+      const w = defaults.w
+      const h = defaults.h
+      if (!canvas.addWidget(clampToVisibleWorld(point, w, h), `${kind}-${Date.now()}-${++localCounter}`, undefined, kind)) {
         setCanvasNotice('Canvas is full — close a widget before adding another.')
       }
     },
-    [canvas.addWidget]
+    [canvas.addWidget, clampToVisibleWorld]
   )
 
   /* Notes/Second Brain were removed; canvas widgets are self-contained. */
-  /* const spawnNoteAt = useCallback(
-    (point: Point): void => {
-      // Check before creating, not after: a full canvas would otherwise leave
-      // an orphan "New Note" in the brain with no widget ever showing it.
-      if (widgetsRef.current.length >= MAX_WIDGETS) {
-        setCanvasNotice('Canvas is full — close a widget before adding another.')
-        return
-      }
-      void window.api.brain
-        .create({ title: 'New Note', content: '', tags: [], projectDir: workspaceDir || undefined })
-        .then((note) => {
-          if (!note || 'error' in note) return
-          if (!canvas.addNoteWidget(point, note.id, note.title)) {
-            setCanvasNotice('Canvas is full — close a widget before adding another.')
-          }
-        })
-        .catch(() => {
-          // removed note handler
-        })
-    },
-    [canvas.addNoteWidget, workspaceDir]
-  ) */
 
   // Stable rail callbacks — see the note above the drag handlers (PERF-rail-memo).
   const onToggleBoard = useCallback((): void => setBoardOpen((v) => !v), [])
@@ -440,10 +456,8 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
         return
       }
       canvas.updateWidget(id, { title })
-      // Note titles/content are persisted by NoteWidget's own debounced save
-      // (DI-003). Writing here too would race that save on every keystroke —
-      // two async writers hitting the same note → duplicate writes, lost
-      // keystrokes, and baseVersion conflicts when main rejects stale writes.
+      // The title rides the debounced canvas save — no second writer exists,
+      // so there is nothing to race with here.
       setEditingId((cur) => (cur === id ? null : cur))
     },
     [canvas.updateWidget]
@@ -456,9 +470,9 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
     (id: string): void => {
       const widget = widgetsRef.current.find((w) => w.id === id)
       if (!widget) return
-      // Timer, Links, Files, Music Player, Orchestration must never enter
-      // fullscreen — filling the canvas is just empty space (user: "не просто кнопку").
-      if (['timer', 'links', 'files', 'music-player', 'orchestration'].includes(widget.kind as string)) return
+      // Non-maximizable kinds (NON_MAXIMIZABLE) must never enter fullscreen —
+      // filling the canvas is just empty space (user: "не просто кнопку").
+      if (NON_MAXIMIZABLE.has((widget.kind ?? 'terminal') as WidgetKind)) return
       const next = !widget.maximized
       // One maximized frame at a time — stacked 9000 z-indexes had no switcher.
       for (const other of widgetsRef.current) {
@@ -473,9 +487,8 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
   // If a widget that is now non-maximizable was persisted as maximized
   // (before the fix), restore it. Timer also gets its dimensions clamped.
   useEffect(() => {
-    const nonMax = new Set(['timer', 'links', 'files', 'music-player', 'orchestration'])
     for (const w of widgets) {
-      if (nonMax.has(w.kind as string) && w.maximized) {
+      if (NON_MAXIMIZABLE.has((w.kind ?? 'terminal') as WidgetKind) && w.maximized) {
         canvas.updateWidget(w.id, { maximized: false })
       }
       if ((w.kind as string) === 'timer' && (w.w > 360 || w.h > 320)) {
@@ -489,7 +502,8 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
   const onWidgetClose = useCallback(
     (id: string): void => {
       const widget = widgetsRef.current.find((w) => w.id === id)
-      if (widget && (widget.kind ?? 'terminal') === 'terminal') {
+      const kind = widget?.kind ?? 'terminal'
+      if (kind === 'terminal') {
         void confirm('Close terminal? The running process will be terminated.', {
           danger: true,
           title: 'Close Terminal',
@@ -529,7 +543,7 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
               e.preventDefault()
               e.stopPropagation()
               termEl.focus()
-              void window.api.terminal.write(id, '\x1b')
+              void window.api.terminal.write(id, '\x1b').catch(() => {})
               return
             }
           }
@@ -600,7 +614,31 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
       ArrowDown: [0, 1]
     }
     const dir = dirs[e.key]
-    if (!dir) return
+    if (!dir) {
+      // +/- / = / 0 zoom controls
+      if (e.key === '+' || e.key === '=') {
+        e.preventDefault()
+        setCamera((c) => ({ ...c, zoom: Math.min(4, c.zoom * 1.2) }))
+        return
+      }
+      if (e.key === '-') {
+        e.preventDefault()
+        setCamera((c) => ({ ...c, zoom: Math.max(0.2, c.zoom / 1.2) }))
+        return
+      }
+      if (e.key === '0') {
+        e.preventDefault()
+        setCamera({ x: 0, y: 0, zoom: 1 })
+        return
+      }
+      // Home key resets to 0,0
+      if (e.key === 'Home') {
+        e.preventDefault()
+        setCamera({ x: 0, y: 0, zoom: 1 })
+        return
+      }
+      return
+    }
     e.preventDefault()
     const step = e.shiftKey ? 10 : 50
     setCamera((c) => ({ ...c, x: c.x - dir[0] * step, y: c.y - dir[1] * step }))
@@ -748,8 +786,20 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
       }
     }
     el.addEventListener('wheel', handleWheel, { passive: false })
-    return () => el.removeEventListener('wheel', handleWheel)
+    return () => {
+      el.removeEventListener('wheel', handleWheel)
+      if (wheelRafRef.current !== null) {
+        cancelAnimationFrame(wheelRafRef.current)
+        wheelRafRef.current = null
+      }
+    }
   }, [flushWheel])
+
+  useEffect(() => {
+    return () => {
+      if (wheelRafRef.current !== null) cancelAnimationFrame(wheelRafRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     const onGlobalDragOver = (e: DragEvent): void => {
@@ -772,7 +822,51 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
     setMenu({ x: e.clientX, y: e.clientY })
   }
 
-  const openTasks = coordination.snapshot.tasks.filter(
+  const onCanvasDragOver = (e: React.DragEvent): void => {
+    e.preventDefault()
+  }
+
+  const onCanvasDrop = async (e: React.DragEvent): Promise<void> => {
+    e.preventDefault()
+    if (!e.dataTransfer || !e.dataTransfer.files.length) return
+
+    // Process dropped files
+    const files = Array.from(e.dataTransfer.files)
+    for (const file of files) {
+      // Check if it's an image file
+      if (file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|tiff?)$/i.test(file.name)) {
+        try {
+          const arrayBuffer = await file.arrayBuffer()
+          const bytes = new Uint8Array(arrayBuffer)
+          const ext = file.name.includes('.') ? file.name.split('.').pop()! : file.type.split('/')[1] || 'png'
+          
+          // Save to media store
+          const saved = await window.api.media.saveBytes(bytes, ext)
+          if (saved && 'path' in saved) {
+            // Get world coordinates from drop point
+            const point = screenToWorld(e.clientX, e.clientY)
+            
+            // Check if it's a trivial image (small enough to be a marker)
+            const isTrivial = file.size < 10 * 1024 // 10KB threshold for trivial images
+            
+            if (isTrivial) {
+              // Place as a marker (use terminal defaults for small marker)
+              placeWidget('terminal', point)
+            } else {
+              // Open in browser widget for larger images
+              placeWidget('browser', point)
+              // TODO: Actually load the image in the browser widget
+            }
+          }
+        } catch (err) {
+          console.error('Failed to save dropped image:', err)
+          setCanvasNotice(`Failed to save image: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+    }
+  }
+
+  const openTasks = (coordination.snapshot?.tasks ?? []).filter(
     (t) => t.state !== 'done' && t.state !== 'cancelled'
   ).length
 
@@ -788,8 +882,7 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
   // costs an IPC round-trip, not state. Every other kind is unmount-unsafe in
   // ways that are silent, not crashes: a `browser` widget's `<webview>` has no
   // such reconnect path and would come back at HOME_URL, losing wherever the
-  // user had navigated to; a `note` widget could have a debounced save still
-  // pending when it unmounts, dropping the last keystrokes. Culling those too
+  // user had navigated to. Culling those too
   // would trade a DOM-cost saving for state loss the user would only notice
   // later, far from the pan that caused it — not worth it for widget kinds
   // that are typically far fewer and lighter than terminals anyway.
@@ -895,35 +988,38 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
       <Sidebar
         workspaceDir={workspaceDir}
         managerId={coordination.snapshot.managerId}
+        activeView={activeView}
         boardOpen={boardOpen}
         taskCount={openTasks}
         onToggleBoard={onToggleBoard}
         onPickDir={onPickDir}
       />
-      <div className={active ? 'contents' : 'contents invisible pointer-events-none'} aria-hidden={!active}>
-      <main
-        ref={mainRef}
-        data-testid="canvas"
-        className="canvas-area relative flex-1 overflow-hidden select-none outline-none focus:outline-none"
-        tabIndex={0}
-        onPointerDown={onCanvasPointerDown}
-        onContextMenu={onContextMenu}
-        onKeyDown={onCanvasKey}
-        style={{
-          // Without touch-action:none a touch drag on the canvas scrolls the
-          // OS page instead of drawing/panning; the widget chrome below sets
-          // its own touch-action so inner scrolling still works (CANV-15).
-          touchAction: 'none',
-          contain: 'layout style',
-          cursor: isPanning
-            ? 'grabbing'
-            : tool === 'pan'
-              ? 'grab'
-              : tool === 'draw' || tool === 'erase'
-                ? 'crosshair'
-                : 'default'
-        }}
-      >
+      <div className={active ? 'contents' : 'contents invisible pointer-events-none'} aria-hidden={!active} inert={!active}>
+          <main
+          ref={mainRef}
+          data-testid="canvas"
+          className="canvas-area relative flex-1 overflow-hidden pt-10 select-none outline-none focus:outline-none"
+          tabIndex={0}
+          onPointerDown={onCanvasPointerDown}
+          onContextMenu={onContextMenu}
+          onKeyDown={onCanvasKey}
+          onDragOver={onCanvasDragOver}
+          onDrop={onCanvasDrop}
+          style={{
+            // Without touch-action:none a touch drag on the canvas scrolls the
+            // OS page instead of drawing/panning; the widget chrome below sets
+            // its own touch-action so inner scrolling still works (CANV-15).
+            touchAction: 'none',
+            contain: 'layout style',
+            cursor: isPanning
+              ? 'grabbing'
+              : tool === 'pan'
+                ? 'grab'
+                : tool === 'draw' || tool === 'erase'
+                  ? 'crosshair'
+                  : 'default'
+          }}
+        >
         <div
           className="absolute inset-0 h-px w-px origin-top-left"
           style={worldTransform}
@@ -934,6 +1030,43 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
           <ConnectionsLayer connections={connections} widgets={widgets} />
         </div>
         <StrokesLayer strokes={strokes} camera={camera} width={mainSize.w} height={mainSize.h} />
+          {widgets.length === 0 && strokes.length === 0 && (
+          <div
+            className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center"
+            aria-label="Empty canvas"
+            role="status"
+          >
+            <div className="rounded-[14px] border border-line-soft bg-bg-panel/80 px-6 py-5 text-center shadow-xl backdrop-blur-md">
+              <div className="mb-1 text-sm font-medium text-text">Your canvas is clear</div>
+              <div className="mb-3 text-[11px] text-text-faint">Right-click anywhere to add a widget</div>
+              <button
+                type="button"
+                className="pointer-events-auto rounded-[8px] bg-accent px-3 py-1.5 text-[11px] font-medium text-bg hover:opacity-90"
+                onClick={() => {
+                  const cx = mainSize.w > 0 ? mainSize.w / 2 : window.innerWidth / 2
+                  const cy = mainSize.h > 0 ? mainSize.h / 2 : window.innerHeight / 2
+                  const halfW = WIDGET_W / 2
+                  const halfH = WIDGET_H / 2
+                  const world = toWorld(cx - halfW, cy - halfH)
+                  const clamped = clampToVisibleWorld(world, WIDGET_W, WIDGET_H)
+                  if (!canvas.addWidget(clamped)) {
+                    setCanvasNotice('Canvas is full — close a widget before adding another.')
+                  }
+                }}
+              >
+                Add terminal
+              </button>
+              <div className="mt-2 text-[10px] text-text-faint">
+                <kbd className="rounded border border-line px-1 py-0.5 text-[9px] text-text-dim">T</kbd>{' '}
+                <kbd className="rounded border border-line px-1 py-0.5 text-[9px] text-text-dim">N</kbd>{' '}
+                <kbd className="rounded border border-line px-1 py-0.5 text-[9px] text-text-dim">+</kbd>{' '}
+                <kbd className="rounded border border-line px-1 py-0.5 text-[9px] text-text-dim">-</kbd>{' '}
+                <kbd className="rounded border border-line px-1 py-0.5 text-[9px] text-text-dim">0</kbd>{' '}
+                <kbd className="rounded border border-line px-1 py-0.5 text-[9px] text-text-dim">Home</kbd>
+              </div>
+            </div>
+          </div>
+        )}
         {/* World layer for widget frames — same transform as the connections
             layer above. Painting order stays connections → ink → widgets. */}
         <div className="absolute inset-0 h-px w-px origin-top-left" style={worldTransform}>
@@ -963,7 +1096,7 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
           />
         ))}
         {canvasNotice && (
-          <div role="status" className="pointer-events-none absolute bottom-14 left-1/2 z-[300] -translate-x-1/2 rounded-[10px] border border-line bg-bg-panel/95 px-3 py-1.5 text-[11px] text-text shadow-lg">
+          <div role="status" className="pointer-events-none absolute bottom-20 left-1/2 z-[300] -translate-x-1/2 rounded-[10px] border border-line bg-bg-panel/95 px-3 py-1.5 text-[11px] text-text shadow-lg">
             {canvasNotice}
           </div>
         )}
@@ -980,6 +1113,7 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
             onPickSysMonitor={() => { placeWidget('sys-monitor', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickTimer={() => { placeWidget('timer', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickPlanner={() => { placeWidget('planner', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onPickBoard={() => { placeWidget('board', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickOrchestration={() => { placeWidget('orchestration', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickBrowser={() => { placeWidget('browser', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickLinks={() => { placeWidget('links', toWorld(menu.x, menu.y)); setMenu(null) }}
@@ -991,7 +1125,7 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
       </main>
 
       {boardOpen && (
-        <Suspense fallback={null}>
+        <Suspense fallback={<div role="status" className="grid h-full place-items-center text-text-dim">Loading…</div>}>
           <KanbanBoard
             snapshot={coordination.snapshot}
             onCreate={(title, brief) => coordination.createTask(title, brief)}
@@ -1033,7 +1167,12 @@ function OrcSpaceCanvas({ active }: { active: boolean }): React.JSX.Element {
  * MouseEvent, so existing mouse-typed handlers keep working unchanged.
  */
 function trackDrag(onMove: (e: PointerEvent) => void, onEnd?: () => void): void {
+  let released = false
+  document.body.classList.add('is-dragging')
   const release = (): void => {
+    if (released) return
+    released = true
+    document.body.classList.remove('is-dragging')
     window.removeEventListener('pointermove', onMove)
     window.removeEventListener('pointerup', release)
     window.removeEventListener('blur', release)
@@ -1054,7 +1193,8 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /** A maximized frame fills the canvas area below the title bar. Rendered
- *  outside the world layer, so no scale/transform applies; starts at top: 40
- *  to sit below the top title bar and keep its controls reachable. One stable
- *  identity for every maximized frame keeps the memo comparison all-equal. */
-const MAXIMIZED_STYLE: React.CSSProperties = { left: 0, top: 40, right: 0, bottom: 0, zIndex: 200 }
+ *  outside the world layer, so no scale/transform applies; top: 0 here because
+ *  the canvas column already carries pt-10, which keeps the frame clear of the
+ *  transparent TitleBar. One stable identity for every maximized frame keeps
+ *  the memo comparison all-equal. */
+const MAXIMIZED_STYLE: React.CSSProperties = { left: 0, top: 0, right: 0, bottom: 0, zIndex: 200 }

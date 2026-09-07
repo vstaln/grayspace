@@ -127,6 +127,8 @@ export class LockManager extends EventEmitter {
     let renewed = 0
     for (const lock of this.locks.values()) {
       if (lock.actorId !== actorId) continue
+      // Implicit locks live exactly one command; heartbeat must not extend them.
+      if ((lock as unknown as { implicit?: boolean }).implicit) continue
       // A lock that already expired stays expired: reviving it would let an
       // actor that was gone long enough to lose the resource silently take it
       // back from whoever picked it up.

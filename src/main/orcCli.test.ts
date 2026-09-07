@@ -290,6 +290,43 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     assert.equal(deleteRes.status, 0)
   })
 
+  test('workers roster shows what runs inside each terminal', async () => {
+    const manual = terminals.reserve({ title: 'manual-1' })
+    terminals.appendOutput(manual.id, '$ antigravity chat\nhello')
+    let disp: { dispatchId?: string } | null = null
+    try {
+      await runOrc(['run-create', '--objective', 'Roster Test'])
+      const taskRes = await runOrc(['task-create', 'Do the thing', '--title', 'The Thing'])
+      const task = taskRes.json as { id: string }
+      const dispRes = await runOrc(['worker-start', task.id, 'claude'])
+      assert.equal(dispRes.status, 0)
+      disp = dispRes.json as { dispatchId?: string }
+
+      const res = await runOrc(['workers'])
+      assert.equal(res.status, 0)
+      const data = res.json as {
+        workers: Array<{
+          id: string; name: string; busy: boolean; agent?: string; running?: string
+          taskTitle?: string; cwd?: string; alive?: boolean
+        }>
+      }
+      const seen = data.workers.find((w) => w.id === manual.id)
+      assert.ok(seen, 'manual terminal is listed')
+      assert.equal(seen.busy, false)
+      assert.equal(seen.running, '~antigravity')
+      assert.equal(typeof seen.cwd, 'string')
+      const dispatched = data.workers.find((w) => w.agent === 'claude')
+      assert.ok(dispatched, 'dispatched worker is listed with its agent')
+      assert.equal(dispatched.running, 'claude')
+      assert.equal(dispatched.taskTitle, 'The Thing')
+    } finally {
+      if (disp?.dispatchId) {
+        await runOrc(['worker-release', disp.dispatchId])
+      }
+      terminals.dispose(manual.id)
+    }
+  })
+
   test('orc tell command routes text to worker', async () => {
     const term = terminals.reserve({ title: 'worker-2' })
     const record = (terminals as unknown as { terminals: Map<string, { pty: unknown }> }).terminals?.get(term.id)
@@ -356,4 +393,3 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     })
   }
 })
-

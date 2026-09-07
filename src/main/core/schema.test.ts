@@ -9,7 +9,7 @@ import { definitionToMcpTool, validatePayload, type CommandDefinition } from './
 describe('Command Schema Registry & MCP Tool Generation', () => {
   const noteCreateDef: CommandDefinition<{ title: string; content?: string; tags?: string[] }> = {
     type: 'note.create',
-    description: 'Creates a new second brain note',
+    description: 'Creates a new note record',
     targetScheme: 'note',
     payloadSchema: {
       type: 'object',
@@ -41,7 +41,7 @@ describe('Command Schema Registry & MCP Tool Generation', () => {
   test('definitionToMcpTool converts schema to standard MCP tool descriptor', () => {
     const mcpTool = definitionToMcpTool(noteCreateDef)
     assert.equal(mcpTool.name, 'note_create')
-    assert.equal(mcpTool.description, 'Creates a new second brain note')
+    assert.equal(mcpTool.description, 'Creates a new note record')
     assert.ok(mcpTool.inputSchema.properties.title)
     assert.ok(mcpTool.inputSchema.properties.target)
     assert.deepEqual(mcpTool.inputSchema.required, ['target', 'title'])

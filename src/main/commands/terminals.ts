@@ -225,9 +225,10 @@ export function registerTerminalCommands({
             // otherwise swallow an Enter appended right after it, leaving the
             // line sitting typed but never submitted (AUD-11).
             await new Promise((resolve) => setTimeout(resolve, 30))
-            // Windows conpty is happier with CRLF for "Enter"; bare \r sometimes
-            // only moves the cursor and the shell never runs the line.
-            const enter = process.platform === 'win32' ? '\r\n' : '\r'
+            // Interactive TUIs (including Codex) consume carriage return as
+            // their Enter key. CRLF can be treated as pasted text by ConPTY,
+            // leaving the line visible but unsubmitted.
+            const enter = '\r'
             const enterWritten = terminals.write(id, enter)
             if (!enterWritten.ok) throw new CommandError('failed', enterWritten.error)
           }

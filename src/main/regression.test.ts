@@ -88,13 +88,12 @@ describe('Regression — end-to-end invariants', () => {
     assert.equal(core.locks.isLockedByOther('widget:x', 'user'), false)
   })
 
-  test('widget kinds invariant: orchestration and note accepted, unknown rejected', () => {
+  test('widget kinds invariant: orchestration accepted, removed and unknown rejected', () => {
     const ok = sanitizeWidget({ id: 'w1', title: 't', x: 0, y: 0, w: 100, h: 100, z: 1, kind: 'orchestration' })
     assert.ok(ok, 'orchestration widget must be accepted')
     assert.equal(ok?.kind, 'orchestration')
-    const okNote = sanitizeWidget({ id: 'w2', title: 't', x: 0, y: 0, w: 100, h: 100, z: 1, kind: 'note' })
-    assert.ok(okNote, 'note widget must be accepted')
-    assert.equal(okNote?.kind, 'note')
+    const removedNote = sanitizeWidget({ id: 'w2', title: 't', x: 0, y: 0, w: 100, h: 100, z: 1, kind: 'note' })
+    assert.equal(removedNote, null, 'removed note widget must be rejected')
     const bad = sanitizeWidget({ id: 'w3', title: 't', x: 0, y: 0, w: 100, h: 100, z: 1, kind: 'invalid_kind' as never })
     assert.equal(bad, null, 'unknown kind should be rejected')
   })

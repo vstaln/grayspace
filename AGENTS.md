@@ -17,6 +17,28 @@ orc tell backend "run the tests and report"  # type into its terminal
 
 Names beat ids: rename a sibling once, then address it by name everywhere.
 
+**Good orchestration.** Before dispatching, turn the objective into a small, bounded
+task graph. Every task spec should state its goal, owned files or responsibility,
+acceptance criteria, verification command, and stop condition. Add dependencies
+only for real blockers; dispatch independent ready tasks in parallel, with no two
+workers owning the same files. The coordinator waits for reports, inspects the
+diff and test evidence, then releases or retains each dispatch — never treating
+a started process or a `tell` message as proof of completion.
+
+Use this compact task-spec shape when creating work:
+
+```text
+Goal: one concrete outcome
+Scope: files or responsibility owned by this worker
+Acceptance: observable conditions that must be true
+Verify: exact test/check to run
+Stop when: the acceptance criteria are met or a blocker is reported
+```
+
+Keep credentials, tokens, and private environment values out of task specs,
+mail, and reports. Use only agents currently available in the worker menu; do
+not invent a model or silently substitute an unavailable route.
+
 **Coordinating with other agents.** For work you intend to *wait on*, use runs,
 tasks and dispatches rather than `tell` — that is what gives you a completion
 report instead of a guess.
@@ -53,8 +75,8 @@ orc board claim <id>                         # claim a task (moves to In Progres
 orc board update <id> done                   # complete a task (moves to Done and checks off in Planner)
 ```
 
-**The rest of the app** is the same CLI: `orc canvas`, `orc brain`, `orc plan`,
+**The rest of the app** is the same CLI: `orc canvas`, `orc plan`,
 `orc board`, `orc terminal`, `orc git`, `orc journal`. Add `--json` for parseable
-output. Prefer putting results on the canvas (a note, a task) over loose files —
+output. Prefer putting results on the canvas or a task over loose files —
 the user is looking at the canvas, not at your scrollback.
 <!-- END ORCSPACE (managed) -->

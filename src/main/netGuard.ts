@@ -84,6 +84,9 @@ export function applyLoopbackCors(
  * return; hashing both to fixed-size digests removes that channel.
  */
 export function secretsEqual(a: string, b: string): boolean {
+  // Bound hashing work pre-auth: a multi-megabyte header would otherwise burn
+  // CPU on every unauthenticated request. Real tokens are far shorter.
+  if (a.length > 1024 || b.length > 1024) return false
   const ha = createHash('sha256').update(a, 'utf8').digest()
   const hb = createHash('sha256').update(b, 'utf8').digest()
   return cryptoTimingSafeEqual(ha, hb)

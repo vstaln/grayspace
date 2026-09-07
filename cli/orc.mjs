@@ -24,6 +24,8 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const TOKEN_HEADER = 'x-orcspace-token'
+// Keep in sync with package.json and TERM_PROGRAM_VERSION in src/main/terminals.ts.
+const ORC_VERSION = '2.0.0'
 
 /**
  * Fast-path token discovery:
@@ -168,6 +170,9 @@ class OrcError extends Error {
   }
 }
 
+/** True only for a genuine "not found" — NOT for timeouts, 5xx or offline. */
+const isNotFound = (err) => err instanceof OrcError && (err.code === 'not_found' || err.code === 'http_404')
+
 async function call(method, path, body, options = {}) {
   let candidateTokens = workingToken ? [workingToken] : getCandidateTokens()
   if (candidateTokens.length === 0) {
@@ -213,22 +218,18 @@ async function call(method, path, body, options = {}) {
 
       if (response.status === 401) {
         workingToken = null
-        if (i === 0 && candidateTokens.length === 1) {
-          const allTokens = getAllCandidateTokens(false)
-          if (allTokens.length > 1) {
-            candidateTokens = allTokens
-            continue
-          }
-        }
-        if (candidateTokens.length > 1 && i < candidateTokens.length - 1) {
-          continue
-        }
+        throw new OrcError('a valid control token is required', 'http_401')
       }
 
       workingToken = token
 
       const isJson = (response.headers.get('content-type') || '').includes('application/json')
-      const payload = isJson ? await response.json() : await response.text()
+      let payload
+      try {
+        payload = isJson ? await response.json() : await response.text()
+      } catch {
+        payload = ''
+      }
 
       if (!response.ok) {
         const message = typeof payload === 'object' && payload?.error ? payload.error : `HTTP ${response.status}`
@@ -238,8 +239,17 @@ async function call(method, path, body, options = {}) {
 
       return payload && typeof payload === 'object' && payload.ok === true && 'data' in payload ? payload.data : payload
     } catch (err) {
-      if (err instanceof OrcError && err.code === 'http_401' && candidateTokens.length > 1) {
-        continue
+      if (err instanceof OrcError && err.code === 'http_401') {
+        // Single-token probe may have used stale cache — expand to all candidates and retry
+        if (candidateTokens.length === 1) {
+          const all = getAllCandidateTokens(false)
+          if (all.length > 1) {
+            candidateTokens = all
+            continue
+          }
+        } else if (candidateTokens.length > 1) {
+          continue
+        }
       }
       lastError = err
       break
@@ -298,13 +308,47 @@ const dispatchLine = (d) =>
 const messageLine = (m) =>
   `  ${m.id}  ${m.type}  from=${m.from}${m.taskId ? ` task=${m.taskId}` : ''}${m.outcome ? ` outcome=${m.outcome}` : ''}\n    ${m.subject}${m.body ? `\n    ${m.body.split('\n').join('\n    ')}` : ''}`
 
+/**
+ * One roster line: name, liveness, and — the point of the whole exercise —
+ * what is actually running inside the terminal, not just its id.
+ * `[claude]` is a fact from the dispatch; `[~antigravity]` is a guess from
+ * the title/scrollback, hence the `~`.
+ */
+const workerLine = (w) => {
+  let line = `  ${w.self ? '*' : ' '} ${w.name}${w.name === w.id ? '' : ` (${w.id})`}`
+  line += w.busy ? '  busy' : '  idle'
+  if (w.alive === false) line += ' (exited)'
+  const tool = w.agent ?? w.running
+  if (tool && tool !== 'shell') line += `  [${tool}]`
+  if (w.taskId) line += `  task=${w.taskId}`
+  if (w.taskTitle) line += `  "${String(w.taskTitle).slice(0, 80)}"`
+  if (w.cwd) line += `  ${w.cwd}`
+  if (w.lastActiveAt) line += `  active=${age(Date.now() - w.lastActiveAt)} ago`
+  return line
+}
+
+function age(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '?'
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 48) return `${h}h`
+  return `${Math.floor(h / 24)}d`
+}
+
 // ------------------------------------------------------------------ commands
 
 const HELP = `orc — OrcSpace agent CLI
 
 THE OTHER AGENTS & ROSTER
   orc whoami                                  identify your own agent, terminal & task
-  orc workers | orc ps | orc who              who else is open on the canvas (* marks you)
+  orc context | orc ctx                      show project folder, Code Workspace and active task
+  orc workers | orc ps | orc who              who else is open on the canvas (* marks you),
+                                              incl. what runs inside each terminal
+  orc version | orc --version                 print the CLI version
+  orc help <command>                          per-command usage, e.g. orc help workers
   orc rename [<worker>] [--name <name>]       rename a terminal (canvas title = worker name)
   orc tell <worker> "run the tests"           type directly into another agent's terminal
   Workers are addressed by name anywhere --to is taken: a name, @name, a
@@ -337,7 +381,10 @@ DISPATCH & WORKERS
 INBOX, QUESTIONS & DECISION GATES
   orc check | orc inbox [--wait] [--types ...] check coordinator mail (--wait blocks)
                         [--ack <msgId>] [--all]
+  orc ack <messageId>                           acknowledge a message (safe after reading)
   orc reply [<askId>] [<bodyText>]            answer a worker's pending question
+  orc allow <id> [--note "..."]                approve a permission request
+  orc deny <id> [--reason "..."]               deny a permission request
   orc gate-create --question "..."            open a decision gate (blocks dependent task)
                   [--task <t>] [--options '["a","b"]']
   orc gate-list | orc gates                   list all decision gates and resolutions
@@ -347,6 +394,7 @@ WORKER (dispatched agent reporting)
   orc done --outcome succeeded|failed         report completion with modified files
            [--task-id <t>] [--dispatch-id <d>] [--body "..."] [--files "a.ts,b.ts"]
   orc ask --question "..." [--options "a,b"]  ask question and block until reply arrives
+  orc ask --type permission --question "..."   request permission and block until granted
   orc escalate --body "..."                   escalate an issue to the coordinator
   orc heartbeat                               keep worker activity alive
   orc send --type <t> [--to <who>]            send direct message or broadcast
@@ -354,23 +402,149 @@ WORKER (dispatched agent reporting)
 THE APP & CANVAS
   orc board list | claim [<id>] | update [<id>] <state>   kanban board management
   orc plan list | create | update | toggle [<id>]         planner day tasks
-  orc brain list | read [<id>] | search <q> | save        second brain notes
   orc canvas list | place | move | rename | close         canvas widgets & viewport
   orc terminal open | send <id> <text> | read | close     direct terminal management
   orc git status | commit --message "..."                 git audit integration
   orc journal [--since N]                                 event audit log
+  orc reset                                               reset orchestration state
   orc doctor                                              diagnostics & connectivity check
   orc api <METHOD> <path> [json]                          direct REST escape hatch
 
+Destructive commands (reset, run-close, canvas close, terminal close,
+plan delete) require --yes to confirm.
+
 Add --json to any command for machine-readable output.`
+
+/** One-liner usage for `orc help <command>` and `<command> --help`. */
+const COMMAND_HELP = {
+  whoami: 'orc whoami — identify your own agent, terminal & task.',
+  context: 'orc context | orc ctx — project folder, Code Workspace and active task.',
+  workers: 'orc workers | orc ps | orc who — roster with what runs inside each terminal:\n  name (id), busy/idle (+exited), [agent] or [~guess], task + title, cwd, last activity.\n  * marks you. Add --json for machine-readable output.',
+  version: 'orc version | orc --version — print the CLI version.',
+  status: 'orc status | orc st — open run, tasks, live workers, unread mail.',
+  'run-create': 'orc run-create --objective "..." — open a run.',
+  'run-list': 'orc run-list | orc runs — list all runs, newest first.',
+  'run-show': 'orc run-show [<id>] | orc run [<id>] — inspect a run and its tasks.',
+  'run-close': 'orc run-close [<id>] --yes — close a run (destructive: needs --yes).',
+  'task-create': 'orc task-create [<spec>] [--title "..."] [--deps \'["otask-1"]\'] [--run <id>] — file a task.',
+  'task-list': 'orc task-list | orc tasks [--ready] [--run <id>] [--status <s>] — list tasks.',
+  'task-show': 'orc task-show [<id>] | orc task [<id>] — full task specification.',
+  'task-update': 'orc task-update [<id>] [--status <s>] [--title "..."] [--spec "..."] — update a task.',
+  'worker-start': 'orc worker-start [<taskId>] [--agent claude|codex|cursor|opencode] [--terminal <id>] [--command "..."] [--no-inject] — dispatch work.',
+  'worker-show': 'orc worker-show [<dispatchId>] [--preamble] — dispatch details.',
+  'worker-release': 'orc worker-release [<dispatchId>] [--close] — release a worker, optionally closing its terminal.',
+  'worker-retain': 'orc worker-retain [<dispatchId>] — keep a worker for subsequent tasks.',
+  'dispatch-show': 'orc dispatch-show [--task <taskId>] — list dispatches.',
+  dispatch: 'orc dispatch [<taskId>] --to <terminalId> — dispatch into an existing terminal.',
+  'worker-read': 'orc worker-read [<dispatchId>] [--limit N] | orc logs [<dispatchId|terminalId>] [limit] — tail worker output.',
+  tell: 'orc tell <worker> "run the tests" — type into another agent\'s terminal.',
+  rename: 'orc rename [<worker>] [--name <name>] — rename a terminal.',
+  check: 'orc check | orc inbox [--wait] [--types ...] [--ack <msgId>] [--all] — read coordinator mail.',
+  reply: 'orc reply [<askId>] [<bodyText>] — answer a worker question.',
+  ask: 'orc ask --question "..." [--options "a,b"] — ask and block until a reply arrives.',
+  done: 'orc done --outcome succeeded|failed [--task-id <t>] [--dispatch-id <d>] [--body "..."] [--files "a.ts,b.ts"] — report completion.',
+  send: 'orc send --type <t> [--to <who>] [--subject "..."] [--body "..."] — direct message or broadcast.',
+  escalate: 'orc escalate --body "..." — escalate an issue to the coordinator.',
+  heartbeat: 'orc heartbeat — keep worker activity alive.',
+  ack: 'orc ack <messageId> — acknowledge a message after reading it.',
+  allow: 'orc allow <id> [--note "..."] — approve a permission request.',
+  deny: 'orc deny <id> [--reason "..."] — deny a permission request.',
+  'gate-create': 'orc gate-create --question "..." [--task <t>] [--options \'["a","b"]\'] — open a decision gate.',
+  'gate-list': 'orc gate-list | orc gates [--run <id>] [--open] — list decision gates.',
+  'gate-resolve': 'orc gate-resolve [<gateId>] <resolution> — resolve a gate and unblock its task.',
+  reset: 'orc reset [--tasks] [--messages] [--all] --yes — destructive reset of orchestration state.',
+  doctor: 'orc doctor — diagnostics & connectivity check.',
+  terminal: 'orc terminal open | send <id> <text> | read | close — direct terminal management.',
+  canvas: 'orc canvas list | place | move | rename | focus | close — canvas widgets & viewport.',
+  plan: 'orc plan list | create | update | done | toggle | delete [<id>] — planner day tasks.',
+  board: 'orc board list | create | claim | update | done [<id>] — kanban board management.',
+  git: 'orc git status | commit --message "..." — git audit integration.',
+  journal: 'orc journal [--since N] — event audit log.',
+  api: 'orc api <METHOD> <path> [json] — direct REST escape hatch.'
+}
+const COMMAND_ALIASES = {
+  ctx: 'context', st: 'status', ps: 'workers', who: 'workers', runs: 'run-list', run: 'run-show',
+  tasks: 'task-list', task: 'task-show', logs: 'worker-read', tail: 'worker-read', inbox: 'check',
+  gates: 'gate-list', mail: 'send', msg: 'send', approve: 'allow', permit: 'allow',
+  deny: 'deny', reject: 'deny', refuse: 'deny'
+}
+const KNOWN_COMMANDS = [
+  'whoami', 'context', 'workers', 'rename', 'tell', 'status', 'run-create', 'run-list',
+  'run-show', 'run-close', 'task-create', 'task-list', 'task-show', 'task-update',
+  'worker-start', 'dispatch', 'worker-show', 'worker-read', 'logs', 'worker-release',
+  'worker-retain', 'dispatch-show', 'send', 'done', 'escalate', 'heartbeat', 'ask',
+  'reply', 'ack', 'allow', 'deny', 'check', 'gate-create', 'gate-list', 'gate-resolve',
+  'board', 'claim', 'plan', 'canvas', 'terminal', 'git', 'journal', 'reset', 'doctor',
+  'api', 'version', 'help'
+]
+
+function commandHelp(name) {
+  const canon = COMMAND_ALIASES[name] ?? name
+  return COMMAND_HELP[canon] ?? COMMAND_HELP[name]
+}
+
+/** Closest known command within a typo distance, if any. */
+function suggestCommand(unknown) {
+  let best = null
+  let bestDist = 4
+  for (const known of KNOWN_COMMANDS) {
+    const d = editDistance(unknown, known)
+    if (d < bestDist) {
+      bestDist = d
+      best = known
+    }
+  }
+  return best
+}
+
+function editDistance(a, b) {
+  if (a === b) return 0
+  if (!a.length) return b.length
+  if (!b.length) return a.length
+  const prev = Array.from({ length: b.length + 1 }, (_, j) => j)
+  const curr = new Array(b.length + 1)
+  for (let i = 1; i <= a.length; i += 1) {
+    curr[0] = i
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+    }
+    for (let j = 0; j <= b.length; j += 1) prev[j] = curr[j]
+  }
+  return prev[b.length]
+}
 
 async function main(argv) {
   const { flags, positional } = parseArgs(argv)
   asJson = flags.json === true
   const command = positional[0]
 
-  if (!command || flags.help || command === 'help') {
+  if (flags.version === true) {
+    return emit({ version: ORC_VERSION }, (v) => `orc ${v.version}`)
+  }
+
+  if (command === 'help') {
+    const topic = positional[1]
+    const detail = topic ? commandHelp(topic) : undefined
+    if (topic && !detail) {
+      const hint = suggestCommand(topic)
+      throw new OrcError(
+        `no help for "${topic}"${hint ? ` — did you mean "${hint}"?` : ''} — run \`orc --help\``,
+        'unknown_command'
+      )
+    }
+    process.stdout.write(`${detail ?? HELP}\n`)
+    return
+  }
+
+  if (!command) {
     process.stdout.write(`${HELP}\n`)
+    return
+  }
+
+  if (flags.help === true) {
+    const detail = commandHelp(command)
+    process.stdout.write(`${detail ?? HELP}\n`)
     return
   }
 
@@ -408,27 +582,66 @@ async function main(argv) {
       )
     }
 
+    case 'context':
+    case 'ctx': {
+      const [presence, codeWorkspace, workersData, snapshot] = await Promise.all([
+        get('/presence'),
+        get('/workspace/code'),
+        get('/orchestration/workers'),
+        get('/orchestration')
+      ])
+      const selfWorker = workersData.workers?.find((w) => w.self || w.id === AGENT_ID || w.name === AGENT_ID)
+      const activeDispatch = snapshot.dispatches?.find(
+        (d) => (d.terminalId === AGENT_ID || d.agent === AGENT_ID || d.terminalId === selfWorker?.id) && d.state === 'running'
+      )
+      const activeTask = activeDispatch ? snapshot.tasks?.find((t) => t.id === activeDispatch.taskId) : null
+      const selected = codeWorkspace.workspaces?.find((workspace) => workspace.id === codeWorkspace.activeId)
+      const result = {
+        folder: presence.workspaceDir || null,
+        codeWorkspace: selected ? { id: selected.id, name: selected.name } : null,
+        terminal: selfWorker?.id ?? AGENT_ID ?? null,
+        terminalName: selfWorker?.name ?? AGENT_ID ?? null,
+        taskId: activeTask?.id ?? activeDispatch?.taskId ?? null,
+        taskTitle: activeTask?.title ?? null,
+        workers: workersData.workers?.length ?? 0
+      }
+      return emit(result, (c) => [
+        `Project folder: ${c.folder || '(none)'}`,
+        `Code Workspace: ${c.codeWorkspace?.name || '(none)'}${c.codeWorkspace ? ` (${c.codeWorkspace.id})` : ''}`,
+        `Terminal: ${c.terminalName || '(external)'}${c.terminalName && c.terminalName !== c.terminal ? ` (${c.terminal})` : ''}`,
+        `Task: ${c.taskId ? `${c.taskId}${c.taskTitle ? ` — ${c.taskTitle}` : ''}` : '(idle)'}`,
+        `Workers: ${c.workers}`
+      ].join('\n'))
+    }
+
     case 'doctor': {
-      const [presence, orchestration, workers] = await Promise.all([
+      const [presence, orchestration, workers, health] = await Promise.all([
         get('/presence'),
         get('/orchestration'),
-        get('/orchestration/workers')
+        get('/orchestration/workers'),
+        get('/health').catch(() => null)
       ])
+      const serverVersion = health && typeof health === 'object' ? health.version : undefined
+      const drift = serverVersion && serverVersion !== ORC_VERSION ? serverVersion : null
       const result = {
         ok: true,
         app: BASE,
+        version: ORC_VERSION,
+        serverVersion: serverVersion ?? null,
+        drift,
         agentId: AGENT_ID || null,
         workspace: presence.workspaceDir || null,
         workers: workers.workers?.length ?? 0,
         runs: orchestration.runs?.filter((r) => !r.closedAt).length ?? 0
       }
-      return emit(result, (d) =>
+      return emit(result, (r) =>
         [
-          `OrcSpace: reachable at ${d.app}`,
-          `Agent: ${d.agentId || '(not inside an OrcSpace terminal)'}`,
-          `Workspace: ${d.workspace || '(none)'}`,
+          `OrcSpace: reachable at ${r.app} (orc ${r.version})`,
+          r.drift ? `Server: ${r.serverVersion} (drift — restart the app to match)` : `Server: ${r.serverVersion ?? '?'}`,
+          `Agent: ${r.agentId || '(not inside an OrcSpace terminal)'}`,
+          `Workspace: ${r.workspace || '(none)'}`,
           `Mode: native orc CLI & orchestration`,
-          `Workers: ${d.workers} | open runs: ${d.runs}`
+          `Workers: ${r.workers} | open runs: ${r.runs}`
         ].join('\n')
       )
     }
@@ -493,7 +706,8 @@ async function main(argv) {
       try {
         const single = await get(`/orchestration/runs/${enc(id)}`)
         run = single.run
-      } catch {
+      } catch (err) {
+        if (!isNotFound(err)) throw err
         const listData = await get('/orchestration/runs')
         run = listData.runs.find((r) => r.id === id)
       }
@@ -511,6 +725,7 @@ async function main(argv) {
     }
     case 'run-close': {
       const id = require1(pick(flags, 'id', 'run') ?? positional[1], 'run-close needs <run-id>')
+      requireConfirm(flags, 'run-close', id)
       return emit(await post(`/orchestration/runs/${enc(id)}/close`), (r) => `run ${r.id} closed`)
     }
 
@@ -541,7 +756,8 @@ async function main(argv) {
       try {
         const single = await get(`/orchestration/tasks/${enc(id)}`)
         found = single.task
-      } catch {
+      } catch (err) {
+        if (!isNotFound(err)) throw err
         const data = await get('/orchestration/tasks', { runId: pick(flags, 'run', 'runId') })
         found = data.tasks.find((t) => t.id === id)
       }
@@ -608,7 +824,8 @@ async function main(argv) {
       try {
         const single = await get(`/orchestration/dispatches/${enc(id)}`)
         found = single.dispatch
-      } catch {
+      } catch (err) {
+        if (!isNotFound(err)) throw err
         const data = await get('/orchestration/dispatches')
         found = data.dispatches.find((d) => d.id === id)
       }
@@ -626,17 +843,18 @@ async function main(argv) {
         try {
           const single = await get(`/orchestration/dispatches/${enc(target)}`)
           found = single.dispatch
-        } catch {
+        } catch (err) {
+          if (!isNotFound(err)) throw err
           const data = await get('/orchestration/dispatches')
           found = data.dispatches.find((d) => d.id === target)
         }
         if (!found) throw new OrcError(`no dispatch "${target}"`, 'not_found')
         terminalId = found.terminalId
       }
-      const limitLines = int(pick(flags, 'limit') ?? positional[2], 50)
+      const limitLines = Math.max(0, int(pick(flags, 'limit') ?? positional[2], 50))
       const output = await get(`/terminal/${enc(terminalId)}/output`, { full: '1' })
       const lines = String(output.output || '').split('\n')
-      const tailOutput = lines.slice(-limitLines).join('\n')
+      const tailOutput = limitLines === 0 ? '' : lines.slice(-limitLines).join('\n')
       return emit({ target, terminalId, output: tailOutput }, (o) => o.output)
     }
     case 'dispatch-show': {
@@ -651,8 +869,12 @@ async function main(argv) {
       return emit(await sendMessage(flags, require1(pick(flags, 'type') ?? positional[1], 'send needs --type <type>')), (m) => `sent ${m.id}`)
 
     case 'done': {
+      const outcome = require1(pick(flags, 'outcome') ?? positional[1], 'done needs --outcome succeeded|failed')
+      if (outcome !== 'succeeded' && outcome !== 'failed') {
+        throw new OrcError('done --outcome must be "succeeded" or "failed"', 'invalid')
+      }
       const result = await sendMessage(flags, 'worker_done', {
-        outcome: require1(pick(flags, 'outcome') ?? positional[1], 'done needs --outcome succeeded|failed'),
+        outcome,
         filesModified: list(pick(flags, 'files', 'filesModified'))
       })
       return emit(result, (m) =>
@@ -668,9 +890,10 @@ async function main(argv) {
 
     case 'ask': {
       const question = require1(pick(flags, 'question', 'body', 'q') ?? positional[1], 'ask needs --question "..."')
-      const asked = await sendMessage(flags, 'ask', {
+      const msgType = pick(flags, 'type') || 'ask'
+      const asked = await sendMessage(flags, msgType, {
         body: question,
-        subject: pick(flags, 'subject') || 'question',
+        subject: pick(flags, 'subject') || (msgType === 'permission' ? 'permission_request' : 'question'),
         options: list(pick(flags, 'options'))
       })
       const timeoutMs = int(pick(flags, 'timeoutMs'), 600_000)
@@ -707,11 +930,47 @@ async function main(argv) {
       )
     }
 
+    case 'ack': {
+      const msgId = require1(pick(flags, 'id') ?? positional[1], 'ack needs <message-id>')
+      return emit(await post(`/orchestration/messages/${enc(msgId)}/ack`, {}), () => `acknowledged ${msgId}`)
+    }
+
+    case 'allow':
+    case 'approve':
+    case 'permit': {
+      const askId = require1(pick(flags, 'id') ?? positional[1], 'allow needs <message-id>')
+      const note = pick(flags, 'note', 'reason')
+      return emit(
+        await sendMessage(flags, 'reply', {
+          replyTo: askId,
+          body: note ? `allow: ${note}` : 'allow',
+          to: pick(flags, 'to') || (await lookupSender(askId)),
+          subject: 'permission_granted'
+        }),
+        (m) => `permission granted (${m.id})`
+      )
+    }
+
+    case 'deny':
+    case 'reject':
+    case 'refuse': {
+      const askId = require1(pick(flags, 'id') ?? positional[1], 'deny needs <message-id>')
+      const reason = pick(flags, 'reason', 'note')
+      return emit(
+        await sendMessage(flags, 'reply', {
+          replyTo: askId,
+          body: reason ? `deny: ${reason}` : 'deny',
+          to: pick(flags, 'to') || (await lookupSender(askId)),
+          subject: 'permission_denied'
+        }),
+        (m) => `permission denied (${m.id})`
+      )
+    }
+
     case 'check':
     case 'inbox': {
       const ackId = pick(flags, 'ack')
-      if (typeof ackId === 'string') await post(`/orchestration/messages/${enc(ackId)}/ack`, {})
-      const timeoutMs = int(pick(flags, 'timeoutMs'), 900_000)
+      const timeoutMs = Math.max(1000, int(pick(flags, 'timeoutMs'), 900_000))
       const params = {
         runId: pick(flags, 'run', 'runId'),
         types: Array.isArray(pick(flags, 'types')) ? pick(flags, 'types').join(',') : pick(flags, 'types'),
@@ -723,6 +982,7 @@ async function main(argv) {
       const stop = flags.wait === true ? beat('inbox') : () => {}
       try {
         const data = await get('/orchestration/inbox', params, flags.wait === true ? { timeoutMs: timeoutMs + 10_000 } : {})
+        if (typeof ackId === 'string') await post(`/orchestration/messages/${enc(ackId)}/ack`, {})
         return emit(data, (d) =>
           d.messages.length
             ? d.messages.map(messageLine).join('\n')
@@ -782,16 +1042,12 @@ async function main(argv) {
     case 'ps': {
       const data = await get('/orchestration/workers')
       return emit(data, (d) =>
-        d.workers.length
-          ? d.workers
-              .map(
-                (w) =>
-                  `  ${w.self ? '*' : ' '} ${w.name}${w.name === w.id ? '' : `  (${w.id})`}` +
-                  `${w.busy ? `  busy: ${w.taskId}` : '  idle'}${w.agent ? `  ${w.agent}` : ''}`
-              )
-              .join('\n')
-          : '  (no terminals open)'
+        d.workers.length ? d.workers.map(workerLine).join('\n') : '  (no terminals open)'
       )
+    }
+
+    case 'version': {
+      return emit({ version: ORC_VERSION }, (v) => `orc ${v.version}`)
     }
 
     case 'rename': {
@@ -803,10 +1059,11 @@ async function main(argv) {
     case 'tell': {
       const to = require1(pick(flags, 'to', 'worker') ?? positional[1], 'tell needs <worker>')
       const text = require1(pick(flags, 'text', 'message', 'body') ?? positional[2], 'tell needs "text to type"')
-      return emit(await post('/orchestration/workers/tell', { to, text }), () => `typed into ${to}`)
+      return emit(await post('/orchestration/workers/tell', { to, text }), () => `sent to ${to}`)
     }
 
     case 'reset':
+      requireConfirm(flags, 'reset')
       return emit(
         await post('/orchestration/reset', {
           tasks: flags.tasks === true,
@@ -819,9 +1076,6 @@ async function main(argv) {
     // ---- the rest of the app -------------------------------------------
     case 'canvas':
       return emit(await canvas(positional[1], flags, positional))
-    case 'brain':
-    case 'notes':
-      return emit(await brain(positional[1], flags, positional))
     case 'plan':
       return emit(await plan(positional[1], flags, positional))
     case 'board':
@@ -832,13 +1086,28 @@ async function main(argv) {
       return emit(await terminal(positional[1], flags, positional))
     case 'git':
       return positional[1] === 'commit'
-        ? emit(await post('/git/commit', { message: require1(pick(flags, 'message', 'm') ?? positional[2], 'git commit needs --message "..."') }))
-        : emit(await get('/git/status'))
-    case 'journal':
-      return emit(await get('/journal', { since: pick(flags, 'since') ?? positional[1] }))
+        ? emit(
+            await post('/git/commit', { message: require1(pick(flags, 'message', 'm') ?? positional[2], 'git commit needs --message "..."') }),
+            (r) => r.hash ? `committed ${r.hash.slice(0, 7)}: ${r.message}` : `committed: ${r.message ?? ''}`
+          )
+        : emit(await get('/git/status'), (s) => {
+            if (s.branch) return `On branch ${s.branch}\n${s.files?.length ? s.files.map((f) => `  ${f}`).join('\n') : '  (clean)'}`
+            return undefined
+          })
+    case 'journal': {
+      const data = await get('/journal', { since: pick(flags, 'since') ?? positional[1] })
+      return emit(data, (d) => {
+        const entries = d.entries ?? d
+        if (!Array.isArray(entries) || !entries.length) return '  (no events)'
+        return entries.map((e) => {
+          const ts = e.time ? `${e.time}  ` : ''
+          return `  ${ts}${e.type ?? e.kind ?? ''}${e.agent ? `  [${e.agent}]` : ''}${e.detail ? `  ${e.detail}` : ''}`
+        }).join('\n')
+      })
+    }
     case 'api': {
       const method = String(positional[1] || 'GET').toUpperCase()
-      const path = require1(positional[2], 'api needs a path, e.g. orc api GET /snapshot')
+      const apiPath = require1(positional[2], 'api needs a path, e.g. orc api GET /snapshot')
       let body
       if (positional[3]) {
         try {
@@ -847,11 +1116,16 @@ async function main(argv) {
           throw new OrcError('api: body must be valid JSON', 'invalid')
         }
       }
-      return emit(await call(method, path, method === 'GET' ? undefined : { agentId: AGENT_ID, ...body }))
+      return emit(await call(method, apiPath, method === 'GET' ? undefined : { agentId: AGENT_ID, ...body }))
     }
 
-    default:
-      throw new OrcError(`unknown command "${command}" — run \`orc --help\``, 'unknown_command')
+    default: {
+      const hint = suggestCommand(command)
+      throw new OrcError(
+        `unknown command "${command}"${hint ? ` — did you mean "${hint}"?` : ''} — run \`orc --help\``,
+        'unknown_command'
+      )
+    }
   }
 }
 
@@ -913,43 +1187,10 @@ async function canvas(action, flags, positional = []) {
     case 'focus':
       return post('/canvas/camera', { x: num(pick(flags, 'x')), y: num(pick(flags, 'y')), zoom: num(pick(flags, 'zoom')) ?? 1 })
     case 'close':
+      requireConfirm(flags, 'canvas close', id)
       return call('DELETE', `/widgets/${enc(require1(id, 'canvas close needs <id>'))}`, { agentId: AGENT_ID })
     default:
       throw new OrcError(`canvas: unknown action "${action}" (list|place|rename|move|focus|close)`, 'invalid')
-  }
-}
-
-async function brain(action, flags, positional = []) {
-  const id = pick(flags, 'id') ?? positional[2]
-  switch (action) {
-    case 'list':
-    case undefined:
-      return get('/brain')
-    case 'search':
-      return get('/brain/search', { q: require1(pick(flags, 'query', 'q') ?? positional[2], 'brain search needs <query>') })
-    case 'read': {
-      const data = await get('/brain')
-      const targetId = require1(id, 'brain read needs <id>')
-      const note = (data.notes || []).find((n) => n.id === targetId)
-      if (!note) throw new OrcError(`no note "${targetId}"`, 'not_found')
-      return note
-    }
-    case 'save':
-      return post('/brain', {
-        title: require1(pick(flags, 'title') ?? positional[2], 'brain save needs <title>'),
-        content: pick(flags, 'content', 'body') ?? positional[3],
-        tags: list(pick(flags, 'tags'))
-      })
-    case 'update':
-      return patch(`/brain/${enc(require1(id, 'brain update needs <id>'))}`, {
-        title: pick(flags, 'title'),
-        content: pick(flags, 'content', 'body'),
-        tags: list(pick(flags, 'tags'))
-      })
-    case 'delete':
-      return call('DELETE', `/brain/${enc(require1(id, 'brain delete needs <id>'))}`, { agentId: AGENT_ID })
-    default:
-      throw new OrcError(`brain: unknown action "${action}" (list|read|search|save|update|delete)`, 'invalid')
   }
 }
 
@@ -981,6 +1222,7 @@ async function plan(action, flags, positional = []) {
     case 'toggle':
       return post(`/planner/${enc(require1(id, 'plan toggle needs <id>'))}/toggle`, { done: flags.done })
     case 'delete':
+      requireConfirm(flags, 'plan delete', id)
       return call('DELETE', `/planner/${enc(require1(id, 'plan delete needs <id>'))}`, { agentId: AGENT_ID })
     default:
       throw new OrcError(`plan: unknown action "${action}" (list|create|update|done|toggle|delete)`, 'invalid')
@@ -1033,6 +1275,7 @@ async function terminal(action, flags, positional = []) {
     case 'read':
       return get(`/terminal/${enc(require1(id, 'terminal read needs <terminal-id>'))}/output`, { full: flags.full === true })
     case 'close':
+      requireConfirm(flags, 'terminal close', id)
       return call('DELETE', `/widgets/${enc(require1(id, 'terminal close needs <terminal-id>'))}`, { agentId: AGENT_ID })
     default:
       throw new OrcError(`terminal: unknown action "${action}" (open|send|read|close)`, 'invalid')
@@ -1049,9 +1292,24 @@ function require1(value, message) {
 const enc = (s) => encodeURIComponent(String(s))
 const num = (v) => (v === undefined ? undefined : Number(v))
 
+function requireConfirm(flags, action, id) {
+  if (flags.yes === true || !process.stdin.isTTY) return
+  const label = id ? `${action} ${id}` : action
+  throw new OrcError(` destructive: ${label} — add --yes to confirm`, 'needs_confirm')
+}
+
 main(process.argv.slice(2)).catch(async (err) => {
   const payload = { ok: false, error: err.message, code: err.code || 'failed' }
   if (asJson) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`)
   else process.stderr.write(`orc: ${err.message}\n`)
-  process.exitCode = 1
+  const codeMap = {
+    invalid: 2,
+    unknown_command: 2,
+    no_token: 3,
+    offline: 3,
+    timeout: 4,
+    not_found: 5,
+    http_404: 5
+  }
+  process.exitCode = codeMap[err.code] ?? 1
 })

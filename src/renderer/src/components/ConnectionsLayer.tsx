@@ -39,21 +39,29 @@ const FLARE_MS = 1600
  * that so a canvas full of terminals still reads as a tree.
  */
 function ConnectionsLayer({ connections, widgets }: Props): React.JSX.Element | null {
+  const hasConnections = connections.length > 0
+  // React's useId() contains ":" characters, which break url(#...) references
+  // in SVG filter attributes — sanitise before use.
+  const rawId = React.useId()
+  const filterId = rawId.replace(/:/g, '')
   // No links on the canvas is the common case, and `widgets` gets a fresh
   // array identity on every drag/resize frame — building a 200-entry lookup
   // map per frame for a layer that draws nothing is pure overhead. Bail before
   // the map, and before the <svg>/<filter> subtree exists at all.
-  const hasConnections = connections.length > 0
+  // Keyed by the stable id list rather than the `widgets` array identity, so a
+  // drag frame that moves widgets without adding/removing any reuses the map.
+  const widgetIdsKey = widgets.map((w) => w.id).join('\n')
   const byId = useMemo(
     () => (hasConnections ? new Map(widgets.map((w) => [w.id, w])) : new Map<string, Widget>()),
-    [hasConnections, widgets]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hasConnections, widgetIdsKey]
   )
   if (!hasConnections) return null
 
   return (
     <svg aria-hidden className="pointer-events-none absolute inset-0 overflow-visible" style={{ width: 1, height: 1 }}>
       <defs>
-        <filter id="conn-blur" x="-60%" y="-60%" width="220%" height="220%">
+        <filter id={`conn-blur-${filterId}`} x="-60%" y="-60%" width="220%" height="220%">
           <feGaussianBlur stdDeviation="2.2" />
         </filter>
       </defs>
@@ -62,7 +70,7 @@ function ConnectionsLayer({ connections, widgets }: Props): React.JSX.Element | 
         const to = byId.get(c.to)
         if (!from || !to || from.id === to.id || from.maximized || to.maximized) return null
         const { d } = arcPath(anchor(from), anchor(to))
-        return <ConnectionArc key={c.id} d={d} bornAt={c.bornAt} />
+        return <ConnectionArc key={c.id} d={d} bornAt={c.bornAt} filterId={filterId} />
       })}
     </svg>
   )
@@ -70,7 +78,7 @@ function ConnectionsLayer({ connections, widgets }: Props): React.JSX.Element | 
 
 export default React.memo(ConnectionsLayer)
 
-function ConnectionArc({ d, bornAt }: { d: string; bornAt: number }): React.JSX.Element {
+function ConnectionArc({ d, bornAt, filterId }: { d: string; bornAt: number; filterId: string }): React.JSX.Element {
   // Local timer rather than a prop computed by the parent: the flare has to
   // turn itself off a moment after it starts, and nothing else in this app
   // re-renders the canvas on a plain interval to notice that for it.
@@ -88,7 +96,7 @@ function ConnectionArc({ d, bornAt }: { d: string; bornAt: number }): React.JSX.
           even long after the flare has played. */}
       <path d={d} className="conn-thread" fill="none" />
       {/* The glow pass — wider, blurred, brighter while fresh. */}
-      <path d={d} className="conn-glow" fill="none" filter="url(#conn-blur)" />
+      <path d={d} className="conn-glow" fill="none" filter={`url(#conn-blur-${filterId})`} />
       {/* A single point of light travelling the arc once on arrival. Finite
           animations only: an `repeatCount="indefinite"` shimmer here used to
           keep the compositor animating every link on the canvas forever, a

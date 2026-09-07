@@ -52,11 +52,16 @@ export default function PlannerWidget(): React.JSX.Element {
   const [project, setProject] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set())
   const [today, setToday] = useState(() => todayKey())
   const [pendingCreateAttachments, setPendingCreateAttachments] = useState<string[]>([])
   const [createAttachBusy, setCreateAttachBusy] = useState(false)
   const createFileRef = useRef<HTMLInputElement | null>(null)
+  const creatingRef = useRef(false)
+  const createAttachBusyRef = useRef(false)
+  const pendingIdsRef = useRef<Set<string>>(new Set())
+  const aliveRef = useRef(true)
   const confirm = useConfirm()
 
   const tasksMap = useMemo(() => {
@@ -64,13 +69,38 @@ export default function PlannerWidget(): React.JSX.Element {
   }, [coordination.snapshot?.tasks])
 
   useEffect(() => {
-    void window.api.planner.list().then(setItems).catch(() => setError('Failed to load planner items'))
-    const unbind = window.api.planner.onChange(setItems)
+    aliveRef.current = true
+    let mounted = true
+    let loadingInitial = true
+    let latestBroadcast: PlanItem[] | null = null
+    const unbind = window.api.planner.onChange((next) => {
+      if (!mounted) return
+      // A change can arrive while the initial list request is still in flight.
+      // Buffer it so the slower list response cannot overwrite a freshly
+      // created/toggled plan line.
+      if (loadingInitial) latestBroadcast = next
+      else setItems(next)
+      if (aliveRef.current) setLoading(false)
+    })
+    void window.api.planner.list()
+      .then((next) => {
+        if (mounted) setItems(latestBroadcast ?? next)
+      })
+      .catch(() => {
+        if (mounted && !latestBroadcast) setError('Failed to load planner items')
+      })
+      .finally(() => {
+        loadingInitial = false
+        if (mounted && latestBroadcast) setItems(latestBroadcast)
+        if (mounted) setLoading(false)
+      })
     const dayTimer = setInterval(() => {
       const current = todayKey()
       setToday((prev) => (prev !== current ? current : prev))
     }, 30_000)
     return () => {
+      aliveRef.current = false
+      mounted = false
       unbind()
       clearInterval(dayTimer)
     }
@@ -132,35 +162,40 @@ export default function PlannerWidget(): React.JSX.Element {
         if (saved && 'path' in saved && saved.path) paths.push(saved.path)
         else if (saved && 'error' in saved) throw new Error(saved.error)
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Could not attach image')
+        if (aliveRef.current) setError(err instanceof Error ? err.message : 'Could not attach image')
       }
     }
     return paths
   }
 
   const handleCreateAttach = async (files: FileList | null): Promise<void> => {
-    if (!files || files.length === 0) return
+    if (!files || files.length === 0 || createAttachBusyRef.current) return
+    createAttachBusyRef.current = true
     setCreateAttachBusy(true)
     try {
       const paths = await saveFiles(files)
-      if (paths.length) setPendingCreateAttachments((cur) => [...cur, ...paths].slice(0, 12))
+      if (aliveRef.current && paths.length) setPendingCreateAttachments((cur) => [...cur, ...paths].slice(0, 12))
     } finally {
-      setCreateAttachBusy(false)
+      createAttachBusyRef.current = false
+      if (aliveRef.current) setCreateAttachBusy(false)
       if (createFileRef.current) createFileRef.current.value = ''
     }
   }
 
   const handleCreatePaste = async (e: React.ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>): Promise<void> => {
     if (!pasteHasImage(e.nativeEvent)) return
+    if (createAttachBusyRef.current) return
     e.preventDefault()
+    createAttachBusyRef.current = true
     setCreateAttachBusy(true)
     try {
       const saved = await saveImageFromPaste(e.nativeEvent)
-      if (saved?.path) setPendingCreateAttachments((cur) => [...cur, saved.path].slice(0, 12))
+      if (aliveRef.current && saved?.path) setPendingCreateAttachments((cur) => [...cur, saved.path].slice(0, 12))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not paste image')
+      if (aliveRef.current) setError(err instanceof Error ? err.message : 'Could not paste image')
     } finally {
-      setCreateAttachBusy(false)
+      createAttachBusyRef.current = false
+      if (aliveRef.current) setCreateAttachBusy(false)
     }
   }
 
@@ -175,9 +210,12 @@ export default function PlannerWidget(): React.JSX.Element {
 
   const add = async (): Promise<void> => {
     const text = title.trim()
-    if (!text || creating) return
+    // Do not create while an image is still being copied; otherwise the task
+    // is persisted without that attachment and the late copy is then cleared.
+    if (!text || creating || creatingRef.current || createAttachBusyRef.current) return
     const day =
       scope === 'inbox' || scope === 'all' ? undefined : todayKey()
+    creatingRef.current = true
     setCreating(true)
     try {
       const result = await window.api.planner.create({
@@ -186,6 +224,7 @@ export default function PlannerWidget(): React.JSX.Element {
         project: (projectFilter || project.trim() || undefined) ?? undefined,
         ...(pendingCreateAttachments.length ? { attachments: pendingCreateAttachments } : {})
       })
+      if (!aliveRef.current) return
       if (result && typeof result === 'object' && 'error' in result) {
         setError(result.error)
         return
@@ -194,27 +233,33 @@ export default function PlannerWidget(): React.JSX.Element {
       setTitle((current) => (current.trim() === text ? '' : current))
       setPendingCreateAttachments([])
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (aliveRef.current) setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setCreating(false)
+      creatingRef.current = false
+      if (aliveRef.current) setCreating(false)
     }
   }
 
   const runItemAction = async (item: PlanItem, action: () => Promise<unknown>): Promise<void> => {
-    if (pendingIds.has(item.id)) return
+    if (pendingIdsRef.current.has(item.id)) return
+    pendingIdsRef.current.add(item.id)
     setPendingIds((current) => new Set(current).add(item.id))
     try {
       const result = await action()
+      if (!aliveRef.current) return
       if (result && typeof result === 'object' && 'error' in result) setError(String(result.error))
       else setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (aliveRef.current) setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setPendingIds((current) => {
-        const next = new Set(current)
-        next.delete(item.id)
-        return next
-      })
+      pendingIdsRef.current.delete(item.id)
+      if (aliveRef.current) {
+        setPendingIds((current) => {
+          const next = new Set(current)
+          next.delete(item.id)
+          return next
+        })
+      }
     }
   }
 
@@ -242,7 +287,9 @@ export default function PlannerWidget(): React.JSX.Element {
       setError('Maximum 12 photos per task')
       return
     }
+    if (pendingIdsRef.current.has(item.id)) return
     // optimistically mark pending
+    pendingIdsRef.current.add(item.id)
     setPendingIds((cur) => new Set(cur).add(item.id))
     try {
       const newPaths: string[] = []
@@ -257,39 +304,49 @@ export default function PlannerWidget(): React.JSX.Element {
       if (newPaths.length) {
         const merged = [...existing, ...newPaths].slice(0, 12)
         const result = await window.api.planner.update(item.id, { attachments: merged, baseVersion: item.version })
+        if (!aliveRef.current) return
         if (result && typeof result === 'object' && 'error' in result) setError(String(result.error))
         else setError(null)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (aliveRef.current) setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setPendingIds((cur) => {
-        const next = new Set(cur)
-        next.delete(item.id)
-        return next
-      })
+      pendingIdsRef.current.delete(item.id)
+      if (aliveRef.current) {
+        setPendingIds((cur) => {
+          const next = new Set(cur)
+          next.delete(item.id)
+          return next
+        })
+      }
     }
   }
 
   const attachClipboardToItem = async (item: PlanItem, event: ClipboardEvent): Promise<boolean> => {
     if (!pasteHasImage(event)) return false
     event.preventDefault()
+    if (pendingIdsRef.current.has(item.id)) return true
+    pendingIdsRef.current.add(item.id)
     setPendingIds((cur) => new Set(cur).add(item.id))
     try {
       const saved = await saveImageFromPaste(event)
       if (!saved?.path) return true
       const merged = [...(item.attachments ?? []), saved.path].slice(0, 12)
       const result = await window.api.planner.update(item.id, { attachments: merged, baseVersion: item.version })
+      if (!aliveRef.current) return true
       if (result && typeof result === 'object' && 'error' in result) setError(String(result.error))
       else setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (aliveRef.current) setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setPendingIds((cur) => {
-        const next = new Set(cur)
-        next.delete(item.id)
-        return next
-      })
+      pendingIdsRef.current.delete(item.id)
+      if (aliveRef.current) {
+        setPendingIds((cur) => {
+          const next = new Set(cur)
+          next.delete(item.id)
+          return next
+        })
+      }
     }
     return true
   }
@@ -331,9 +388,9 @@ export default function PlannerWidget(): React.JSX.Element {
       </div>
 
       <div className="flex min-h-0 flex-1">
-        {/* Project rail */}
+        {/* Project rail — hidden on narrow widgets to preserve list width */}
         {projects.length > 0 && (
-          <aside className="flex w-[118px] flex-none flex-col gap-0.5 overflow-auto border-r border-line-soft px-1.5 py-2">
+          <aside className="hidden w-[118px] min-[380px]:flex flex-none flex-col gap-0.5 overflow-auto border-r border-line-soft px-1.5 py-2">
             <div className="px-1.5 pb-1 text-[9px] font-medium tracking-wider text-text-faint uppercase">
               Projects
             </div>
@@ -371,6 +428,24 @@ export default function PlannerWidget(): React.JSX.Element {
         )}
 
         <div className="flex min-w-0 flex-1 flex-col overflow-auto">
+          {/* Project filter fallback for narrow widgets (rail is hidden <380px) */}
+          {projects.length > 0 && (
+            <div className="flex-none px-3 pt-2 min-[380px]:hidden">
+              <select
+                className="w-full rounded-[8px] border border-line-soft bg-transparent px-2 py-1 text-[11px] text-text-dim outline-none focus:border-line"
+                value={projectFilter ?? ''}
+                onChange={(e) => setProjectFilter(e.target.value || null)}
+                aria-label="Filter by project"
+              >
+                <option value="">All projects</option>
+                {projects.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           {/* Scope chips */}
           <div
             className="flex flex-none flex-wrap gap-1 px-3 pt-2.5 pb-1.5"
@@ -448,7 +523,7 @@ export default function PlannerWidget(): React.JSX.Element {
               <button
                 type="button"
                 className="flex h-6 flex-none items-center rounded-[8px] bg-accent px-2.5 text-[11px] font-semibold text-bg transition-opacity hover:opacity-90 disabled:opacity-30"
-                disabled={creating || !title.trim()}
+                disabled={creating || createAttachBusy || !title.trim()}
                 title="Add"
                 aria-label="Add item"
                 onClick={() => void add()}
@@ -477,15 +552,33 @@ export default function PlannerWidget(): React.JSX.Element {
                 aria-label="Project"
               />
             )}
-            {error && <p className="text-[11px] text-danger">{error}</p>}
+            {error && (
+              <div role="alert" className="flex items-start justify-between gap-2 text-[11px] text-danger">
+                <span className="min-w-0 flex-1">{error}</span>
+                <button
+                  type="button"
+                  onClick={() => setError(null)}
+                  aria-label="Dismiss error"
+                  className="flex-none rounded px-1 leading-none hover:opacity-70"
+                >
+                  ×
+                </button>
+              </div>
+            )}
             <p className="text-[10px] leading-relaxed text-text-faint">
-              Совет: вставь скриншот (Ctrl+V), перетащи картинку или нажми <Paperclip size={10} className="inline" /> — фото сохранится вместе с задачей.
+              Tip: paste a screenshot (Ctrl+V), drag &amp; drop an image, or click <Paperclip size={10} className="inline" /> — photos are saved with the task.
             </p>
           </div>
 
           {/* Checklist */}
           <div className="px-2 pb-2">
-            {scoped.length === 0 ? (
+            {loading ? (
+              <div className="flex flex-col gap-2 px-1 pt-4" role="status" aria-label="Loading tasks">
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="h-10 animate-pulse rounded-[12px] bg-bg-hover/60" />
+                ))}
+              </div>
+            ) : scoped.length === 0 ? (
               <Empty
                 text={
                   scope === 'today'
@@ -576,7 +669,7 @@ function CreateAttachmentsPreview({
             )}
             <button
               type="button"
-              className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/80"
+              className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-bg-panel text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100 hover:bg-bg-raise"
               title="Remove"
               aria-label="Remove attachment"
               onClick={() => onRemove(idx)}
@@ -814,7 +907,7 @@ function PlanAttachments({
             )}
             <button
               type="button"
-              className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover/thumb:opacity-100 hover:bg-black/80 disabled:opacity-50"
+              className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-bg-panel text-white opacity-0 transition-opacity group-hover/thumb:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100 hover:bg-bg-raise disabled:opacity-50"
               title="Remove photo"
               aria-label="Remove photo"
               disabled={pending}

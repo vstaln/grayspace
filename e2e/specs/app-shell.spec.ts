@@ -68,3 +68,54 @@ test('ctrl+wheel zooms the world layer, plain wheel pans it', async () => {
   })
   await expect.poll(transform, { timeout: 3000 }).not.toBe(zoomed)
 })
+
+test('keyboard zoom: Ctrl++ zooms in, Ctrl+- zooms out, Ctrl+0 resets', async () => {
+  const { page } = ctx
+  const world = page.getByTestId('canvas').locator(':scope > div').first()
+  const transform = (): Promise<string> => world.evaluate((el) => (el as HTMLElement).style.transform)
+
+  const before = await transform()
+
+  // Zoom in with Ctrl++
+  await page.keyboard.press('Control+=')
+  await expect.poll(transform, { timeout: 3000 }).not.toBe(before)
+  const zoomed = await transform()
+
+  // Zoom out with Ctrl+-
+  await page.keyboard.press('Control+-')
+  await expect.poll(transform, { timeout: 3000 }).not.toBe(zoomed)
+
+  // Reset with Ctrl+0
+  await page.keyboard.press('Control+0')
+  await expect.poll(transform, { timeout: 3000 }).toBe(before)
+})
+
+test('minimum window size: no horizontal overflow at 800x560', async () => {
+  const minCtx = await launchOrcSpace({ viewport: { width: 800, height: 560 } })
+  await waitForCanvas(minCtx.page)
+
+  // The canvas should not extend beyond the viewport (no horizontal overflow).
+  const canvasWidth = await minCtx.page.getByTestId('canvas').evaluate((el) => el.scrollWidth)
+  const viewportWidth = await minCtx.page.evaluate(() => window.innerWidth)
+  await expect(canvasWidth).toBeLessThanOrEqual(viewportWidth)
+
+  await closeOrcSpace(minCtx)
+})
+
+test('2x HiDPI ink: canvas renders at 2x device scale (skip if no canvas)', async () => {
+  const { page } = ctx
+  const projectName = test.info().project.name
+  if (!projectName.includes('ink')) {
+    test.skip()
+  }
+  await expect(page.getByTestId('canvas')).toBeVisible()
+  // At 2x device scale, canvas backing store should be 2x viewport resolution.
+  const backingWidth = await page.evaluate(() => {
+    const canvas = document.querySelector('[data-testid="canvas"]') as HTMLCanvasElement | null
+    if (!canvas) return 0
+    return canvas.width
+  })
+  const viewportWidth = await page.evaluate(() => window.innerWidth)
+  // Backing width should be approximately 2x viewport width (allowing for DPR precision).
+  await expect(backingWidth).toBeGreaterThanOrEqual(viewportWidth * 1.5)
+})

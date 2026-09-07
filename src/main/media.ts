@@ -47,18 +47,24 @@ const MEDIA_MIME_BY_EXT: Record<string, string> = { ...MIME_BY_EXT, ...AUDIO_MIM
 /** Refuse anything big enough to make a data URL a memory problem in the renderer. */
 export const MAX_MEDIA_BYTES = 24 * 1024 * 1024
 
+/** MIME lookup shared by dataUrl() and the file-manager image preview. */
+export function mimeTypeForPath(path: string): string {
+  const ext = extname(path).slice(1).toLowerCase()
+  return MEDIA_MIME_BY_EXT[ext] || 'application/octet-stream'
+}
+
 /**
- * Pasted pictures outlive the note that references them, so they cannot go to
- * the temp dir the way clipboard-to-terminal paths do (see
- * saveClipboardImageToScratch) — they live in userData.
+ * Pasted pictures that belong to app data cannot go to the temp dir the way
+ * clipboard-to-terminal paths do (see saveClipboardImageToScratch) — they live
+ * in userData.
  */
 export function mediaDir(): string {
   return join(getUserDataDir(), 'media')
 }
 
 /**
- * Content-addressed: pasting the same screenshot into five notes stores one
- * file, and re-pasting after a restart resolves to the copy already on disk.
+ * Content-addressed: pasting the same screenshot repeatedly stores one file,
+ * and re-pasting after a restart resolves to the copy already on disk.
  */
 export function saveBytes(bytes: Buffer, ext: string): MediaFile {
   if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('File larger than 24 MB')
@@ -155,8 +161,6 @@ export function saveBytesToScratch(bytes: Buffer, ext: string): MediaFile {
  * without bound. The temp dir is the right home: the OS reclaims it, and the
  * path stays valid for as long as the command needs to read it.
  *
- * Notes are the opposite case and keep using saveBytes() — a note outlives the
- * paste and must still resolve its picture after a restart.
  */
 export function saveClipboardImageToScratch(): MediaFile | null {
   if (!clipboard) return null
@@ -174,10 +178,8 @@ export function saveClipboardImageToScratch(): MediaFile | null {
  * (`\\host\share\x.png`) or a `//host/share` path makes Windows open an SMB
  * connection to `host` just to read the "file", which leaks the current
  * user's NTLM hash to whoever controls that host — the same bug class as the
- * old Outlook/Office UNC-image CVEs. Note content can carry a path an agent
- * wrote, and NoteAttachments resolves every linked image the moment a note is
- * opened, with no click involved, so this has to be enforced here rather than
- * trusted to callers.
+ * old Outlook/Office UNC-image CVEs. Callers can carry a path an agent wrote,
+ * so this has to be enforced here rather than trusted to callers.
  */
 export function isLocalPath(path: string): boolean {
   if (path.startsWith('\\\\') || path.startsWith('//')) return false
@@ -189,11 +191,10 @@ export function isLocalPath(path: string): boolean {
  * pictures cross the bridge as data URLs rather than paths.
  *
  * Reading is restricted to the app's own data directory (media store +
- * wallpapers) — a note body can carry any path an agent wrote, and
- * NoteAttachments resolves every linked image on open with no click, so a
- * hand-typed path into, say, a private screenshot must not turn this into a
- * read-any-image bridge (SEC-006). Combined with the extension check at the
- * IPC layer, only app-authored images are readable.
+ * wallpapers) — a caller can carry any path an agent wrote, so a hand-typed
+ * path into, say, a private screenshot must not turn this into a read-any-image
+ * bridge (SEC-006). Combined with the extension check at the IPC layer, only
+ * app-authored images are readable.
  *
  * Reads asynchronously on purpose: this runs in the main process, where a
  * synchronous read stalls every window and all IPC for as long as the
@@ -206,8 +207,7 @@ export async function dataUrl(path: string): Promise<string | null> {
   try {
     const bytes = await fs.promises.readFile(authorizedPath)
     if (bytes.byteLength > MAX_MEDIA_BYTES) return null
-    const ext = extname(authorizedPath).slice(1).toLowerCase()
-    const mime = MEDIA_MIME_BY_EXT[ext] || MIME_BY_EXT[ext] || 'application/octet-stream'
+    const mime = mimeTypeForPath(authorizedPath)
     return `data:${mime};base64,${bytes.toString('base64')}`
   } catch {
     return null

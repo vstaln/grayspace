@@ -42,6 +42,20 @@ interface ExactQuotaData {
 
 const exactQuotaCache = new Map<string, ExactQuotaData>()
 
+interface LogCacheEntry {
+  mtimeMs: number
+  size: number
+  lastTs: number
+  tokensMonthly: number
+  requestsMonthly: number
+  tokensWeekly: number
+  requestsWeekly: number
+  tokens5h: number
+  requests5h: number
+  oldest5h: number | null
+}
+const logCache = new Map<string, LogCacheEntry>()
+
 function parseQuotaFromTerminalOutput(rawText: string): ExactQuotaData | null {
   if (!rawText) return null
   // Strip ANSI escape sequences and carriage returns
@@ -182,47 +196,104 @@ function parseJsonlHistory(filePaths: string[], isSec = false): {
         fileModifiedRecently = true
       }
 
-      const content = fs.readFileSync(filePath, 'utf8')
-      const lines = content.split('\n')
+      const cached = logCache.get(filePath)
+      let fileTokensMonthly = 0
+      let fileRequestsMonthly = 0
+      let fileTokensWeekly = 0
+      let fileRequestsWeekly = 0
+      let fileTokens5h = 0
+      let fileRequests5h = 0
+      let fileLastTs = 0
+      let fileOldest5h: number | null = null
 
-      for (let i = lines.length - 1; i >= 0; i--) {
-        const line = lines[i].trim()
-        if (!line) continue
-        try {
-          const item = JSON.parse(line)
-          let ts = item.timestamp || item.ts || (item.created_at ? new Date(item.created_at).getTime() : 0)
-          if (!ts) continue
-          if (isSec && ts < 1e11) ts *= 1000
-          if (ts > lastTs) lastTs = ts
-          if (ts < thirtyDAgo) {
-            // Can break early since logs are chronological
-            break
+      if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+        fileTokensMonthly = cached.tokensMonthly
+        fileRequestsMonthly = cached.requestsMonthly
+        fileTokensWeekly = cached.tokensWeekly
+        fileRequestsWeekly = cached.requestsWeekly
+        fileTokens5h = cached.tokens5h
+        fileRequests5h = cached.requests5h
+        fileLastTs = cached.lastTs
+        fileOldest5h = cached.oldest5h
+      } else {
+        let content = ''
+        const maxBytes = 4 * 1024 * 1024
+        if (stat.size > maxBytes) {
+          const buf = Buffer.alloc(maxBytes)
+          const fd = fs.openSync(filePath, 'r')
+          try {
+            fs.readSync(fd, buf, 0, maxBytes, stat.size - maxBytes)
+          } finally {
+            fs.closeSync(fd)
           }
-
-          const tok =
-            item.tokens ||
-            item.token_count ||
-            item.total_tokens ||
-            (item.prompt_tokens ? item.prompt_tokens + (item.candidates_tokens || item.completion_tokens || 0) : 0) ||
-            0
-
-          requestsMonthly++
-          tokensMonthly += tok
-
-          if (ts >= sevenDAgo) {
-            requestsWeekly++
-            tokensWeekly += tok
-          }
-          if (ts >= fiveHAgo) {
-            requests5h++
-            tokens5h += tok
-            if (!oldest5h || ts < oldest5h) {
-              oldest5h = ts
-            }
-          }
-        } catch {
-          // ignore malformed lines
+          content = buf.toString('utf8')
+        } else {
+          content = fs.readFileSync(filePath, 'utf8')
         }
+
+        const lines = content.split('\n')
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const line = lines[i].trim()
+          if (!line) continue
+          try {
+            const item = JSON.parse(line)
+            let ts = item.timestamp || item.ts || (item.created_at ? new Date(item.created_at).getTime() : 0)
+            if (!ts) continue
+            if (isSec && ts < 1e11) ts *= 1000
+            if (ts > fileLastTs) fileLastTs = ts
+            if (ts < thirtyDAgo) {
+              break
+            }
+
+            const tok =
+              item.tokens ||
+              item.token_count ||
+              item.total_tokens ||
+              (item.prompt_tokens ? item.prompt_tokens + (item.candidates_tokens || item.completion_tokens || 0) : 0) ||
+              0
+
+            fileRequestsMonthly++
+            fileTokensMonthly += tok
+
+            if (ts >= sevenDAgo) {
+              fileRequestsWeekly++
+              fileTokensWeekly += tok
+            }
+            if (ts >= fiveHAgo) {
+              fileRequests5h++
+              fileTokens5h += tok
+              if (!fileOldest5h || ts < fileOldest5h) {
+                fileOldest5h = ts
+              }
+            }
+          } catch {
+            // ignore malformed lines
+          }
+        }
+
+        logCache.set(filePath, {
+          mtimeMs: stat.mtimeMs,
+          size: stat.size,
+          lastTs: fileLastTs,
+          tokensMonthly: fileTokensMonthly,
+          requestsMonthly: fileRequestsMonthly,
+          tokensWeekly: fileTokensWeekly,
+          requestsWeekly: fileRequestsWeekly,
+          tokens5h: fileTokens5h,
+          requests5h: fileRequests5h,
+          oldest5h: fileOldest5h
+        })
+      }
+
+      requestsMonthly += fileRequestsMonthly
+      tokensMonthly += fileTokensMonthly
+      requestsWeekly += fileRequestsWeekly
+      tokensWeekly += fileTokensWeekly
+      requests5h += fileRequests5h
+      tokens5h += fileTokens5h
+      if (fileLastTs > lastTs) lastTs = fileLastTs
+      if (fileOldest5h && (!oldest5h || fileOldest5h < oldest5h)) {
+        oldest5h = fileOldest5h
       }
     } catch {
       // ignore read errors
@@ -379,7 +450,8 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
     for (const t of activeTerminals) {
       if (!t.alive) continue
       try {
-        const out = deps.terminals.fullOutput(t.id) || ''
+        const fullOut = deps.terminals.fullOutput(t.id) || ''
+        const out = fullOut.length > 8192 ? fullOut.slice(-8192) : fullOut
         const parsed = parseQuotaFromTerminalOutput(out)
         if (parsed) {
           const lowerOut = out.toLowerCase()
@@ -401,6 +473,20 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
     }
   }
 
+  // One bounded tail per terminal, computed once and shared by every agent:
+  // the old loop lowercased the full 50 KB scrollback per agent per terminal.
+  const tails: string[] = deps?.terminals && typeof deps.terminals.fullOutput === 'function'
+    ? activeTerminals.map((t) => {
+        if (!t.alive) return ''
+        try {
+          const out = deps.terminals.fullOutput(t.id) || ''
+          return out.slice(-8_000).toLowerCase()
+        } catch {
+          return ''
+        }
+      })
+    : activeTerminals.map(() => '')
+
   return AGENTS.map((agent) => {
     // 1. Detect open status from terminals, process list, presence locks, or recent activity
     let openCount = 0
@@ -408,7 +494,8 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
     const lowerCmd = agent.command.toLowerCase()
     const lowerName = agent.name.toLowerCase()
 
-    for (const t of activeTerminals) {
+    for (let i = 0; i < activeTerminals.length; i += 1) {
+      const t = activeTerminals[i]
       if (!t.alive) continue
       const lowerTitle = (t.title || '').toLowerCase()
       const lowerTId = (t.id || '').toLowerCase()
@@ -418,15 +505,8 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
         lowerTitle.includes(lowerName) ||
         lowerTId.includes(lowerId)
 
-      if (!matches && deps?.terminals && typeof deps.terminals.fullOutput === 'function') {
-        try {
-          const out = (deps.terminals.fullOutput(t.id) || '').toLowerCase()
-          if (agent.outputKeywords.some((kw) => out.includes(kw))) {
-            matches = true
-          }
-        } catch {
-          // ignore
-        }
+      if (!matches && tails[i] && agent.outputKeywords.some((kw) => (tails[i] as string).includes(kw))) {
+        matches = true
       }
 
       if (matches) {

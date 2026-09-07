@@ -1,8 +1,5 @@
 import type { MediaFile } from '../../../preload/index.d'
 
-/** `![name](C:\...\media\hash.png)` — the link every editor writes for a picture. */
-const IMAGE_LINK = /!\[[^\]]*\]\(([^)]+)\)/g
-
 /**
  * Pulls the picture out of a paste, whichever way the OS offered it, and copies
  * it into the app's media store.
@@ -25,11 +22,17 @@ export async function saveImageFromPaste(
 ): Promise<MediaFile | null> {
   const scratch = options?.scratch === true
   const file = Array.from(event.clipboardData?.files ?? []).find(
-    (f) => f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|tiff?)$/i.test(f.name)
+    (f: File) => f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|tiff?)$/i.test(f.name)
   )
   if (file) {
-    const bytes = new Uint8Array(await file.arrayBuffer())
-    const ext = file.name.includes('.') ? file.name.split('.').pop()! : file.type.split('/')[1] || 'png'
+    const f = file as File
+    // DoS guard: clipboard image >20 MB would OOM renderer (arrayBuffer dup)
+    if (f.size > 20 * 1024 * 1024) {
+      console.warn('paste image too large', f.size)
+      return null
+    }
+    const bytes = new Uint8Array(await f.arrayBuffer())
+    const ext = f.name.includes('.') ? f.name.split('.').pop()! : f.type.split('/')[1] || 'png'
     const saved = scratch
       ? await window.api.media.saveBytesScratch(bytes, ext)
       : await window.api.media.saveBytes(bytes, ext)
@@ -45,17 +48,21 @@ export function pasteHasImage(event: ClipboardEvent): boolean {
   if (!data) return false
   if (
     Array.from(data.files).some(
-      (f) => f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|tiff?)$/i.test(f.name)
+      (f: File) => f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|tiff?)$/i.test(f.name)
     )
   )
     return true
   // A browser image copy exposes an `image/*` item with no File behind it.
-  return Array.from(data.items).some((i) => i.kind === 'file' && i.type.startsWith('image/'))
-}
+  if (Array.from(data.items).some((i: DataTransferItem) => i.kind === 'file' && i.type.startsWith('image/'))) return true
 
-/** Absolute paths of every picture referenced by a note body, in order. */
-export function imageLinksIn(content: string): string[] {
-  return Array.from(String(content || '').matchAll(IMAGE_LINK), (m) => m[1].trim()).filter(Boolean)
+  // Some Chromium/Electron clipboard providers expose a copied image as rich
+  // HTML plus an alt label in text/plain (for example, "Image One"). Treat
+  // the HTML image as the source of truth so the caller does not paste that
+  // label into the CLI prompt instead of forwarding the image shortcut.
+  if (data.types.includes('text/html')) {
+    return /<img\b/i.test(data.getData('text/html'))
+  }
+  return false
 }
 
 /** Splices `text` into `value` at the cursor, returning the new value and caret. */

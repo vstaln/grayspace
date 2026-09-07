@@ -1,19 +1,27 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { FolderOpen, KanbanSquare, Palette, Pin, Settings, UserRound, X } from 'lucide-react'
-import type { RecentDir, UserRole } from '../../../preload/index.d'
+import { Code2, FolderOpen, FolderPlus, KanbanSquare, MessageSquare, Palette, Pencil, Pin, Plus, Settings, UserRound, X } from 'lucide-react'
+import type { CodeWorkspaceState, RecentDir, UserRole } from '../../../preload/index.d'
+import type { WorkView } from './TitleBar'
 import { useFocusTrap } from '../hooks/useFocusTrap'
-import { THEMES, useTheme } from '../theme'
+import { THEMES, useTheme, wallpaperBackgroundImage } from '../theme'
 import { useSettings } from '../hooks/useSettings'
 import { VerifiedBadge } from './VerifiedBadge'
 
 interface Props {
   workspaceDir: string | null
   managerId: string | null
+  activeView?: WorkView
   boardOpen: boolean
   taskCount: number
   onToggleBoard(): void
   onPickDir(): void
+}
+
+interface CodeSessionSummary {
+  id: string
+  title: string
+  status: 'active' | 'finished'
 }
 
 function IconButton({
@@ -22,6 +30,8 @@ function IconButton({
   danger,
   badge,
   testId,
+  pressed,
+  expanded,
   onClick,
   children
 }: {
@@ -30,6 +40,8 @@ function IconButton({
   danger?: boolean
   badge?: number
   testId?: string
+  pressed?: boolean
+  expanded?: boolean
   onClick(): void
   children: React.ReactNode
 }): React.JSX.Element {
@@ -48,6 +60,8 @@ function IconButton({
       onClick={onClick}
       title={label}
       aria-label={label}
+      aria-pressed={pressed ?? active}
+      aria-expanded={expanded}
     >
       {children}
       {badge ? (
@@ -86,6 +100,7 @@ const FAVORITE_WIDGETS = [
   ['sys-monitor', 'System Monitor', 'CPU, RAM and processes'],
   ['timer', 'Timer', 'Countdown or stopwatch'],
   ['planner', 'Planner', 'Daily agenda and checklist'],
+  ['board', 'Kanban Board', 'Interactive task board on canvas'],
   ['orchestration', 'Orchestration', 'The agent fleet: tasks, workers and their questions'],
   ['browser', 'Browser', 'Embedded web page'],
   ['links', 'Links', 'Saved links'],
@@ -135,22 +150,25 @@ function Choice({
   label,
   hint,
   mono,
+  disabled,
   onClick
 }: {
   selected: boolean
   label: string
   hint?: string
   mono?: boolean
+  disabled?: boolean
   onClick(): void
 }): React.JSX.Element {
   return (
     <button
       type="button"
       aria-pressed={selected}
+      disabled={disabled}
       onClick={onClick}
       className={`flex flex-col gap-1.5 rounded-[10px] border p-3.5 text-left transition-colors duration-150 ${
         selected ? 'border-line bg-bg-hover' : 'border-line-soft hover:border-line'
-      }`}
+      } ${disabled ? 'pointer-events-none opacity-50' : ''}`}
     >
       <span className="flex items-center justify-between gap-2">
         <span className={`text-xs ${selected ? 'text-text' : 'text-text-dim'}`}>{label}</span>
@@ -234,6 +252,10 @@ function SettingsModal({
   }, [open])
 
   useEffect(() => {
+    setNotice(null)
+  }, [tab, open])
+
+  useEffect(() => {
     const openAccount = (): void => {
       setTab('account')
       setOpen(true)
@@ -247,10 +269,10 @@ function SettingsModal({
   const saveAccount = async (): Promise<void> => {
     setBusy(true)
     try {
-      await update({
+      const saved = await update({
         userName: userName.trim() || 'you'
       })
-      setNotice('Account settings saved.')
+      setNotice(saved ? 'Account settings saved.' : 'Failed to save account settings.')
     } catch (err) {
       setNotice(`Failed to save account: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
@@ -265,7 +287,7 @@ function SettingsModal({
     // it beneath either made Settings/Account look dead there (UI-audit P0).
     createPortal(
       <div
-        className="fixed top-10 inset-x-0 bottom-0 z-[50000] flex items-center justify-center bg-black/45 p-6 backdrop-blur-[2px]"
+        className="fixed inset-0 z-[50000] flex items-center justify-center bg-black/45 p-6 backdrop-blur-[2px]"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         role="presentation"
         onMouseDown={(event) => {
@@ -278,7 +300,7 @@ function SettingsModal({
           aria-modal="true"
           aria-label="Settings"
           data-testid="settings-modal"
-          className="pop-in flex max-h-[min(720px,calc(100vh-80px))] w-[min(820px,calc(100vw-48px))] flex-col overflow-hidden rounded-[14px] border border-line-soft bg-bg-panel sm:flex-row glass:bg-bg-panel/90 glass:backdrop-blur-2xl"
+          className="pop-in flex max-h-[min(720px,calc(100vh-80px))] w-[min(820px,calc(100vw-48px))] flex-col overflow-hidden rounded-[14px] border border-line-soft bg-bg-panel sm:flex-row"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           <nav className="flex flex-none gap-1 overflow-x-auto border-b border-line-soft p-2.5 sm:w-[172px] sm:flex-col sm:border-r sm:border-b-0 sm:p-3">
@@ -298,7 +320,7 @@ function SettingsModal({
               </button>
             ))}
           </nav>
-          <main className="flex min-w-0 flex-1 flex-col gap-7 overflow-auto px-7 py-6">
+          <main className="flex min-w-0 flex-1 flex-col gap-7 overflow-auto px-7 py-6 min-h-0">
             <header className="flex flex-none items-center justify-between">
               <h2 className="text-[15px] font-medium text-text">
                 {tab === 'appearance' ? 'Appearance' : 'Account'}
@@ -306,7 +328,7 @@ function SettingsModal({
               <button
                 className="grid h-7 w-7 place-items-center rounded-[8px] text-text-faint transition-colors duration-150 hover:bg-bg-hover hover:text-text"
                 onClick={() => setOpen(false)}
-                aria-label="Close"
+                aria-label="Close settings"
               >
                 <X size={15} />
               </button>
@@ -322,6 +344,7 @@ function SettingsModal({
                         selected={theme === item.id}
                         label={item.label}
                         hint={item.hint}
+                        disabled={busy}
                         onClick={() => {
                           setTheme(item.id)
                           if (item.id === 'photo' && !background) void pickBackground()
@@ -338,6 +361,7 @@ function SettingsModal({
                       label="Command Prompt (CMD)"
                       hint="cmd.exe"
                       mono
+                      disabled={busy}
                       onClick={() => void update({ windowsShell: 'cmd' })}
                     />
                     <Choice
@@ -345,6 +369,7 @@ function SettingsModal({
                       label="PowerShell"
                       hint="powershell.exe"
                       mono
+                      disabled={busy}
                       onClick={() => void update({ windowsShell: 'powershell' })}
                     />
                   </div>
@@ -385,7 +410,7 @@ function SettingsModal({
                   {background ? (
                     <div
                       className="h-32 rounded-[10px] border border-line-soft bg-cover bg-center"
-                      style={{ backgroundImage: `url("${background}")` }}
+                      style={{ backgroundImage: wallpaperBackgroundImage(background) }}
                     />
                   ) : (
                     <div className="rounded-[10px] border border-dashed border-line-soft px-3 py-8 text-center text-[11px] text-text-faint">
@@ -439,6 +464,7 @@ function SettingsModal({
                   <input
                     className="w-full rounded-[8px] border border-line-soft bg-transparent px-3 py-2.5 text-xs text-text outline-none transition-colors duration-150 focus:border-line"
                     type="text"
+                    aria-label="Display name"
                     maxLength={40}
                     value={userName}
                     onChange={(event) => setUserName(event.target.value)}
@@ -529,6 +555,7 @@ function SettingsModal({
 export default React.memo(function Sidebar({
   workspaceDir,
   managerId,
+  activeView = 'canvas',
   boardOpen,
   taskCount,
   onToggleBoard,
@@ -536,14 +563,21 @@ export default React.memo(function Sidebar({
 }: Props): React.JSX.Element {
   const { settings } = useSettings()
   const [recent, setRecent] = useState<RecentDir[]>([])
+  const [codeWorkspaceState, setCodeWorkspaceState] = useState<CodeWorkspaceState>({ workspaces: [], activeId: 'code-default', folder: null })
+  const [codeSessions, setCodeSessions] = useState<CodeSessionSummary[]>([])
   const [foldersOpen, setFoldersOpen] = useState(false)
   const [foldersError, setFoldersError] = useState<string | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [workspaceName, setWorkspaceName] = useState('')
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false)
   const foldersRef = useRef<HTMLDivElement>(null)
   const foldersMenuRef = useRef<HTMLDivElement>(null)
-  useFocusTrap(foldersMenuRef, foldersOpen)
+  const createDialogRef = useRef<HTMLFormElement>(null)
+  useFocusTrap(createDialogRef, createOpen)
   const dirName = workspaceDir ? workspaceDir.split(/[\\/]/).filter(Boolean).pop() : null
   const avatarName = settings.userName?.trim() || 'you'
   const avatarInitials = avatarName.slice(0, 2).toUpperCase()
+  const expanded = activeView !== 'canvas'
 
   // Remembered folders live in the main process, so mirror them live.
   useEffect(() => {
@@ -555,12 +589,43 @@ export default React.memo(function Sidebar({
   }, [])
 
   useEffect(() => {
+    void window.api.workspace.codeWorkspaces().then(setCodeWorkspaceState).catch(() => {})
+    return window.api.workspace.onCodeWorkspaceChange(setCodeWorkspaceState)
+  }, [])
+
+  useEffect(() => {
+    const applySnapshot = (snapshot: { sessions?: Array<{ id: string; title?: string; label: string; status?: 'active' | 'finished' }> }): void => {
+      if (!Array.isArray(snapshot.sessions)) return
+      setCodeSessions(snapshot.sessions.map((session) => ({
+        id: session.id,
+        title: session.title?.trim() || session.label,
+        status: session.status === 'finished' ? 'finished' : 'active'
+      })))
+    }
+    void window.api.code.load().then(applySnapshot).catch(() => {})
+    const offCode = window.api.code.onChange(applySnapshot)
+    const onLocalSessions = (event: Event): void => {
+      const detail = (event as CustomEvent<CodeSessionSummary[]>).detail
+      if (!Array.isArray(detail)) return
+      setCodeSessions(detail.filter((session) => session && typeof session.id === 'string'))
+    }
+    window.addEventListener('orcspace:code-sessions', onLocalSessions)
+    return () => {
+      offCode()
+      window.removeEventListener('orcspace:code-sessions', onLocalSessions)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!foldersOpen) return
     const onDown = (e: MouseEvent): void => {
       if (foldersRef.current && !foldersRef.current.contains(e.target as Node)) setFoldersOpen(false)
     }
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setFoldersOpen(false)
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setFoldersOpen(false)
+      }
     }
     window.addEventListener('mousedown', onDown)
     window.addEventListener('keydown', onKey)
@@ -570,11 +635,25 @@ export default React.memo(function Sidebar({
     }
   }, [foldersOpen])
 
+  // Keep the folders menu inside the viewport (same Math.min pattern as ContextMenu).
+  useEffect(() => {
+    if (!foldersOpen) return
+    const el = foldersMenuRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const maxTop = window.innerHeight - rect.height - 4
+    const clampedTop = Math.min(rect.top, Math.max(4, maxTop))
+    if (clampedTop !== rect.top) {
+      el.style.top = `${clampedTop - rect.top + el.offsetTop}px`
+    }
+  }, [foldersOpen, recent.length])
+
   const open = async (path: string): Promise<void> => {
     // Both a bus `{ error }` reply and a rejected invoke (deleted folder,
     // unreachable drive) must surface — an uncaught reject would only hit the
     // global console handler and the menu would silently stay open.
     try {
+      window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
       const result = await window.api.workspace.openRecent(path)
       if (result && typeof result === 'object' && 'error' in result) {
         setFoldersError(result.error)
@@ -603,6 +682,105 @@ export default React.memo(function Sidebar({
     }
   }
 
+  const openCreateWorkspace = (): void => {
+    setFoldersOpen(false)
+    setFoldersError(null)
+    setWorkspaceName('')
+    setCreateOpen(true)
+  }
+
+  const createWorkspace = async (): Promise<void> => {
+    const name = workspaceName.trim()
+    setCreatingWorkspace(true)
+    try {
+      window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
+      const result = await window.api.workspace.createCodeWorkspace(name || undefined)
+      if (result && typeof result === 'object' && 'error' in result) {
+        setFoldersError(result.error)
+        return
+      }
+      if (result && typeof result === 'object' && 'id' in result) {
+        setCreateOpen(false)
+        setWorkspaceName('')
+        setFoldersError(null)
+      }
+    } catch (err) {
+      setFoldersError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCreatingWorkspace(false)
+    }
+  }
+
+  const [renameTarget, setRenameTarget] = useState<null | { kind: 'folder' | 'code'; id: string; current: string }>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const renameRef = useRef<HTMLFormElement>(null)
+  useFocusTrap(renameRef, !!renameTarget)
+
+  const openRename = (kind: 'folder' | 'code', id: string, currentName: string): void => {
+    setRenameTarget({ kind, id, current: currentName })
+    setRenameValue(currentName)
+  }
+
+  const submitRename = async (): Promise<void> => {
+    if (!renameTarget) return
+    const nextName = renameValue.trim()
+    if (!nextName || nextName === renameTarget.current) {
+      setRenameTarget(null)
+      return
+    }
+    try {
+      if (renameTarget.kind === 'folder') {
+        const result = await window.api.workspace.rename(renameTarget.id, nextName)
+        if (result && !Array.isArray(result) && 'error' in result) {
+          setFoldersError(result.error)
+          // Don't auto-close on failure; keep dialog open so user can retry
+          return
+        }
+        setFoldersError(null)
+      } else {
+        const result = await window.api.workspace.renameCodeWorkspace(renameTarget.id, nextName)
+        if ('error' in result) {
+          setFoldersError(result.error)
+          // Don't auto-close on failure
+          return
+        }
+        setFoldersError(null)
+      }
+      setRenameTarget(null)
+    } catch (err) {
+      setFoldersError(err instanceof Error ? err.message : String(err))
+      // Don't auto-close on failure
+    }
+  }
+
+  const renameWorkspace = (path: string, currentName: string): void => {
+    openRename('folder', path, currentName)
+  }
+
+  const renameCodeWorkspace = (id: string, currentName: string): void => {
+    openRename('code', id, currentName)
+  }
+
+  const selectCodeWorkspace = async (id: string): Promise<void> => {
+    if (id === codeWorkspaceState.activeId) return
+    window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
+    try {
+      const result = await window.api.workspace.selectCodeWorkspace(id)
+      if ('error' in result) setFoldersError(result.error)
+    } catch (err) {
+      setFoldersError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  useEffect(() => {
+    if (!createOpen) return
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setCreateOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [createOpen])
+
   const RAIL_ITEM_IDS = ['board', 'folders'] as const
   type RailItemId = (typeof RAIL_ITEM_IDS)[number]
   const [order, setOrder] = useState<RailItemId[]>(() => {
@@ -628,14 +806,17 @@ export default React.memo(function Sidebar({
       const targetIndex = next.indexOf(target)
       if (targetIndex === -1) return prev
       next.splice(targetIndex, 0, dragged)
-      localStorage.setItem('rail-order', JSON.stringify(next))
       return next
     })
   }
+  // Persist rail order outside the state updater (side-effect inside updater runs twice in StrictMode)
+  React.useEffect(() => {
+    try { localStorage.setItem('rail-order', JSON.stringify(order)) } catch {}
+  }, [order])
 
   const railItems: Record<RailItemId, React.ReactNode> = {
     board: (
-      <IconButton label="Task Board" testId="rail-board" active={boardOpen} badge={taskCount} onClick={onToggleBoard}>
+      <IconButton label={`Task Board, ${taskCount} open`} testId="rail-board" active={boardOpen} pressed={boardOpen} expanded={boardOpen} badge={taskCount} onClick={onToggleBoard}>
         <KanbanSquare size={17} />
       </IconButton>
     ),
@@ -644,7 +825,9 @@ export default React.memo(function Sidebar({
         <IconButton
           label={workspaceDir ? `Folders · current: ${dirName}` : 'Workspace Folders'}
           testId="rail-folders"
-          active={Boolean(workspaceDir)}
+          active={foldersOpen}
+          pressed={foldersOpen}
+          expanded={foldersOpen}
           onClick={() => setFoldersOpen((v) => !v)}
         >
           <FolderOpen size={17} />
@@ -653,41 +836,66 @@ export default React.memo(function Sidebar({
         {foldersOpen && (
           <div
             ref={foldersMenuRef}
-            role="dialog"
-            aria-modal="true"
+            role="menu"
             aria-label="Workspace Folders"
-            className="absolute top-0 left-[calc(100%+10px)] z-[900] w-72 max-w-[calc(100vw-70px)] rounded-[10px] border border-line bg-bg-panel p-2 shadow-2xl glass:bg-bg-panel/85 glass:backdrop-blur-2xl"
+            className="absolute top-0 left-[calc(100%+10px)] z-[9500] w-72 max-w-[calc(100vw-70px)] max-h-[calc(100vh-120px)] overflow-auto rounded-[10px] border border-line bg-bg-panel p-2 shadow-2xl"
+            onKeyDown={(e) => {
+              // Only handle Escape if this is the frontmost dialog (frontmost trap)
+              if (e.key === 'Escape') {
+                e.stopPropagation()
+                setFoldersOpen(false)
+              }
+              // Arrow nav for menu items
+              const items = Array.from(
+                (e.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('[role="menuitem"]')
+              )
+              if (items.length === 0) return
+              const idx = items.indexOf(document.activeElement as HTMLButtonElement)
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                items[(idx + 1) % items.length]?.focus()
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                items[(idx - 1 + items.length) % items.length]?.focus()
+              } else if (e.key === 'Enter') {
+                // Focus return is handled natively via button focus
+              }
+            }}
           >
             <div className="px-1.5 pt-1 pb-2 text-[10px] tracking-wider text-text-faint uppercase">Workspace Folders</div>
             <div className="flex max-h-72 flex-col gap-1 overflow-auto">
-              {recent.map((entry) => (
-                <div
-                  key={entry.path}
-                  className={`group flex items-center gap-1 rounded-[10px] ${entry.path === workspaceDir ? 'bg-bg-hover' : ''}`}
-                  title={entry.path}
-                >
-                  <button className="min-w-0 flex-1 px-2 py-1.5 text-left" onClick={() => void open(entry.path)}>
-                    <b className="block truncate text-xs font-semibold text-text">{entry.name}</b>
-                    <span className="block truncate text-[10px] text-text-faint">{entry.path}</span>
-                  </button>
-                  <button
-                    className={`flex-none rounded-[10px] p-1 text-text-faint hover:bg-bg-hover hover:text-text ${entry.pinned ? 'text-accent' : ''}`}
-                    title={entry.pinned ? 'Unpin' : 'Pin'}
-                    aria-label={entry.pinned ? `Unpin ${entry.name}` : `Pin ${entry.name}`}
-                    onClick={() => void pinRecent(entry.path)}
+{recent.map((entry) => (
+                  <div
+                    key={entry.path}
+                    className={`group flex items-center gap-1 rounded-[10px] ${entry.path === workspaceDir ? 'bg-bg-hover' : ''}`}
+                    title={entry.path}
                   >
-                    <Pin size={12} />
-                  </button>
-                  <button
-                    className="flex-none rounded-[10px] p-1 text-text-faint hover:bg-bg-hover hover:text-text"
-                    title="Remove from recent"
-                    aria-label={`Remove ${entry.name} from recent`}
-                    onClick={() => void forgetRecent(entry.path)}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              ))}
+                    <button
+                      className="min-w-0 flex-1 px-2 py-1.5 text-left"
+                      onClick={() => void open(entry.path)}
+                      role="menuitem"
+                    >
+                      <b className="block truncate text-xs font-semibold text-text">{entry.name}</b>
+                      <span className="block truncate text-[10px] text-text-faint">{entry.path}</span>
+                    </button>
+                    <button
+                      className={`flex-none rounded-[10px] p-1 text-text-faint hover:bg-bg-hover hover:text-text ${entry.pinned ? 'text-accent' : ''}`}
+                      title={entry.pinned ? 'Unpin' : 'Pin'}
+                      aria-label={entry.pinned ? `Unpin ${entry.name}` : `Pin ${entry.name}`}
+                      onClick={() => void pinRecent(entry.path)}
+                    >
+                      <Pin size={12} />
+                    </button>
+                    <button
+                      className="flex-none rounded-[10px] p-1 text-text-faint hover:bg-bg-hover hover:text-text"
+                      title="Remove from recent"
+                      aria-label={`Remove ${entry.name} from recent`}
+                      onClick={() => void forgetRecent(entry.path)}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
               {!recent.length && (
                 <div className="px-2 py-3 text-center text-[11px] text-text-faint">Recent folders list is empty — select your first folder</div>
               )}
@@ -698,6 +906,7 @@ export default React.memo(function Sidebar({
             <button
               className="mt-2 flex w-full items-center justify-center gap-2 rounded-[10px] bg-accent px-3 py-2 text-xs font-semibold text-black hover:bg-white"
               onClick={() => {
+                window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
                 onPickDir()
                 setFoldersOpen(false)
               }}
@@ -710,16 +919,262 @@ export default React.memo(function Sidebar({
     )
   }
 
+  const renderExpanded = (): React.JSX.Element => {
+    if (activeView === 'chat') {
+      return (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex h-8 flex-none items-center justify-between border-b border-line-soft px-2.5">
+            <span className="text-[10px] font-semibold tracking-[0.08em] text-text-faint uppercase">Chat</span>
+            <button
+              type="button"
+              aria-label="New chat"
+              title="New chat"
+              onClick={() => window.dispatchEvent(new CustomEvent('orcspace:new-chat'))}
+              className="grid h-6 w-6 place-items-center rounded text-text-faint transition hover:bg-bg-hover hover:text-text"
+            >
+              <Plus size={13} />
+            </button>
+          </div>
+          <div data-chat-sidebar-slot className="min-h-0 flex-1" />
+          <button
+            type="button"
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
+              onPickDir()
+            }}
+            className="mx-1.5 mb-1.5 flex flex-none items-center justify-center gap-1.5 rounded-[7px] bg-bg-hover px-1.5 py-1 text-[10px] font-medium text-text-dim transition hover:bg-bg-raise hover:text-text"
+          >
+            <FolderPlus size={12} /> Open folder
+          </button>
+        </div>
+      )
+    }
+
+    const contextLabel = 'Code sessions'
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex h-8 flex-none items-center justify-between border-b border-line-soft px-2.5">
+          <span className="text-[10px] font-semibold tracking-[0.08em] text-text-faint uppercase">Workspace</span>
+            <button
+              type="button"
+              aria-label="Create workspace"
+              title="Create workspace"
+              data-testid="workspace-create"
+              onClick={openCreateWorkspace}
+            className="grid h-6 w-6 place-items-center rounded text-text-faint transition hover:bg-bg-hover hover:text-text"
+          >
+            <Plus size={13} />
+          </button>
+        </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
+          <div className="mb-0.5 px-1.5 text-[9px] font-semibold tracking-[0.1em] text-text-faint uppercase">Workspaces</div>
+          <div className="mb-2">
+            {codeWorkspaceState.workspaces.map((workspace) => {
+              const current = workspace.id === codeWorkspaceState.activeId
+              return (
+                <div key={workspace.id} className={`group flex min-w-0 items-center rounded-[8px] ${current ? 'bg-bg-hover' : 'hover:bg-bg-hover/60'}`}>
+                  <button
+                    type="button"
+                    data-testid={current ? 'current-workspace' : undefined}
+                    className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left text-[11px] text-text-dim"
+                    onClick={() => void selectCodeWorkspace(workspace.id)}
+                  >
+                    <Code2 size={12} className="flex-none text-text-faint" />
+                    <span className={`min-w-0 truncate ${current ? 'text-text' : ''}`}>{workspace.name}</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Rename ${workspace.name}`}
+                    title="Rename workspace"
+                    className="mr-0.5 grid h-6 w-6 flex-none place-items-center rounded text-text-faint opacity-0 transition group-hover:opacity-100 hover:bg-bg-raise hover:text-text"
+                    onClick={() => void renameCodeWorkspace(workspace.id, workspace.name)}
+                  >
+                    <Pencil size={10} />
+                  </button>
+                </div>
+              )
+            })}
+            {!codeWorkspaceState.workspaces.length && <div className="px-2 py-1 text-[10px] text-text-faint">No workspaces</div>}
+          </div>
+          {workspaceDir && <div className="mb-2 px-2 text-[10px] text-text-faint" title={workspaceDir}>Project folder: {dirName}</div>}
+          {foldersError && <div className="px-2 pt-3 text-[10px] leading-snug text-danger">{foldersError}</div>}
+
+          <div className="mt-3 border-t border-line-soft pt-2">
+            <div className="mb-0.5 px-2 text-[9px] font-semibold tracking-[0.1em] text-text-faint uppercase">{contextLabel}</div>
+            <div className="mb-1.5 px-2 text-[10px] text-text-faint">Terminals inside this Workspace</div>
+            {activeView === 'code' && codeSessions.length > 0 && (
+              <div className="mb-1.5 ml-2 flex flex-col gap-0.5 border-l border-line-soft pl-1.5">
+                {codeSessions.map((session) => (
+                  <button
+                    key={session.id}
+                    type="button"
+                    className="flex min-w-0 items-center gap-2 rounded-[7px] px-1.5 py-1 text-left text-[11px] text-text-dim transition hover:bg-bg-hover hover:text-text"
+                    title={`${session.title} · ${session.status === 'active' ? 'active' : 'finished'}`}
+                    onClick={() => window.dispatchEvent(new CustomEvent('orcspace:focus-code-session', { detail: session.id }))}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`h-1.5 w-1.5 flex-none rounded-full ${session.status === 'active' ? 'animate-pulse bg-ok' : 'bg-text-faint'}`}
+                    />
+                    <span className="min-w-0 flex-1 truncate">{session.title}</span>
+                    <span className="flex-none text-[9px] text-text-faint">{session.status === 'active' ? 'active' : 'done'}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              className="flex w-full items-center gap-1.5 rounded-[7px] px-1.5 py-1 text-[11px] text-text-dim transition hover:bg-bg-hover hover:text-text"
+              onClick={() => window.dispatchEvent(new CustomEvent(activeView === 'code' ? 'orcspace:open-code-launcher' : 'orcspace:new-chat'))}
+            >
+              {activeView === 'code' ? <Code2 size={13} /> : <MessageSquare size={13} />}
+              {activeView === 'code' ? 'Launch session' : 'New chat'}
+            </button>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
+            onPickDir()
+          }}
+          className="mx-1.5 mb-1.5 flex flex-none items-center justify-center gap-1.5 rounded-[7px] bg-bg-hover px-1.5 py-1 text-[10px] font-medium text-text-dim transition hover:bg-bg-raise hover:text-text"
+        >
+          <FolderPlus size={12} /> Open folder
+        </button>
+      </div>
+    )
+  }
+
+  const createDialog = createOpen ? createPortal(
+    <div
+      className="fixed inset-0 z-[60000] flex items-center justify-center bg-black/45 p-6 backdrop-blur-[2px]"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) setCreateOpen(false)
+      }}
+    >
+      <form
+        ref={createDialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Create workspace"
+        data-testid="create-workspace-dialog"
+        tabIndex={-1}
+        className="pop-in flex w-[min(380px,calc(100vw-32px))] flex-col gap-4 rounded-[14px] border border-line-soft bg-bg-panel p-5 shadow-2xl"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void createWorkspace()
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.stopPropagation()
+            e.preventDefault()
+            setCreateOpen(false)
+          }
+        }}
+      >
+        <div>
+          <h2 className="text-[15px] font-medium text-text">New Workspace</h2>
+          <p className="mt-1 text-[11px] leading-relaxed text-text-faint">
+            One workspace contains the whole Code screen; terminals are sessions inside it. Canvas stays unchanged.
+          </p>
+        </div>
+        <label className="flex flex-col gap-1.5 text-[10px] font-medium tracking-[0.09em] text-text-faint uppercase">
+          Workspace name
+          <input
+            autoFocus
+            data-testid="create-workspace-name"
+            value={workspaceName}
+            onChange={(event) => setWorkspaceName(event.target.value)}
+            maxLength={80}
+            placeholder="WorkSpace 1"
+            className="rounded-[8px] border border-line-soft bg-bg-raise px-3 py-2.5 text-xs font-normal tracking-normal text-text outline-none focus:border-line"
+          />
+        </label>
+        {foldersError && <p className="text-[11px] leading-snug text-danger">{foldersError}</p>}
+        <div className="flex justify-end gap-2">
+          <button type="button" className={BTN_QUIET} onClick={() => setCreateOpen(false)}>Cancel</button>
+          <button type="submit" className={BTN_PRIMARY} disabled={creatingWorkspace}>
+            {creatingWorkspace ? 'Creating…' : 'Create workspace'}
+          </button>
+        </div>
+      </form>
+    </div>,
+    document.body
+  ) : null
+
+  const renameDialog = renameTarget ? createPortal(
+    <div
+      className="fixed inset-0 z-[60000] flex items-center justify-center bg-black/45 p-6 backdrop-blur-[2px]"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) setRenameTarget(null)
+      }}
+    >
+      <form
+        ref={renameRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Rename workspace"
+        data-testid="rename-workspace-dialog"
+        tabIndex={-1}
+        className="pop-in flex w-[min(380px,calc(100vw-32px))] flex-col gap-4 rounded-[14px] border border-line-soft bg-bg-panel p-5 shadow-2xl"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void submitRename()
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.stopPropagation()
+            e.preventDefault()
+            setRenameTarget(null)
+          }
+        }}
+      >
+        <div>
+          <h2 className="text-[15px] font-medium text-text">Rename Workspace</h2>
+          <p className="mt-1 truncate text-[11px] leading-relaxed text-text-faint" title={renameTarget.current}>
+            Current name: {renameTarget.current}
+          </p>
+        </div>
+        <label className="flex flex-col gap-1.5 text-[10px] font-medium tracking-[0.09em] text-text-faint uppercase">
+          Workspace name
+          <input
+            autoFocus
+            data-testid="rename-workspace-name"
+            value={renameValue}
+            onChange={(event) => setRenameValue(event.target.value)}
+            maxLength={80}
+            placeholder="Workspace name"
+            aria-label="Workspace name"
+            className="rounded-[8px] border border-line-soft bg-bg-raise px-3 py-2.5 text-xs font-normal tracking-normal text-text outline-none focus:border-line"
+          />
+        </label>
+        <div className="flex justify-end gap-2">
+          <button type="button" className={BTN_QUIET} onClick={() => setRenameTarget(null)}>Cancel</button>
+          <button type="submit" className={BTN_PRIMARY} disabled={!renameValue.trim() || renameValue.trim() === renameTarget.current}>
+            Save
+          </button>
+        </div>
+      </form>
+    </div>,
+    document.body
+  ) : null
+
   return (
+    <>
+    {createDialog}
+    {renameDialog}
     <aside
-      className="rail-shell rail relative z-[45000] flex w-rail flex-none flex-col items-center gap-1.5 border-r border-line pt-10 pb-2.5 glass:border-line-soft select-none"
+      className={`rail-shell rail relative z-[45000] flex flex-none flex-col gap-1 border-r border-line pt-10 pb-2 glass:border-line-soft select-none ${expanded ? (activeView === 'chat' ? 'is-expanded w-[240px]' : 'is-expanded w-[200px]') + ' items-stretch' : 'w-rail items-center'}`}
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       <button
         type="button"
         aria-label="Account"
         title={`${avatarName} · Account`}
-        className="group absolute bottom-[52px] grid h-9 w-9 place-items-center rounded-full bg-[#2563eb] p-[2px] transition-transform hover:scale-105"
+        className={`group absolute bottom-[52px] grid h-9 w-9 place-items-center rounded-full border border-line bg-bg-raise p-[2px] transition-transform hover:scale-105 ${expanded ? 'left-3' : 'left-1/2 -translate-x-1/2'}`}
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-account'))}
       >
@@ -727,32 +1182,38 @@ export default React.memo(function Sidebar({
           {avatarInitials}
         </span>
       </button>
-      <div className="flex-1" />
-      <div className="flex flex-col gap-1.5">
-        {order.map((id) => (
-          <div
-            key={id}
-            draggable
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            onDragStart={() => {
-              dragIdRef.current = id
-            }}
-            onDragOver={(e) => {
-              e.preventDefault()
-              reorder(id)
-            }}
-            onDragEnd={() => {
-              dragIdRef.current = null
-            }}
-            className="cursor-grab active:cursor-grabbing"
-          >
-            {railItems[id]}
+      {expanded ? renderExpanded() : (
+        <>
+          <div className="flex-1" />
+          <div className="flex flex-col gap-1.5">
+            {order.map((id) => (
+              <div
+                key={id}
+                draggable
+                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                onDragStart={() => {
+                  dragIdRef.current = id
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault()
+                  reorder(id)
+                }}
+                onDragEnd={() => {
+                  dragIdRef.current = null
+                }}
+                className="cursor-grab active:cursor-grabbing"
+              >
+                {railItems[id]}
+              </div>
+            ))}
           </div>
-        ))}
+          <div className="flex-1" />
+        </>
+      )}
+      <div className={expanded ? 'px-2' : ''}>
+        <SettingsModal workspaceDir={workspaceDir} managerId={managerId} />
       </div>
-
-      <div className="flex-1" />
-      <SettingsModal workspaceDir={workspaceDir} managerId={managerId} />
     </aside>
+    </>
   )
 })

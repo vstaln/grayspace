@@ -88,6 +88,9 @@ export class OrchestrationStore extends EventEmitter {
   private repliesByAskId = new Map<string, Message>()
   private counter = 0
   private persistTimer: ReturnType<typeof setTimeout> | null = null
+  private writeChain: Promise<void> = Promise.resolve()
+  private writeSeq = 0
+  private syncFlushedSeq = 0
   private readonly file: string
   private readonly now: () => number
 
@@ -163,11 +166,32 @@ export class OrchestrationStore extends EventEmitter {
     if (this.persistTimer !== null) clearTimeout(this.persistTimer)
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null
-      void writeJsonAtomicAsync(this.file, this.payload()).catch((err) => {
-        console.error('failed to persist orchestration state', err)
-      })
+      this.flushAsync()
     }, PERSIST_DEBOUNCE_MS)
     this.persistTimer.unref?.()
+  }
+
+  /**
+   * Chained + seq-guarded async write, matching the planner/canvas stores: an
+   * older async copy can never rename over the newer durable shutdown write.
+   */
+  private flushAsync(): void {
+    this.writeSeq += 1
+    const seq = this.writeSeq
+    const snapshot = this.payload()
+    this.writeChain = this.writeChain
+      .catch(() => {
+        /* a failed write must not strand the chain */
+      })
+      .then(async () => {
+        if (seq <= this.syncFlushedSeq) return
+        try {
+          await writeJsonAtomicAsync(this.file, snapshot)
+        } catch (err) {
+          console.error('failed to persist orchestration state', err)
+        }
+      })
+      .catch((err) => console.error('orchestration flushAsync chain broke', err))
   }
 
   /** Durable, blocking write. Shutdown only. */
@@ -178,6 +202,7 @@ export class OrchestrationStore extends EventEmitter {
     }
     try {
       writeJsonAtomic(this.file, this.payload())
+      this.syncFlushedSeq = this.writeSeq
     } catch (err) {
       console.error('failed to flush orchestration state', err)
     }

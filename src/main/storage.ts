@@ -26,7 +26,7 @@ type NativeStorageCore = {
 const nativeStorageCore = ((): NativeStorageCore | null => {
   try {
     const require = createRequire(import.meta.url)
-    // Mirrors the load pattern used by canvas-core/brain-core (see canvasState.ts):
+    // Mirrors the load pattern used by the native stores (see canvasState.ts):
     // packaged builds ship native/* under resourcesPath, dev builds resolve relative to source.
     const nativeDir = electronApp?.isPackaged
       ? join(process.resourcesPath, 'native', 'storage-core')
@@ -202,7 +202,9 @@ export function readJsonFile<T>(file: string): JsonRead<T> {
     throw err
   }
   try {
-    const parsed = JSON.parse(text.replace(/^\uFEFF/, ''))
+    const parsed = JSON.parse(text.replace(/^\uFEFF/, ''), (k: string, v: unknown) =>
+      k === '__proto__' || k === 'prototype' || k === 'constructor' ? undefined : v
+    )
     if (parsed === null || typeof parsed !== 'object') return { ok: false, error: 'corrupt' }
     return { ok: true, data: parsed as T }
   } catch {

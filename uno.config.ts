@@ -1,4 +1,5 @@
-﻿import { defineConfig, presetWind4 } from 'unocss'
+import { defineConfig, presetWind4 } from 'unocss'
+import { presetTypography } from '@unocss/preset-typography'
 
 /*
  * UnoCSS replaces Tailwind as the utility engine. Design values stay in
@@ -10,7 +11,10 @@
  * nothing about the class vocabulary changes, only the engine that compiles it.
  */
 export default defineConfig({
-  presets: [presetWind4()],
+  presets: [
+    presetWind4(),
+    presetTypography()
+  ],
   theme: {
     colors: {
       bg: {

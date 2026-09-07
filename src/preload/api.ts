@@ -74,9 +74,29 @@ export interface RecentDir {
   lastOpenedAt: number
 }
 
+export interface CodeWorkspace {
+  id: string
+  name: string
+  createdAt: number
+}
+
+export interface CodeWorkspaceState {
+  workspaces: CodeWorkspace[]
+  activeId: string
+  folder: string | null
+}
+
 export interface WorkspaceApi {
   getDir(): Promise<string | null>
   pickDir(): Promise<string | null>
+  /** Creates a new logical workspace with its own private working folder. */
+  create(name: string): Promise<string | { error: string } | null>
+  rename(path: string, name: string): Promise<RecentDir[] | { error: string }>
+  codeWorkspaces(): Promise<CodeWorkspaceState>
+  createCodeWorkspace(name?: string): Promise<CodeWorkspace | { error: string }>
+  renameCodeWorkspace(id: string, name: string): Promise<CodeWorkspaceState | { error: string }>
+  selectCodeWorkspace(id: string): Promise<CodeWorkspaceState | { error: string }>
+  onCodeWorkspaceChange(cb: (state: CodeWorkspaceState) => void): () => void
   onDirChange(cb: (dir: string | null) => void): () => void
   recent(): Promise<RecentDir[]>
   openRecent(path: string): Promise<string | { error: string }>
@@ -373,38 +393,6 @@ export interface PlannerApi {
 
 
 
-export interface BrainNote {
-  id: string
-  title: string
-  content: string
-  tags: string[]
-  createdAt: number
-  updatedAt: number
-  projectDir?: string
-  folder?: string
-  color?: string
-  links?: string[]
-  unresolved?: string[]
-  deletedAt?: number
-  version: number
-}
-
-export interface BrainApi {
-  list(): Promise<{ notes: BrainNote[] }>
-  /** One note by id, or null — without serializing the whole store. */
-  get(id: string): Promise<BrainNote | null>
-  create(input: Partial<BrainNote>): Promise<BrainNote | { error: string }>
-  update(
-    id: string,
-    patch: Partial<BrainNote> & { baseVersion?: number }
-  ): Promise<BrainNote | { error: string; code?: string }>
-  delete(id: string): Promise<void | { error: string }>
-  trash(): Promise<BrainNote[]>
-  restore(id: string): Promise<BrainNote | { error: string }>
-  purge(id: string): Promise<void | { error: string }>
-  onChange(cb: (snapshot: { notes: BrainNote[] }) => void): () => void
-}
-
 export interface CanvasWidget {
   id: string
   title: string
@@ -455,6 +443,7 @@ export interface CodeSession {
   label: string
   command: string
   title?: string
+  status?: 'active' | 'finished'
 }
 
 export type WorkView = 'canvas' | 'code' | 'chat'
@@ -470,7 +459,7 @@ export interface CodeSnapshot {
 
 export interface CodeApi {
   load(): Promise<CodeSnapshot>
-  save(snapshot: { sessions?: CodeSession[]; featuredId?: string | null; maximizedId?: string | null; activeView?: WorkView | null; workspaceDir?: string | null }): Promise<{ ok: boolean } | { error: string }>
+  save(snapshot: { sessions?: CodeSession[]; featuredId?: string | null; maximizedId?: string | null; activeView?: WorkView | null; workspaceDir?: string | null; codeWorkspaceId?: string }): Promise<{ ok: boolean } | { error: string }>
   onChange(cb: (snapshot: CodeSnapshot) => void): () => void
 }
 
@@ -636,6 +625,22 @@ export interface WindowApi {
 
 export type ChatModelId = 'codex' | 'claude' | 'grok' | 'antigravity' | 'opencode'
 
+export type ChatEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
+
+export interface ChatSendOptions {
+  model?: string
+  effort?: ChatEffort
+  images?: string[]
+}
+
+export interface ChatModelOption {
+  id: string
+  label: string
+  efforts?: ChatEffort[]
+}
+
+export type ChatModelCatalog = Partial<Record<ChatModelId, { models: ChatModelOption[]; defaultModel?: string; defaultEffort?: ChatEffort }>>
+
 export interface ChatExitPayload {
   exitCode: number
   cancelled?: boolean
@@ -643,7 +648,8 @@ export interface ChatExitPayload {
 }
 
 export interface ChatApi {
-  send(threadId: string, model: ChatModelId, prompt: string): Promise<{ ok: true } | { error: string }>
+  send(threadId: string, model: ChatModelId, prompt: string, options?: ChatSendOptions): Promise<{ ok: true } | { error: string }>
+  listModels(): Promise<ChatModelCatalog>
   stop(threadId: string): Promise<{ ok: boolean }>
   dispose(threadId: string): Promise<{ ok: boolean }>
   onData(cb: (threadId: string, chunk: string) => void): () => void

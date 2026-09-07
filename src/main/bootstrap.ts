@@ -43,6 +43,10 @@ export function initAppSwitches(): void {
 }
 
 export function requestInstanceLock(): boolean {
+  // Development runs must be able to coexist with the installed app. The
+  // renderer is served by Vite and is intentionally isolated from production;
+  // sharing the production lock otherwise makes Electron hand off and exit.
+  if (!app.isPackaged) return true
   const hasLock = app.requestSingleInstanceLock()
   if (!hasLock) {
     console.warn('Another OrcSpace instance is already running — handing off and exiting.')

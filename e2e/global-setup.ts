@@ -7,7 +7,10 @@ import path from 'node:path'
  * here is almost always "forgot to build first".
  */
 export default function globalSetup(): void {
-  const root = path.resolve(__dirname, '..')
+  // Playwright invokes the setup from the project root.  Using cwd keeps this
+  // file typecheckable under the e2e CommonJS tsconfig as well as runnable
+  // from the package's ESM runtime.
+  const root = path.resolve(process.cwd())
   const mainJs = path.join(root, 'out', 'main', 'index.js')
   const renderer = path.join(root, 'out', 'renderer', 'index.html')
   if (!fs.existsSync(mainJs)) {

@@ -15,9 +15,23 @@ export interface WorkerInfo {
   /** The dispatch it is currently serving, if any. */
   dispatchId?: string
   taskId?: string
+  /** Human title of the dispatched task, when there is one. */
+  taskTitle?: string
   busy: boolean
   /** True for the terminal asking — so an agent can tell itself apart. */
   self: boolean
+  /** Shell working directory, so agents can tell checkouts apart. */
+  cwd?: string
+  /** False when the shell process is gone but the widget is still listed. */
+  alive?: boolean
+  /**
+   * What is running inside: the dispatch agent when there is one,
+   * otherwise a best-effort guess from the title and recent output
+   * (`~antigravity` — the `~` marks a guess, not a fact).
+   */
+  running?: string
+  /** When the shell last printed anything, unix ms (0/undefined = never). */
+  lastActiveAt?: number
 }
 
 /**
@@ -39,17 +53,104 @@ export function listWorkers(
       running.set(dispatch.terminalId, { id: dispatch.id, agent: dispatch.agent, taskId: dispatch.taskId })
     }
   }
-  return deps.terminals.list().map((terminal) => {
+  const titles = new Map<string, string>()
+  try {
+    for (const task of deps.orchestration.listTasks()) titles.set(task.id, task.title)
+  } catch {
+    /* a store that cannot list tasks simply yields no titles */
+  }
+  const terminals = deps.terminals as unknown as {
+    list(): { id: string; title?: string; cwd?: string; alive?: boolean }[]
+    tailOutput?(id: string, maxBytes?: number): string | null
+    fullOutput?(id: string): string | null
+    lastDataAt?(id: string): number
+  }
+  return terminals.list().map((terminal) => {
     const live = running.get(terminal.id)
+    const title = terminal.title || terminal.id
+    const taskTitle = live ? titles.get(live.taskId) : undefined
+    let tail: string | null = null
+    try {
+      // Prefer the ring-buffer tail (no full join); fall back to a sliced
+      // `fullOutput` so a fake/stub that only implements the wider getter
+      // still feeds the detector.
+      const tailed = terminals.tailOutput?.(terminal.id, 4_000)
+      if (typeof tailed === 'string' && tailed.length > 0) {
+        tail = tailed
+      } else {
+        const full = terminals.fullOutput?.(terminal.id)
+        tail = typeof full === 'string' && full.length > 0 ? full.slice(-4_000) : null
+      }
+    } catch {
+      tail = null
+    }
+    let lastActiveAt: number | undefined
+    try {
+      const at = terminals.lastDataAt?.(terminal.id)
+      if (typeof at === 'number' && at > 0) lastActiveAt = at
+    } catch {
+      lastActiveAt = undefined
+    }
     return {
       id: terminal.id,
-      name: terminal.title || terminal.id,
+      name: title,
       ...(live ? { agent: live.agent, dispatchId: live.id, taskId: live.taskId } : {}),
+      ...(taskTitle ? { taskTitle } : {}),
       busy: !!live,
-      self: terminal.id === callerId
+      self: terminal.id === callerId,
+      ...(typeof terminal.cwd === 'string' && terminal.cwd ? { cwd: terminal.cwd } : {}),
+      ...(typeof terminal.alive === 'boolean' ? { alive: terminal.alive } : {}),
+      running: live?.agent || detectRunning(title, tail) || 'shell',
+      ...(lastActiveAt !== undefined ? { lastActiveAt } : {})
     }
   })
 }
+
+/**
+ * Best-effort guess at which CLI owns a terminal nobody dispatched.
+ *
+ * A dispatched worker's agent is a fact recorded at dispatch time; anything
+ * else is read off the title (`claude: …`) or the recent scrollback and
+ * returned with a `~` prefix so callers can show it as uncertain.
+ */
+export function detectRunning(title: string, tail: string | null): string | undefined {
+  const fromTitle = /^\s*([A-Za-z][A-Za-z0-9_+-]*)\s*:/.exec(title ?? '')
+  if (fromTitle && KNOWN_TOOLS.has(fromTitle[1].toLowerCase())) return `~${fromTitle[1].toLowerCase()}`
+  if (!tail) return undefined
+  const text = tail
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ' ')
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, ' ')
+    .toLowerCase()
+  for (const tool of TAIL_TOOLS) {
+    if (tool.pattern.test(text)) return `~${tool.name}`
+  }
+  return undefined
+}
+
+/** CLI names worth recognising inside a shell. Order = match priority. */
+const KNOWN_TOOLS_IN_ORDER = [
+  'antigravity',
+  'claude',
+  'codex',
+  'gemini',
+  'opencode',
+  'windsurf',
+  'copilot',
+  'aider',
+  'cursor',
+  'cline'
+]
+const KNOWN_TOOLS = new Set(KNOWN_TOOLS_IN_ORDER)
+
+/**
+ * Scrollback matching is deliberately narrower than title matching: a title
+ * like `cursor: …` is a strong signal, but the bare words "cursor" ("cursor
+ * position") or "cline" ("decline") appear in ordinary prose. So the tail
+ * scan only looks for distinctive names, on word boundaries.
+ */
+const TAIL_TOOLS = ['antigravity', 'claude', 'codex', 'gemini', 'opencode', 'windsurf', 'copilot', 'aider'].map(
+  (name) => ({ name, pattern: new RegExp(`(^|[^a-z0-9_])${name}([^a-z0-9_]|$)`) })
+)
 
 /**
  * Turns whatever an agent typed into a terminal id.

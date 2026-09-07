@@ -15,7 +15,13 @@ window.addEventListener('error', (event) => {
   console.error('Unhandled error:', event.error ?? event.message)
 })
 window.addEventListener('unhandledrejection', (event) => {
-  console.error('Unhandled promise rejection:', event.reason)
+  const reason = event.reason
+  const message = reason instanceof Error ? reason.message : String(reason)
+  // IPC calls against a terminal that was disposed mid-flight (folder
+  // switch, widget unmount, agent handoff) reject with a predictable
+  // message. Those are expected, not bugs — swallow them.
+  if (/disposed|destroyed|no such terminal/i.test(message)) return
+  console.error('Unhandled promise rejection:', reason)
 })
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(<App />)

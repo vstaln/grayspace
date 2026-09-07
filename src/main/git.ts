@@ -86,9 +86,29 @@ function isTimeoutError(err: unknown): boolean {
  * and coloured, and treating it as an API breaks the first time the user runs
  * something else in that shell.
  */
+/**
+ * In-flight status reads keyed by cwd: the poller fires faster than `git`
+ * answers on big repos, and without this every tick spawned its own pair of
+ * children. Concurrent callers share one promise; an abort signal opts out
+ * (it must not cancel the shared read for everyone else).
+ */
+const inflightStatus = new Map<string, Promise<GitStatus>>()
+
 export async function readGitStatus(cwd: string | undefined, signal?: AbortSignal): Promise<GitStatus> {
   if (!cwd) return EMPTY()
   if (signal?.aborted) throw Object.assign(new Error('aborted'), { code: 'ABORT_ERR', name: 'AbortError' })
+  if (!signal) {
+    const shared = inflightStatus.get(cwd)
+    if (shared) return shared
+  }
+  const task = readGitStatusInner(cwd, signal).finally(() => {
+    if (inflightStatus.get(cwd) === task) inflightStatus.delete(cwd)
+  })
+  if (!signal) inflightStatus.set(cwd, task)
+  return task
+}
+
+async function readGitStatusInner(cwd: string, signal?: AbortSignal): Promise<GitStatus> {
   try {
     const root = (await git(cwd, ['rev-parse', '--show-toplevel'], GIT_READ_TIMEOUT_MS, signal)).trim()
     if (!root) return EMPTY()
