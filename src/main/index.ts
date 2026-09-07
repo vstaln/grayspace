@@ -29,6 +29,13 @@ import { chatRunner } from './chatRunner.ts'
 
 // --- bootstrap ---
 initAppSwitches()
+if (process.env.ORCSPACE_DEV_USER_DATA) {
+  try {
+    app.setPath('userData', process.env.ORCSPACE_DEV_USER_DATA)
+  } catch (err) {
+    console.warn('Failed to set custom userData path:', err)
+  }
+}
 const hasInstanceLock = requestInstanceLock()
 if (!hasInstanceLock) {
   // bootstrap already called app.exit(0)

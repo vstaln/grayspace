@@ -10,7 +10,7 @@ export function getUserDataDir(): string {
       /* app may not be initialized in test mode */
     }
   }
-  const testPath = process.env.ORCSPACE_TEST_USER_DATA
+  const testPath = process.env.ORCSPACE_TEST_USER_DATA || process.env.ORCSPACE_DEV_USER_DATA
   if (testPath) return testPath
   throw new Error('Electron app is unavailable and ORCSPACE_TEST_USER_DATA is not set')
 }
