@@ -1,12 +1,12 @@
-﻿import { strict as assert } from 'node:assert'
+import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
 import { ActorRegistry } from './actors.ts'
 import { CommandBus } from './bus.ts'
 import { Journal } from './journal.ts'
 import { LockManager } from './locks.ts'
-import { definitionToMcpTool, validatePayload, type CommandDefinition } from './schema.ts'
+import { validatePayload, type CommandDefinition } from './schema.ts'
 
-describe('Command Schema Registry & MCP Tool Generation', () => {
+describe('Command Schema Registry & Validation', () => {
   const noteCreateDef: CommandDefinition<{ title: string; content?: string; tags?: string[] }> = {
     type: 'note.create',
     description: 'Creates a new note record',
@@ -36,15 +36,6 @@ describe('Command Schema Registry & MCP Tool Generation', () => {
       validatePayload(noteCreateDef.payloadSchema, { title: 'Note', tags: 'not-an-array' }),
       'field "tags" must be an array'
     )
-  })
-
-  test('definitionToMcpTool converts schema to standard MCP tool descriptor', () => {
-    const mcpTool = definitionToMcpTool(noteCreateDef)
-    assert.equal(mcpTool.name, 'note_create')
-    assert.equal(mcpTool.description, 'Creates a new note record')
-    assert.ok(mcpTool.inputSchema.properties.title)
-    assert.ok(mcpTool.inputSchema.properties.target)
-    assert.deepEqual(mcpTool.inputSchema.required, ['target', 'title'])
   })
 
   test('bus validates payloads against registered schema definitions', async () => {
@@ -83,13 +74,9 @@ describe('Command Schema Registry & MCP Tool Generation', () => {
     assert.equal(invalidRes.code, 'invalid')
     assert.ok(invalidRes.message.includes('missing required field "title"'))
 
-    // Catalog and MCP tools reflect registered definitions
+    // Catalog reflects registered definitions
     const catalog = bus.catalog()
     assert.equal(catalog.length, 1)
     assert.equal(catalog[0].type, 'note.create')
-
-    const tools = bus.getMcpTools()
-    assert.equal(tools.length, 1)
-    assert.equal(tools[0].name, 'note_create')
   })
 })

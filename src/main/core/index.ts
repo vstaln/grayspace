@@ -1,4 +1,4 @@
-﻿import { ActorRegistry } from './actors.ts'
+import { ActorRegistry } from './actors.ts'
 import { CommandBus } from './bus.ts'
 import { ContentAddressedStore } from './cas.ts'
 import { Journal, type JournalSink } from './journal.ts'
@@ -31,11 +31,9 @@ export { MetricsRegistry, type MetricsSnapshot, type TimingStats } from './metri
 export { fileResource, isResourceId, parseResource, resourceId } from './resources.ts'
 export {
   validatePayload,
-  definitionToMcpTool,
   type CommandDefinition,
   type CommandPayloadSchema,
-  type FieldSchema,
-  type McpToolDescriptor
+  type FieldSchema
 } from './schema.ts'
 export { VersionRegistry, stamp, type Versioned } from './versioned.ts'
 export { ShadowOverlay, OverlayManager, type OverlayRecord } from './overlay.ts'

@@ -57,7 +57,7 @@ function harness(options: { now?: () => number } = {}): {
 
   actors.register({ id: 'user', type: 'user', label: 'Human', transport: 'ipc' })
   actors.register({ id: 'assistant', type: 'assistant', label: 'OrcSpace assistant', transport: 'internal' })
-  actors.register({ id: 'agent-a', type: 'agent', label: 'Claude Code', transport: 'mcp' })
+  actors.register({ id: 'agent-a', type: 'agent', label: 'Claude Code', transport: 'cli' })
 
   return { bus, locks, journal, actors, notes, entries }
 }
@@ -213,7 +213,7 @@ describe('CommandBus — sequencing', () => {
         live.set(command.target, (live.get(command.target) ?? 1) - 1)
       }
     })
-    actors.register({ id: 'agent-b', type: 'agent', label: 'Codex', transport: 'mcp' })
+    actors.register({ id: 'agent-b', type: 'agent', label: 'Codex', transport: 'cli' })
 
     await Promise.all([
       bus.submit({ actorId: 'user', type: 'trace.step', target: 'canvas:main', payload: { tag: 'slow', delay: 20 } }),
@@ -480,8 +480,8 @@ describe('CommandBus — the journal', () => {
 
     test('mixed concurrent: some with baseVersion, some blind', async () => {
       const { bus, notes, actors } = harness()
-      actors.register({ id: 'agent-a', type: 'agent', label: 'Codex', transport: 'mcp' })
-      actors.register({ id: 'agent-b', type: 'agent', label: 'Codex', transport: 'mcp' })
+      actors.register({ id: 'agent-a', type: 'agent', label: 'Codex', transport: 'cli' })
+      actors.register({ id: 'agent-b', type: 'agent', label: 'Codex', transport: 'cli' })
 
       await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'initial' } })
 
@@ -520,8 +520,8 @@ describe('CommandBus — the journal', () => {
       const { bus, locks, actors } = harness()
       await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'initial' } })
       // Register additional actors for this test
-      actors.register({ id: 'agent-b', type: 'agent', label: 'Codex', transport: 'mcp' })
-      actors.register({ id: 'agent-c', type: 'agent', label: 'Codex', transport: 'mcp' })
+      actors.register({ id: 'agent-b', type: 'agent', label: 'Codex', transport: 'cli' })
+      actors.register({ id: 'agent-c', type: 'agent', label: 'Codex', transport: 'cli' })
       // agent-a acquires an explicit lock first
       locks.acquire({ resource: 'note:n1', actorId: 'agent-a', reason: 'refactor' })
       // Now agent-b and agent-c try to write while agent-a holds the lock
@@ -557,9 +557,9 @@ describe('CommandBus — the journal', () => {
 
     test('command queue ordering under load', async () => {
       const { bus, actors } = harness()
-      actors.register({ id: 'agent-a', type: 'agent', label: 'Codex', transport: 'mcp' })
-      actors.register({ id: 'agent-b', type: 'agent', label: 'Codex', transport: 'mcp' })
-      actors.register({ id: 'agent-c', type: 'agent', label: 'Codex', transport: 'mcp' })
+      actors.register({ id: 'agent-a', type: 'agent', label: 'Codex', transport: 'cli' })
+      actors.register({ id: 'agent-b', type: 'agent', label: 'Codex', transport: 'cli' })
+      actors.register({ id: 'agent-c', type: 'agent', label: 'Codex', transport: 'cli' })
 
       const order: string[] = []
       let live = 0

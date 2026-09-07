@@ -3,6 +3,7 @@ import * as fs from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import { CONTROL_PORT } from './config.ts'
+import { getIpcSocketPath } from './ipcSocket.ts'
 import { controlToken } from './controlToken.ts'
 
 const electronApp = (electron as unknown as { app?: { isPackaged?: boolean } }).app
@@ -61,6 +62,7 @@ export function orcTerminalEnv(terminalId: string): Record<string, string> {
     // Prepended, not appended: an `orc` earlier on the user's PATH would
     // otherwise shadow the one bound to this running instance.
     PATH: path ? `${dir}${delimiter()}${path}` : dir,
+    ORCSPACE_SOCKET_PATH: getIpcSocketPath(),
     ORCSPACE_URL: `http://127.0.0.1:${CONTROL_PORT}`,
     ORCSPACE_TOKEN: controlToken(),
     ORCSPACE_AGENT_ID: terminalId,

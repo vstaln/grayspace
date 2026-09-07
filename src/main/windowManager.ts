@@ -100,7 +100,7 @@ export function createWindow(): BrowserWindow {
     // (including a downloaded one) load with preload/IPC attached.
     const devUrl = process.env['ELECTRON_RENDERER_URL']
     const controlOrigin = `http://127.0.0.1:${CONTROL_PORT}/`
-    let isAppUrl = Boolean(devUrl && url.startsWith(devUrl)) || url === controlOrigin || url.startsWith(controlOrigin)
+    let isAppUrl = Boolean(devUrl && url.startsWith(devUrl)) || url.startsWith('orc://app') || url === controlOrigin || url.startsWith(controlOrigin)
     if (!isAppUrl) {
       try {
         const parsed = new URL(url)
@@ -129,13 +129,10 @@ export function createWindow(): BrowserWindow {
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else if (app.isPackaged) {
-    // A real HTTP origin is required by embedded media providers. Loading the
-    // packaged renderer with file:// gives it Origin: null, which YouTube and
-    // other iframe players reject for API/control messages.
-    win.loadURL(`http://127.0.0.1:${CONTROL_PORT}/`)
   } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'))
+    // Portless loading: orc://app provides a secure, valid origin for media providers
+    // without requiring any local HTTP server or open TCP ports.
+    win.loadURL('orc://app/index.html')
   }
 
   mainWindow = win

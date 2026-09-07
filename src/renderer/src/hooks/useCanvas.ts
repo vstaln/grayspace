@@ -126,7 +126,7 @@ function nextTerminalNumber(widgets: Widget[]): number {
 
 /**
  * Owns the infinite canvas: camera, widget list, and the mapping between screen
- * and world coordinates. Also bridges widgets requested by agents over MCP.
+ * and world coordinates. Also bridges widgets requested by agents over CLI / IPC.
  */
 export function useCanvas() {
   const [widgets, setWidgets] = useState<Widget[]>([])
@@ -164,7 +164,7 @@ export function useCanvas() {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const workspaceDirRef = useRef<string | null>(null)
   const workspaceSyncSeqRef = useRef(0)
-  // A load can overlap an MCP/agent write. If a change broadcast arrives while
+  // A load can overlap an agent write. If a change broadcast arrives while
   // the read is in flight, applying the older read afterwards would erase the
   // freshly created or renamed widget from the renderer (stale-load race).
   const canvasChangeSeqRef = useRef(0)
@@ -320,7 +320,7 @@ export function useCanvas() {
   // addition would be indistinguishable from a main-side deletion (CANV-01).
   const pendingCreatesRef = useRef<Set<string>>(new Set())
 
-  // Keep the visible canvas in sync with MCP/assistant writes made in the main
+  // Keep the visible canvas in sync with agent/assistant writes made in the main
   // process. The save echo is consumed once so an external update cannot cause
   // an import/save feedback loop.
   // Camera/strokes are edited locally (wheel-pan, pencil) and only reach main

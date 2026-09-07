@@ -160,21 +160,6 @@ export interface SettingsApi {
   onChange(cb: (settings: AppSettings) => void): () => void
 }
 
-export interface McpStatus {
-  entrypoint: string
-  running: boolean
-  error?: string
-  restarts: number
-  pid?: number
-}
-
-export interface McpApi {
-  getStatus(): Promise<McpStatus>
-  getUrl(): Promise<string>
-  restart(): Promise<McpStatus>
-  onStatusChange(cb: (status: McpStatus) => void): () => void
-}
-
 /** A picture copied into the app's own store, addressable by absolute path. */
 export interface MediaFile { name: string; path: string }
 

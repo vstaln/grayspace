@@ -10,7 +10,7 @@ import { registerFileCommands } from './files.ts'
 function harness(): { core: Core; deps: CommandDeps } {
   const core = createCore()
   core.actors.register({ id: 'user', type: 'user', label: 'You', transport: 'ipc' })
-  core.actors.register({ id: 'agent-a', type: 'agent', label: 'Agent', transport: 'mcp' })
+  core.actors.register({ id: 'agent-a', type: 'agent', label: 'Agent', transport: 'cli' })
   const deps = { core } as unknown as CommandDeps
   registerFileCommands(deps)
   return { core, deps }
@@ -184,13 +184,13 @@ describe('file.* commands on the bus', () => {
     assert.equal(missing.ok === false && missing.code, 'not_found')
   })
 
-  test('definitions are registered — schema validation and MCP tool generation work', async () => {
+  test('definitions are registered — schema validation works', async () => {
     const { core } = harness()
     const def = core.bus.getDefinition('file.write')
     assert.ok(def, 'file.write has a definition')
-    const tools = core.bus.getMcpTools().map((t) => t.name)
-    assert.ok(tools.includes('file_write'))
-    assert.ok(tools.includes('file_rename'))
+    const catalog = core.bus.catalog().map((d) => d.type)
+    assert.ok(catalog.includes('file.write'))
+    assert.ok(catalog.includes('file.rename'))
 
     // Schema validation fires before the handler: missing content → invalid.
     const badPayload = await core.bus.submit({

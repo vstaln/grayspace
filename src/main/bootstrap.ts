@@ -1,9 +1,29 @@
-import { app } from 'electron'
+import { app, protocol } from 'electron'
 import * as fs from 'fs'
 import { join } from 'path'
 
 /** macOS differs on menus, accelerators and window chrome — checked in all three. */
 export const IS_MAC = process.platform === 'darwin'
+
+/**
+ * Registers custom schemes as privileged before app.whenReady().
+ */
+export function registerProtocols(): void {
+  if (protocol && typeof protocol.registerSchemesAsPrivileged === 'function') {
+    protocol.registerSchemesAsPrivileged([
+      {
+        scheme: 'orc',
+        privileges: {
+          standard: true,
+          secure: true,
+          supportFetchAPI: true,
+          corsEnabled: true,
+          stream: true
+        }
+      }
+    ])
+  }
+}
 
 /**
  * Session the Browser pane's tabs share. Persistent so logins survive a

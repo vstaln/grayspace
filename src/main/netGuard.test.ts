@@ -60,6 +60,11 @@ describe('netGuard - Loopback URL detection', () => {
     assert.ok(!isLoopbackUrl('http://example.com'))
   })
 
+  test('orc://app is recognized as loopback URL', () => {
+    assert.ok(isLoopbackUrl('orc://app'))
+    assert.ok(isLoopbackUrl('orc://app/index.html'))
+  })
+
   test('malformed URL returns false', () => {
     assert.ok(!isLoopbackUrl('not-a-url'))
   })
@@ -74,6 +79,23 @@ describe('netGuard - isLoopbackRequest', () => {
     assert.ok(
       isLoopbackRequest({
       headers: { host: '127.0.0.1:20220', origin: 'http://127.0.0.1:5174' }
+      })
+    )
+  })
+
+  test('accepts orc://app origin', () => {
+    assert.ok(
+      isLoopbackRequest({
+        headers: { host: 'localhost', origin: 'orc://app' }
+      })
+    )
+  })
+
+  test('accepts local named pipe socket request without remoteAddress', () => {
+    assert.ok(
+      isLoopbackRequest({
+        headers: {},
+        socket: { remoteAddress: undefined }
       })
     )
   })

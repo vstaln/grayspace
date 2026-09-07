@@ -1,4 +1,4 @@
-﻿import { strict as assert } from 'node:assert'
+import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
 import { ActorRegistry } from './actors.ts'
 import { CommandBus } from './bus.ts'
@@ -92,7 +92,7 @@ describe('Priority Queue, Rate Limiter and Backpressure', () => {
       rateLimitPerSec: 1
     })
 
-    actors.register({ id: 'agent-burst', type: 'agent', label: 'Agent', transport: 'mcp' })
+    actors.register({ id: 'agent-burst', type: 'agent', label: 'Agent', transport: 'cli' })
     bus.register('test.cmd', {
       ignoreVersion: true,
       requiresLock: false,

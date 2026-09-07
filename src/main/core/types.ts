@@ -1,4 +1,4 @@
-﻿/**
+/**
  * The vocabulary every actor, transport and store in OrcSpace shares.
  *
  * Nothing in `core/` may import from `electron` or touch the filesystem: the
@@ -11,7 +11,7 @@
 /**
  * `user` is the human at the keyboard, `assistant` is the built-in chat agent,
  * `agent` is an external CLI (Claude Code, Codex, opencode) reaching in over
- * MCP. The type only ever affects presentation and audit — the assistant has
+ * CLI or IPC. The type only ever affects presentation and audit — the assistant has
  * no privileges the others lack, which is the rule the architecture is built
  * around.
  */
@@ -22,7 +22,7 @@ export interface Actor {
   type: ActorType
   /** Human-readable name for the audit trail and the UI. */
   label: string
-  /** Which transport authenticated this actor (`ipc`, `http`, `mcp`, `internal`). */
+  /** Which transport authenticated this actor (`ipc`, `http`, `cli`, `internal`). */
   transport: string
   registeredAt: number
   lastSeenAt: number

@@ -2,8 +2,8 @@ import { test, expect } from '@playwright/test'
 import { launchOrcSpace, waitForCanvas, closeOrcSpace, type OrcSpaceFixture } from '../helpers/app'
 
 /**
- * Journey 9 — Settings: open from the rail, switch to Integrations, and read
- * the local MCP URL this instance was told to bind.
+ * Journey 9 — Settings: open from the rail, switch to Integrations, and verify
+ * the control settings for this instance.
  */
 let ctx: OrcSpaceFixture
 

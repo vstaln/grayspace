@@ -1,4 +1,4 @@
-﻿import { strict as assert } from 'node:assert'
+import { strict as assert } from 'node:assert'
 import { test, describe } from 'node:test'
 import { ActorRegistry } from './actors.ts'
 import { CommandBus } from './bus.ts'
@@ -52,7 +52,7 @@ function harness(options: { now?: () => number } = {}): {
 
   actors.register({ id: 'user', type: 'user', label: 'Human', transport: 'ipc' })
   actors.register({ id: 'assistant', type: 'assistant', label: 'OrcSpace assistant', transport: 'internal' })
-  actors.register({ id: 'agent-a', type: 'agent', label: 'Claude Code', transport: 'mcp' })
+  actors.register({ id: 'agent-a', type: 'agent', label: 'Claude Code', transport: 'cli' })
 
   return { bus, locks, journal, actors, notes, entries }
 }

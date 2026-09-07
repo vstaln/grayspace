@@ -21,6 +21,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import http from 'node:http'
 import { fileURLToPath } from 'node:url'
 
 const TOKEN_HEADER = 'x-orcspace-token'
@@ -86,17 +87,17 @@ function getAllCandidateTokens(stopAtFirst = false) {
   return tokens
 }
 
-function getDiscoveredPort() {
-  const envPort = Number(process.env.WORKSPACE_CONTROL_PORT)
-  if (Number.isInteger(envPort) && envPort >= 1 && envPort <= 65535) {
-    return envPort
+function getDiscoveredTarget() {
+  if (process.env.ORCSPACE_SOCKET_PATH) {
+    return { socketPath: process.env.ORCSPACE_SOCKET_PATH }
   }
   if (process.env.ORCSPACE_URL) {
-    try {
-      const u = new URL(process.env.ORCSPACE_URL)
-      if (u.port) return Number(u.port)
-    } catch {
-      /* ignore invalid URL */
+    return { url: process.env.ORCSPACE_URL.replace(/\/+$/, '') }
+  }
+  if (process.env.WORKSPACE_CONTROL_PORT) {
+    const envPort = Number(process.env.WORKSPACE_CONTROL_PORT)
+    if (Number.isInteger(envPort) && envPort >= 1 && envPort <= 65535) {
+      return { url: `http://127.0.0.1:${envPort}` }
     }
   }
 
@@ -124,19 +125,28 @@ function getDiscoveredPort() {
       const runtimePath = path.join(dir, 'runtime.json')
       if (fs.existsSync(runtimePath)) {
         const raw = JSON.parse(fs.readFileSync(runtimePath, 'utf8'))
+        if (raw && typeof raw.socketPath === 'string' && raw.socketPath) {
+          return { socketPath: raw.socketPath }
+        }
         if (raw && typeof raw.controlPort === 'number' && raw.controlPort >= 1 && raw.controlPort <= 65535) {
-          return raw.controlPort
+          return { url: `http://127.0.0.1:${raw.controlPort}` }
         }
       }
     } catch {
       /* try next candidate */
     }
   }
-  return 20220
+
+  const isDev = fs.existsSync(path.join(process.cwd(), '.dev-user-data')) || Boolean(process.env.ORCSPACE_DEV_USER_DATA)
+  const suffix = isDev ? '-dev' : ''
+  if (process.platform === 'win32') {
+    return { socketPath: `\\\\.\\pipe\\orcspace${suffix}` }
+  }
+  return { socketPath: path.join(os.tmpdir(), `orcspace${suffix}.sock`) }
 }
 
-const defaultPort = getDiscoveredPort()
-const BASE = (process.env.ORCSPACE_URL || `http://127.0.0.1:${defaultPort}`).replace(/\/+$/, '')
+const TARGET = getDiscoveredTarget()
+const TARGET_DESC = TARGET.url || TARGET.socketPath
 const AGENT_ID = process.env.ORCSPACE_AGENT_ID || process.env.ORCSPACE_TERMINAL_ID || 'cli'
 let workingToken = null
 
@@ -223,6 +233,108 @@ class OrcError extends Error {
 /** True only for a genuine "not found" — NOT for timeouts, 5xx or offline. */
 const isNotFound = (err) => err instanceof OrcError && (err.code === 'not_found' || err.code === 'http_404')
 
+async function requestTarget({ target, method, path, headers, body, signal, timeoutMs }) {
+  if (target.socketPath) {
+    return new Promise((resolve, reject) => {
+      let req
+      const timer = timeoutMs ? setTimeout(() => {
+        if (req) req.destroy(new OrcError(`OrcSpace request timed out after ${Math.round(timeoutMs / 1000)}s for ${path}`, 'timeout'))
+      }, timeoutMs) : null
+
+      const onAbort = () => {
+        if (req) req.destroy(new OrcError('OrcSpace request aborted', 'aborted'))
+      }
+      if (signal) {
+        if (signal.aborted) {
+          return reject(new OrcError('OrcSpace request aborted', 'aborted'))
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+      }
+
+      req = http.request({
+        socketPath: target.socketPath,
+        path,
+        method,
+        headers,
+        timeout: timeoutMs
+      }, (res) => {
+        if (timer) clearTimeout(timer)
+        if (signal) signal.removeEventListener('abort', onAbort)
+        const chunks = []
+        res.on('data', (chunk) => chunks.push(chunk))
+        res.on('end', () => {
+          const buffer = Buffer.concat(chunks)
+          const text = buffer.toString('utf8')
+          const contentType = res.headers['content-type'] || ''
+          let payload
+          if (contentType.includes('application/json')) {
+            try { payload = JSON.parse(text) } catch { payload = text }
+          } else {
+            payload = text
+          }
+          resolve({
+            ok: res.statusCode >= 200 && res.statusCode < 300,
+            status: res.statusCode,
+            payload
+          })
+        })
+      })
+
+      req.on('error', (err) => {
+        if (timer) clearTimeout(timer)
+        if (signal) signal.removeEventListener('abort', onAbort)
+        if (err instanceof OrcError) return reject(err)
+        reject(new OrcError(
+          `OrcSpace is not reachable at ${target.socketPath} — is the app running? (${err.message})`,
+          'offline'
+        ))
+      })
+
+      if (body !== undefined) {
+        req.write(JSON.stringify(body))
+      }
+      req.end()
+    })
+  } else {
+    const url = `${target.url}${path}`
+    let response
+    try {
+      response = await fetch(url, {
+        method,
+        headers,
+        keepalive: true,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(signal ? { signal } : {})
+      })
+    } catch (fetchErr) {
+      if (fetchErr.name === 'TimeoutError' || fetchErr.code === 23) {
+        throw new OrcError(
+          `OrcSpace request timed out after ${Math.round((timeoutMs || 15000) / 1000)}s for ${path}`,
+          'timeout'
+        )
+      }
+      throw new OrcError(
+        `OrcSpace is not reachable at ${target.url} — is the app running? (${fetchErr.message})`,
+        'offline'
+      )
+    }
+
+    const isJson = (response.headers.get('content-type') || '').includes('application/json')
+    let payload
+    try {
+      payload = isJson ? await response.json() : await response.text()
+    } catch {
+      payload = ''
+    }
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      payload
+    }
+  }
+}
+
 async function call(method, path, body, options = {}) {
   let candidateTokens = workingToken ? [workingToken] : getCandidateTokens()
   if (candidateTokens.length === 0) {
@@ -232,39 +344,26 @@ async function call(method, path, body, options = {}) {
     )
   }
 
-  const url = `${BASE}${path}`
   let lastError = null
 
   for (let i = 0; i < candidateTokens.length; i++) {
     const token = candidateTokens[i]
     try {
-      let response
       const timeoutMs = options.timeoutMs ?? (options.signal ? undefined : 15_000)
       const signal = options.signal ?? (timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined)
 
-      try {
-        response = await fetch(url, {
-          method,
-          headers: {
-            'Content-Type': 'application/json',
-            [TOKEN_HEADER]: token
-          },
-          keepalive: true,
-          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-          ...(signal ? { signal } : {})
-        })
-      } catch (fetchErr) {
-        if (fetchErr.name === 'TimeoutError' || fetchErr.code === 23) {
-          throw new OrcError(
-            `OrcSpace request timed out after ${Math.round((timeoutMs || 15000) / 1000)}s for ${path}`,
-            'timeout'
-          )
-        }
-        throw new OrcError(
-          `OrcSpace is not reachable at ${BASE} — is the app running? (${fetchErr.message})`,
-          'offline'
-        )
-      }
+      const response = await requestTarget({
+        target: TARGET,
+        method,
+        path,
+        headers: {
+          'Content-Type': 'application/json',
+          [TOKEN_HEADER]: token
+        },
+        body,
+        signal,
+        timeoutMs
+      })
 
       if (response.status === 401) {
         workingToken = null
@@ -273,21 +372,13 @@ async function call(method, path, body, options = {}) {
 
       workingToken = token
 
-      const isJson = (response.headers.get('content-type') || '').includes('application/json')
-      let payload
-      try {
-        payload = isJson ? await response.json() : await response.text()
-      } catch {
-        payload = ''
-      }
-
       if (!response.ok) {
-        const message = typeof payload === 'object' && payload?.error ? payload.error : `HTTP ${response.status}`
-        const code = typeof payload === 'object' && payload?.code ? payload.code : `http_${response.status}`
+        const message = typeof response.payload === 'object' && response.payload?.error ? response.payload.error : `HTTP ${response.status}`
+        const code = typeof response.payload === 'object' && response.payload?.code ? response.payload.code : `http_${response.status}`
         throw new OrcError(message, code)
       }
 
-      return payload && typeof payload === 'object' && payload.ok === true && 'data' in payload ? payload.data : payload
+      return response.payload && typeof response.payload === 'object' && response.payload.ok === true && 'data' in response.payload ? response.payload.data : response.payload
     } catch (err) {
       if (err instanceof OrcError && err.code === 'http_401') {
         // Single-token probe may have used stale cache — expand to all candidates and retry
@@ -675,7 +766,7 @@ async function main(argv) {
       const drift = serverVersion && serverVersion !== ORC_VERSION ? serverVersion : null
       const result = {
         ok: true,
-        app: BASE,
+        app: TARGET_DESC,
         version: ORC_VERSION,
         serverVersion: serverVersion ?? null,
         drift,

@@ -1,7 +1,9 @@
 import * as http from 'http'
 import * as fs from 'fs'
+import * as os from 'os'
 import { extname, join, normalize, resolve, sep } from 'path'
 import { CONTROL_PORT, MAX_TERMINAL_WRITE_BYTES, getActiveControlPort, setActiveControlPort } from './config.ts'
+import { getIpcSocketPath, prepareSocketPath, setActiveSocketPath } from './ipcSocket.ts'
 import { CoordinationStore, USER_AUTHOR } from './coordination.ts'
 import { TerminalManager } from './terminals.ts'
 import { CanvasStore } from './canvasState.ts'
@@ -60,13 +62,17 @@ interface ControlDeps {
   canvas: CanvasStore
   state: AppState
   defaultCwd(): string | undefined
-  /** Optional custom port; defaults to CONTROL_PORT (20220). */
+  /** Optional custom port. If omitted and WORKSPACE_CONTROL_PORT is not set, portless IPC is used. */
   port?: number
+  /** Optional custom socket / named pipe path. Defaults to getIpcSocketPath(). */
+  socketPath?: string
   /** Optional packaged renderer directory; served by this same listener. */
   rendererDir?: string
   broadcast?(channel: string, payload: unknown): void
   /** Called whenever the server successfully binds, passing the assigned port. */
   onPortAssigned?(port: number): void
+  /** Called whenever the pipe server successfully binds, passing the socket path. */
+  onSocketAssigned?(socketPath: string): void
 }
 
 /** How a failed command maps onto HTTP for callers that only speak status codes. */
@@ -85,13 +91,15 @@ const STATUS_BY_CODE: Record<CommandErrorCode, number> = {
 }
 
 /**
- * Loopback-only HTTP surface that the MCP server, CLI agents (`orc`),
+ * Local IPC & loopback HTTP surface that CLI agents (`orc`)
  * and local tooling drive the app through.
  */
 export function startControlServer(deps: ControlDeps): http.Server {
   const token = controlToken()
-  const port = deps.port ?? CONTROL_PORT
-  const server = http.createServer((req, res) => {
+  const socketPath = deps.socketPath ?? getIpcSocketPath()
+  prepareSocketPath(socketPath)
+
+  const handleRequest = (req: http.IncomingMessage, res: http.ServerResponse): void => {
     applyLoopbackCors(req, res, `Content-Type, ${CONTROL_TOKEN_HEADER}`)
     const url = new URL(req.url || '/', 'http://localhost')
     const parts = url.pathname.split('/').filter(Boolean)
@@ -114,7 +122,7 @@ export function startControlServer(deps: ControlDeps): http.Server {
       return sendJson(
         res,
         200,
-        buildPresence({ workspaceDir: deps.defaultCwd() ?? null })
+        buildPresence({ workspaceDir: deps.defaultCwd() ?? null, socketPath })
       )
     }
 
@@ -127,23 +135,56 @@ export function startControlServer(deps: ControlDeps): http.Server {
         const status = typeof (err as { statusCode?: unknown })?.statusCode === 'number'
           ? (err as { statusCode: number }).statusCode
           : 500
-        if (err instanceof URIError) return sendJson(res, 400, { error: 'invalid URL encoding' });
+        if (err instanceof URIError) return sendJson(res, 400, { error: 'invalid URL encoding' })
         const raw = (err as { statusCode?: unknown })?.statusCode
         const status2 = typeof raw === 'number' && Number.isInteger(raw) && raw >= 400 && raw <= 599 ? (raw as number) : 500
         const message = status2 >= 500 ? 'internal error' : err instanceof Error ? err.message : String(err)
         sendJson(res, status2, { error: message })
       }
     })
+  }
+
+  // 1. Always start local Named Pipe / Unix Domain Socket listener for portless IPC
+  const pipeServer = http.createServer(handleRequest)
+  let activeSocket = socketPath
+  pipeServer.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      const fallback = process.platform === 'win32'
+        ? `\\\\.\\pipe\\orcspace-${process.pid}`
+        : join(os.tmpdir(), `orcspace-${process.pid}.sock`)
+      console.warn(`control IPC socket ${activeSocket} in use, falling back to ${fallback}`)
+      prepareSocketPath(fallback)
+      activeSocket = fallback
+      pipeServer.listen(fallback, () => {
+        setActiveSocketPath(fallback)
+        deps.onSocketAssigned?.(fallback)
+      })
+      return
+    }
+    console.error('control pipe server error', err)
   })
-  let activePort = port
-  server.on('error', (err: NodeJS.ErrnoException) => {
+  pipeServer.listen(socketPath, () => {
+    setActiveSocketPath(socketPath)
+    deps.onSocketAssigned?.(socketPath)
+  })
+
+  // 2. Determine if TCP listener should also be opened
+  const shouldListenTcp = deps.port !== undefined || Boolean(process.env.WORKSPACE_CONTROL_PORT)
+  if (!shouldListenTcp) {
+    return pipeServer
+  }
+
+  const tcpPort = deps.port ?? (Number(process.env.WORKSPACE_CONTROL_PORT) || CONTROL_PORT)
+  let activePort = tcpPort
+  const tcpServer = http.createServer(handleRequest)
+
+  tcpServer.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       console.warn(
         `control port ${activePort} is already in use — falling back to an available free port on 127.0.0.1.`
       )
-      // Listen on 0 to let OS assign an available free port on 127.0.0.1
-      server.listen(0, '127.0.0.1', () => {
-        const address = server.address()
+      tcpServer.listen(0, '127.0.0.1', () => {
+        const address = tcpServer.address()
         const assigned = typeof address === 'object' && address ? address.port : 0
         if (assigned) {
           activePort = assigned
@@ -154,14 +195,33 @@ export function startControlServer(deps: ControlDeps): http.Server {
       })
       return
     }
-    console.error('control server error', err)
+    console.error('control tcp server error', err)
   })
-  server.listen(port, '127.0.0.1', () => {
-    setActiveControlPort(port)
-    console.log(`control server listening on http://127.0.0.1:${port}`)
-    deps.onPortAssigned?.(port)
+
+  tcpServer.listen(tcpPort, '127.0.0.1', () => {
+    setActiveControlPort(tcpPort)
+    console.log(`control server listening on http://127.0.0.1:${tcpPort}`)
+    deps.onPortAssigned?.(tcpPort)
   })
-  return server
+
+  const originalClose = tcpServer.close.bind(tcpServer)
+  tcpServer.close = (cb?: (err?: Error) => void) => {
+    try {
+      pipeServer.close()
+    } catch {}
+    return originalClose(cb)
+  }
+  const originalCloseAll = tcpServer.closeAllConnections?.bind(tcpServer)
+  if (originalCloseAll) {
+    tcpServer.closeAllConnections = () => {
+      try {
+        pipeServer.closeAllConnections?.()
+      } catch {}
+      return originalCloseAll()
+    }
+  }
+
+  return tcpServer
 }
 
 function isRendererPath(pathname: string): boolean {

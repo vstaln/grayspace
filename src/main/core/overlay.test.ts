@@ -1,4 +1,4 @@
-﻿import { strict as assert } from 'node:assert'
+import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
 import { ActorRegistry } from './actors.ts'
 import { CommandBus } from './bus.ts'
@@ -43,7 +43,7 @@ function createOverlayHarness() {
   })
 
   actors.register({ id: 'user', type: 'user', label: 'Human', transport: 'ipc' })
-  actors.register({ id: 'agent-1', type: 'agent', label: 'Agent 1', transport: 'mcp' })
+  actors.register({ id: 'agent-1', type: 'agent', label: 'Agent 1', transport: 'cli' })
 
   return { bus, locks, journal, actors, notes, noteVersions }
 }

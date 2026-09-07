@@ -14,8 +14,8 @@ let cached: string | null = null
  * The control server can open shells and type into them, so "it came from
  * loopback" was never authorisation — every process on the machine is on
  * loopback. The token is generated once per installation, stored in the user's
- * profile with owner-only permissions, and handed to the bundled MCP server
- * through its environment so the normal path needs no configuration.
+ * profile with owner-only permissions, and handed to the CLI agents
+ * through their environment so the normal path needs no configuration.
  *
  * It is deliberately not regenerated per launch: an external agent configured
  * against a previous run would otherwise break on every restart, and the
@@ -48,14 +48,4 @@ export function controlToken(): string {
 
 export function tokenFile(): string {
   return join(getUserDataDir(), 'control-token')
-}
-
-/**
- * The headers every generated MCP client config must carry. The MCP endpoint
- * is gated by the same token as the control API (P1), so `.mcp.json`,
- * `opencode.json`, codex `config.toml` and the copy-paste recipes all embed
- * these so CLI agents can authenticate without a manual step.
- */
-export function mcpAuthHeaders(): Record<string, string> {
-  return { [CONTROL_TOKEN_HEADER]: controlToken() }
 }

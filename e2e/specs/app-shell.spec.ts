@@ -29,9 +29,7 @@ test('the shell starts and renders the canvas chrome', async () => {
   await expect(page.getByTestId('tool-erase')).toBeVisible()
 
   // The app is genuinely alive: its loopback control API answers and reports
-  // the embedded MCP runtime. That runtime is no longer a child process on its
-  // own port — it is served by this same control server under /mcp, so the URL
-  // it advertises has to carry the control port.
+  // server status.
   await expect.poll(async () => {
     const data = await (await fetch(`http://127.0.0.1:${ctx.controlPort}/health`, {
       headers: { 'x-orcspace-token': ctx.controlToken }

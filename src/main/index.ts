@@ -4,7 +4,8 @@ loadEnvFile()
 
 import { app, Menu } from 'electron'
 import { join } from 'path'
-import { IS_MAC, initAppSwitches, requestInstanceLock, initAutoUpdater } from './bootstrap.ts'
+import { IS_MAC, initAppSwitches, requestInstanceLock, initAutoUpdater, registerProtocols } from './bootstrap.ts'
+import { setupOrcProtocol } from './protocol.ts'
 import { createAppStores } from './appStores.ts'
 import {
   createWindow,
@@ -28,6 +29,7 @@ import { onPersistError } from './persistNotifier.ts'
 import { chatRunner } from './chatRunner.ts'
 
 // --- bootstrap ---
+registerProtocols()
 initAppSwitches()
 if (process.env.ORCSPACE_DEV_USER_DATA) {
   try {
@@ -110,6 +112,7 @@ if (hasInstanceLock) {
   )
 
   app.whenReady().then(() => {
+    setupOrcProtocol()
     if (process.platform === 'win32') {
       app.setAppUserModelId(app.isPackaged ? 'com.orcspace.app' : 'com.orcspace.app.dev')
     }
@@ -209,7 +212,8 @@ if (hasInstanceLock) {
       rendererDir: process.env['ELECTRON_RENDERER_URL'] ? undefined : join(__dirname, '../renderer'),
       defaultCwd: () => state.workspaceDir,
       broadcast: (channel, payload) => send(channel, payload),
-      onPortAssigned: () => doPublishPresence()
+      onPortAssigned: () => doPublishPresence(),
+      onSocketAssigned: () => doPublishPresence()
     })
 
     ensureOrcExecutable()

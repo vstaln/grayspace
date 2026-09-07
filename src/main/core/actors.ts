@@ -25,7 +25,7 @@ export class ActorRegistry extends EventEmitter {
 
   /**
    * Idempotent: re-registering an existing id refreshes its liveness and label
-   * rather than failing. Transports reconnect (a renderer reload, an MCP client
+   * rather than failing. Transports reconnect (a renderer reload, a CLI agent
    * restarting) and should not have to care whether they are new.
    */
   register(input: { id: string; type: ActorType; label?: string; transport: string }): Actor {

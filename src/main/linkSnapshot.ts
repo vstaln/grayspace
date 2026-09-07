@@ -1,4 +1,5 @@
 import { CONTROL_PORT, getActiveControlPort } from './config.ts'
+import { getIpcSocketPath } from './ipcSocket.ts'
 
 export const APP_VERSION = '2.0.0'
 
@@ -8,6 +9,7 @@ export interface PresenceInfo {
   version: string
   pid: number
   controlPort: number
+  socketPath: string
   workspaceDir: string | null
 }
 
@@ -39,6 +41,7 @@ export interface PlannerSummary {
 export function buildPresence(input: {
   workspaceDir: string | null | undefined
   pid?: number
+  socketPath?: string
 }): PresenceInfo {
   return {
     ok: true,
@@ -46,6 +49,7 @@ export function buildPresence(input: {
     version: APP_VERSION,
     pid: input.pid ?? process.pid,
     controlPort: getActiveControlPort(),
+    socketPath: input.socketPath ?? getIpcSocketPath(),
     workspaceDir: input.workspaceDir ?? null
   }
 }

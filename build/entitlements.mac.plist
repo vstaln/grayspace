@@ -12,7 +12,7 @@
     <!-- node-pty spawns real shells; the native .node addons are loaded from Resources. -->
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
-    <!-- Terminals, the embedded browser and the MCP server all need outbound network. -->
+    <!-- Terminals and the embedded browser need outbound network. -->
     <key>com.apple.security.network.client</key>
     <true/>
     <key>com.apple.security.network.server</key>

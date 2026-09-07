@@ -8,10 +8,8 @@ import { OverlayManager, type ShadowOverlay } from './overlay.ts'
 import { ActorRateLimiter, PriorityCommandQueue } from './queue.ts'
 import { fileResource, parseResource } from './resources.ts'
 import {
-  definitionToMcpTool,
   validatePayload,
-  type CommandDefinition,
-  type McpToolDescriptor
+  type CommandDefinition
 } from './schema.ts'
 import {
   CommandError,
@@ -46,7 +44,7 @@ export interface CommandBusOptions {
  * The unified write path of OrcSpace.
  *
  * Implements:
- * - Schema validation as single source of truth + MCP tool generation.
+ * - Schema validation as single source of truth + command catalog.
  * - Idempotency-Key caching and replay prevention.
  * - Priority queue with user preemption and actor rate-limiting backpressure.
  * - In-flight command cancellation (AbortSignal).
@@ -115,10 +113,6 @@ export class CommandBus extends EventEmitter {
 
   catalog(): CommandDefinition[] {
     return Array.from(this.definitions.values()).sort((a, b) => a.type.localeCompare(b.type))
-  }
-
-  getMcpTools(): McpToolDescriptor[] {
-    return Array.from(this.definitions.values()).map(definitionToMcpTool)
   }
 
   registerVersions(scheme: ResourceScheme, source: VersionSource): void {

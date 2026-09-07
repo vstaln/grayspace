@@ -18,6 +18,7 @@ const { PlannerStore } = await import('./plannerStore.ts')
 const { CanvasStore } = await import('./canvasState.ts')
 const { startControlServer } = await import('./controlServer.ts')
 const { controlToken } = await import('./controlToken.ts')
+const { getIpcSocketPath } = await import('./ipcSocket.ts')
 
 describe('orc CLI - Functional, Performance & Integration Tests', () => {
   let server: ReturnType<typeof startControlServer>
@@ -95,18 +96,22 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
   })
 
   function runOrc(args: string[], envOverrides: Record<string, string> = {}): Promise<{ status: number; stdout: string; stderr: string; json: unknown }> {
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      ORCSPACE_URL: `http://127.0.0.1:${testPort}`,
+      ORCSPACE_TOKEN: token,
+      ORCSPACE_AGENT_ID: agentId,
+      ...envOverrides
+    }
+    for (const [k, v] of Object.entries(envOverrides)) {
+      if (v === '') delete env[k]
+    }
     return new Promise((resolve) => {
       execFile(
         process.execPath,
         [cliPath, ...args, '--json'],
         {
-          env: {
-            ...process.env,
-            ORCSPACE_URL: `http://127.0.0.1:${testPort}`,
-            ORCSPACE_TOKEN: token,
-            ORCSPACE_AGENT_ID: agentId,
-            ...envOverrides
-          },
+          env,
           encoding: 'utf8'
         },
         (error, stdout, stderr) => {
@@ -130,7 +135,7 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
 
   test('whoami returns agent identification and status', async () => {
     const res = await runOrc(['whoami'])
-    assert.equal(res.status, 0)
+    assert.equal(res.status, 0, 'orc failed: ' + JSON.stringify(res))
     const data = res.json as { agentId: string; busy: boolean }
     assert.equal(data.agentId, agentId)
     assert.equal(data.busy, false)
@@ -392,4 +397,17 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
       assert.equal(parsed.agentId, agentId)
     })
   }
+
+  test('communicates directly over Named Pipe / IPC socket without TCP port', async () => {
+    const pipePath = getIpcSocketPath()
+    const res = await runOrc(['whoami'], {
+      ORCSPACE_URL: '',
+      WORKSPACE_CONTROL_PORT: '',
+      ORCSPACE_SOCKET_PATH: pipePath
+    })
+    assert.equal(res.status, 0, `whoami over pipe failed: ${res.stderr}`)
+    const json = res.json as { agentId: string; busy: boolean }
+    assert.equal(json.agentId, agentId)
+    assert.equal(json.busy, false)
+  })
 })

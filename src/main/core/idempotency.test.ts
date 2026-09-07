@@ -1,4 +1,4 @@
-﻿import { strict as assert } from 'node:assert'
+import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
 import { ActorRegistry } from './actors.ts'
 import { CommandBus } from './bus.ts'
@@ -15,7 +15,7 @@ describe('Idempotency — Idempotency-Key caching and retry deduplication', () =
     const noteVersions = new VersionRegistry('note')
     bus.registerVersions('note', noteVersions)
 
-    actors.register({ id: 'agent-1', type: 'agent', label: 'Agent', transport: 'mcp' })
+    actors.register({ id: 'agent-1', type: 'agent', label: 'Agent', transport: 'cli' })
 
     let executions = 0
     bus.register<{ title: string }, { id: string; version: number }>('note.create', {

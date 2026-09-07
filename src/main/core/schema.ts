@@ -1,4 +1,4 @@
-﻿import type { CommandHandler, ResourceScheme } from './types.ts'
+import type { CommandHandler, ResourceScheme } from './types.ts'
 
 export type FieldType = 'string' | 'number' | 'boolean' | 'array' | 'object' | 'any'
 
@@ -31,16 +31,6 @@ export interface CommandDefinition<P = unknown, R = unknown> {
   /** See CommandHandler.bypassQueue — skips the single-lane queue. */
   bypassQueue?: boolean
   handler?: CommandHandler<P, R>
-}
-
-export interface McpToolDescriptor {
-  name: string
-  description: string
-  inputSchema: {
-    type: 'object'
-    properties: Record<string, Record<string, unknown>>
-    required: string[]
-  }
 }
 
 /**
@@ -95,53 +85,4 @@ export function validatePayload(schema: CommandPayloadSchema, payload: unknown):
   }
 
   return null
-}
-
-function fieldToMcpProperty(field: FieldSchema): Record<string, unknown> {
-  const prop: Record<string, unknown> = {
-    type: field.type === 'any' ? 'string' : field.type,
-    description: field.description || ''
-  }
-  if (field.enum) prop.enum = [...field.enum]
-  if (field.items) prop.items = fieldToMcpProperty(field.items)
-  if (field.properties) {
-    const nestedProps: Record<string, unknown> = {}
-    for (const [k, f] of Object.entries(field.properties)) {
-      nestedProps[k] = fieldToMcpProperty(f)
-    }
-    prop.properties = nestedProps
-  }
-  return prop
-}
-
-/**
- * Converts a CommandDefinition into a standardized MCP Tool Descriptor.
- */
-export function definitionToMcpTool(def: CommandDefinition): McpToolDescriptor {
-  const properties: Record<string, Record<string, unknown>> = {
-    target: {
-      type: 'string',
-      description: `Target resource id (scheme: "${def.targetScheme}")`
-    },
-    baseVersion: {
-      type: 'number',
-      description: 'Expected base version for optimistic concurrency control (optional for creates)'
-    }
-  }
-
-  for (const [key, field] of Object.entries(def.payloadSchema.properties)) {
-    properties[key] = fieldToMcpProperty(field)
-  }
-
-  const required = ['target', ...(def.payloadSchema.required || [])]
-
-  return {
-    name: def.type.replace(/\./g, '_'),
-    description: def.description,
-    inputSchema: {
-      type: 'object',
-      properties,
-      required
-    }
-  }
 }

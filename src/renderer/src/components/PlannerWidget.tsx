@@ -41,7 +41,7 @@ function inWeek(day: string | undefined, today: string, weekEnd: string): boolea
  *
  * Matches a Linear/Nexa-style task list: scope chips, progress counter,
  * numbered rows with circle checkboxes. Checking one off does not move a
- * board card. Agents see the same data via MCP list_plan_items / toggle_plan_item.
+ * board card. Agents see the same data via orc plan list / orc plan toggle.
  */
 export default function PlannerWidget(): React.JSX.Element {
   const coordination = useCoordination()
@@ -582,7 +582,7 @@ export default function PlannerWidget(): React.JSX.Element {
               <Empty
                 text={
                   scope === 'today'
-                    ? 'Nothing planned for today. Add a task above — items persist and sync with MCP.'
+                    ? 'Nothing planned for today. Add a task above — items persist and sync with CLI & Planner.'
                     : scope === 'inbox'
                       ? 'No unscheduled tasks. Use inbox to drop ideas and assign dates later.'
                       : 'Plan list is empty. Add tasks above to track your day.'

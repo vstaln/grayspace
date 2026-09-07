@@ -9,13 +9,14 @@ import type { ElectronApplication, Page } from 'playwright'
 /**
  * The whole app under test: the Electron handle, the renderer page, and the
  * isolated profile + ports every instance owns so tests never touch the user's
- * real data, running app, or default MCP/control ports.
+ * real data, running app, or default control ports.
  */
 export interface OrcSpaceFixture {
   app: ElectronApplication
   page: Page
   profileDir: string
   controlPort: number
+  /** Legacy alias for controlPort. */
   mcpPort: number
   controlToken: string
 }
@@ -62,7 +63,7 @@ function freePort(): Promise<number> {
  * Boots a fresh, isolated OrcSpace from the built `out/` output.
  *
  * - `--user-data-dir` points at a throwaway profile: no real notes/board/state
- *   can leak in, and main's MCP auto-config sync is disabled for it.
+ *   can leak in.
  * - One free backend port per instance keeps parallel runs isolated.
  */
 export async function launchOrcSpace(options?: LaunchOptions): Promise<OrcSpaceFixture> {

@@ -4,12 +4,6 @@ import { join } from 'path'
 const isDev = Boolean(process.env['ELECTRON_RENDERER_URL'] || process.env.NODE_ENV === 'development')
 export const APP_TITLE = isDev ? 'OrcSpace (Dev)' : 'OrcSpace'
 
-/**
- * Name MCP clients see, and the key used in every generated config snippet.
- * Not "workspace" — Claude Code treats that as a reserved server name and
- * silently refuses to load it, which is a wordless failure to debug.
- */
-
 function configuredPort(value: string | undefined, fallback: number): number {
   const parsed = Number(value)
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65_535 ? parsed : fallback

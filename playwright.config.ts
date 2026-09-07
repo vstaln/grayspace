@@ -5,7 +5,7 @@ import { defineConfig } from '@playwright/test'
  *
  * There is no webServer here: each test launches its own Electron instance via
  * `_electron.launch` (see `e2e/helpers/app.ts`) against the built output in
- * `out/` with a throwaway `--user-data-dir` profile and free MCP/control ports,
+ * `out/` with a throwaway `--user-data-dir` profile and isolated runtime presence,
  * so runs are hermetic and parallel-safe.
  *
  * Two projects:
@@ -23,7 +23,7 @@ export default defineConfig({
   testDir: './e2e',
   globalSetup: './e2e/global-setup.ts',
   fullyParallel: true,
-  // Each worker owns a whole Electron app plus its bundled MCP child; more than
+  // Each worker owns a whole Electron app; more than
   // one at a time is a lot of node-pty/conpty instances on a dev machine.
   workers: 1,
   timeout: 90_000,
