@@ -21,7 +21,7 @@ export const CANVAS_SCHEMA_VERSION = 3
 /** Snapshot cache interval for event sourcing. */
 export const CANVAS_SNAPSHOT_INTERVAL = 50
 
-export type WidgetKind = 'terminal' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration'
+export type WidgetKind = 'terminal' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration' | 'mission'
 
 export interface CanvasWidget {
   id: string
@@ -112,7 +112,7 @@ const isNum = (value: unknown): value is number => typeof value === 'number' && 
  * `storage-core`'s off-thread writer (one string) and `sanitizeScrollback`.
  */
 
-const WIDGET_KINDS = new Set<string>(['terminal', 'timer', 'board', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'orchestration'])
+const WIDGET_KINDS = new Set<string>(['terminal', 'timer', 'board', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'orchestration', 'mission'])
 
 export function sanitizeWidget(value: unknown): CanvasWidget | null {
   const w = value as Record<string, unknown>

@@ -64,11 +64,11 @@ const TASK_UPDATE_SCHEMA: CommandPayloadSchema = {
 }
 
 export function registerBoardCommands({ core, board }: CommandDeps): void {
-  const { bus } = core
+  const { flow } = core
 
-  bus.registerVersions('task', board.versions)
+  flow.registerVersions('task', board.versions)
 
-  bus.registerDefinition<TaskCreatePayload, Task>({
+  flow.registerDefinition<TaskCreatePayload, Task>({
     type: 'task.create',
     description: 'Create a kanban task. Only the manager may create work for others.',
     targetScheme: 'task',
@@ -96,7 +96,7 @@ export function registerBoardCommands({ core, board }: CommandDeps): void {
    * touch their own cards), an agent's carry manager/assignee rules. Before the
    * bus these were two functions reachable from two different places.
    */
-  bus.registerDefinition<TaskUpdatePayload, Task>({
+  flow.registerDefinition<TaskUpdatePayload, Task>({
     type: 'task.update',
     description: 'Update a task. Humans edit via board-role rules, agents via manager/assignee rules.',
     targetScheme: 'task',
@@ -115,7 +115,7 @@ export function registerBoardCommands({ core, board }: CommandDeps): void {
     }
   })
 
-  bus.registerDefinition<Record<string, never>, Task>({
+  flow.registerDefinition<Record<string, never>, Task>({
     type: 'task.claim',
     description: 'Claim a task and take its file locks.',
     targetScheme: 'task',
@@ -125,7 +125,7 @@ export function registerBoardCommands({ core, board }: CommandDeps): void {
     }
   })
 
-  bus.registerDefinition<Record<string, never>, { id: string }>({
+  flow.registerDefinition<Record<string, never>, { id: string }>({
     type: 'task.delete',
     description: 'Delete a task (manager only).',
     targetScheme: 'task',
@@ -147,7 +147,7 @@ export function registerBoardCommands({ core, board }: CommandDeps): void {
   // it, and routing it through the bus means the claim is serialised with
   // everything else rather than racing task writes.
 
-  bus.registerDefinition<Record<string, never>, { managerId: string; role: 'manager' }>({
+  flow.registerDefinition<Record<string, never>, { managerId: string; role: 'manager' }>({
     type: 'manager.claim',
     description: 'Become the single board manager.',
     targetScheme: 'task',
@@ -158,7 +158,7 @@ export function registerBoardCommands({ core, board }: CommandDeps): void {
     }
   })
 
-  bus.registerDefinition<{ force?: boolean }, { managerId: null }>({
+  flow.registerDefinition<{ force?: boolean }, { managerId: null }>({
     type: 'manager.release',
     description: 'Release the manager role. `force` (user only) resets a dead manager.',
     targetScheme: 'task',

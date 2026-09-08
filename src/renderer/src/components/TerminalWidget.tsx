@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Terminal, ITheme } from 'xterm'
 import { FitAddon } from 'xterm-addon-fit'
+import { Unicode11Addon } from 'xterm-addon-unicode11'
 import 'xterm/css/xterm.css'
 import { ThemeName, useTheme } from '../theme'
 import { pasteHasImage } from '../lib/paste'
@@ -37,9 +38,7 @@ interface Props {
   onProcessExit?: () => void
 }
 
-/** Standard-ish ANSI palette for dark terminals — not grayscale. Apps like
- *  Claude Code colour their UI with these slots; mapping them all to grey made
- *  every TUI look monochrome. */
+/** Standard-ish ANSI palette for dark terminals — preserve TUI colours. */
 const BASE_COLORS = {
   foreground: '#e8e8ea',
   cursor: '#e8e8ea',
@@ -71,7 +70,7 @@ function xtermTheme(_appTheme: ThemeName, surface: 'canvas' | 'code'): ITheme {
   const isCanvas = surface === 'canvas'
   return {
     ...BASE_COLORS,
-    background: isCanvas ? '#00000000' : palette.terminalSolid,
+    background: isCanvas ? 'transparent' : palette.terminalSolid,
     cursorAccent: palette.wallpaperBase
   }
 }
@@ -108,12 +107,21 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
       // while an agent (for example Codex) owns the session. Keep the normal
       // blinking cursor only when this terminal is focused for user input.
       cursorInactiveStyle: 'none',
-      convertEol: false
+      convertEol: false,
+      // The Unicode addon exposes xterm's proposed unicode API. Without this
+      // flag xterm replaces the terminal with its "allowProposedApi" error
+      // screen as soon as the widget mounts.
+      allowProposedApi: true
     })
     termRef.current = term
     let mounted = true
     const fit = new FitAddon()
     term.loadAddon(fit)
+    // Emoji and other wide Unicode graphemes must occupy the correct number
+    // of terminal cells; otherwise xterm clips their right half before Enter.
+    const unicode11 = new Unicode11Addon()
+    term.loadAddon(unicode11)
+    term.unicode.activeVersion = '11'
     const pendingWrites: string[] = []
     let writeRaf: number | null = null
     const flushWrites = (): void => {
@@ -376,6 +384,9 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
     // modifier that works alongside Ctrl/Cmd. Existing native Ctrl+C/X/V and
     // Cmd+C/V remain functional for their standard roles.
     const onKeyShortcut = (e: KeyboardEvent): void => {
+      // One listener is registered per mounted terminal. Without this focus
+      // gate, Ctrl+Shift+V is handled by every open Code terminal.
+      if (!container.contains(document.activeElement)) return
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey) return // standard Ctrl/Cmd+C/V, let native handle
       if ((e.ctrlKey || e.metaKey) && e.shiftKey) {
         e.preventDefault()
@@ -416,14 +427,14 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
       menu.style.border = '1px solid var(--border-line-soft)'
       menu.style.borderRadius = '6px'
       menu.style.padding = '8px'
-      menu.style.boxShadow = '0 4px 12px rgba(0,0,0,.15)'
+      menu.style.boxShadow = '0 4px 12px rgba(8,9,11,.6)'
       menu.style.zIndex = '99999'
       menu.innerHTML = `
         ${hasSelection
-          ? `<button style="width:100%;margin-bottom:4px;padding:4px;border:none;border-radius:4px;background:#3182ce;color:white;font-size:12px;cursor:pointer;" onclick="void navigator.clipboard.writeText('${selection}')">Copy</button>`
+          ? `<button style="width:100%;margin-bottom:4px;padding:4px;border:none;border-radius:4px;background:var(--tok-color-bg-panel);color:var(--tok-color-text);font-size:12px;cursor:pointer;" onclick="void navigator.clipboard.writeText('${selection}')">Copy</button>`
           : ''}
         ${!hasSelection
-          ? `<button style="width:100%;padding:4px;border:none;border-radius:4px;background:#e2e8f0;font-size:12px;cursor:pointer;" onclick="void navigator.clipboard.readText().then(t=>term.paste(t)).catch(()=>{})">Paste</button>`
+          ? `<button style="width:100%;padding:4px;border:none;border-radius:4px;background:var(--tok-color-bg-panel);color:var(--tok-color-text);font-size:12px;cursor:pointer;" onclick="void navigator.clipboard.readText().then(t=>term.paste(t)).catch(()=>{})">Paste</button>`
           : ''}
       `
       document.body.appendChild(menu)
@@ -489,10 +500,13 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
     // Capture phase + stopPropagation: the event never reaches xterm's own
     // textarea paste handler, so the text is written to the pty a single time.
     // Handling it on bubble instead is what caused every Ctrl+V to paste twice.
-    // Capture phase + stopPropagation: the event never reaches xterm's own
-    // textarea paste handler, so the text is written to the pty a single time.
-    // Handling it on bubble instead is what caused every Ctrl+V to paste twice.
     const onPaste = (event: ClipboardEvent): void => {
+      // Only the terminal whose xterm textarea owns focus may consume a paste.
+      // This guard prevents a canvas-level paste from being handled by every
+      // mounted terminal when several widgets are open at once.
+      const eventTarget = event.target
+      const ownsEvent = container.contains(document.activeElement) || (eventTarget instanceof Node && container.contains(eventTarget))
+      if (!ownsEvent) return
       event.preventDefault()
       event.stopPropagation()
       // The image bytes cannot travel through a PTY. Forward the original
@@ -736,7 +750,7 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
   return (
     <div
       ref={containerRef}
-      className={`term-shell term relative h-full w-full p-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 focus-within:ring-1 focus-within:ring-inset focus-within:ring-text-faint/50 ${
+      className={`term-shell term relative h-full w-full p-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
         surface === 'canvas' ? 'is-canvas-term' : 'is-code-term'
       }`}
       data-testid="terminal-xterm"

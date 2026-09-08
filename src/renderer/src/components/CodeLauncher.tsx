@@ -6,6 +6,7 @@ import CodexIcon from './CodexIcon'
 import GrokIcon from './GrokIcon'
 import AntigravityIcon from './AntigravityIcon'
 import OpenCodeIcon from './OpenCodeIcon'
+import CursorIcon from './CursorIcon'
 
 export interface CodeAgent {
   id: string
@@ -23,7 +24,9 @@ export const CODE_AGENTS: CodeAgent[] = [
   { id: 'antigravity', label: 'Antigravity', command: 'agy', Icon: AntigravityIcon },
   { id: 'grok', label: 'Grok', command: 'grok', Icon: GrokIcon },
   { id: 'opencode', label: 'OpenCode', command: 'opencode', Icon: OpenCodeIcon },
-  { id: 'cursor', label: 'Cursor Agent', command: 'cursor-agent', Icon: Terminal },
+  { id: 'gemini', label: 'Gemini CLI', command: 'gemini', Icon: Terminal },
+  { id: 'aider', label: 'Aider', command: 'aider', Icon: Terminal },
+  { id: 'cursor', label: 'Cursor Agent', command: 'cursor-agent', Icon: CursorIcon },
   { id: 'browser', label: 'Browser', command: 'browser', Icon: Globe2 },
   { id: 'custom', label: 'Other CLI', command: '', Icon: Terminal }
 ]
@@ -61,13 +64,13 @@ export default function CodeLauncher({ onClose, onLaunch, currentCount = 0 }: Pr
       role="dialog"
       aria-modal="true"
       aria-label="Launch Code Session"
-      className="code-launcher-shell fixed inset-0 z-[650] flex items-center justify-center bg-black/35 backdrop-blur-[2px]"
+      className="code-launcher-shell fixed inset-0 z-[650] flex items-center justify-center bg-bg/80 backdrop-blur-[2px]"
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}
     >
       <div
-        className="flex w-[560px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-[10px] border border-line bg-bg-panel shadow-[0_30px_90px_rgba(0,0,0,0.75)]"
+        className="flex w-[560px] max-w-[calc(100vw-48px)] flex-col overflow-hidden rounded-[10px] border border-line bg-bg-panel shadow-[0_30px_90px_rgba(8,9,11,0.75)]"
         onPointerDown={(e) => e.stopPropagation()}
       >
         <header className="flex flex-none items-center justify-between gap-4 border-b border-line-soft bg-bg-raise px-4 py-3.5">

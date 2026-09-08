@@ -49,6 +49,24 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
     }
   }, [isCustom])
 
+  // WidgetFrame temporarily re-parents the body when a timer is maximized.
+  // Persist the live snapshot on every state transition so that remount does
+  // not reset a running countdown to the 25-minute preset.
+  useEffect(() => {
+    if (!widgetId) return
+    timerPersist.set(persistKey, {
+      totalMs,
+      remaining: running ? deadline.current - Date.now() : remaining,
+      running,
+      deadline: deadline.current,
+      rang: rang.current,
+      isCustom,
+      customHours,
+      customMinutes,
+      customSeconds
+    })
+  }, [widgetId, persistKey, totalMs, remaining, running, isCustom, customHours, customMinutes, customSeconds])
+
   useEffect(() => {
     if (!running) return
     const tick = (): void => {

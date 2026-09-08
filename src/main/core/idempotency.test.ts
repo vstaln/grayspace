@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
 import { ActorRegistry } from './actors.ts'
-import { CommandBus } from './bus.ts'
+import { CommandFlow } from './flow.ts'
 import { Journal } from './journal.ts'
 import { LockManager } from './locks.ts'
 import { VersionRegistry } from './versioned.ts'
@@ -11,7 +11,7 @@ describe('Idempotency — Idempotency-Key caching and retry deduplication', () =
     const actors = new ActorRegistry()
     const locks = new LockManager()
     const journal = new Journal()
-    const bus = new CommandBus({ actors, locks, journal })
+    const bus = new CommandFlow({ actors, locks, journal })
     const noteVersions = new VersionRegistry('note')
     bus.registerVersions('note', noteVersions)
 

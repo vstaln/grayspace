@@ -38,11 +38,11 @@ const PLAN_FIELDS: CommandPayloadSchema['properties'] = {
 }
 
 export function registerPlannerCommands({ core, planner }: CommandDeps): void {
-  const { bus } = core
+  const { flow } = core
 
-  bus.registerVersions('plan', planner.versions)
+  flow.registerVersions('plan', planner.versions)
 
-  bus.registerDefinition<PlanCreatePayload, PlanItem>({
+  flow.registerDefinition<PlanCreatePayload, PlanItem>({
     type: 'plan.create',
     description: 'Add a line to the day planner.',
     targetScheme: 'plan',
@@ -56,7 +56,7 @@ export function registerPlannerCommands({ core, planner }: CommandDeps): void {
     }
   })
 
-  bus.registerDefinition<PlanUpdatePayload, PlanItem>({
+  flow.registerDefinition<PlanUpdatePayload, PlanItem>({
     type: 'plan.update',
     description:
       'Update a planner line (text, day/time, done, order, attachments). Pass null for day/project/time/attachments to clear them.',
@@ -71,7 +71,7 @@ export function registerPlannerCommands({ core, planner }: CommandDeps): void {
   })
 
   /** Dedicated check/uncheck — same store field as plan.update done, clearer for agents. */
-  bus.registerDefinition<{ done?: boolean }, PlanItem>({
+  flow.registerDefinition<{ done?: boolean }, PlanItem>({
     type: 'plan.toggle',
     description: 'Check or uncheck a planner line. Omit `done` to flip the current value.',
     targetScheme: 'plan',
@@ -87,7 +87,7 @@ export function registerPlannerCommands({ core, planner }: CommandDeps): void {
     }
   })
 
-  bus.registerDefinition<Record<string, never>, { id: string }>({
+  flow.registerDefinition<Record<string, never>, { id: string }>({
     type: 'plan.delete',
     description: 'Delete a planner line.',
     targetScheme: 'plan',

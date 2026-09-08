@@ -30,6 +30,7 @@ import type {
   OrcSnapshot,
   MediaApi,
   MediaFile,
+  MissionApi,
   PlanItem,
   PlannerApi,
   RecentDir,
@@ -197,12 +198,18 @@ const orchestration: OrchestrationApi = {
   snapshot: (runId?: string): Promise<OrcSnapshot> => ipcRenderer.invoke('orchestration:snapshot', runId),
   inbox: (runId?: string): Promise<OrcMessage[]> => ipcRenderer.invoke('orchestration:inbox', runId),
   reply: (askId: string, body: string): Promise<unknown> => ipcRenderer.invoke('orchestration:reply', askId, body),
+  respondToPermission: (askId: string, approved: boolean, note?: string): Promise<unknown> =>
+    ipcRenderer.invoke('orchestration:permission', askId, approved, note),
   resolveGate: (gateId: string, resolution: string): Promise<unknown> =>
     ipcRenderer.invoke('orchestration:resolve-gate', gateId, resolution),
   account: (dispatchId: string, state: 'retained' | 'released', closeTerminal?: boolean): Promise<unknown> =>
     ipcRenderer.invoke('orchestration:account', dispatchId, state, closeTerminal),
   closeRun: (runId: string): Promise<unknown> => ipcRenderer.invoke('orchestration:close-run', runId),
   onChange: (cb: () => void): (() => void) => onBroadcast('orchestration:onChange', cb)
+}
+
+const mission: MissionApi = {
+  start: (input) => ipcRenderer.invoke('mission:start', input)
 }
 
 const coordination: CoordinationApi = {
@@ -344,6 +351,7 @@ contextBridge.exposeInMainWorld('api', {
   media,
   coordination,
   orchestration,
+  mission,
   planner,
   canvas,
   code,

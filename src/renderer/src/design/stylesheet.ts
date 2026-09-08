@@ -5,6 +5,7 @@ import {
   geometry,
   hairline,
   lanes,
+  monochrome,
   palette,
   toCustomProperty,
   translucentTokens,
@@ -109,7 +110,7 @@ const componentsLayer: Sheet = {
       WebkitBackdropFilter: frost.shell
     },
     '&.is-expanded': {
-      background: 'rgba(9, 10, 12, 0.94)',
+      background: 'rgba(8, 9, 11, 0.94)',
       backdropFilter: frost.shell,
       WebkitBackdropFilter: frost.shell
     }
@@ -198,7 +199,7 @@ const componentsLayer: Sheet = {
     // A terminal the cursor is dragging a Check widget's wire over — the same
     // bluish-white the wire itself glows, so the highlighted target reads as
     // "this is what the thread would land on" (CANV connect-drag).
-    '&.connect-target-active': { boxShadow: '0 0 0 2px rgba(223, 231, 255, 0.9)' },
+    '&.connect-target-active': { boxShadow: '0 0 0 2px rgba(169, 171, 176, 0.9)' },
     // Keyboard focus (Tab onto the frame) gets a visible ring so the user can
     // tell whether arrows will move the widget or pan the canvas (CANV-14).
     '&:focus-visible': {
@@ -225,19 +226,31 @@ const componentsLayer: Sheet = {
       background: palette.terminalGlass,
       backdropFilter: frost.terminal,
       WebkitBackdropFilter: frost.terminal,
-      boxShadow: `0 0 0 1px ${hairline.glassSoft}`
+      // Canvas terminals sit directly over the wallpaper; the old 1px ring
+      // read as a distracting grey vertical divider when a terminal was focused.
+      boxShadow: 'none'
+    },
+    '&.is-terminal.is-canvas-terminal.is-active': {
+      // Keep the selected terminal identifiable without bringing back the
+      // distracting grey divider: active focus is a clean white hairline.
+      boxShadow: '0 0 0 1px rgba(169, 171, 176, 0.42)'
     },
     'html[data-translucent] &.is-terminal.is-canvas-terminal': {
       background: palette.terminalGlass,
       backdropFilter: frost.terminal,
       WebkitBackdropFilter: frost.terminal,
-      boxShadow: `0 0 0 1px ${hairline.glassSoft}`
+      boxShadow: 'none'
+    },
+    'html[data-translucent] &.is-terminal.is-canvas-terminal.is-active': {
+      boxShadow: '0 0 0 1px rgba(169, 171, 176, 0.48)'
     },
     // Terminal header: fixed graphite surface; the body remains transparent
     // in Canvas and pure black in Code.
     '&.is-terminal .widget-header-shell': {
       background: palette.titleBar.surface,
-      boxShadow: `inset 0 -1px 0 ${hairline.soft}`
+      // The header should meet the terminal body cleanly; the old inset
+      // hairline looked like a distracting grey separator.
+      boxShadow: 'none'
     },
   },
 
@@ -274,15 +287,15 @@ const componentsLayer: Sheet = {
     to: { opacity: 1, transform: 'scale(1)' }
   },
 
-  /* Browser — простой тёмно-серый, без стекла и без белых обводок */
+  /* Browser uses the same three anchors as the rest of the app. */
   '.browser-chrome': {
-    background: '#1e1e21',
-    borderBottom: '1px solid #2a2a2e',
+    background: monochrome.surface,
+    borderBottom: `1px solid ${hairline.soft}`,
     contain: 'layout paint style'
   },
   '.browser-tab-strip': {
-    background: '#18181b',
-    borderBottom: '1px solid #232326',
+    background: monochrome.base,
+    borderBottom: `1px solid ${hairline.soft}`,
     scrollbarWidth: 'none',
     '&::-webkit-scrollbar': { display: 'none' }
   },
@@ -292,22 +305,22 @@ const componentsLayer: Sheet = {
     transition: 'background 120ms ease, color 120ms ease'
   },
   '.browser-tab-active': {
-    background: '#2a2a2e',
-    color: '#ececec',
+    background: 'rgba(169, 171, 176, 0.12)',
+    color: monochrome.graphite,
     borderColor: 'transparent'
   },
   '.browser-tab-idle': {
     background: 'transparent',
-    color: '#8a8a90',
-    '&:hover': { background: '#232326', color: '#d4d4d8' }
+    color: 'rgba(169, 171, 176, 0.58)',
+    '&:hover': { background: 'rgba(169, 171, 176, 0.08)', color: monochrome.graphite }
   },
   '.browser-omnibox': {
-    background: '#252529',
-    border: '1px solid #2e2e32',
+    background: monochrome.surface,
+    border: `1px solid ${hairline.soft}`,
     transition: 'border-color 120ms ease, background 120ms ease',
     '&:focus-within': {
-      background: '#2a2a2e',
-      borderColor: '#3a3a40'
+      background: monochrome.surface,
+      borderColor: hairline.active
     }
   },
   '.browser-omnibox-input': {
@@ -315,26 +328,26 @@ const componentsLayer: Sheet = {
     outline: 'none'
   },
   '.browser-icon-btn': {
-    color: '#9a9aa0',
+    color: 'rgba(169, 171, 176, 0.7)',
     transition: 'background 120ms ease, color 120ms ease',
-    '&:hover': { background: '#2a2a2e', color: '#ececec' },
-    '&:active': { background: '#303034' },
+    '&:hover': { background: 'rgba(169, 171, 176, 0.08)', color: monochrome.graphite },
+    '&:active': { background: 'rgba(169, 171, 176, 0.14)' },
     '&:disabled': { opacity: 0.3, pointerEvents: 'none' }
   },
   '.browser-surface': {
-    background: '#121214',
+    background: monochrome.base,
     contain: 'strict'
   },
 
   /* Тонкая полоса загрузки — просто серая, без белых свечений */
   '.load-bar': {
-    background: '#5a5a60',
+    background: monochrome.graphite,
     willChange: 'transform',
     animation: 'load-bar-slide 1.0s ease-in-out infinite',
     contain: 'paint'
   },
   '.load-bar-track': {
-    background: '#1e1e21',
+    background: monochrome.surface,
     overflow: 'hidden',
     contain: 'paint'
   },
@@ -367,7 +380,7 @@ const componentsLayer: Sheet = {
   // Code sessions are intentionally a pure black work surface even when the
   // app is using the photo/translucent theme.
   '.code-terminal-shell': {
-    background: '#0b0b0d',
+    background: monochrome.base,
     borderColor: hairline.soft,
     '& .code-session-header': { background: palette.titleBar.surface },
     '& .code-session-header:hover': { background: palette.titleBar.active }
@@ -438,7 +451,7 @@ export const appStylesheet: Sheet = {
   // offset, which around a rounded input drew a hard rectangle floating off
   // the control — it read as unstyled browser chrome. Keyboard users still get
   // a clear ring; it just belongs to this app now.
-  ':focus-visible': { outline: '1px solid rgba(255,255,255,0.38)', outlineOffset: '1px', borderRadius: '10px' },
+  ':focus-visible': { outline: '1px solid rgba(169,171,176,0.38)', outlineOffset: '1px', borderRadius: '10px' },
   // Text fields already show focus themselves — every styled input/textarea in
   // the app switches its own border color on focus — so the generic ring on
   // top of that just doubled the outline into a floating oval around the

@@ -87,17 +87,40 @@ function getAllCandidateTokens(stopAtFirst = false) {
   return tokens
 }
 
-function getDiscoveredTarget() {
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return true
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    // EPERM means the process exists but this user cannot signal it.
+    return err?.code === 'EPERM'
+  }
+}
+
+function isLiveRuntime(raw) {
+  if (!raw || typeof raw !== 'object') return false
+  if (raw.app && raw.app !== 'orcspace') return false
+  if (!isProcessAlive(raw.pid)) return false
+  // Older beacons did not include a pid. Do not let an abandoned beacon from
+  // an old install win forever when there is no process to validate.
+  if (!Number.isInteger(raw.pid) && Number.isFinite(raw.writtenAt)) {
+    if (Date.now() - raw.writtenAt > 24 * 60 * 60 * 1000) return false
+  }
+  return true
+}
+
+function getDiscoveredTargets() {
   if (process.env.ORCSPACE_SOCKET_PATH) {
-    return { socketPath: process.env.ORCSPACE_SOCKET_PATH }
+    return [{ socketPath: process.env.ORCSPACE_SOCKET_PATH }]
   }
   if (process.env.ORCSPACE_URL) {
-    return { url: process.env.ORCSPACE_URL.replace(/\/+$/, '') }
+    return [{ url: process.env.ORCSPACE_URL.replace(/\/+$/, '') }]
   }
   if (process.env.WORKSPACE_CONTROL_PORT) {
     const envPort = Number(process.env.WORKSPACE_CONTROL_PORT)
     if (Number.isInteger(envPort) && envPort >= 1 && envPort <= 65535) {
-      return { url: `http://127.0.0.1:${envPort}` }
+      return [{ url: `http://127.0.0.1:${envPort}` }]
     }
   }
 
@@ -120,16 +143,26 @@ function getDiscoveredTarget() {
     path.join(os.homedir(), 'Library', 'Application Support', 'Orcspace')
   ].filter(Boolean)
 
+  const targets = []
+  const seen = new Set()
+  const addTarget = (target) => {
+    const key = target.socketPath ? `socket:${target.socketPath}` : `url:${target.url}`
+    if (seen.has(key)) return
+    seen.add(key)
+    targets.push(target)
+  }
+
   for (const dir of candidateDirs) {
     try {
       const runtimePath = path.join(dir, 'runtime.json')
       if (fs.existsSync(runtimePath)) {
         const raw = JSON.parse(fs.readFileSync(runtimePath, 'utf8'))
+        if (!isLiveRuntime(raw)) continue
         if (raw && typeof raw.socketPath === 'string' && raw.socketPath) {
-          return { socketPath: raw.socketPath }
+          addTarget({ socketPath: raw.socketPath })
         }
         if (raw && typeof raw.controlPort === 'number' && raw.controlPort >= 1 && raw.controlPort <= 65535) {
-          return { url: `http://127.0.0.1:${raw.controlPort}` }
+          addTarget({ url: `http://127.0.0.1:${raw.controlPort}` })
         }
       }
     } catch {
@@ -140,15 +173,19 @@ function getDiscoveredTarget() {
   const isDev = fs.existsSync(path.join(process.cwd(), '.dev-user-data')) || Boolean(process.env.ORCSPACE_DEV_USER_DATA)
   const suffix = isDev ? '-dev' : ''
   if (process.platform === 'win32') {
-    return { socketPath: `\\\\.\\pipe\\orcspace${suffix}` }
+    addTarget({ socketPath: `\\\\.\\pipe\\orcspace${suffix}` })
+  } else {
+    addTarget({ socketPath: path.join(os.tmpdir(), `orcspace${suffix}.sock`) })
   }
-  return { socketPath: path.join(os.tmpdir(), `orcspace${suffix}.sock`) }
+  return targets
 }
 
-const TARGET = getDiscoveredTarget()
+const TARGETS = getDiscoveredTargets()
+const TARGET = TARGETS[0]
 const TARGET_DESC = TARGET.url || TARGET.socketPath
 const AGENT_ID = process.env.ORCSPACE_AGENT_ID || process.env.ORCSPACE_TERMINAL_ID || 'cli'
 let workingToken = null
+let workingTarget = null
 
 // ---------------------------------------------------------------- arg parsing
 
@@ -336,8 +373,8 @@ async function requestTarget({ target, method, path, headers, body, signal, time
 }
 
 async function call(method, path, body, options = {}) {
-  let candidateTokens = workingToken ? [workingToken] : getCandidateTokens()
-  if (candidateTokens.length === 0) {
+  const initialTokens = workingToken ? [workingToken] : getCandidateTokens()
+  if (initialTokens.length === 0) {
     throw new OrcError(
       'OrcSpace control token not found — ensure OrcSpace is running.',
       'no_token'
@@ -346,54 +383,63 @@ async function call(method, path, body, options = {}) {
 
   let lastError = null
 
-  for (let i = 0; i < candidateTokens.length; i++) {
-    const token = candidateTokens[i]
-    try {
-      const timeoutMs = options.timeoutMs ?? (options.signal ? undefined : 15_000)
-      const signal = options.signal ?? (timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined)
+  const candidateTargets = workingTarget ? [workingTarget] : TARGETS
+  for (const target of candidateTargets) {
+    let candidateTokens = [...initialTokens]
+    for (let i = 0; i < candidateTokens.length; i += 1) {
+      const token = candidateTokens[i]
+      try {
+        const timeoutMs = options.timeoutMs ?? (options.signal ? undefined : 15_000)
+        const signal = options.signal ?? (timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined)
 
-      const response = await requestTarget({
-        target: TARGET,
-        method,
-        path,
-        headers: {
-          'Content-Type': 'application/json',
-          [TOKEN_HEADER]: token
-        },
-        body,
-        signal,
-        timeoutMs
-      })
+        const response = await requestTarget({
+          target,
+          method,
+          path,
+          headers: {
+            'Content-Type': 'application/json',
+            [TOKEN_HEADER]: token
+          },
+          body,
+          signal,
+          timeoutMs
+        })
 
-      if (response.status === 401) {
-        workingToken = null
-        throw new OrcError('a valid control token is required', 'http_401')
-      }
+        if (response.status === 401) {
+          workingToken = null
+          throw new OrcError('a valid control token is required', 'http_401')
+        }
 
-      workingToken = token
+        if (!response.ok) {
+          const message = typeof response.payload === 'object' && response.payload?.error ? response.payload.error : `HTTP ${response.status}`
+          const code = typeof response.payload === 'object' && response.payload?.code ? response.payload.code : `http_${response.status}`
+          throw new OrcError(message, code)
+        }
 
-      if (!response.ok) {
-        const message = typeof response.payload === 'object' && response.payload?.error ? response.payload.error : `HTTP ${response.status}`
-        const code = typeof response.payload === 'object' && response.payload?.code ? response.payload.code : `http_${response.status}`
-        throw new OrcError(message, code)
-      }
-
-      return response.payload && typeof response.payload === 'object' && response.payload.ok === true && 'data' in response.payload ? response.payload.data : response.payload
-    } catch (err) {
-      if (err instanceof OrcError && err.code === 'http_401') {
-        // Single-token probe may have used stale cache — expand to all candidates and retry
-        if (candidateTokens.length === 1) {
-          const all = getAllCandidateTokens(false)
-          if (all.length > 1) {
-            candidateTokens = all
-            continue
+        workingTarget = target
+        workingToken = token
+        return response.payload && typeof response.payload === 'object' && response.payload.ok === true && 'data' in response.payload ? response.payload.data : response.payload
+      } catch (err) {
+        if (err instanceof OrcError && err.code === 'http_401') {
+          // A token file can be stale even when the runtime beacon is live.
+          // Expand once, then try the next discovered target if none match.
+          if (candidateTokens.length === 1) {
+            const all = getAllCandidateTokens(false)
+            if (all.length > 1) {
+              candidateTokens = all
+              i = -1
+              continue
+            }
           }
-        } else if (candidateTokens.length > 1) {
+          lastError = err
           continue
         }
+        lastError = err
+        // An abandoned runtime beacon should not prevent trying the installed
+        // app's other beacon or the well-known fallback socket.
+        if (err instanceof OrcError && ['offline', 'timeout', 'http_404'].includes(err.code)) break
+        throw err
       }
-      lastError = err
-      break
     }
   }
 
@@ -491,7 +537,7 @@ THE OTHER AGENTS & ROSTER
   orc version | orc --version                 print the CLI version
   orc help <command>                          per-command usage, e.g. orc help workers
   orc rename [<worker>] [--name <name>]       rename a terminal (canvas title = worker name)
-  orc tell <worker> "run the tests"           type directly into another agent's terminal
+  orc tell <worker> "run the tests"           deliver and confirm text in another agent's terminal
   Workers are addressed by name anywhere --to is taken: a name, @name, a
   case-insensitive or unambiguous prefix, the terminal id, or "self".
 
@@ -510,7 +556,7 @@ TASKS & DAG
   orc task-update [<id>] [--status <s>]       update a task's status, title, or spec
 
 DISPATCH & WORKERS
-  orc worker-start [<taskId>] [--agent claude|codex|cursor|opencode]
+  orc worker-start [<taskId>] [--agent claude|codex|opencode|antigravity|grok]
                               [--terminal <id>] [--command "..."] [--no-inject]
   orc dispatch [<taskId>] --to <terminalId>   dispatch work into an existing terminal
   orc worker-show [<dispatchId>]              view details/preamble of a dispatch
@@ -542,7 +588,7 @@ WORKER (dispatched agent reporting)
 
 THE APP & CANVAS
   orc board list | claim [<id>] | update [<id>] <state>   kanban board management
-  orc plan list | create | update | toggle [<id>]         planner day tasks
+  orc plan list | create | update | toggle [<id>]         planner day tasks (create accepts --attachments)
   orc canvas list | place | move | rename | close         canvas widgets & viewport
   orc terminal open | send <id> <text> | read | close     direct terminal management
   orc git status | commit --message "..."                 git audit integration
@@ -571,14 +617,14 @@ const COMMAND_HELP = {
   'task-list': 'orc task-list | orc tasks [--ready] [--run <id>] [--status <s>] — list tasks.',
   'task-show': 'orc task-show [<id>] | orc task [<id>] — full task specification.',
   'task-update': 'orc task-update [<id>] [--status <s>] [--title "..."] [--spec "..."] — update a task.',
-  'worker-start': 'orc worker-start [<taskId>] [--agent claude|codex|cursor|opencode] [--terminal <id>] [--command "..."] [--no-inject] — dispatch work.',
+  'worker-start': 'orc worker-start [<taskId>] [--agent claude|codex|opencode|antigravity|grok] [--terminal <id>] [--command "..."] [--no-inject] — dispatch work.',
   'worker-show': 'orc worker-show [<dispatchId>] [--preamble] — dispatch details.',
   'worker-release': 'orc worker-release [<dispatchId>] [--close] — release a worker, optionally closing its terminal.',
   'worker-retain': 'orc worker-retain [<dispatchId>] — keep a worker for subsequent tasks.',
   'dispatch-show': 'orc dispatch-show [--task <taskId>] — list dispatches.',
   dispatch: 'orc dispatch [<taskId>] --to <terminalId> — dispatch into an existing terminal.',
   'worker-read': 'orc worker-read [<dispatchId>] [--limit N] | orc logs [<dispatchId|terminalId>] [limit] — tail worker output.',
-  tell: 'orc tell <worker> "run the tests" — type into another agent\'s terminal.',
+  tell: 'orc tell <worker> "run the tests" — deliver and confirm text in its terminal.',
   rename: 'orc rename [<worker>] [--name <name>] — rename a terminal.',
   check: 'orc check | orc inbox [--wait] [--types ...] [--ack <msgId>] [--all] — read coordinator mail.',
   reply: 'orc reply [<askId>] [<bodyText>] — answer a worker question.',
@@ -1200,7 +1246,10 @@ async function main(argv) {
     case 'tell': {
       const to = require1(pick(flags, 'to', 'worker') ?? positional[1], 'tell needs <worker>')
       const text = require1(pick(flags, 'text', 'message', 'body') ?? positional[2], 'tell needs "text to type"')
-      return emit(await post('/orchestration/workers/tell', { to, text }), () => `sent to ${to}`)
+      return emit(
+        await post('/orchestration/workers/tell', { to, text }),
+        (result) => `delivered to ${to} (${result.delivery?.id ?? 'confirmed'})`
+      )
     }
 
     case 'reset':
@@ -1347,7 +1396,8 @@ async function plan(action, flags, positional = []) {
         note: pick(flags, 'note'),
         day: pick(flags, 'day'),
         time: pick(flags, 'time'),
-        project: pick(flags, 'project')
+        project: pick(flags, 'project'),
+        attachments: list(pick(flags, 'attachments', 'attachment'))
       })
     case 'update':
       return patch(`/planner/${enc(require1(id, 'plan update needs <id>'))}`, {
@@ -1355,7 +1405,8 @@ async function plan(action, flags, positional = []) {
         note: pick(flags, 'note'),
         day: pick(flags, 'day'),
         time: pick(flags, 'time'),
-        project: pick(flags, 'project')
+        project: pick(flags, 'project'),
+        attachments: list(pick(flags, 'attachments', 'attachment'))
       })
     case 'done':
     case 'complete':
@@ -1411,7 +1462,8 @@ async function terminal(action, flags, positional = []) {
     case 'send':
       return post(`/terminal/${enc(require1(id, 'terminal send needs <terminal-id>'))}/write`, {
         text: require1(pick(flags, 'text', 'command') ?? positional[3], 'terminal send needs text to send'),
-        pressEnter: flags.enter !== false
+        pressEnter: flags.enter !== false,
+        confirmDelivery: flags.confirm !== false
       })
     case 'read':
       return get(`/terminal/${enc(require1(id, 'terminal read needs <terminal-id>'))}/output`, { full: flags.full === true })

@@ -46,7 +46,7 @@ export function registerSystemIpc(deps: IpcDeps): void {
         activeTerminals,
         nodeVersion: process.versions.node,
         electronVersion: process.versions.electron,
-        bus: deps.core.bus.stats(),
+        flow: deps.core.flow.stats(),
         agents
       }
     } catch (err) {

@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
 import * as fs from 'node:fs'
-import { TerminalManager } from './terminals.ts'
+import { TerminalManager, normalizeDeliveryText } from './terminals.ts'
 import { defaultShell } from './config.ts'
 
 describe('TerminalManager', () => {
@@ -106,6 +106,53 @@ describe('TerminalManager', () => {
     assert.equal(result.ok, false)
     assert.match((result as { error: string }).error, /exceeds/)
     manager.disposeAll()
+  })
+
+  test('deliverLine only succeeds after the target terminal echoes the message', async () => {
+    const manager = new TerminalManager()
+    const term = manager.reserve()
+    const writes: string[] = []
+    const record = (
+      manager as unknown as { terminals: Map<string, { pty: { write(data: string): void } | null }> }
+    ).terminals.get(term.id)
+    assert.ok(record)
+    record.pty = { write: (data: string) => writes.push(data) }
+
+    const delivery = manager.deliverLine(term.id, 'hello world', { timeoutMs: 500 })
+    setTimeout(() => {
+      manager.appendOutput(term.id, '\x1b[2Khello world\r\n')
+      manager.emit('data', term.id, '\x1b[2Khello world\r\n')
+    }, 50)
+    const result = await delivery
+
+    assert.equal(result.ok, true)
+    assert.deepEqual(writes, ['hello world', '\r'])
+    manager.disposeAll()
+  })
+
+  test('deliverLine reports not sent when only Enter is observed', async () => {
+    const manager = new TerminalManager()
+    const term = manager.reserve()
+    const record = (
+      manager as unknown as { terminals: Map<string, { pty: { write(data: string): void } | null }> }
+    ).terminals.get(term.id)
+    assert.ok(record)
+    record.pty = { write: () => {} }
+
+    const delivery = manager.deliverLine(term.id, 'must arrive', { timeoutMs: 250 })
+    setTimeout(() => {
+      manager.appendOutput(term.id, '\r\n> ')
+      manager.emit('data', term.id, '\r\n> ')
+    }, 50)
+    const result = await delivery
+
+    assert.equal(result.ok, false)
+    assert.match((result as { error: string }).error, /not sent/)
+    manager.disposeAll()
+  })
+
+  test('delivery matching ignores ANSI paint and wrapped whitespace', () => {
+    assert.equal(normalizeDeliveryText('\x1b[31mhello\x1b[0m\r\n world'), 'hello world')
   })
 
   test('dispose prevents resurrecting banned terminal IDs', () => {

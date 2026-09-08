@@ -120,6 +120,7 @@ export interface LocalModelSettings {
 }
 
 export interface AppSettings {
+  missionMode: boolean
   linkSyntax: LinkSyntax
   windowsShell: 'cmd' | 'powershell'
   role: UserRole
@@ -198,6 +199,7 @@ export type OrcMessageType =
   | 'heartbeat'
   | 'escalation'
   | 'ask'
+  | 'permission'
   | 'reply'
   | 'note'
 export type OrcOutcome = 'succeeded' | 'failed'
@@ -286,11 +288,30 @@ export interface OrchestrationApi {
   inbox(runId?: string): Promise<OrcMessage[]>
   /** Answers a worker that is blocked on `orc ask`. */
   reply(askId: string, body: string): Promise<unknown>
+  /** Answers a safety permission request with an explicit permission subject. */
+  respondToPermission(askId: string, approved: boolean, note?: string): Promise<unknown>
   resolveGate(gateId: string, resolution: string): Promise<unknown>
   /** Accounts for a settled worker: keep its terminal, or hand it back. */
   account(dispatchId: string, state: 'retained' | 'released', closeTerminal?: boolean): Promise<unknown>
   closeRun(runId: string): Promise<unknown>
   onChange(cb: () => void): () => void
+}
+
+export interface MissionApi {
+  start(input: {
+    objective: string
+    title: string
+    spec: string
+    planId: string
+    agent?: string
+    terminalId?: string
+  }): Promise<{
+    runId: string
+    taskId: string
+    dispatchId: string
+    terminalId: string
+    agent: string
+  } | { error: string }>
 }
 
 export interface CoordinationApi {
@@ -381,7 +402,7 @@ export interface PlannerApi {
 export interface CanvasWidget {
   id: string
   title: string
-  kind?: 'terminal' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration'
+  kind?: 'terminal' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration' | 'mission'
   x: number
   y: number
   w: number
@@ -528,8 +549,8 @@ export interface SystemTerminalInfo {
   agentOwned?: boolean
 }
 
-/** Live write-path metrics from the CommandBus (see core/metrics.ts). */
-export interface BusStats {
+/** Live write-path metrics from the CommandFlow (see core/metrics.ts). */
+export interface FlowStats {
   counters: Record<string, number>
   gauges: Record<string, number>
   timings: Record<string, { count: number; avgMs: number; maxMs: number; lastMs: number }>
@@ -585,7 +606,7 @@ export interface SystemStats {
   activeTerminals: SystemTerminalInfo[]
   nodeVersion: string
   electronVersion: string
-  bus?: BusStats
+  flow?: FlowStats
   agents?: AgentUsageItem[]
   error?: string
 }
@@ -608,7 +629,16 @@ export interface WindowApi {
   onMaximizeChange(cb: (maximized: boolean) => void): () => void
 }
 
-export type ChatModelId = 'codex' | 'claude' | 'grok' | 'antigravity' | 'opencode'
+export type ChatModelId =
+  | 'codex'
+  | 'claude'
+  | 'grok'
+  | 'antigravity'
+  | 'opencode'
+  | 'gemini'
+  | 'cursor'
+  | 'aider'
+  | 'custom'
 
 export type ChatEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
 
@@ -616,6 +646,8 @@ export interface ChatSendOptions {
   model?: string
   effort?: ChatEffort
   images?: string[]
+  /** Custom CLI argv template. Use {prompt}, or the prompt is appended. */
+  command?: string
 }
 
 export interface ChatModelOption {

@@ -447,6 +447,21 @@ export function useCanvas() {
     [nextZ]
   )
 
+  /** Connect two already-mounted widgets without exposing connection state to callers. */
+  const connectWidgets = useCallback((from: string, to: string): void => {
+    if (!from || !to || from === to) return
+    if (!widgetsRef.current.some((widget) => widget.id === from) || !widgetsRef.current.some((widget) => widget.id === to)) return
+    setConnections((prev) => {
+      if (prev.some((connection) => connection.from === from && connection.to === to)) return prev
+      return [...prev, { id: makeConnectionId(), from, to, bornAt: Date.now() }]
+    })
+  }, [])
+
+  const disconnectWidgets = useCallback((from: string, to?: string): void => {
+    if (!from) return
+    setConnections((prev) => prev.filter((connection) => connection.from !== from || (to && connection.to !== to)))
+  }, [])
+
   const removeWidget = useCallback((id: string): void => {
     // Tombstone the closed id until a save round-trip proves main dropped it:
     // without this, an intermediate broadcast re-adds the widget (and for
@@ -754,6 +769,8 @@ export function useCanvas() {
     topZ: zRef,
     screenToWorld,
     addWidget,
+    connectWidgets,
+    disconnectWidgets,
     removeWidget,
     updateWidget,
     bringToFront,

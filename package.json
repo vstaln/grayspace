@@ -20,7 +20,7 @@
     "prestart": "npm run build:native",
     "start": "electron-vite preview",
     "reset": "node scripts/reset.mjs",
-    "test": "node --test \"src/main/**/*.test.ts\"",
+    "test": "node --test --test-concurrency=1 \"src/main/**/*.test.ts\"",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
@@ -162,7 +162,7 @@
     "nsis": {
       "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
       "oneClick": false,
-      "perMachine": false,
+    "perMachine": true,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
@@ -185,6 +185,7 @@
     "@homebridge/node-pty-prebuilt-multiarch": "0.13.1",
     "dotenv": "^17.4.2",
     "electron-updater": "^6.8.9",
+    "xterm-addon-unicode11": "^0.6.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import { test, describe } from 'node:test'
 import { ActorRegistry } from './actors.ts'
-import { CommandBus } from './bus.ts'
+import { CommandFlow } from './flow.ts'
 import { Journal } from './journal.ts'
 import { LockManager } from './locks.ts'
 import { VersionRegistry } from './versioned.ts'
@@ -13,7 +13,7 @@ import { CommandError, type JournalEntry } from './types.ts'
  * four real stores need holds or fails here first.
  */
 function harness(options: { now?: () => number } = {}): {
-  bus: CommandBus
+  bus: CommandFlow
   locks: LockManager
   journal: Journal
   actors: ActorRegistry
@@ -24,7 +24,7 @@ function harness(options: { now?: () => number } = {}): {
   const actors = new ActorRegistry(now)
   const locks = new LockManager({ now })
   const journal = new Journal({ now })
-  const bus = new CommandBus({ actors, locks, journal, now })
+  const bus = new CommandFlow({ actors, locks, journal, now })
   const versions = new VersionRegistry('note')
   const notes = new Map<string, { id: string; body: string; version: number }>()
   const entries: JournalEntry[] = []
@@ -62,7 +62,7 @@ function harness(options: { now?: () => number } = {}): {
   return { bus, locks, journal, actors, notes, entries }
 }
 
-describe('CommandBus — the lost update', () => {
+describe('CommandFlow — the lost update', () => {
   test('a stale baseVersion is a conflict, not a silent overwrite', async () => {
     const { bus, notes } = harness()
     await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'v1' } })
@@ -120,7 +120,7 @@ describe('CommandBus — the lost update', () => {
   })
 })
 
-describe('CommandBus — locks gate every write', () => {
+describe('CommandFlow — locks gate every write', () => {
   test('a write to a resource another actor holds is refused', async () => {
     const { bus, locks } = harness()
     await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'a' } })
@@ -171,7 +171,7 @@ describe('CommandBus — locks gate every write', () => {
   })
 })
 
-describe('CommandBus — identity and validation', () => {
+describe('CommandFlow — identity and validation', () => {
   test('an unregistered actor cannot write anything', async () => {
     const { bus } = harness()
     const result = await bus.submit({
@@ -197,7 +197,7 @@ describe('CommandBus — identity and validation', () => {
   })
 })
 
-describe('CommandBus — sequencing', () => {
+describe('CommandFlow — sequencing', () => {
   test('commands on one resource apply in submission order, never interleaved', async () => {
     const { bus, actors } = harness()
     const order: string[] = []
@@ -267,7 +267,7 @@ describe('CommandBus — sequencing', () => {
   })
 })
 
-describe('CommandBus — waiting on the outside world', () => {
+describe('CommandFlow — waiting on the outside world', () => {
   /**
    * Per-resource lanes fixed the historical shape of this bug for disjoint
    * targets, but the same-target variant remains: a handler holding its
@@ -397,7 +397,7 @@ describe('CommandBus — waiting on the outside world', () => {
   })
 })
 
-describe('CommandBus — the journal', () => {
+describe('CommandFlow — the journal', () => {
     test('an applied command is written as intent then commit', async () => {
       const { bus, entries } = harness()
       await bus.submit({ actorId: 'agent-a', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'a' } })
@@ -447,7 +447,7 @@ describe('CommandBus — the journal', () => {
     })
   })
 
-  describe('CommandBus — concurrency stress', () => {
+  describe('CommandFlow — concurrency stress', () => {
     test('concurrent baseVersion conflicts are detected', async () => {
       const { bus, notes } = harness()
       await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'v1' } })

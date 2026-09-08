@@ -48,6 +48,23 @@ export interface SpawnResult {
   reconnected?: boolean
 }
 
+export interface TerminalDeliveryReceipt {
+  ok: true
+  id: string
+  terminalId: string
+  confirmedAt: number
+  evidence: 'terminal-output'
+}
+
+export interface TerminalDeliveryFailure {
+  ok: false
+  id: string
+  terminalId: string
+  error: string
+}
+
+export type TerminalDeliveryResult = TerminalDeliveryReceipt | TerminalDeliveryFailure
+
 export interface ReleaseOptions {
   /**
    * Whether to run the best-effort Windows descendant sweep after releasing
@@ -115,6 +132,7 @@ export class TerminalManager extends EventEmitter {
    * when the model says "the terminal" / `terminal:new` without a real id.
    */
   private preferredId: string | null = null
+  private deliveryCounter = 0
 
   constructor(options: { getWindowsShell?: () => 'cmd' | 'powershell' } = {}) {
     super()
@@ -313,6 +331,104 @@ export class TerminalManager extends EventEmitter {
       console.warn(`failed to write to terminal ${id}`, err)
       return { ok: false, error: String((err as Error)?.message ?? err) }
     }
+  }
+
+  /**
+   * Sends one submitted line and waits for proof that the target session
+   * rendered that text. node-pty's write() has no delivery callback: a return
+   * without an exception only means the bytes entered the local write path.
+   * Matching the text in subsequent PTY output gives `orc tell` an observable
+   * receipt and prevents a lone Enter/redraw from being reported as success.
+   */
+  async deliverLine(
+    id: string,
+    text: string,
+    options: { pressEnter?: boolean; timeoutMs?: number; signal?: AbortSignal } = {}
+  ): Promise<TerminalDeliveryResult> {
+    this.deliveryCounter += 1
+    const receiptId = `delivery-${Date.now()}-${this.deliveryCounter}`
+    const fail = (error: string): TerminalDeliveryFailure => ({
+      ok: false,
+      id: receiptId,
+      terminalId: id,
+      error
+    })
+    if (typeof text !== 'string' || !text.trim()) return fail('message is empty')
+    const record = this.terminals.get(id)
+    if (!record?.pty) return fail(`terminal ${id} is not running`)
+
+    const singleLine = text.replace(/\r\n|\r|\n/g, ' ')
+    const expected = normalizeDeliveryText(singleLine)
+    if (!expected) return fail('message has no visible text')
+    const offset = record.output.globalOffset
+
+    const typed = this.write(id, singleLine)
+    if (!typed.ok) return fail(typed.error)
+    if (options.pressEnter !== false) {
+      if (!(await deliveryDelay(30, options.signal))) return fail('delivery cancelled')
+      const submitted = this.write(id, '\r')
+      if (!submitted.ok) return fail(submitted.error)
+    }
+
+    const confirmed = await this.waitForDeliveryEcho(
+      id,
+      offset,
+      expected,
+      options.timeoutMs ?? 4_000,
+      options.signal
+    )
+    if (!confirmed) return fail('not sent: target terminal did not confirm the message')
+    return {
+      ok: true,
+      id: receiptId,
+      terminalId: id,
+      confirmedAt: Date.now(),
+      evidence: 'terminal-output'
+    }
+  }
+
+  private waitForDeliveryEcho(
+    id: string,
+    offset: number,
+    expected: string,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    const matches = (): boolean => {
+      const record = this.terminals.get(id)
+      if (!record?.pty) return false
+      const from = Math.max(offset, record.output.startOffset)
+      const output = record.output.read(from, MAX_TERMINAL_WRITE_BYTES).data
+      return normalizeDeliveryText(output).includes(expected)
+    }
+    if (matches()) return Promise.resolve(true)
+    if (signal?.aborted) return Promise.resolve(false)
+
+    return new Promise<boolean>((resolve) => {
+      let settled = false
+      const finish = (value: boolean): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        this.off('data', onData)
+        this.off('exit', onExit)
+        signal?.removeEventListener('abort', onAbort)
+        resolve(value)
+      }
+      const onData = (terminalId: string): void => {
+        if (terminalId === id && matches()) finish(true)
+      }
+      const onExit = (terminalId: string): void => {
+        if (terminalId === id) finish(false)
+      }
+      const onAbort = (): void => finish(false)
+      const timer = setTimeout(() => finish(matches()), Math.min(15_000, Math.max(250, timeoutMs)))
+      timer.unref?.()
+      this.on('data', onData)
+      this.on('exit', onExit)
+      signal?.addEventListener('abort', onAbort, { once: true })
+      if (matches()) finish(true)
+    })
   }
 
   /** Remember which shell the user is looking at (for "type into the terminal"). */
@@ -567,6 +683,32 @@ export class TerminalManager extends EventEmitter {
       }
     })
   }
+}
+
+/** Removes terminal paint/control sequences and normalises wrapping. */
+export function normalizeDeliveryText(value: string): string {
+  return String(value ?? '')
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function deliveryDelay(ms: number, signal?: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve(false)
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      resolve(false)
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve(true)
+    }, ms)
+    timer.unref?.()
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 function isPositiveInt(value: unknown): value is number {

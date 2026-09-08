@@ -18,7 +18,7 @@ export const GIT_TARGET = 'git:repo'
 export function registerGitCommands({ core, defaultCwd }: CommandDeps): {
   status(): Promise<GitStatus>
 } {
-  const { bus } = core
+  const { flow } = core
   let cached: GitStatus | null = null
   let inflight: Promise<GitStatus> | null = null
 
@@ -27,7 +27,7 @@ export function registerGitCommands({ core, defaultCwd }: CommandDeps): {
     return e?.name === 'AbortError' || e?.code === 'ABORT_ERR' || /aborted/i.test(String(e?.message ?? ''))
   }
 
-  bus.registerDefinition<Record<string, never>, GitStatus>({
+  flow.registerDefinition<Record<string, never>, GitStatus>({
     type: 'git.refresh',
     description: 'Read the working tree status of the open project.',
     targetScheme: 'git',
@@ -66,7 +66,7 @@ export function registerGitCommands({ core, defaultCwd }: CommandDeps): {
     }
   })
 
-  bus.registerDefinition<{ message?: string }, { hash: string }>({
+  flow.registerDefinition<{ message?: string }, { hash: string }>({
     type: 'git.commit',
     description: 'Stage everything and create a commit on the open repository.',
     targetScheme: 'git',

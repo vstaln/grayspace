@@ -81,7 +81,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
       {children}
       {pending && (
         <div
-          className="fixed inset-0 z-[70000] grid place-items-center bg-black/50 p-3 backdrop-blur-[2px]"
+          className="fixed inset-0 z-[70000] grid place-items-center bg-bg/80 p-3 backdrop-blur-[2px]"
           onMouseDown={(e) => {
             if (e.target === e.currentTarget) settle(false)
           }}

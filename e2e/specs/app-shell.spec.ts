@@ -23,7 +23,7 @@ test('the shell starts and renders the canvas chrome', async () => {
   for (const id of ['rail-board', 'rail-folders', 'rail-settings']) {
     await expect(page.getByTestId(id)).toBeVisible()
   }
-  // Floating toolbar with the tool switcher.
+  // Floating toolbar with the drawing tool switcher.
   await expect(page.getByTestId('tool-select')).toBeVisible()
   await expect(page.getByTestId('tool-draw')).toBeVisible()
   await expect(page.getByTestId('tool-erase')).toBeVisible()
@@ -72,6 +72,10 @@ test('keyboard zoom: Ctrl++ zooms in, Ctrl+- zooms out, Ctrl+0 resets', async ()
   const world = page.getByTestId('canvas').locator(':scope > div').first()
   const transform = (): Promise<string> => world.evaluate((el) => (el as HTMLElement).style.transform)
 
+  // The shell tests share one fixture page; start this journey from the
+  // canonical camera instead of inheriting the pan from the wheel test.
+  await page.keyboard.press('Control+0')
+  await expect.poll(transform, { timeout: 3000 }).toBe('translate3d(0px, 0px, 0px) scale(1)')
   const before = await transform()
 
   // Zoom in with Ctrl++

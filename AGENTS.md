@@ -79,14 +79,4 @@ orc board update <id> done                   # complete a task (moves to Done an
 `orc board`, `orc terminal`, `orc git`, `orc journal`. Add `--json` for parseable
 output. Prefer putting results on the canvas or a task over loose files —
 the user is looking at the canvas, not at your scrollback.
-
-**Ports, Networking & Build Invariants (MANDATORY FOR ALL AGENTS):**
-- **Zero-Port Desktop IPC & Protocol Architecture:** The renderer loads via the custom secure scheme `orc://app/index.html` without requiring any local HTTP server. Communication with the `orc` CLI and local tooling uses in-memory Named Pipes (`\\.\pipe\orcspace` / `\\.\pipe\orcspace-dev`) on Windows and Unix Domain Sockets on macOS/Linux.
-- **Strict Loopback Binding for TCP:** When TCP binding is requested (e.g. automated tests or `WORKSPACE_CONTROL_PORT`), the control server MUST always bind to `127.0.0.1` — NEVER bind to bare `localhost` or public hostnames (avoids Windows IPv6 `::1` DNS resolution delays and network leakage).
-- **Default Isolation:**
-  - Production / Installed app (`OrcSpace.exe`): zero TCP ports by default (pipe `\\.\pipe\orcspace`), user data in `%APPDATA%\OrcSpace`.
-  - Dev mode (`dev.bat`): pipe `\\.\pipe\orcspace-dev`, user data in `.dev-user-data`, optional dev TCP port 20224.
-- **Dynamic Free Port Fallback:** If a TCP port is requested and already occupied (e.g. `EADDRINUSE`), the app automatically binds to an available free port on `127.0.0.1` (`server.listen(0, '127.0.0.1')`) rather than crashing or terminating existing processes.
-- **Auto-Discovery:** Active socket path and port are written to `runtime.json` (`socketPath`, `controlPort`). The `orc` CLI and client agents discover them automatically from `runtime.json`, environment (`ORCSPACE_SOCKET_PATH`, `ORCSPACE_URL`), or standard named pipes.
-- **Coexistence:** Production and Dev mode can run simultaneously without conflicts, colliding sockets, or killing each other.
 <!-- END ORCSPACE (managed) -->

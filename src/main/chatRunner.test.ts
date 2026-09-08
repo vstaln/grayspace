@@ -1,6 +1,13 @@
 import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
-import { buildChatInvocationArgs, buildChatProcessEnv, cleanCodexStderrLine, extractCodexJsonLine, ChatRunner } from './chatRunner.ts'
+import {
+  buildChatInvocationArgs,
+  buildChatProcessEnv,
+  cleanCodexStderrLine,
+  extractCodexJsonLine,
+  parseCustomCommand,
+  ChatRunner
+} from './chatRunner.ts'
 import { stripAnsi } from './ansi.ts'
 
 describe('stripAnsi', () => {
@@ -59,6 +66,32 @@ describe('ChatRunner', () => {
         'fix'
       ]
     )
+  })
+
+  test('builds headless invocations for additional CLIs', () => {
+    assert.deepEqual(buildChatInvocationArgs('gemini', 'hello', { model: 'gemini-2.5-pro' }), [
+      '-p', '--model', 'gemini-2.5-pro', 'hello'
+    ])
+    assert.deepEqual(buildChatInvocationArgs('cursor', 'review'), ['-p', 'review'])
+    assert.deepEqual(buildChatInvocationArgs('aider', 'fix tests'), ['--message', 'fix tests'])
+    assert.deepEqual(buildChatInvocationArgs('opencode', 'review', { model: 'opencode/big-pickle', effort: 'high' }), [
+      'run',
+      '--model',
+      'opencode/big-pickle',
+      '--variant',
+      'high',
+      'review'
+    ])
+  })
+
+  test('parses a custom CLI template without invoking a shell', () => {
+    assert.deepEqual(parseCustomCommand('"C:\\Tools\\agent cli.exe" --print "{prompt}"'), {
+      command: 'C:\\Tools\\agent cli.exe',
+      args: ['--print', '{prompt}']
+    })
+    assert.deepEqual(buildChatInvocationArgs('custom', 'hello world', {
+      command: 'qwen --prompt {prompt}'
+    }), ['--prompt', 'hello world'])
   })
 
   test('keeps only assistant text from Codex JSONL output', () => {

@@ -336,11 +336,23 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     const term = terminals.reserve({ title: 'worker-2' })
     const record = (terminals as unknown as { terminals: Map<string, { pty: unknown }> }).terminals?.get(term.id)
     if (record) {
-      record.pty = { write: () => true, resize: () => {}, kill: () => {} }
+      record.pty = {
+        write: (data: string) => {
+          if (data === '\r') return true
+          setImmediate(() => {
+            terminals.appendOutput(term.id, data)
+            terminals.emit('data', term.id, data)
+          })
+          return true
+        },
+        resize: () => {},
+        kill: () => {}
+      }
       terminals.emit('spawned', term.id)
     }
     const tellRes = await runOrc(['tell', 'worker-2', 'echo hello'])
     assert.equal(tellRes.status, 0)
+    assert.equal((tellRes.json as { delivery?: { status?: string } }).delivery?.status, 'delivered')
     terminals.dispose(term.id)
   })
 

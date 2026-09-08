@@ -66,7 +66,7 @@ export type CommandPriority = 'high' | 'normal' | 'low'
 
 /**
  * The only way state changes. Submitted by every actor through every
- * transport; applied one at a time by the {@link CommandBus}.
+ * transport; applied one at a time by the {@link CommandFlow}.
  */
 export interface Command<P = unknown> {
   /** Assigned by the bus if the caller does not supply one (used for tracking & cancellation). */
@@ -103,7 +103,7 @@ export type CommandErrorCode =
   | 'cancelled'
 
 export type CommandResult<T = unknown> =
-  | { ok: true; seq: number; version: number; data: T; cached?: boolean; /** Id the bus assigned (or accepted) for this command — the handle `bus.cancel()` takes. */ commandId?: string }
+  | { ok: true; seq: number; version: number; data: T; cached?: boolean; /** Id the bus assigned (or accepted) for this command — the handle `flow.cancel()` takes. */ commandId?: string }
   | { ok: false; code: CommandErrorCode; message: string; details?: Record<string, unknown>; cached?: boolean; commandId?: string }
 
 /**
@@ -225,7 +225,7 @@ export interface TransactionResult<T = unknown> {
   data?: T
   results?: CommandResult[]
   cached?: boolean
-  /** Id of the transaction as a whole — the handle `bus.cancel()` takes. */
+  /** Id of the transaction as a whole — the handle `flow.cancel()` takes. */
   commandId?: string
 }
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AppSettings } from '../../../preload/index.d'
 
 const DEFAULTS: AppSettings = {
+  missionMode: false,
   linkSyntax: 'both',
   windowsShell: 'cmd',
   role: 'lead',
@@ -17,7 +18,7 @@ const DEFAULTS: AppSettings = {
     idleTimeoutMs: 5 * 60_000,
     offloadVision: false
   },
-  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player']
+  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'mission', 'orchestration', 'browser', 'links', 'music-player']
 }
 
 const FAVORITES_ALL_MIGRATION_KEY = 'orcspace-favorites-all-enabled'

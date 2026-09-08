@@ -3,7 +3,7 @@
  * PTY); the rest render from state the app
  * already has, which is why they need no id of their own beyond the widget's.
  */
-export type WidgetKind = 'terminal' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration'
+export type WidgetKind = 'terminal' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration' | 'mission'
 
 export interface Widget {
   id: string
@@ -103,7 +103,8 @@ export const WIDGET_DEFAULTS: Record<WidgetKind, { title: string; w: number; h: 
   browser: { title: 'Browser', w: 720, h: 480 },
   links: { title: 'Links', w: 420, h: 360 },
   'music-player': { title: 'Music Player', w: 460, h: 420 },
-  orchestration: { title: 'Orchestration', w: 520, h: 560 }
+  orchestration: { title: 'Orchestration', w: 520, h: 560 },
+  mission: { title: 'Mission Controller', w: 560, h: 560 }
 }
 
 /**

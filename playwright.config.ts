@@ -18,6 +18,10 @@ import { defineConfig } from '@playwright/test'
  * window. `--disable-gpu` (passed in the helper) keeps CI green without a GPU.
  */
 const isCi = Boolean(process.env.CI)
+const baseUse = {
+  trace: isCi ? 'on-first-retry' : 'retain-on-failure',
+  screenshot: 'only-on-failure'
+} as const
 
 export default defineConfig({
   testDir: './e2e',
@@ -31,10 +35,7 @@ export default defineConfig({
   reporter: isCi
     ? [['list'], ['html', { open: 'never' }]]
     : [['list']],
-  use: {
-    trace: isCi ? 'on-first-retry' : 'retain-on-failure',
-    screenshot: 'only-on-failure'
-  },
+  use: baseUse,
   projects: [
     { name: 'local', retries: 0 },
     { name: 'ci', retries: 2 },
@@ -42,7 +43,7 @@ export default defineConfig({
       name: 'ink',
       testMatch: '**/*.spec.ts',
       use: {
-        ...use,
+        ...baseUse,
         viewport: { width: 1280, height: 800 },
         deviceScaleFactor: 2,
         hasTouch: true,
@@ -52,7 +53,7 @@ export default defineConfig({
       name: 'min',
       testMatch: '**/*.spec.ts',
       use: {
-        ...use,
+        ...baseUse,
         viewport: { width: 800, height: 560 },
       },
     },

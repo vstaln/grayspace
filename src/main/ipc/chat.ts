@@ -7,7 +7,17 @@ import { isLocalPath } from '../media.ts'
 import { ipcMain } from './shims.ts'
 import type { IpcDeps } from './types.ts'
 
-const CHAT_MODELS = new Set<ChatModelId>(['codex', 'claude', 'grok', 'antigravity', 'opencode'])
+const CHAT_MODELS = new Set<ChatModelId>([
+  'codex',
+  'claude',
+  'grok',
+  'antigravity',
+  'opencode',
+  'gemini',
+  'cursor',
+  'aider',
+  'custom'
+])
 const THREAD_ID = /^[A-Za-z0-9_-]{1,128}$/
 const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$/
 
@@ -242,7 +252,9 @@ export function registerChatIpc(deps: IpcDeps): void {
       }
       if (typeof prompt !== 'string') return { error: 'invalid prompt' }
       const cwd = deps.getWorkspaceDir() || os.homedir()
-      const safeOptions = options && typeof options === 'object' ? options as { model?: unknown; effort?: unknown; images?: unknown } : undefined
+      const safeOptions = options && typeof options === 'object'
+        ? options as { model?: unknown; effort?: unknown; images?: unknown; command?: unknown }
+        : undefined
       const effort = safeOptions?.effort
       const modelName = safeOptions?.model
       const images = Array.isArray(safeOptions?.images)
@@ -253,7 +265,8 @@ export function registerChatIpc(deps: IpcDeps): void {
       return chatRunner.send(threadId, model as ChatModelId, prompt, cwd, {
         model: typeof modelName === 'string' && MODEL_NAME.test(modelName) ? modelName : undefined,
         effort: VALID_EFFORTS.has(effort as ChatEffort) ? effort as ChatEffort : undefined,
-        images
+        images,
+        command: typeof safeOptions?.command === 'string' ? safeOptions.command.slice(0, 512) : undefined
       })
     }
   )

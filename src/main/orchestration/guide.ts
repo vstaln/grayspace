@@ -12,7 +12,7 @@ const BEGIN = '<!-- BEGIN ORCSPACE (managed) -->'
 const END = '<!-- END ORCSPACE (managed) -->'
 
 /** The instruction files the major CLI agents read on startup, by convention. */
-const GUIDE_FILES = ['AGENTS.md', 'CLAUDE.md'] as const
+const GUIDE_FILES = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md'] as const
 
 /**
  * What an agent needs to know to coordinate, written where it will actually
@@ -77,9 +77,12 @@ function guideBody(): string {
     'orc task-create --spec "..." [--deps \'["otask-1"]\']',
     'orc task-list --ready                        # what can be dispatched now',
     'orc task-show <id>                           # view full specification and status',
-    'orc worker-start --task <id> --agent claude  # opens a terminal and briefs it',
+    'orc worker-start --task <id> --agent opencode  # opens a terminal and briefs it',
     'orc check --wait --types worker_done,escalation,ask   # block until a worker reports',
     'orc reply <askId> "..."                      # unblock a worker that asked',
+    'orc ask --type permission --question "..."     # request safety approval and wait',
+    'orc allow <permission-id> [--note "..."]      # approve a permission request',
+    'orc deny <permission-id> [--reason "..."]     # reject a permission request',
     'orc gates                                    # check open decision gates',
     'orc worker-release <dispatchId>              # account for a finished worker',
     '```',
@@ -112,19 +115,15 @@ function guideBody(): string {
 }
 
 /**
- * Writes the managed block into every guide file that the workspace already
- * has, and creates `AGENTS.md` if it has none.
- *
- * Deliberately does not create both files: two instruction files saying the
- * same thing is noise in a repo the user has to live with, and every agent
- * worth supporting reads at least one of them.
+ * Writes the managed block into every major agent guide. Each CLI has its own
+ * discovery convention, so all three must exist before a freshly launched
+ * agent can reliably learn about `orc`.
  */
 export function syncOrcGuide(dir: string): void {
   if (!dir) return
   purgeLegacyMcpConfigs(dir)
   const body = guideBody()
-  const existing = GUIDE_FILES.map((name) => join(dir, name)).filter((file) => fs.existsSync(file))
-  const targets = existing.length > 0 ? existing : [join(dir, GUIDE_FILES[0])]
+  const targets = GUIDE_FILES.map((name) => join(dir, name))
 
   for (const file of targets) {
     try {

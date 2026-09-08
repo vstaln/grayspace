@@ -43,9 +43,9 @@ describe('Regression — end-to-end invariants', () => {
     core.actors.register({ id: 'user', type: 'user', label: 'tester', transport: 'test' })
     core.actors.register({ id: 'agent-a', type: 'agent', label: 'a', transport: 'test' })
     // Minimal handlers without version registry — hash-chain must stay valid regardless
-    core.bus.register('note.create', { apply: () => ({ version: 1 }) })
-    await core.bus.submit({ actorId: 'user', type: 'note.create', target: 'widget:w1', payload: {} })
-    await core.bus.submit({ actorId: 'agent-a', type: 'note.create', target: 'widget:w2', payload: {} })
+    core.flow.register('note.create', { apply: () => ({ version: 1 }) })
+    await core.flow.submit({ actorId: 'user', type: 'note.create', target: 'widget:w1', payload: {} })
+    await core.flow.submit({ actorId: 'agent-a', type: 'note.create', target: 'widget:w2', payload: {} })
     assertJournalHashChain(core.journal)
   })
 
@@ -54,8 +54,8 @@ describe('Regression — end-to-end invariants', () => {
     core.actors.register({ id: 'user', type: 'user', label: 'u', transport: 'test' })
     const { VersionRegistry } = await import('./core/versioned.ts')
     const reg = new VersionRegistry('widget')
-    core.bus.registerVersions('widget', reg)
-    core.bus.register('inc', {
+    core.flow.registerVersions('widget', reg)
+    core.flow.register('inc', {
       apply: ({ command, currentVersion }) => {
         // Bump registry so next currentVersion reflects prior write (event sourcing)
         const next = reg.bump(command.target.replace('widget:', ''))
@@ -65,7 +65,7 @@ describe('Regression — end-to-end invariants', () => {
     })
     const N = 20
     const promises = Array.from({ length: N }, (_, i) =>
-      core.bus.submit({ actorId: 'user', type: 'inc', target: 'widget:counter', payload: { i } })
+      core.flow.submit({ actorId: 'user', type: 'inc', target: 'widget:counter', payload: { i } })
     )
     const results = await Promise.all(promises)
     const ok = results.filter((r) => r.ok)
@@ -77,12 +77,12 @@ describe('Regression — end-to-end invariants', () => {
   test('locks do not leak after handler throws', async () => {
     const core = createCore()
     core.actors.register({ id: 'user', type: 'user', label: 'u', transport: 'test' })
-    core.bus.register('boom', {
+    core.flow.register('boom', {
       apply: () => {
         throw new Error('boom')
       }
     })
-    const res = await core.bus.submit({ actorId: 'user', type: 'boom', target: 'widget:x', payload: {} })
+    const res = await core.flow.submit({ actorId: 'user', type: 'boom', target: 'widget:x', payload: {} })
     assert.equal(res.ok, false)
     // Lock must be released even though handler threw
     assert.equal(core.locks.isLockedByOther('widget:x', 'user'), false)
@@ -130,7 +130,7 @@ describe('Regression — concurrent IPC stress', () => {
     const results = await Promise.all(
       Array.from({ length: N }, (_, i) => {
         const p = join(tmp, `f${i}.txt`)
-        return core.bus.submit({ actorId: 'user', type: 'file.write', target: `file:${p.toLowerCase()}`, payload: { path: p, content: `hello ${i}` } })
+        return core.flow.submit({ actorId: 'user', type: 'file.write', target: `file:${p.toLowerCase()}`, payload: { path: p, content: `hello ${i}` } })
       })
     )
     const ok = results.filter((r) => r.ok).length
@@ -143,8 +143,8 @@ describe('Regression — concurrent IPC stress', () => {
     core.actors.register({ id: 'user', type: 'user', label: 'u', transport: 'test' })
     const { VersionRegistry } = await import('./core/versioned.ts')
     const reg = new VersionRegistry('widget')
-    core.bus.registerVersions('widget', reg)
-    core.bus.register('inc2', {
+    core.flow.registerVersions('widget', reg)
+    core.flow.register('inc2', {
       apply: ({ command, currentVersion }) => {
         const next = reg.bump(command.target.replace('widget:', ''))
         assert.equal(next, currentVersion + 1)
@@ -153,7 +153,7 @@ describe('Regression — concurrent IPC stress', () => {
     })
     const N = 30
     const results = await Promise.all(
-      Array.from({ length: N }, () => core.bus.submit({ actorId: 'user', type: 'inc2', target: 'widget:shared', payload: {} }))
+      Array.from({ length: N }, () => core.flow.submit({ actorId: 'user', type: 'inc2', target: 'widget:shared', payload: {} }))
     )
     assert.equal(results.filter((r) => r.ok).length, N)
     const versions = results.filter((r) => r.ok).map((r) => (r as { version: number }).version).sort((a, b) => a - b)

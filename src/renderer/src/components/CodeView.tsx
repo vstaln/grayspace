@@ -41,6 +41,7 @@ interface Props {
   /** The view keeps its sessions alive while hidden, same as BrowserPane —
    *  switching to Canvas and back must not kill a running agent. */
   active: boolean
+  sidebarCollapsed?: boolean
 }
 
 const SessionCard = React.memo(function SessionCard({
@@ -225,7 +226,7 @@ const SessionCard = React.memo(function SessionCard({
   )
 })
 
-export default function CodeView({ active }: Props): React.JSX.Element {
+export default function CodeView({ active, sidebarCollapsed = false }: Props): React.JSX.Element {
   const [sessions, setSessions] = useState<Session[]>([])
   const sessionsRef = useRef<Session[]>(sessions)
   sessionsRef.current = sessions
@@ -625,7 +626,7 @@ export default function CodeView({ active }: Props): React.JSX.Element {
 
   // Columns scale with the actual session count. Three sessions get three
   // equal columns so the last card never leaves a large empty quadrant.
-  const columns = sessions.length <= 1 ? 1 : sessions.length === 2 ? 2 : sessions.length <= 3 ? 3 : sessions.length <= 4 ? 2 : sessions.length <= 6 ? 3 : 4
+  const columns = sessions.length <= 1 ? 1 : sessions.length === 2 ? 2 : sessions.length <= 4 ? 2 : sessions.length === 5 ? 6 : sessions.length <= 6 ? 3 : 4
 
   // With exactly 3 sessions a grid used to promote one terminal to a big
   // left slot (featured). That caused closing 1 of 4 → 3 to auto-promote
@@ -634,7 +635,14 @@ export default function CodeView({ active }: Props): React.JSX.Element {
   // explicitly clicked a small card to promote it.
   // Every session keeps the same grid parent and equal placement. This avoids
   // the old featured 2x2 arrangement, which left an empty quadrant at three.
-  const placementOf = (_sessionId: string): React.CSSProperties => ({})
+  const placementOf = (sessionId: string): React.CSSProperties => {
+    if (sessions.length !== 5) return {}
+    const index = sessions.findIndex((session) => session.id === sessionId)
+    // Six tracks let three cards fill the first row while the two cards in
+    // the second row sit in the middle instead of leaving a dangling card at
+    // the far left and an empty column at the far right.
+    return { gridColumn: `${index < 3 ? index * 2 + 1 : index === 3 ? 2 : 4} / span 2` }
+  }
 
   return (
     <div
@@ -644,9 +652,10 @@ export default function CodeView({ active }: Props): React.JSX.Element {
       // see geometry.sidebarExpanded in design/tokens.ts; ChatPane uses the
       // 240px chat width) so the view content never floats underneath its
       // workspace controls.
-      className={`absolute inset-y-0 right-0 left-[200px] z-[40000] flex flex-row pt-10 ${
+      className={`absolute inset-y-0 right-0 ${sidebarCollapsed ? 'left-[56px]' : 'left-[200px]'} z-[40000] flex flex-row pt-10 ${
         active ? '' : 'pointer-events-none invisible'
       }`}
+      data-testid="code-view"
       aria-hidden={!active}
     >
       <div className="flex min-w-0 min-h-0 flex-1 flex-col">
@@ -670,8 +679,8 @@ export default function CodeView({ active }: Props): React.JSX.Element {
             keep a 220px minimum and a 180px row floor; overflow scrolls instead
             of squeezing 7+ sessions unreadable. */}
         <div
-          className="relative grid min-h-0 flex-1 gap-2 overflow-auto bg-bg-raise p-2"
-          style={{ gridTemplateColumns: `repeat(${columns}, minmax(220px, 1fr))`, gridAutoRows: 'minmax(180px, 1fr)' }}
+          className="relative grid min-h-0 flex-1 gap-1 overflow-auto bg-bg-raise p-1"
+            style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gridAutoRows: 'minmax(180px, 1fr)' }}
         >
           {sessions.map((session) => {
             const handlers = getSessionHandlers(session.id)

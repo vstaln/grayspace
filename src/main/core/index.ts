@@ -1,5 +1,5 @@
 import { ActorRegistry } from './actors.ts'
-import { CommandBus } from './bus.ts'
+import { CommandFlow } from './flow.ts'
 import { ContentAddressedStore } from './cas.ts'
 import { Journal, type JournalSink } from './journal.ts'
 import { ProjectionManager } from './projections.ts'
@@ -7,7 +7,7 @@ import type { JournalEntry } from './types.ts'
 import { LockManager } from './locks.ts'
 
 export { ActorRegistry, ACTOR_TTL_MS } from './actors.ts'
-export { CommandBus } from './bus.ts'
+export { CommandFlow, type CommandFlowOptions } from './flow.ts'
 export { ContentAddressedStore, type CasStats } from './cas.ts'
 export { IdempotencyCache, type IdempotencyRecord } from './idempotency.ts'
 export { Journal, GENESIS_HASH, computeEntryHash } from './journal.ts'
@@ -52,7 +52,7 @@ export interface Core {
   actors: ActorRegistry
   locks: LockManager
   journal: Journal
-  bus: CommandBus
+  flow: CommandFlow
   projections: ProjectionManager
   cas: ContentAddressedStore
   /** Releases the locks of every actor that has gone quiet. */
@@ -77,7 +77,7 @@ export function createCore(
   const actors = new ActorRegistry(now)
   const locks = new LockManager({ now })
   const journal = new Journal({ sink: options.sink, startSeq: options.startSeq, now, seed: options.seed })
-  const bus = new CommandBus({ actors, locks, journal, now })
+  const flow = new CommandFlow({ actors, locks, journal, now })
   const projections = new ProjectionManager(journal, { now })
   const cas = new ContentAddressedStore({ rootDir: options.casRootDir })
 
@@ -99,7 +99,7 @@ export function createCore(
     actors,
     locks,
     journal,
-    bus,
+    flow,
     projections,
     cas,
     sweepDeadActors,

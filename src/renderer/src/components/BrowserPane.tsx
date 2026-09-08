@@ -175,13 +175,16 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
     setResetting(true)
     try {
       if (window.api.browser.clearData) {
-        await window.api.browser.clearData()
+        const result = await window.api.browser.clearData()
+        if (!result?.ok) throw new Error(result?.error || 'Could not clear browser data')
       }
       const fresh = makeTab(HOME_URL)
       views.current.clear()
       setTabs([fresh])
       setActiveId(fresh.id)
       setAddress(HOME_URL)
+    } catch (error) {
+      showTabNotice(`Browser reset failed: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
       setResetting(false)
     }

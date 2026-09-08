@@ -16,7 +16,7 @@ const STRING_LIST: CommandPayloadSchema['properties'][string] = {
 }
 
 /**
- * Orchestration on the bus.
+ * Orchestration on the flow.
  *
  * Every dispatch, reply and completion is a command like any other, which is
  * the point: the journal ends up holding "agent-2 was told to do task X" right
@@ -26,16 +26,16 @@ const STRING_LIST: CommandPayloadSchema['properties'][string] = {
  */
 export function registerOrchestrationCommands(deps: CommandDeps): void {
   const { core, orchestration, terminals, requestWidget, originWidgetId, defaultCwd } = deps
-  const { bus } = core
+  const { flow } = core
 
-  bus.registerVersions('run', orchestration.runVersions)
-  bus.registerVersions('orctask', orchestration.taskVersions)
-  bus.registerVersions('dispatch', orchestration.dispatchVersions)
-  bus.registerVersions('gate', orchestration.gateVersions)
+  flow.registerVersions('run', orchestration.runVersions)
+  flow.registerVersions('orctask', orchestration.taskVersions)
+  flow.registerVersions('dispatch', orchestration.dispatchVersions)
+  flow.registerVersions('gate', orchestration.gateVersions)
 
   // ---- runs --------------------------------------------------------------
 
-  bus.registerDefinition<{ objective?: string }, ReturnType<typeof orchestration.createRun>>({
+  flow.registerDefinition<{ objective?: string }, ReturnType<typeof orchestration.createRun>>({
     type: 'run.create',
     description: 'Open an orchestration run: a namespace for tasks and the coordinator inbox workers report into.',
     targetScheme: 'run',
@@ -51,7 +51,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
     }
   })
 
-  bus.registerDefinition<Record<string, never>, ReturnType<typeof orchestration.closeRun>>({
+  flow.registerDefinition<Record<string, never>, ReturnType<typeof orchestration.closeRun>>({
     type: 'run.close',
     description: 'Close a run. Its tasks and mail stay readable.',
     targetScheme: 'run',
@@ -62,7 +62,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
 
   // ---- tasks -------------------------------------------------------------
 
-  bus.registerDefinition<
+  flow.registerDefinition<
     { runId?: string; title?: string; spec?: string; deps?: string[] },
     ReturnType<typeof orchestration.createTask>
   >({
@@ -95,7 +95,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
     }
   })
 
-  bus.registerDefinition<
+  flow.registerDefinition<
     { status?: (typeof TASK_STATUSES)[number]; title?: string; spec?: string },
     ReturnType<typeof orchestration.updateTask>
   >({
@@ -123,7 +123,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
    * back — its task id, its dispatch id, the exact commands — arrives in that
    * one injection, which is why nothing else has to be configured.
    */
-  bus.registerDefinition<
+  flow.registerDefinition<
     { taskId?: string; terminalId?: string; agent?: string; command?: string; inject?: boolean },
     { dispatchId: string; taskId: string; terminalId: string; agent: string; injected: boolean }
   >({
@@ -138,7 +138,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
       properties: {
         taskId: { type: 'string', description: 'Task to hand over' },
         terminalId: { type: 'string', description: 'Existing terminal to dispatch into; omit to open a fresh one' },
-        agent: { type: 'string', description: 'CLI to start in a fresh terminal: claude | codex | cursor | opencode' },
+        agent: { type: 'string', description: 'CLI to start in a fresh terminal: claude | codex | opencode | antigravity | grok | gemini | cursor | aider' },
         command: { type: 'string', description: 'Override the command used to start the agent' },
         inject: { type: 'boolean', description: 'false records the dispatch without typing the preamble' }
       }
@@ -196,11 +196,12 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
           // terminal is assumed to already have an agent waiting at a prompt.
           if (opened) {
             const start = String(p.command ?? agent)
-            terminals.write(terminalId, `${start}\r`)
+            if (!await submitPtyLine(terminals, terminalId, start, signal)) {
+              throw new CommandError('failed', `could not start ${start} in terminal ${terminalId}`)
+            }
             await delay(2_500, signal)
           }
-          const write = terminals.write(terminalId, `${preamble}\r`)
-          injected = write.ok
+          injected = await submitPtyLine(terminals, terminalId, preamble, signal)
         }
 
         orchestration.send({
@@ -219,7 +220,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
     }
   })
 
-  bus.registerDefinition<
+  flow.registerDefinition<
     { outcome?: Outcome; filesModified?: string[] },
     { dispatchId: string; taskId: string; status: string; promoted: string[] }
   >({
@@ -253,7 +254,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
     }
   })
 
-  bus.registerDefinition<{ state?: 'retained' | 'released'; closeTerminal?: boolean }, { id: string; state: string }>({
+  flow.registerDefinition<{ state?: 'retained' | 'released'; closeTerminal?: boolean }, { id: string; state: string }>({
     type: 'dispatch.account',
     description:
       'Account for a settled worker: `retained` keeps its terminal for debugging, `released` hands it back (and may close it).',
@@ -284,7 +285,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
 
   // ---- mail --------------------------------------------------------------
 
-  bus.registerDefinition<
+  flow.registerDefinition<
     {
       runId?: string
       type?: MessageType
@@ -384,7 +385,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
     }
   })
 
-  bus.registerDefinition<{ messageId?: string }, { id: string }>({
+  flow.registerDefinition<{ messageId?: string }, { id: string }>({
     type: 'orc.ack',
     description: 'Consume a message so the next `check` moves past it.',
     targetScheme: 'run',
@@ -404,7 +405,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
 
   // ---- decision gates ----------------------------------------------------
 
-  bus.registerDefinition<
+  flow.registerDefinition<
     { runId?: string; taskId?: string; question?: string; options?: string[] },
     ReturnType<typeof orchestration.createGate>
   >({
@@ -436,7 +437,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
     }
   })
 
-  bus.registerDefinition<{ resolution?: string }, ReturnType<typeof orchestration.resolveGate>>({
+  flow.registerDefinition<{ resolution?: string }, ReturnType<typeof orchestration.resolveGate>>({
     type: 'gate.resolve',
     description: 'Answer a decision gate and unblock its task.',
     targetScheme: 'gate',
@@ -459,6 +460,19 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
     if (!active) throw new CommandError('not_found', 'no open run — call `orc run-create --objective "..."` first')
     return active.id
   }
+}
+
+async function submitPtyLine(
+  terminals: CommandDeps['terminals'],
+  terminalId: string,
+  text: string,
+  signal?: AbortSignal
+): Promise<boolean> {
+  const singleLine = text.replace(/\r\n|\r|\n/g, ' ')
+  const typed = terminals.write(terminalId, singleLine)
+  if (!typed.ok) return false
+  await delay(30, signal)
+  return terminals.write(terminalId, '\r').ok
 }
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {

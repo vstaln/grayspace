@@ -213,7 +213,7 @@ export default function KanbanBoard({
       className={
         embedded
           ? 'board-shell flex h-full flex-col overflow-hidden'
-          : 'board-shell pop-in fixed inset-[76px_7%_42px] z-[12000] mx-auto flex w-auto min-w-0 max-w-[min(100%,1400px)] flex-col overflow-hidden rounded-[10px] border border-line-soft shadow-[0_28px_80px_rgba(0,0,0,0.7)] sm:min-w-[min(100%,760px)]'
+          : 'board-shell pop-in fixed inset-[76px_7%_42px] z-[12000] mx-auto flex w-auto min-w-0 max-w-[min(100%,1400px)] flex-col overflow-hidden rounded-[10px] border border-line-soft shadow-[0_28px_80px_rgba(8,9,11,0.7)] sm:min-w-[min(100%,760px)]'
       }
       style={{ background: palette.graphite }}
     >
@@ -403,7 +403,7 @@ function TaskCard({
           {task.title}
         </span>
         <button
-          className="absolute top-2.5 right-2 flex h-5 w-5 items-center justify-center rounded-[8px] bg-transparent text-text-dim opacity-0 transition-all duration-150 hover:bg-danger hover:text-white group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100"
+          className="absolute top-2.5 right-2 flex h-5 w-5 items-center justify-center rounded-[8px] bg-transparent text-text-dim opacity-0 transition-all duration-150 hover:bg-bg-hover hover:text-text group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100"
           disabled={busy}
           onClick={onDelete}
           title="Delete"
@@ -428,7 +428,7 @@ function TaskCard({
           <span
             className={`inline-flex items-center gap-1 max-w-full truncate rounded-full px-2 py-0.5 text-[10px] font-medium ${
               isAgent
-                ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                ? 'bg-bg-hover text-text border border-line'
                 : 'bg-ok/15 text-ok border border-ok/30'
             }`}
             title={`Assigned to ${task.assignee}`}

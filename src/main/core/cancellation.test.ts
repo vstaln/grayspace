@@ -1,7 +1,7 @@
 ﻿import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
 import { ActorRegistry } from './actors.ts'
-import { CommandBus } from './bus.ts'
+import { CommandFlow } from './flow.ts'
 import { Journal } from './journal.ts'
 import { LockManager } from './locks.ts'
 
@@ -10,7 +10,7 @@ describe('In-Flight Command Cancellation (bus.cancel)', () => {
     const actors = new ActorRegistry()
     const locks = new LockManager()
     const journal = new Journal()
-    const bus = new CommandBus({ actors, locks, journal })
+    const bus = new CommandFlow({ actors, locks, journal })
 
     actors.register({ id: 'user', type: 'user', label: 'User', transport: 'ipc' })
 

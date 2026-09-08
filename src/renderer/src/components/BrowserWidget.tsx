@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { ArrowLeft, ArrowRight, Lock, RotateCw, Search, X } from 'lucide-react'
 import { BROWSER_PARTITION, HOME_URL, hostOf, toNavigationUrl, type Webview } from '../lib/browserShared'
 
-export default React.memo(function BrowserWidget(): React.JSX.Element {
+export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: string }): React.JSX.Element {
   const [url, setUrl] = useState(HOME_URL)
   const [address, setAddress] = useState(HOME_URL)
+  const [imageSrc, setImageSrc] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -56,12 +57,14 @@ export default React.memo(function BrowserWidget(): React.JSX.Element {
     }
     const onNavigate = (event: Event): void => {
       const navUrl = (event as Event & { url?: string }).url
-      if (navUrl) setUrl(navUrl)
+      // Dropped images are loaded as data URLs. Keep the omnibox readable
+      // instead of replacing it with a multi-megabyte base64 string.
+      if (navUrl && !navUrl.startsWith('data:')) setUrl(navUrl)
       syncHistory()
     }
     const onInPage = (event: Event): void => {
       const e = event as Event & { url?: string; isMainFrame?: boolean }
-      if (e.isMainFrame && e.url) setUrl(e.url)
+      if (e.isMainFrame && e.url && !e.url.startsWith('data:')) setUrl(e.url)
       syncHistory()
     }
     let crashReloads = 0
@@ -97,6 +100,34 @@ export default React.memo(function BrowserWidget(): React.JSX.Element {
     }
   }, [viewEl])
 
+  // The canvas accepts dropped images and routes them to a browser widget.
+  // Use the media bridge rather than a file:// URL (which is blocked by the
+  // renderer origin), and scope the event so multiple browser widgets do not
+  // all display the same dropped image.
+  useEffect(() => {
+    const onDroppedImage = (event: Event): void => {
+      const detail = (event as CustomEvent<{ widgetId?: string; path?: string; name?: string }>).detail
+      if (!detail?.path || detail.widgetId !== widgetId) return
+      void window.api.media.dataUrl(detail.path).then((dataUrl) => {
+        if (!dataUrl) {
+          setLoadError('Could not load the dropped image')
+          return
+        }
+        setImageSrc(dataUrl)
+        setUrl('')
+        setAddress(detail.name || 'Dropped image')
+        setEditing(false)
+        setLoading(true)
+        setLoadError(null)
+      }).catch((error) => {
+        setLoadError(error instanceof Error ? error.message : 'Could not load the dropped image')
+        setLoading(false)
+      })
+    }
+    window.addEventListener('orcspace:open-image', onDroppedImage)
+    return () => window.removeEventListener('orcspace:open-image', onDroppedImage)
+  }, [widgetId])
+
   const navigate = useCallback((input: string): void => {
     const target = toNavigationUrl(input)
     const view = viewRef.current
@@ -109,6 +140,7 @@ export default React.memo(function BrowserWidget(): React.JSX.Element {
     // immediately then hides the URL the user needs to fix or retry.
     setUrl(target)
     setAddress(target)
+    setImageSrc(null)
     setLoading(true)
     setLoadError(null)
     setEditing(false)
@@ -168,6 +200,7 @@ const host = hostOf(url)
               setLoading(true)
               setLoadError(null)
               setEditing(false)
+              setImageSrc(null)
               void viewRef.current?.loadURL(target).catch(() => {})
             }}
           >
@@ -223,7 +256,7 @@ const host = hostOf(url)
             ref={setViewRef}
             partition={BROWSER_PARTITION}
             allowpopups={'true' as unknown as boolean}
-            src={HOME_URL}
+            src={imageSrc ?? HOME_URL}
             className="absolute inset-0 h-full w-full"
           />
         </div>

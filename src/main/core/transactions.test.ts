@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
 import { ActorRegistry } from './actors.ts'
-import { CommandBus } from './bus.ts'
+import { CommandFlow } from './flow.ts'
 import { Journal } from './journal.ts'
 import { LockManager } from './locks.ts'
 import { VersionRegistry } from './versioned.ts'
@@ -11,7 +11,7 @@ function createTransactionHarness() {
   const actors = new ActorRegistry()
   const locks = new LockManager()
   const journal = new Journal()
-  const bus = new CommandBus({ actors, locks, journal })
+  const bus = new CommandFlow({ actors, locks, journal })
   const noteVersions = new VersionRegistry('note')
   const taskVersions = new VersionRegistry('task')
 
@@ -65,7 +65,7 @@ function createTransactionHarness() {
   return { bus, locks, journal, actors, notes, tasks, entries, noteVersions, taskVersions }
 }
 
-describe('CommandBus — bus.transact (Multi-step atomic transactions)', () => {
+describe('CommandFlow — flow.transact (Multi-step atomic transactions)', () => {
   test('executes multi-command plan atomically and produces single journal commit', async () => {
     const { bus, notes, tasks, entries } = createTransactionHarness()
 
@@ -99,9 +99,9 @@ describe('CommandBus — bus.transact (Multi-step atomic transactions)', () => {
     // Single intent and commit in journal for the transaction
     assert.equal(entries.length, 2)
     assert.equal(entries[0].phase, 'intent')
-    assert.equal(entries[0].type, 'bus.transact')
+    assert.equal(entries[0].type, 'flow.transact')
     assert.equal(entries[1].phase, 'commit')
-    assert.equal(entries[1].type, 'bus.transact')
+    assert.equal(entries[1].type, 'flow.transact')
   })
 
   test('all-or-nothing rollback when a step fails mid-plan', async () => {
@@ -130,7 +130,7 @@ describe('CommandBus — bus.transact (Multi-step atomic transactions)', () => {
     // Journal records abort
     const abortEntry = entries.find((e) => e.phase === 'abort')
     assert.ok(abortEntry)
-    assert.equal(abortEntry.type, 'bus.transact')
+    assert.equal(abortEntry.type, 'flow.transact')
 
     // Locks are fully released
     assert.equal(locks.holder('note:n1'), undefined)

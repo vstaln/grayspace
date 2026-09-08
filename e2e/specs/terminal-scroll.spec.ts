@@ -52,6 +52,12 @@ test('the wheel scrolls terminal scrollback, even while a TUI tracks the mouse',
     'powershell -NoProfile -Command "[Console]::Write([char]27+\'[?1000h\'+[char]27+\'[?1006h\')"'
   )
   await page.keyboard.press('Enter')
+  await page.keyboard.type('echo TRACKING_READY')
+  await page.keyboard.press('Enter')
+  // Do not snapshot the viewport while the tracking command is still being
+  // parsed. A late prompt/output repaint can legitimately move xterm's
+  // auto-scroll position after the first assertion and make the test flaky.
+  await waitForTerminalOutput(ctx, id, (output) => output.includes('TRACKING_READY'))
 
   const viewport = frame.locator('.xterm-viewport')
   await expect.poll(async () => viewport.evaluate((el) => el.scrollTop)).toBeGreaterThan(0)

@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Maximize2, Minimize2, Pencil, X } from 'lucide-react'
+import { Maximize2, Minimize2, Pencil, Terminal, X } from 'lucide-react'
 import ClaudeIcon from './ClaudeIcon'
 import CodexIcon from './CodexIcon'
 import GrokIcon from './GrokIcon'
 import AntigravityIcon from './AntigravityIcon'
 import OpenCodeIcon from './OpenCodeIcon'
+import CursorIcon from './CursorIcon'
 import TerminalWidget from './TerminalWidget'
 import TimerWidget from './TimerWidget'
 import PlannerWidget from './PlannerWidget'
@@ -16,6 +17,7 @@ import SysMonitorWidget from './SysMonitorWidget'
 import BrowserWidget from './BrowserWidget'
 import LinksWidget from './LinksWidget'
 import MusicPlayerWidget from './MusicPlayerWidget'
+import MissionWidget from './MissionWidget'
 import ErrorBoundary from './ErrorBoundary'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { NON_MAXIMIZABLE, RESIZE_HANDLES, ResizeDir, Widget, WidgetKind } from '../types'
@@ -45,7 +47,10 @@ const AGENTS = [
   { id: 'claude', label: 'Claude', command: 'claude', Icon: ClaudeIcon },
   { id: 'codex', label: 'Codex', command: 'codex', Icon: CodexIcon },
   { id: 'opencode', label: 'OpenCode', command: 'opencode', Icon: OpenCodeIcon },
-  { id: 'grok', label: 'Grok', command: 'grok', Icon: GrokIcon }
+  { id: 'grok', label: 'Grok', command: 'grok', Icon: GrokIcon },
+  { id: 'gemini', label: 'Gemini CLI', command: 'gemini', Icon: Terminal },
+  { id: 'cursor', label: 'Cursor Agent', command: 'cursor-agent', Icon: CursorIcon },
+  { id: 'aider', label: 'Aider', command: 'aider', Icon: Terminal }
 ] as const
 
 // A maximized widget is rendered in a different layer than a normal widget.
@@ -142,6 +147,14 @@ function WidgetFrame({
       top
     })
   }, [])
+
+  // Re-measure after the portalled menu has painted. Measuring only before
+  // the portal exists can leave the menu detached from its trigger.
+  useEffect(() => {
+    if (!agentMenuOpen) return
+    const frame = requestAnimationFrame(recomputeMenuPos)
+    return () => cancelAnimationFrame(frame)
+  }, [agentMenuOpen, recomputeMenuPos])
 
   useLayoutEffect(() => {
     if (!agentMenuOpen) return
@@ -275,7 +288,7 @@ function WidgetFrame({
       onKeyDown={onKeyDown}
     >
       <div
-        className="widget-header-shell relative z-30 flex h-[34px] flex-none cursor-grab items-center gap-1 py-0 pr-0 pl-2.5 active:cursor-grabbing"
+        className="widget-header-shell relative z-50 flex h-[34px] flex-none cursor-grab items-center gap-1 py-0 pr-0 pl-2.5 active:cursor-grabbing"
         onPointerDown={handleHeaderPointerDown}
         onDoubleClick={isTerminal ? onTerminalDoubleClick : undefined}
       >
@@ -383,7 +396,9 @@ function WidgetFrame({
                         setAgentMenuOpen(false)
                       }}
                     >
-                      <a.Icon size={13} />
+                      <span className="flex h-[13px] w-[13px] flex-none items-center justify-center">
+                        <a.Icon size={13} />
+                      </span>
                       <span className="truncate">{a.label}</span>
                     </button>
                   ))}
@@ -474,11 +489,13 @@ function WidgetBody({
     case 'sys-monitor':
       return <SysMonitorWidget />
     case 'browser':
-      return <BrowserWidget />
+      return <BrowserWidget widgetId={widget.id} />
     case 'links':
       return <LinksWidget widgetId={widget.id} />
     case 'music-player':
       return <MusicPlayerWidget widgetId={widget.id} />
+    case 'mission':
+      return <MissionWidget widgetId={widget.id} />
     default:
       return <TerminalWidget id={widget.id} surface="canvas" onProcessExit={onProcessExit} />
   }

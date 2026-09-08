@@ -362,6 +362,24 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
     }
   }
 
+  const revealPath = async (path: string): Promise<void> => {
+    try {
+      const result = await window.api.fs.reveal(path)
+      if (result.error) showNotice(`Cannot reveal path: ${result.error}`)
+    } catch (err) {
+      showNotice(`Cannot reveal path: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  const openPath = async (path: string): Promise<void> => {
+    try {
+      const result = await window.api.fs.openPath(path)
+      if (result.error) showNotice(`Cannot open path: ${result.error}`)
+    } catch (err) {
+      showNotice(`Cannot open path: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
   const filteredItems = useMemo(() => {
     if (!search.trim()) return items
     const q = search.trim().toLowerCase()
@@ -461,7 +479,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
           {currentPath && (
             <button
               className="grid h-6 w-6 place-items-center rounded-[6px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
-              onClick={() => void window.api.fs.reveal(currentPath)}
+              onClick={() => void revealPath(currentPath)}
               title="Reveal in OS Explorer"
               aria-label="Reveal in OS"
             >
@@ -529,7 +547,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
             }}
           />
           <button
-            className="flex items-center gap-1.5 rounded bg-accent px-2 py-1 text-[11px] font-semibold text-black hover:bg-white disabled:opacity-40"
+            className="flex items-center gap-1.5 rounded bg-accent px-2 py-1 text-[11px] font-semibold text-bg hover:opacity-90 disabled:opacity-40"
             disabled={!newItemName.trim() || createBusy}
             onClick={() => void handleCreate()}
           >
@@ -606,7 +624,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                           />
                           <button
                             type="button"
-                            className="flex-none rounded bg-accent px-1.5 py-0.5 text-[10px] font-semibold text-black hover:bg-white"
+                            className="flex-none rounded bg-accent px-1.5 py-0.5 text-[10px] font-semibold text-bg hover:opacity-90"
                             onClick={() => void handleRename()}
                             aria-label="Save new name"
                           >
@@ -660,7 +678,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                         )}
                         <button
                           className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
-                          onClick={() => void window.api.fs.openPath(entry.path)}
+                          onClick={() => void openPath(entry.path)}
                           title="Open in default app"
                         >
                           <ExternalLink size={12} />
@@ -739,7 +757,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
             <div className="flex items-center gap-2">
               <button
                 className="flex items-center gap-1.5 rounded-[8px] border border-line px-2.5 py-1 text-xs text-text-dim hover:bg-bg-hover hover:text-text"
-                onClick={() => void window.api.fs.openPath(previewFile.path)}
+                onClick={() => void openPath(previewFile.path)}
               >
                 <ExternalLink size={13} /> Open with OS App
               </button>

@@ -14,7 +14,7 @@ export function makeSend(
   return <T>(type: string, target: string, payload: unknown = {}, baseVersion?: number): Promise<CommandResult<T>> => {
     const command: Command = { actorId: USER_ACTOR_ID, type, target, payload }
     if (typeof baseVersion === 'number') command.baseVersion = baseVersion
-    return core.bus.submit<T>(command)
+    return core.flow.submit<T>(command)
   }
 }
 

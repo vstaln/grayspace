@@ -37,12 +37,12 @@ export function registerCanvasCommands({
   requestWidgetRename,
   requestWidgetRemoval
 }: CommandDeps): void {
-  const { bus } = core
+  const { flow } = core
 
-  bus.registerVersions('widget', canvas.widgetVersions)
-  bus.registerVersions('canvas', canvas.canvasVersions)
+  flow.registerVersions('widget', canvas.widgetVersions)
+  flow.registerVersions('canvas', canvas.canvasVersions)
 
-  bus.registerDefinition<WidgetCreatePayload, CanvasWidget>({
+  flow.registerDefinition<WidgetCreatePayload, CanvasWidget>({
     type: 'widget.create',
     description: 'Create a canvas widget (terminal, timer, board, …).',
     targetScheme: 'widget',
@@ -98,7 +98,7 @@ export function registerCanvasCommands({
     }
   })
 
-  bus.registerDefinition<WidgetPatchPayload, CanvasWidget>({
+  flow.registerDefinition<WidgetPatchPayload, CanvasWidget>({
     type: 'widget.update',
     description: 'Move/resize/retitle a widget. Geometry is world-space; z orders the stack.',
     targetScheme: 'widget',
@@ -136,7 +136,7 @@ export function registerCanvasCommands({
     }
   })
 
-  bus.registerDefinition<Record<string, never>, { id: string }>({
+  flow.registerDefinition<Record<string, never>, { id: string }>({
     type: 'widget.remove',
     description:
       'Remove a widget. Closing a terminal widget also tears down its shell.',
@@ -158,7 +158,7 @@ export function registerCanvasCommands({
     }
   })
 
-  bus.registerDefinition<{ x?: number; y?: number; zoom?: number }, { camera: CanvasCamera }>({
+  flow.registerDefinition<{ x?: number; y?: number; zoom?: number }, { camera: CanvasCamera }>({
     type: 'canvas.camera',
     description: 'Pan or zoom the canvas viewport (world coordinates).',
     targetScheme: 'canvas',
@@ -182,7 +182,7 @@ export function registerCanvasCommands({
     }
   })
 
-  bus.registerDefinition<{ strokes: unknown }, { count: number }>({
+  flow.registerDefinition<{ strokes: unknown }, { count: number }>({
     type: 'canvas.strokes',
     description: 'Update freehand strokes on the canvas.',
     targetScheme: 'canvas',
@@ -199,7 +199,7 @@ export function registerCanvasCommands({
     }
   })
 
-  bus.registerDefinition<
+  flow.registerDefinition<
     { widgets?: unknown; camera?: unknown; strokes?: unknown },
     { applied: number; skipped: number; removed: number; removedWidgets: Array<{ id: string; kind?: WidgetKind }> }
   >({

@@ -36,6 +36,8 @@ export interface CodeWorkspaceState {
 }
 
 export interface AppSettings {
+  /** When enabled, Codex drafts a plan before delegating implementation to OpenCode. */
+  missionMode: boolean
   linkSyntax: LinkSyntax
   windowsShell: WindowsShell
   role: UserRole
@@ -109,6 +111,7 @@ export interface AppStateShape {
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
+  missionMode: false,
   linkSyntax: 'both',
   windowsShell: 'cmd',
   role: 'lead',
@@ -128,7 +131,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     idleTimeoutMs: 5 * 60_000,
     offloadVision: false
   },
-  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player']
+  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'mission', 'orchestration', 'browser', 'links', 'music-player']
 }
 
 const MAX_RECENT = 12
@@ -317,6 +320,7 @@ export class AppState extends EventEmitter {
   /** `backgroundImage: null` clears the wallpaper; omitting the key leaves it alone. */
   patchSettings(patch: SettingsPatch): AppSettings {
     this.ensure()
+    if (typeof patch.missionMode === 'boolean') this.state.settings.missionMode = patch.missionMode
     if (patch.windowsShell && ['cmd', 'powershell'].includes(patch.windowsShell)) {
       this.state.settings.windowsShell = patch.windowsShell
     }
@@ -367,7 +371,7 @@ export class AppState extends EventEmitter {
       this.state.settings.localModel = merged
     }
     if (Array.isArray(patch.favoriteWidgets)) {
-      const allowed = new Set(['terminal', 'timer', 'board', 'planner', 'orchestration', 'files', 'sys-monitor', 'browser', 'links', 'music-player'])
+      const allowed = new Set(['terminal', 'timer', 'board', 'planner', 'mission', 'orchestration', 'files', 'sys-monitor', 'browser', 'links', 'music-player'])
       this.state.settings.favoriteWidgets = [...new Set(patch.favoriteWidgets.filter((kind): kind is string => typeof kind === 'string' && allowed.has(kind)))].slice(0, 32)
     }
     this.commit()
@@ -451,6 +455,8 @@ export class AppState extends EventEmitter {
     this.state.settings.localModel = { ...DEFAULT_SETTINGS.localModel, ...(raw.settings?.localModel || {}) }
     if (!['cmd', 'powershell'].includes(this.state.settings.windowsShell))
       this.state.settings.windowsShell = DEFAULT_SETTINGS.windowsShell
+    if (typeof this.state.settings.missionMode !== 'boolean')
+      this.state.settings.missionMode = DEFAULT_SETTINGS.missionMode
     // A state file written before wallpapers existed (or hand-edited) can carry a
     // non-numeric dim/blur, which would otherwise reach the renderer broken.
     if (!Number.isFinite(this.state.settings.backgroundDim))

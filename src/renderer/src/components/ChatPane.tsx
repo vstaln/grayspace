@@ -14,13 +14,15 @@ import {
   FileCode,
   Wrench,
   Loader2,
-  ChevronDown
+  ChevronDown,
+  Terminal
 } from 'lucide-react'
 import CodexIcon from './CodexIcon'
 import ClaudeIcon from './ClaudeIcon'
 import GrokIcon from './GrokIcon'
 import AntigravityIcon from './AntigravityIcon'
 import OpenCodeIcon from './OpenCodeIcon'
+import CursorIcon from './CursorIcon'
 import { renderMarkdownSafe } from '../lib/markdown'
 import { insertAt, pasteHasImage, saveImageFromPaste } from '../lib/paste'
 import { useConfirm } from './ConfirmDialog'
@@ -44,6 +46,7 @@ interface ChatThread {
   model: ChatModel
   modelName?: string
   effort?: ChatEffort
+  customCommand?: string
   messages: ChatMessage[]
   at: number
 }
@@ -53,7 +56,11 @@ const MODELS: { id: ChatModel; label: string; Icon: React.ComponentType<{ size?:
   { id: 'claude', label: 'Claude', Icon: ClaudeIcon, desc: 'Reasoning' },
   { id: 'antigravity', label: 'Antigravity', Icon: AntigravityIcon, desc: 'Research' },
   { id: 'grok', label: 'Grok', Icon: GrokIcon, desc: 'Fast' },
-  { id: 'opencode', label: 'OpenCode', Icon: OpenCodeIcon, desc: 'Local' }
+  { id: 'opencode', label: 'OpenCode', Icon: OpenCodeIcon, desc: 'Local' },
+  { id: 'gemini', label: 'Gemini CLI', Icon: Terminal, desc: 'Google CLI' },
+  { id: 'cursor', label: 'Cursor', Icon: CursorIcon, desc: 'Cursor Agent' },
+  { id: 'aider', label: 'Aider', Icon: Terminal, desc: 'Git pair programmer' },
+  { id: 'custom', label: 'Other CLI', Icon: Terminal, desc: 'Custom command' }
 ]
 
 const MODEL_OPTIONS: Record<ChatModel, string[]> = {
@@ -61,14 +68,22 @@ const MODEL_OPTIONS: Record<ChatModel, string[]> = {
   claude: ['claude-sonnet-5'],
   grok: ['grok-4.6'],
   antigravity: ['gemini-3.7-flash-medium'],
-  opencode: ['opencode/big-pickle']
+  opencode: ['opencode/big-pickle'],
+  gemini: ['gemini-2.5-pro'],
+  cursor: ['auto'],
+  aider: ['default'],
+  custom: []
 }
 const EFFORT_OPTIONS: Record<ChatModel, ChatEffort[]> = {
   codex: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
   claude: ['low', 'medium', 'high', 'xhigh', 'max'],
   grok: ['low', 'medium', 'high', 'xhigh', 'max'],
   antigravity: ['low', 'medium', 'high'],
-  opencode: ['minimal', 'low', 'medium', 'high', 'max']
+  opencode: ['minimal', 'low', 'medium', 'high', 'max'],
+  gemini: [],
+  cursor: [],
+  aider: [],
+  custom: []
 }
 function modelsFor(catalog: ChatModelCatalog, provider: ChatModel): string[] {
   const discovered = catalog[provider]?.models.map((entry) => entry.id).filter(Boolean) ?? []
@@ -76,6 +91,7 @@ function modelsFor(catalog: ChatModelCatalog, provider: ChatModel): string[] {
 }
 function preferredModel(catalog: ChatModelCatalog, provider: ChatModel): string {
   const options = modelsFor(catalog, provider)
+  if (options.length === 0) return ''
   const preferred = MODEL_OPTIONS[provider][0]
   if (options.includes(preferred)) return preferred
   const configured = catalog[provider]?.defaultModel
@@ -100,7 +116,16 @@ const MODEL_COMMAND: Record<ChatModel, string> = {
   claude: 'claude',
   grok: 'grok',
   antigravity: 'agy',
-  opencode: 'opencode'
+  opencode: 'opencode',
+  gemini: 'gemini',
+  cursor: 'cursor-agent',
+  aider: 'aider',
+  custom: 'custom CLI'
+}
+
+function commandFor(model: ChatModel, customCommand?: string): string {
+  if (model !== 'custom') return MODEL_COMMAND[model]
+  return customCommand?.trim().split(/\s+/, 1)[0] || 'custom CLI'
 }
 
 const LS_KEY = 'orcspace-chat-threads-v1'
@@ -284,7 +309,7 @@ function ChatSelect<T extends string>({
       {open && (
         <div
           role="listbox"
-        className={`absolute left-0 z-[70000] max-h-64 min-w-full overflow-y-auto rounded-[9px] border border-line bg-bg-panel p-1 shadow-[0_14px_40px_rgba(0,0,0,0.45)] ${dropUp ? 'bottom-[calc(100%+6px)]' : 'top-[calc(100%+6px)]'}`}
+        className={`absolute left-0 z-[70000] max-h-64 min-w-full overflow-y-auto rounded-[9px] border border-line bg-bg-panel p-1 shadow-[0_14px_40px_rgba(8,9,11,0.7)] ${dropUp ? 'bottom-[calc(100%+6px)]' : 'top-[calc(100%+6px)]'}`}
         >
           {options.map((option) => (
             <button
@@ -323,6 +348,16 @@ interface Props {
   active: boolean
 }
 
+interface MissionDraft {
+  request: string
+  title: string
+}
+
+interface QueuedDraft {
+  text: string
+  image: MediaFile | null
+}
+
 function SidebarPortal({
   target,
   children
@@ -340,6 +375,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
   const [model, setModel] = useState<ChatModel>(() => threads[0]?.model ?? 'codex')
   const [modelName, setModelName] = useState(() => threads[0]?.modelName ?? MODEL_OPTIONS[threads[0]?.model ?? 'codex'][0])
   const [effort, setEffort] = useState<ChatEffort | undefined>(() => threads[0]?.effort ?? defaultEffort(threads[0]?.model ?? 'codex'))
+  const [customCommand, setCustomCommand] = useState(() => threads[0]?.customCommand ?? '')
   const [modelCatalog, setModelCatalog] = useState<ChatModelCatalog>({})
   const [query, setQuery] = useState('')
   const [input, setInput] = useState('')
@@ -348,7 +384,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
   // Ephemeral composer errors (e.g. overlong prompt) — never written into threads.
   const [promptError, setPromptError] = useState<string | null>(null)
   // A message typed while a reply is still streaming — auto-sent when it ends.
-  const [queued, setQueued] = useState<string | null>(null)
+  const [queued, setQueued] = useState<QueuedDraft | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [sharedSidebarTarget, setSharedSidebarTarget] = useState<HTMLElement | null>(null)
   const [runningThreads, setRunningThreads] = useState<Set<string>>(new Set())
@@ -357,6 +393,65 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
   const chatPinnedToBottomRef = useRef(true)
   const sendInFlightRef = useRef(false)
   const pasteSeqRef = useRef(0)
+  const threadsRef = useRef(threads)
+  threadsRef.current = threads
+  const missionDraftsRef = useRef(new Map<string, MissionDraft>())
+  const missionRunsRef = useRef(new Map<string, { taskId: string; planId: string }>())
+  const missionSettledRef = useRef(new Set<string>())
+
+  const startMission = useCallback(async (draft: MissionDraft, codexPlan: string): Promise<void> => {
+    const plan = codexPlan.trim().slice(0, 12_000) || 'Codex returned no plan. Inspect the request and make the smallest safe implementation.'
+    const title = draft.title.slice(0, 180)
+    const item = await window.api.planner.create({
+      title,
+      project: 'Mission',
+      note: `Codex plan:\n${plan.slice(0, 3_700)}\n\nOriginal request:\n${draft.request.slice(0, 250)}`
+    })
+    if (!item || 'error' in item) return
+    const started = await window.api.mission.start({
+      objective: draft.request,
+      title,
+      spec: plan,
+      planId: item.id
+    })
+    if (!started || 'error' in started) {
+      await window.api.planner.update(item.id, {
+        note: `Mission could not start: ${started && 'error' in started ? started.error : 'unknown error'}\n\nCodex plan:\n${plan.slice(0, 3_700)}`
+      }).catch(() => {})
+      return
+    }
+    missionRunsRef.current.set(started.runId, { taskId: started.taskId, planId: item.id })
+    window.dispatchEvent(new CustomEvent('orcspace:mission-start', {
+      detail: { missionId: started.runId, planId: item.id, title, terminalId: started.terminalId }
+    }))
+    window.dispatchEvent(new CustomEvent('orcspace:mission-view', { detail: { view: 'canvas' } }))
+  }, [])
+
+  // The worker reports completion through the normal orchestration store. Tie
+  // that lifecycle back to the one Planner item created for this mission.
+  useEffect(() => {
+    const off = window.api.orchestration.onChange(() => {
+      for (const [runId, mission] of missionRunsRef.current) {
+        if (missionSettledRef.current.has(runId)) continue
+        void window.api.orchestration.snapshot(runId).then((snapshot) => {
+          const task = snapshot.tasks.find((candidate) => candidate.id === mission.taskId)
+          if (!task || (task.status !== 'completed' && task.status !== 'failed')) return
+          missionSettledRef.current.add(runId)
+          if (task.status === 'completed') {
+            void window.api.planner.toggle(mission.planId, true)
+          }
+          window.dispatchEvent(new CustomEvent('orcspace:mission-complete', {
+            detail: { missionId: runId, success: task.status === 'completed' }
+          }))
+          if (task.status === 'completed') {
+            window.dispatchEvent(new CustomEvent('orcspace:mission-view', { detail: { view: 'chat' } }))
+          }
+          missionRunsRef.current.delete(runId)
+        }).catch(() => {})
+      }
+    })
+    return off
+  }, [])
 
   useEffect(() => {
     if (!active) {
@@ -440,8 +535,9 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
       setEffort(activeThread.effort && availableEfforts.includes(activeThread.effort)
         ? activeThread.effort
         : preferredEffort(modelCatalog, activeThread.model, nextModelName))
+      setCustomCommand(activeThread.customCommand ?? '')
     }
-  }, [activeThreadId, activeThread?.model, activeThread?.modelName, activeThread?.effort, modelCatalog])
+  }, [activeThreadId, activeThread?.model, activeThread?.modelName, activeThread?.effort, activeThread?.customCommand, modelCatalog])
 
   // A thread switch starts at its newest message. During streaming, preserve
   // the reader's viewport once they deliberately scroll away from the bottom.
@@ -520,6 +616,16 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
             return { ...t, messages: msgs, at: Date.now() }
           })
         )
+
+        const missionDraft = missionDraftsRef.current.get(threadId)
+        if (missionDraft) {
+          missionDraftsRef.current.delete(threadId)
+          if (payload.exitCode === 0 && !payload.cancelled && !payload.timedOut) {
+            const thread = threadsRef.current.find((candidate) => candidate.id === threadId)
+            const assistantPlan = thread?.messages.slice().reverse().find((message) => message.role === 'assistant')?.content ?? ''
+            void startMission(missionDraft, assistantPlan)
+          }
+        }
       }
     )
 
@@ -527,7 +633,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
       offData()
       offExit()
     }
-  }, [])
+  }, [startMission])
 
   const createThread = useCallback(
     (initialModel: ChatModel = model) => {
@@ -537,6 +643,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
         model: initialModel,
         modelName: preferredModel(modelCatalog, initialModel),
         effort: preferredEffort(modelCatalog, initialModel, preferredModel(modelCatalog, initialModel)) ?? defaultEffort(initialModel),
+        customCommand: initialModel === 'custom' ? customCommand : undefined,
         messages: [],
         at: Date.now()
       }
@@ -547,7 +654,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
       // Timer intentionally short; clear on unmount via effect not needed — one-shot focus.
       void tId
     },
-    [model, modelCatalog]
+    [model, modelCatalog, customCommand]
   )
 
   const deleteThread = useCallback(
@@ -588,9 +695,9 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
     void window.api?.chat?.stop(activeThreadId).catch(() => {})
   }, [activeThreadId])
 
-  const send = useCallback(async (override?: string) => {
+  const send = useCallback(async (override?: string, overrideImage?: MediaFile | null) => {
     const text = (override ?? input).trim()
-    const image = override !== undefined ? null : pendingImage
+    const image = overrideImage !== undefined ? overrideImage : (override === undefined ? pendingImage : null)
     if (!text && !image) return
     const prompt = text || 'Please analyze the attached image.'
     if (text.length > 32_000) {
@@ -598,14 +705,24 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
       setPromptError('Prompt too long — keep it under 32,000 characters.')
       return
     }
+    if (model === 'custom' && !customCommand.trim()) {
+      setPromptError('Enter a CLI command. Use {prompt} where the message should be inserted.')
+      return
+    }
     if (sendInFlightRef.current) return
     if (isGenerating && override === undefined) {
       // Queue the draft instead of blocking it: auto-sent when the reply ends.
-      if (text) {
-        setQueued((prev) => (prev ? `${prev}\n${text}` : text))
-        setInput('')
-        if (inputRef.current) inputRef.current.style.height = 'auto'
-      }
+      setQueued((prev) => ({
+        text: prev?.text ? (text ? `${prev.text}\n${text}` : prev.text) : text,
+        // Keep the attachment with the queued draft. Without this, an image
+        // queued during a stream was left in the composer and sent with a
+        // later message (or silently dropped when the queue flushed).
+        image: image ?? prev?.image ?? null
+      }))
+      setInput('')
+      setPendingImage(null)
+      setImageError(null)
+      if (inputRef.current) inputRef.current.style.height = 'auto'
       return
     }
     if (isGenerating) return
@@ -617,6 +734,9 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
 
     let threadId = activeThreadId
     let threadModel = model
+    // Mission Mode is driven by the explicit Mission Controller widget. Chat
+    // remains a normal conversation even when the setting is enabled.
+    const startsMission = false
     if (!threadId) {
       const t: ChatThread = {
         id: makeId(),
@@ -624,6 +744,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
         model,
         modelName,
         effort,
+        customCommand: model === 'custom' ? customCommand : undefined,
         messages: [],
         at: Date.now()
       }
@@ -632,6 +753,25 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
       setThreads((prev) => [t, ...prev])
       setActiveThreadId(t.id)
     }
+
+    if (startsMission && threadId) {
+      missionDraftsRef.current.set(threadId, {
+        request: text,
+        title: `Mission · ${text.slice(0, 150)}`
+      })
+    }
+
+    const promptToSend = startsMission
+      ? [
+          'MISSION MODE: do not implement the request yet.',
+          'Analyze it and return a concrete, ordered implementation plan for another worker.',
+          'Include affected files, acceptance criteria, and verification commands.',
+          'Keep the answer focused on the plan.',
+          '',
+          'USER REQUEST:',
+          prompt
+        ].join('\n')
+      : prompt
 
     const userMsg: ChatMessage = { id: makeId(), role: 'user', content: text || '[Image attached]', at: Date.now() }
     const assistantId = makeId()
@@ -659,6 +799,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
               model: threadModel,
               modelName,
               effort,
+              customCommand: threadModel === 'custom' ? customCommand : undefined,
               messages: [...t.messages, userMsg, assistantPlaceholder],
               at: Date.now()
             }
@@ -667,10 +808,11 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
     )
 
     try {
-      const result = await window.api.chat.send(threadId, threadModel, prompt, {
+      const result = await window.api.chat.send(threadId, threadModel, promptToSend, {
         model: modelName,
         effort: effortOptionsFor(modelCatalog, threadModel, modelName).includes(effort as ChatEffort) ? effort : undefined,
-        images: image ? [image.path] : undefined
+        images: image ? [image.path] : undefined,
+        command: threadModel === 'custom' ? customCommand : undefined
       })
       if (result && 'error' in result) {
         setRunningThreads((prev) => {
@@ -725,7 +867,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
       sendInFlightRef.current = false
       setTimeout(() => inputRef.current?.focus(), 30)
     }
-  }, [input, pendingImage, isGenerating, activeThreadId, model, modelName, effort, modelCatalog])
+  }, [input, pendingImage, isGenerating, activeThreadId, model, modelName, effort, modelCatalog, customCommand])
 
   // Flush a queued draft once the running reply finishes (and the thread still
   // exists) — this is what makes the composer non-blocking.
@@ -736,7 +878,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
     if (!activeThreadId || !threads.some((t) => t.id === activeThreadId)) return
     const q = queued
     setQueued(null)
-    void sendRef.current(q)
+    void sendRef.current(q.text, q.image)
   }, [isGenerating, queued, activeThreadId, threads])
 
   const onPaste = useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -784,11 +926,19 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
       setEffort(nextEffort)
       if (activeThreadId) {
         setThreads((prev) =>
-          prev.map((t) => (t.id === activeThreadId ? { ...t, model: newModel, modelName: nextModelName, effort: nextEffort } : t))
+          prev.map((t) => (t.id === activeThreadId
+            ? {
+                ...t,
+                model: newModel,
+                modelName: nextModelName,
+                effort: nextEffort,
+                customCommand: newModel === 'custom' ? customCommand : undefined
+              }
+            : t))
         )
       }
     },
-    [activeThreadId, modelCatalog]
+    [activeThreadId, modelCatalog, customCommand]
   )
 
   const updateModelName = useCallback((value: string) => {
@@ -801,6 +951,15 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
     setEffort(next)
     if (activeThreadId) setThreads((prev) => prev.map((t) => t.id === activeThreadId ? { ...t, effort: next } : t))
   }, [activeThreadId])
+
+  const updateCustomCommand = useCallback((value: string) => {
+    const next = value.slice(0, 512)
+    setCustomCommand(next)
+    if (promptError) setPromptError(null)
+    if (activeThreadId) {
+      setThreads((prev) => prev.map((t) => t.id === activeThreadId ? { ...t, customCommand: next } : t))
+    }
+  }, [activeThreadId, promptError])
 
   const [debouncedQuery, setDebouncedQuery] = useState(query)
   useEffect(() => {
@@ -893,7 +1052,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
       <div className="relative flex min-h-0 flex-1">
         {sidebarOpen && (
           <SidebarPortal target={sharedSidebarTarget}>
-            <aside className="flex h-full max-h-full w-[240px] min-h-0 flex-none flex-col border-r border-line-soft bg-bg-panel max-sm:absolute max-sm:inset-y-0 max-sm:left-0 max-sm:z-20 max-sm:shadow-[0_8px_30px_rgba(0,0,0,0.5)]">
+            <aside className="flex h-full max-h-full w-[240px] min-h-0 flex-none flex-col border-r border-line-soft bg-bg-panel max-sm:absolute max-sm:inset-y-0 max-sm:left-0 max-sm:z-20 max-sm:shadow-[0_8px_30px_rgba(8,9,11,0.75)]">
             <div className="flex items-center gap-1.5 p-2.5">
               <label className="relative flex min-w-0 flex-1 items-center">
                 <Search size={13} className="pointer-events-none absolute left-2.5 text-text-faint" />
@@ -999,7 +1158,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                 <Wrench size={11} /> Headless CLI Engine
               </span>
               <span className="mt-0.5 block text-[10px] leading-tight text-text-dim">
-                Executes via <code className="font-mono text-accent">{MODEL_COMMAND[model]}</code> with streaming output
+                Executes via <code className="font-mono text-accent">{commandFor(model, customCommand)}</code> with streaming output
               </span>
             </div>
             </aside>
@@ -1024,7 +1183,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                   <p className="mt-1.5 text-[13px] leading-[1.6] text-text-dim">
                     Direct integration with your installed agent CLI{' '}
                     <code className="rounded bg-bg-raise px-1.5 py-0.5 text-text font-mono">
-                      {MODEL_COMMAND[model]}
+                      {commandFor(model, customCommand)}
                     </code>
                     . One-shot execution with frame-rate streaming and zero hanging background processes.
                   </p>
@@ -1050,7 +1209,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                 </div>
                 <div className="grid gap-3 sm:grid-cols-3">
                   {[
-                    { k: 'Engine', v: MODEL_COMMAND[model], sub: 'Headless CLI Process' },
+                    { k: 'Engine', v: commandFor(model, customCommand), sub: 'Headless CLI Process' },
                     { k: 'Stream', v: '16 ms flush', sub: 'Native Rust ANSI Stripping' },
                     { k: 'State', v: 'Isolated', sub: 'Per-thread lifecycle' }
                   ].map((card) => (
@@ -1077,7 +1236,11 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                       <span className="mt-0.5 grid h-7 w-7 flex-none place-items-center rounded-full border border-line-soft bg-bg-panel text-text-dim">
                         {(() => {
                           const I = MODELS.find((x) => x.id === m.model)?.Icon ?? CodexIcon
-                          return <I size={13} />
+                          return (
+                            <span className="flex h-[13px] w-[13px] flex-none items-center justify-center">
+                              <I size={13} />
+                            </span>
+                          )
                         })()}
                       </span>
                     )}
@@ -1089,7 +1252,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                       }`}
                     >
                       {m.role === 'assistant' && m.content === '' && m.isStreaming ? (
-                        <ThinkingIndicator command={MODEL_COMMAND[m.model || model]} />
+                        <ThinkingIndicator command={commandFor(m.model || model, activeThread?.customCommand)} />
                       ) : (
                         <MessageContent text={m.content} />
                       )}
@@ -1145,7 +1308,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                   {promptError}
                 </div>
               )}
-              <div className="rounded-[12px] border border-line bg-bg-panel shadow-[0_8px_30px_rgba(0,0,0,0.35)] focus-within:border-line">
+              <div className="rounded-[12px] border border-line bg-bg-panel shadow-[0_8px_30px_rgba(8,9,11,0.65)] focus-within:border-line">
                 <textarea
                   ref={inputRef}
                   value={input}
@@ -1167,8 +1330,8 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                   rows={1}
                   placeholder={
                     isGenerating
-                      ? `Generating response from ${MODEL_COMMAND[model]}… (keep typing — sends next)`
-                      : `Message ${MODELS.find((m) => m.id === model)?.label} (${MODEL_COMMAND[model]}) — Shift+Enter for new line`
+                      ? `Generating response from ${commandFor(model, customCommand)}… (keep typing — sends next)`
+                      : `Message ${MODELS.find((m) => m.id === model)?.label} (${commandFor(model, customCommand)}) — Shift+Enter for new line`
                   }
                   aria-label="Chat message"
                   className="max-h-[140px] min-h-[44px] w-full resize-none bg-transparent px-3.5 py-3 text-[13px] text-text placeholder:text-text-faint outline-none"
@@ -1181,16 +1344,26 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                 />
                 <div className="flex items-center justify-between gap-2 border-t border-line-soft px-2 py-1.5">
                   <div className="flex min-w-0 items-center gap-1">
-                    <ChatSelect
-                      value={modelName}
-                      onChange={updateModelName}
-                      title="CLI model"
-                      className="w-[min(220px,32vw)]"
-                      options={modelSelectOptions.map((name) => ({
-                        value: name,
-                        label: modelCatalog[model]?.models.find((entry) => entry.id === name)?.label || name
-                      }))}
-                    />
+                    {model === 'custom' ? (
+                      <input
+                        value={customCommand}
+                        onChange={(event) => updateCustomCommand(event.target.value)}
+                        placeholder="CLI command, e.g. qwen -p {prompt}"
+                        aria-label="Custom CLI command"
+                        className="h-7 w-[min(360px,46vw)] rounded-[7px] border border-line-soft bg-bg-raise px-2 text-[11px] text-text outline-none focus:border-line"
+                      />
+                    ) : (
+                      <ChatSelect
+                        value={modelName}
+                        onChange={updateModelName}
+                        title="CLI model"
+                        className="w-[min(220px,32vw)]"
+                        options={modelSelectOptions.map((name) => ({
+                          value: name,
+                          label: modelCatalog[model]?.models.find((entry) => entry.id === name)?.label || name
+                        }))}
+                      />
+                    )}
             {configuredEfforts.length > 0 && (
                       <ChatSelect
                         value={(effort ?? configuredEfforts[0]) as ChatEffort}
@@ -1208,7 +1381,7 @@ export default function ChatPane({ active }: Props): React.JSX.Element {
                     {isGenerating ? (
                       <button
                         onClick={stopCurrent}
-                        className="flex items-center gap-1.5 rounded-[8px] bg-red-600/80 px-3.5 py-1.5 text-[12px] font-semibold text-white hover:bg-red-600 transition-colors"
+                        className="flex items-center gap-1.5 rounded-[8px] bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-bg hover:opacity-80 transition-opacity"
                       >
                         <Square size={12} fill="currentColor" /> Stop
                       </button>

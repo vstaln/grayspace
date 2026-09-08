@@ -2,6 +2,7 @@ import React from 'react'
 
 interface State {
   error: Error | null
+  retryCount: number
 }
 
 /**
@@ -12,9 +13,9 @@ interface State {
  * a visible message instead.
  */
 export default class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State> {
-  state: State = { error: null }
+  state: State = { error: null, retryCount: 0 }
 
-  static getDerivedStateFromError(error: Error): State {
+  static getDerivedStateFromError(error: Error): Partial<State> {
     return { error }
   }
 
@@ -31,9 +32,18 @@ export default class ErrorBoundary extends React.Component<{ children: React.Rea
         <p className="max-w-md text-sm text-text-dim">{message}</p>
         <button
           className="mt-2 rounded-[10px] border border-line px-4 py-2 text-sm hover:bg-bg-hover"
-          onClick={() => this.setState({ error: null })}
+          onClick={() => {
+            // A render exception can be caused by transient widget/IPC state;
+            // retry once in place. If React catches the same tree again,
+            // reload the renderer so stale module and DOM state are discarded.
+            if (this.state.retryCount > 0) {
+              window.location.reload()
+              return
+            }
+            this.setState({ error: null, retryCount: 1 })
+          }}
         >
-          Try again
+          {this.state.retryCount > 0 ? 'Reload app' : 'Try again'}
         </button>
       </div>
     )

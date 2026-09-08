@@ -87,7 +87,7 @@ export function blame(
       if (entry.target === target) {
         history.push(entry)
       } else if (
-        entry.type === 'bus.transact' &&
+        entry.type === 'flow.transact' &&
         Array.isArray((entry.payload as { commands?: Array<{ target?: string }> })?.commands)
       ) {
         const hasTarget = (entry.payload as { commands: Array<{ target?: string }> }).commands.some(

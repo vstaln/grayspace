@@ -28,7 +28,7 @@ import {
 } from './types.ts'
 import { VersionRegistry } from './versioned.ts'
 
-export interface CommandBusOptions {
+export interface CommandFlowOptions {
   actors: ActorRegistry
   locks: LockManager
   journal: Journal
@@ -48,10 +48,14 @@ export interface CommandBusOptions {
  * - Idempotency-Key caching and replay prevention.
  * - Priority queue with user preemption and actor rate-limiting backpressure.
  * - In-flight command cancellation (AbortSignal).
- * - Multi-command atomic transactions (bus.transact).
+ * - Multi-command atomic transactions (flow.transact).
  * - Shadow overlays for dry-run and speculative planning.
  */
-export class CommandBus extends EventEmitter {
+/**
+ * Central command dispatcher: the single, observable write path for OrcSpace.
+ *
+ */
+export class CommandFlow extends EventEmitter {
   private readonly handlers = new Map<string, CommandHandler<never, unknown>>()
   private readonly definitions = new Map<string, CommandDefinition>()
   private readonly versions = new Map<ResourceScheme, VersionSource>()
@@ -69,7 +73,7 @@ export class CommandBus extends EventEmitter {
   readonly metrics = new MetricsRegistry()
   private cmdCounter = 0
 
-  constructor(options: CommandBusOptions) {
+  constructor(options: CommandFlowOptions) {
     super()
     this.actors = options.actors
     this.locks = options.locks
@@ -89,21 +93,33 @@ export class CommandBus extends EventEmitter {
   // ---- Schema and command registration ------------------------------------
 
   register<P, R>(type: string, handler: CommandHandler<P, R>): void {
+    if (!type.trim()) throw new Error('command type must not be empty')
     if (this.handlers.has(type)) throw new Error(`command ${type} is already registered`)
     this.handlers.set(type, handler as CommandHandler<never, unknown>)
   }
 
   registerDefinition<P, R>(def: CommandDefinition<P, R>): void {
+    if (!def.type.trim()) throw new Error('command type must not be empty')
+    if (this.definitions.has(def.type) || this.handlers.has(def.type)) {
+      throw new Error(`command ${def.type} is already registered`)
+    }
+    // Validate before mutating either registry. This keeps the catalog and
+    // handler map consistent when registration is attempted twice.
     this.definitions.set(def.type, def as CommandDefinition)
     if (def.handler) {
-      this.register(def.type, {
-        requiresLock: def.requiresLock,
-        ignoreVersion: def.ignoreVersion,
-        transient: def.transient ?? def.handler.transient,
-        bypassQueue: def.bypassQueue ?? def.handler.bypassQueue,
-        description: def.description,
-        apply: def.handler.apply
-      })
+      try {
+        this.register(def.type, {
+          requiresLock: def.requiresLock,
+          ignoreVersion: def.ignoreVersion,
+          transient: def.transient ?? def.handler.transient,
+          bypassQueue: def.bypassQueue ?? def.handler.bypassQueue,
+          description: def.description,
+          apply: def.handler.apply
+        })
+      } catch (error) {
+        this.definitions.delete(def.type)
+        throw error
+      }
     }
   }
 
@@ -265,7 +281,7 @@ export class CommandBus extends EventEmitter {
     if (!ctrl) return false
     ctrl.abort(reason)
     this.cancellations.delete(commandId)
-    this.metrics.inc('bus.cancelled')
+    this.metrics.inc('flow.cancelled')
     this.emit('cancelled', { commandId, reason })
     return true
   }
@@ -377,10 +393,10 @@ export class CommandBus extends EventEmitter {
     // bus-assigned field, written onto it as a side effect.
     const cmd: Command = { ...command }
     this.cmdCounter += 1
-    const commandId = cmd.id || `cmd-${Date.now()}-${this.cmdCounter}`
+    const commandId = cmd.id || `cmd-${this.now()}-${this.cmdCounter}`
     cmd.id = commandId
     const submittedAt = this.now()
-    this.metrics.inc('bus.submitted')
+    this.metrics.inc('flow.submitted')
 
     // 1. Idempotency Check
     if (cmd.idempotencyKey) {
@@ -398,7 +414,7 @@ export class CommandBus extends EventEmitter {
     const actor = this.actors.get(cmd.actorId)
     const isPrivileged = !actor || actor.type === 'user' || actor.type === 'system'
     if (!isPrivileged && !this.rateLimiter.tryConsume(cmd.actorId)) {
-      this.metrics.inc('bus.rate_limited')
+      this.metrics.inc('flow.rate_limited')
       return Promise.resolve({
         ok: false,
         code: 'rate_limited',
@@ -419,7 +435,7 @@ export class CommandBus extends EventEmitter {
       this.cancellations.set(commandId, fastCtrl)
       const fastStartedAt = submittedAt
       const fast = this.apply<T>(cmd, () => {}, undefined, fastCtrl.signal).finally(() => {
-        this.metrics.observe('bus.apply_ms', Math.max(0, this.now() - fastStartedAt))
+        this.metrics.observe('flow.apply_ms', Math.max(0, this.now() - fastStartedAt))
         this.cancellations.delete(commandId)
       })
       if (cmd.idempotencyKey) this.idempotency.track(cmd.idempotencyKey, fast)
@@ -443,19 +459,19 @@ export class CommandBus extends EventEmitter {
         actorId: cmd.actorId,
         lanes: this.lanesOf(cmd),
         run: async (unblock) => {
-          this.metrics.observe('bus.queue_wait_ms', Math.max(0, this.now() - submittedAt))
+          this.metrics.observe('flow.queue_wait_ms', Math.max(0, this.now() - submittedAt))
           const startedAt = this.now()
           try {
             return await this.apply<T>(cmd, unblock, options?.overlayId, abortCtrl.signal)
           } finally {
-            this.metrics.observe('bus.apply_ms', Math.max(0, this.now() - startedAt))
+            this.metrics.observe('flow.apply_ms', Math.max(0, this.now() - startedAt))
           }
         }
       }).finally(() => {
         this.cancellations.delete(commandId)
       })
     } catch (err) {
-      this.metrics.inc('bus.backpressure')
+      this.metrics.inc('flow.backpressure')
       this.cancellations.delete(commandId)
       taskPromise = Promise.resolve({
         ok: false,
@@ -489,7 +505,7 @@ export class CommandBus extends EventEmitter {
     return this.submit<T>(command, options)
   }
 
-  // ---- Transactions (Atomic multi-command bus.transact) -------------------
+  // ---- Transactions (Atomic multi-command flow.transact) -------------------
 
   transact<T = unknown[]>(
     commands: Command[],
@@ -619,7 +635,7 @@ export class CommandBus extends EventEmitter {
       const intentEntry = {
         phase: 'intent' as const,
         actorId: primaryActorId,
-        type: 'bus.transact',
+        type: 'flow.transact',
         target: 'system:transaction',
         payload: {
           commands: validatedCommands.map((c) => ({
@@ -675,7 +691,7 @@ export class CommandBus extends EventEmitter {
       const commitEntry = {
         phase: 'commit' as const,
         actorId: primaryActorId,
-        type: 'bus.transact',
+        type: 'flow.transact',
         target: 'system:transaction',
         payload: {
           commands: validatedCommands.map((c, i) => ({
@@ -704,7 +720,7 @@ export class CommandBus extends EventEmitter {
         commandId: txId
       }
 
-      this.metrics.inc('bus.transactions')
+      this.metrics.inc('flow.transactions')
       this.emit('transaction_applied', { commands: validatedCommands, result: txResult })
       return txResult
     } catch (err) {
@@ -713,7 +729,7 @@ export class CommandBus extends EventEmitter {
         const abortEntry = {
           phase: 'abort' as const,
           actorId: primaryActorId,
-          type: 'bus.transact',
+          type: 'flow.transact',
           target: 'system:transaction',
           error: error.message
         }
@@ -724,9 +740,9 @@ export class CommandBus extends EventEmitter {
           this.journal.append(abortEntry)
         }
       }
-      if (!(err instanceof CommandError)) console.error('bus.transact failed', err)
-      this.metrics.inc('bus.transactions_rejected')
-      this.metrics.inc(`bus.transactions_rejected.${error.code}`)
+      if (!(err instanceof CommandError)) console.error('flow.transact failed', err)
+      this.metrics.inc('flow.transactions_rejected')
+      this.metrics.inc(`flow.transactions_rejected.${error.code}`)
       const txResult: TransactionResult<T> = {
         ok: false,
         code: error.code,
@@ -832,7 +848,7 @@ export class CommandBus extends EventEmitter {
       }
 
       const result: CommandResult<T> = { ok: true, seq: commitSeq, version, data, commandId: cmd.id }
-      this.metrics.inc('bus.applied')
+      this.metrics.inc('flow.applied')
       this.emit('applied', { command: cmd, result, actor })
       return result
     } catch (err) {
@@ -853,8 +869,8 @@ export class CommandBus extends EventEmitter {
         }
       }
       if (!(err instanceof CommandError)) console.error(`command ${cmd.type} failed`, err)
-      this.metrics.inc('bus.rejected')
-      this.metrics.inc(`bus.rejected.${error.code}`)
+      this.metrics.inc('flow.rejected')
+      this.metrics.inc(`flow.rejected.${error.code}`)
       const result: CommandResult<T> = {
         ok: false,
         code: error.code,

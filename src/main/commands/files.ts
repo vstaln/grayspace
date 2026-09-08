@@ -37,9 +37,9 @@ const PATH_FIELD = {
 }
 
 export function registerFileCommands({ core }: CommandDeps): void {
-  const { bus } = core
+  const { flow } = core
 
-  bus.registerDefinition<{ path: string; content: string }, { ok: true }>({
+  flow.registerDefinition<{ path: string; content: string }, { ok: true }>({
     type: 'file.write',
     description: 'Create or overwrite a UTF-8 text file.',
     targetScheme: 'file',
@@ -72,7 +72,7 @@ export function registerFileCommands({ core }: CommandDeps): void {
     }
   })
 
-  bus.registerDefinition<{ path: string }, { ok: true }>({
+  flow.registerDefinition<{ path: string }, { ok: true }>({
     type: 'file.create',
     description: 'Create an empty file; fails if it already exists.',
     targetScheme: 'file',
@@ -96,7 +96,7 @@ export function registerFileCommands({ core }: CommandDeps): void {
     }
   })
 
-  bus.registerDefinition<{ path: string }, { ok: true }>({
+  flow.registerDefinition<{ path: string }, { ok: true }>({
     type: 'file.mkdir',
     description: 'Create a folder (parents included); fails if it already exists.',
     targetScheme: 'file',
@@ -120,7 +120,7 @@ export function registerFileCommands({ core }: CommandDeps): void {
     }
   })
 
-  bus.registerDefinition<{ path: string }, { ok: true }>({
+  flow.registerDefinition<{ path: string }, { ok: true }>({
     type: 'file.delete',
     description: 'Delete a file, or a folder with everything inside it.',
     targetScheme: 'file',
@@ -146,7 +146,7 @@ export function registerFileCommands({ core }: CommandDeps): void {
     }
   })
 
-  bus.registerDefinition<{ path: string; to: string }, { ok: true }>({
+  flow.registerDefinition<{ path: string; to: string }, { ok: true }>({
     type: 'file.rename',
     description: 'Rename or move a file/folder. The target is the source; `to` is the destination.',
     targetScheme: 'file',

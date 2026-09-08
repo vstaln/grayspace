@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Code2, FolderOpen, FolderPlus, KanbanSquare, MessageSquare, Palette, Pencil, Pin, Plus, Settings, UserRound, X } from 'lucide-react'
+import { Code2, FolderOpen, FolderPlus, KanbanSquare, MessageSquare, Palette, Pencil, Pin, Plus, Settings, UserRound, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import type { CodeWorkspaceState, RecentDir, UserRole } from '../../../preload/index.d'
 import type { WorkView } from './TitleBar'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -16,6 +16,8 @@ interface Props {
   taskCount: number
   onToggleBoard(): void
   onPickDir(): void
+  sidebarCollapsed?: boolean
+  onToggleSidebar?(): void
 }
 
 interface CodeSessionSummary {
@@ -65,7 +67,7 @@ function IconButton({
     >
       {children}
       {badge ? (
-        <span className="absolute top-0.5 right-0.5 min-w-[15px] rounded-full bg-accent px-1 text-[9px] leading-[15px] font-semibold text-black">
+        <span className="absolute top-0.5 right-0.5 min-w-[15px] rounded-full bg-accent px-1 text-[9px] leading-[15px] font-semibold text-bg">
           {badge}
         </span>
       ) : null}
@@ -100,6 +102,7 @@ const FAVORITE_WIDGETS = [
   ['sys-monitor', 'System Monitor', 'CPU, RAM and processes'],
   ['timer', 'Timer', 'Countdown or stopwatch'],
   ['planner', 'Planner', 'Daily agenda and checklist'],
+  ['mission', 'Mission Controller', 'Connect an AI terminal to a guided Planner workflow'],
   ['board', 'Kanban Board', 'Interactive task board on canvas'],
   ['orchestration', 'Orchestration', 'The agent fleet: tasks, workers and their questions'],
   ['browser', 'Browser', 'Embedded web page'],
@@ -287,7 +290,7 @@ function SettingsModal({
     // it beneath either made Settings/Account look dead there (UI-audit P0).
     createPortal(
       <div
-        className="fixed inset-0 z-[50000] flex items-center justify-center bg-black/45 p-6 backdrop-blur-[2px]"
+        className="fixed inset-0 z-[50000] flex items-center justify-center bg-bg/80 p-6 backdrop-blur-[2px]"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         role="presentation"
         onMouseDown={(event) => {
@@ -373,6 +376,27 @@ function SettingsModal({
                       onClick={() => void update({ windowsShell: 'powershell' })}
                     />
                   </div>
+                </Section>
+
+                <Section
+                  title="Mission mode"
+                  hint="Mission Controller sends the workflow to the connected AI coordinator, which creates Planner and starts the selected worker."
+                >
+                  <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[10px] border border-line-soft px-3.5 py-3 text-xs text-text-dim transition-colors duration-150 hover:border-line hover:bg-bg-hover">
+                    <span className="min-w-0">
+                      <span className="block text-text">Planner → selected agent → report</span>
+                      <span className="mt-1 block text-[10px] leading-relaxed text-text-faint">
+                        Planner opens once per mission and is checked only after the worker reports completion.
+                      </span>
+                    </span>
+                    <input
+                      data-testid="mission-mode-toggle"
+                      type="checkbox"
+                      checked={settings.missionMode}
+                      onChange={(event) => void update({ missionMode: event.target.checked })}
+                      className="h-4 w-4 flex-none accent-white"
+                    />
+                  </label>
                 </Section>
 
                 <Section title="Right-click menu" hint="Which widgets appear when you right-click the canvas.">
@@ -559,7 +583,9 @@ export default React.memo(function Sidebar({
   boardOpen,
   taskCount,
   onToggleBoard,
-  onPickDir
+  onPickDir,
+  sidebarCollapsed = false,
+  onToggleSidebar
 }: Props): React.JSX.Element {
   const { settings } = useSettings()
   const [recent, setRecent] = useState<RecentDir[]>([])
@@ -577,7 +603,7 @@ export default React.memo(function Sidebar({
   const dirName = workspaceDir ? workspaceDir.split(/[\\/]/).filter(Boolean).pop() : null
   const avatarName = settings.userName?.trim() || 'you'
   const avatarInitials = avatarName.slice(0, 2).toUpperCase()
-  const expanded = activeView !== 'canvas'
+  const expanded = activeView !== 'canvas' && !(activeView === 'code' && sidebarCollapsed)
 
   // Remembered folders live in the main process, so mirror them live.
   useEffect(() => {
@@ -904,7 +930,7 @@ export default React.memo(function Sidebar({
               <div className="px-2 pt-1 pb-2 text-[11px] leading-snug text-danger">{foldersError}</div>
             )}
             <button
-              className="mt-2 flex w-full items-center justify-center gap-2 rounded-[10px] bg-accent px-3 py-2 text-xs font-semibold text-black hover:bg-white"
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-[10px] bg-accent px-3 py-2 text-xs font-semibold text-bg hover:opacity-90"
               onClick={() => {
                 window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
                 onPickDir()
@@ -955,6 +981,17 @@ export default React.memo(function Sidebar({
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex h-8 flex-none items-center justify-between border-b border-line-soft px-2.5">
           <span className="text-[10px] font-semibold tracking-[0.08em] text-text-faint uppercase">Workspace</span>
+            {activeView === 'code' && onToggleSidebar && (
+              <button
+                type="button"
+                aria-label="Collapse sidebar"
+                title="Collapse sidebar"
+                onClick={onToggleSidebar}
+                className="grid h-6 w-6 place-items-center rounded text-text-faint transition hover:bg-bg-hover hover:text-text"
+              >
+                <PanelLeftClose size={13} />
+              </button>
+            )}
             <button
               type="button"
               aria-label="Create workspace"
@@ -1048,7 +1085,7 @@ export default React.memo(function Sidebar({
 
   const createDialog = createOpen ? createPortal(
     <div
-      className="fixed inset-0 z-[60000] flex items-center justify-center bg-black/45 p-6 backdrop-blur-[2px]"
+      className="fixed inset-0 z-[60000] flex items-center justify-center bg-bg/80 p-6 backdrop-blur-[2px]"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) setCreateOpen(false)
@@ -1106,7 +1143,7 @@ export default React.memo(function Sidebar({
 
   const renameDialog = renameTarget ? createPortal(
     <div
-      className="fixed inset-0 z-[60000] flex items-center justify-center bg-black/45 p-6 backdrop-blur-[2px]"
+      className="fixed inset-0 z-[60000] flex items-center justify-center bg-bg/80 p-6 backdrop-blur-[2px]"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) setRenameTarget(null)
@@ -1184,6 +1221,17 @@ export default React.memo(function Sidebar({
       </button>
       {expanded ? renderExpanded() : (
         <>
+          {activeView === 'code' && sidebarCollapsed && onToggleSidebar && (
+            <button
+              type="button"
+              aria-label="Expand sidebar"
+              title="Expand sidebar"
+              onClick={onToggleSidebar}
+              className="mx-auto grid h-8 w-8 place-items-center rounded text-text-faint transition hover:bg-bg-hover hover:text-text"
+            >
+              <PanelLeftOpen size={14} />
+            </button>
+          )}
           <div className="flex-1" />
           <div className="flex flex-col gap-1.5">
             {order.map((id) => (

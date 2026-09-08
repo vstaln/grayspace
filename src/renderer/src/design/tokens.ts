@@ -5,9 +5,14 @@
  * colour is changed here and nowhere else.
  */
 
-/** Palette shared by both themes — the flat, near-black graphite look. */
+/** The complete application palette: dark surfaces plus the original semantic colours. */
+export const monochrome = {
+  base: '#08090b',
+  surface: '#15171b',
+  graphite: '#a9abb0'
+} as const
+
 export const palette = {
-  /** Monochrome system: deep, surface and silver are the only visual anchors. */
   graphite: 'rgba(9, 10, 12, 0.82)',
   /** Opaque Code-terminal fill. Canvas terminals opt into the transparent
    *  xterm theme and use `terminalGlass` for their frame instead. */

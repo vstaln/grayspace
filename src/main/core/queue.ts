@@ -68,7 +68,7 @@ const RANK: Record<CommandPriority, number> = { high: 0, normal: 1, low: 2 }
 /**
  * Lane assigned to tasks submitted without one. Direct users of the queue
  * (tests, tools) get the historical behaviour — one global lane, nothing ever
- * overlaps — while callers that declare lanes, like the CommandBus, opt into
+ * overlaps — while callers that declare lanes, like the CommandFlow, opt into
  * per-resource concurrency explicitly.
  */
 const GLOBAL_LANE = '\u0000global'

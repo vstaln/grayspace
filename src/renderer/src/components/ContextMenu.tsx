@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Clipboard, Cpu, FolderOpen, Globe, Kanban, ListTodo, Music2, Network, Terminal, Timer } from 'lucide-react'
+import { Clipboard, Cpu, FolderOpen, Globe, Kanban, ListTodo, Music2, Network, Terminal, Timer, Workflow } from 'lucide-react'
 import { Point } from '../types'
 
 interface Props {
@@ -10,6 +10,7 @@ interface Props {
   onPickSysMonitor: () => void
   onPickTimer: () => void
   onPickPlanner: () => void
+  onPickMission: () => void
   onPickBoard: () => void
   onPickBrowser: () => void
   onPickLinks: () => void
@@ -37,6 +38,7 @@ export default function ContextMenu({
   onPickSysMonitor,
   onPickTimer,
   onPickPlanner,
+  onPickMission,
   onPickBoard,
   onPickBrowser,
   onPickLinks,
@@ -93,6 +95,13 @@ export default function ContextMenu({
         onSelect: onPickPlanner
       },
       {
+        id: 'mission',
+        label: 'Mission Controller',
+        hint: 'Connect an AI terminal to a Planner workflow',
+        icon: <Workflow size={15} className="text-accent" />,
+        onSelect: onPickMission
+      },
+      {
         id: 'board',
         label: 'Kanban Board',
         hint: 'Interactive task board for agents and todos',
@@ -134,6 +143,7 @@ export default function ContextMenu({
       onPickSysMonitor,
       onPickTimer,
       onPickPlanner,
+      onPickMission,
       onPickBoard,
       onPickBrowser,
       onPickLinks,

@@ -144,6 +144,31 @@ describe('OrchestrationStore', () => {
       store.send({ runId, type: 'reply', from: 'coord', to: 'term-1', body: 'postgres', replyTo: ask.id })
       assert.equal(store.replyTo(ask.id)?.body, 'postgres')
     })
+
+    test('permission requests stay pending until an explicit reply', () => {
+      const runId = run()
+      const permission = store.send({
+        runId,
+        type: 'permission',
+        from: 'term-1',
+        to: '@coordinator',
+        subject: 'permission_request',
+        body: 'May I run the migration?'
+      })
+      assert.equal(store.replyTo(permission.id), undefined)
+      assert.equal(store.inbox('coord').some((message) => message.id === permission.id), true)
+
+      store.send({
+        runId,
+        type: 'reply',
+        from: 'coord',
+        to: 'term-1',
+        subject: 'permission_granted',
+        body: 'allow',
+        replyTo: permission.id
+      })
+      assert.equal(store.replyTo(permission.id)?.subject, 'permission_granted')
+    })
   })
 
   describe('decision gates', () => {

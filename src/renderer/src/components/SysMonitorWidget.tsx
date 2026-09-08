@@ -22,6 +22,7 @@ import CodexIcon from './CodexIcon'
 import ClaudeIcon from './ClaudeIcon'
 import GrokIcon from './GrokIcon'
 import OpenCodeIcon from './OpenCodeIcon'
+import CursorIcon from './CursorIcon'
 import type { SystemStats } from '../../../preload/index.d'
 import { useConfirm } from './ConfirmDialog'
 
@@ -57,6 +58,8 @@ function renderAgentIcon(id: string, size = 13): React.JSX.Element {
       return <GrokIcon size={size} />
     case 'opencode':
       return <OpenCodeIcon size={size} />
+    case 'cursor':
+      return <CursorIcon size={size} />
     default:
       return <Activity size={size} className="text-accent" />
   }
@@ -334,7 +337,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
                   return (
                     <div
                       key={ag.id}
-                      className="rounded-[8px] border border-line-soft/80 bg-black/30 p-2 space-y-2"
+                      className="rounded-[8px] border border-line-soft/80 bg-bg-hover p-2 space-y-2"
                     >
                       <div>
                         <div className="flex items-center justify-between">
@@ -371,7 +374,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
                       </div>
 
                       {/* 5-Hour Limit Remaining */}
-                      <div className="space-y-1 rounded bg-black/20 p-1.5 border border-white/5">
+                      <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft">
                         <div className="flex items-center justify-between text-[10px]">
                           <span className="flex items-center gap-1 text-text font-medium">
                             <Clock size={10} className="text-[#38bdf8]" /> 5h Remaining (Осталось)
@@ -393,7 +396,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
                       </div>
 
                       {/* Weekly Limit Remaining */}
-                      <div className="space-y-1 rounded bg-black/20 p-1.5 border border-white/5">
+                      <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft">
                         <div className="flex items-center justify-between text-[10px]">
                           <span className="flex items-center gap-1 text-text font-medium">
                             <Calendar size={10} className="text-[#7fd99a]" /> Weekly Remaining (Осталось)
@@ -416,7 +419,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
 
                       {/* Monthly Limit Remaining */}
                       {ag.monthly && remMo !== null && (
-                        <div className="space-y-1 rounded bg-black/20 p-1.5 border border-white/5">
+                        <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft">
                           <div className="flex items-center justify-between text-[10px]">
                             <span className="flex items-center gap-1 text-text font-medium">
                               <Layers size={10} className="text-[#a78bfa]" /> Monthly Remaining (Месячный)
@@ -466,7 +469,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
             </div>
 
             {/* Sparkline chart */}
-            <div className="flex h-9 items-end gap-[2px] rounded bg-black/25 px-1 py-0.5">
+            <div className="flex h-9 items-end gap-[2px] rounded bg-bg-hover px-1 py-0.5">
               {cpuHistory.map((val, i) => (
                 <div
                   key={i}
@@ -560,55 +563,55 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
         </div>
 
         {/* Command Bus write-path metrics */}
-        {stats?.bus && (
+        {stats?.flow && (
           <div className="rounded-[10px] border border-line-soft bg-bg-hover/20 p-2.5">
             <div className="mb-2 flex items-center justify-between text-xs font-semibold text-text">
               <span className="flex items-center gap-1.5">
                 <Zap size={13} className="text-[#e6c07b]" /> Command Bus
               </span>
               <span className="text-[10px] font-normal text-text-faint">
-                queue {stats.bus.queueDepth} · lanes {stats.bus.busyLanes}
+                queue {stats.flow.queueDepth} · lanes {stats.flow.busyLanes}
               </span>
             </div>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
               <div className="flex justify-between text-text-dim">
                 <span>Submitted:</span>
-                <span className="font-medium text-text tabular-nums">{stats.bus.counters['bus.submitted'] ?? 0}</span>
+                <span className="font-medium text-text tabular-nums">{stats.flow.counters['flow.submitted'] ?? 0}</span>
               </div>
               <div className="flex justify-between text-text-dim">
                 <span>Applied:</span>
-                <span className="font-medium text-[#7fd99a] tabular-nums">{stats.bus.counters['bus.applied'] ?? 0}</span>
+                <span className="font-medium text-text tabular-nums">{stats.flow.counters['flow.applied'] ?? 0}</span>
               </div>
               <div className="flex justify-between text-text-dim">
                 <span>Rejected:</span>
                 <span
                   className={`font-medium tabular-nums ${
-                    (stats.bus.counters['bus.rejected'] ?? 0) > 0 ? 'text-danger' : 'text-text'
+                    (stats.flow.counters['flow.rejected'] ?? 0) > 0 ? 'text-danger' : 'text-text'
                   }`}
-                  title={Object.entries(stats.bus.counters)
-                    .filter(([k]) => k.startsWith('bus.rejected.'))
-                    .map(([k, v]) => `${k.slice('bus.rejected.'.length)}: ${v}`)
+                  title={Object.entries(stats.flow.counters)
+                    .filter(([k]) => k.startsWith('flow.rejected.'))
+                    .map(([k, v]) => `${k.slice('flow.rejected.'.length)}: ${v}`)
                     .join(', ')}
                 >
-                  {stats.bus.counters['bus.rejected'] ?? 0}
+                  {stats.flow.counters['flow.rejected'] ?? 0}
                 </span>
               </div>
               <div className="flex justify-between text-text-dim">
                 <span>Transactions:</span>
-                <span className="font-medium text-text tabular-nums">{stats.bus.counters['bus.transactions'] ?? 0}</span>
+                <span className="font-medium text-text tabular-nums">{stats.flow.counters['flow.transactions'] ?? 0}</span>
               </div>
               <div className="flex justify-between text-text-dim">
                 <span>Conflicts / Rate-limited:</span>
                 <span className="font-medium text-text tabular-nums">
-                  {(stats.bus.counters['bus.rejected.conflict'] ?? 0) + (stats.bus.counters['bus.transactions_rejected.conflict'] ?? 0)} /{' '}
-                  {stats.bus.counters['bus.rate_limited'] ?? 0}
+                  {(stats.flow.counters['flow.rejected.conflict'] ?? 0) + (stats.flow.counters['flow.transactions_rejected.conflict'] ?? 0)} /{' '}
+                  {stats.flow.counters['flow.rate_limited'] ?? 0}
                 </span>
               </div>
               <div className="flex justify-between text-text-dim">
                 <span>Apply latency:</span>
                 <span className="font-medium text-text tabular-nums">
-                  {stats.bus.timings['bus.apply_ms']
-                    ? `${stats.bus.timings['bus.apply_ms'].avgMs.toFixed(1)}ms avg · ${stats.bus.timings['bus.apply_ms'].maxMs.toFixed(0)}ms max`
+                  {stats.flow.timings['flow.apply_ms']
+                    ? `${stats.flow.timings['flow.apply_ms'].avgMs.toFixed(1)}ms avg · ${stats.flow.timings['flow.apply_ms'].maxMs.toFixed(0)}ms max`
                     : '—'}
                 </span>
               </div>
@@ -631,7 +634,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
               {(stats.activeTerminals || []).map((t) => (
                 <div
                   key={t.id}
-                  className="flex items-center justify-between rounded-[6px] border border-line-soft/60 bg-black/20 px-2 py-1 text-xs"
+                  className="flex items-center justify-between rounded-[6px] border border-line-soft/60 bg-bg-hover px-2 py-1 text-xs"
                 >
                   <div className="flex min-w-0 items-center gap-2">
                     <span

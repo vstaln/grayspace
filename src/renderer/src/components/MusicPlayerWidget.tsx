@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { ExternalLink, Loader2, Music2, Pause, Play, Plus, RotateCcw, SkipBack, SkipForward, SquareStop, Trash2, Volume2, VolumeX } from 'lucide-react'
-import { isSafeUrl, sanitizeUrl } from '../lib/sanitizeUrl'
+import { Loader2, Music2, Pause, Play, Plus, RotateCcw, SkipBack, SkipForward, SquareStop, Trash2, Volume2, VolumeX } from 'lucide-react'
 import {
   coerceList,
   formatDuration as format,
@@ -32,6 +31,7 @@ type YTApi = {
     el: HTMLElement,
     opts: {
       videoId: string
+      host?: string
       playerVars?: Record<string, unknown>
       events?: {
         onReady?: () => void
@@ -222,13 +222,19 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
         if (cancelled || !hostRef.current || !id) return
         const p = new api.Player(mountEl, {
           videoId: id,
+          // Keep the preview inside the widget and avoid loading the full
+          // YouTube site. The privacy-enhanced host also works around a
+          // subset of provider-specific embed failures.
+          host: 'https://www.youtube-nocookie.com',
           playerVars: {
             autoplay: 1,
             controls: 0,
             rel: 0,
             playsinline: 1,
             enablejsapi: 1,
-            origin: (window.location.origin && window.location.origin.startsWith('http')) ? window.location.origin : 'https://www.youtube.com'
+            // YouTube rejects custom schemes as an API origin. Packaged builds
+            // use `orc://app`, so keep a valid HTTPS origin for the iframe API.
+            origin: window.location.origin.startsWith('http') ? window.location.origin : 'https://www.youtube.com'
           },
           events: {
             onReady: () => {
@@ -296,7 +302,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
               setPlaying(false)
               const msg =
                 e.data === 101 || e.data === 150
-                  ? 'Video cannot be embedded by owner request.'
+                  ? 'This video is blocked by the owner for embedded playback.'
                   : e.data === 100
                   ? 'Video not found or removed.'
                   : 'YouTube playback error.'
@@ -410,22 +416,6 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
       } catch {}
     }
   }, [volume, muted, ready, track?.id])
-
-  // Pause and revoke the previous audio element before switching tracks. The
-  // `<audio key={track.id}>` remounts on its own, but a remount alone leaves the
-  // old element's decoder and network stream alive until GC — pausing first
-  // keeps the audio thread from leaking across every track change.
-  useEffect(() => {
-    if (track?.provider !== 'audio' || !audioSrc) return
-    const prev = audioRef.current
-    if (prev) {
-      try {
-        prev.pause()
-        prev.removeAttribute('src')
-        prev.load()
-      } catch {}
-    }
-  }, [track?.id, track?.url, track?.provider])
 
   const audioSrc = track?.provider === 'audio' ? sanitizeAudioSrc(track.url) : null
   const controllable = !!id || (track?.provider === 'audio' && !!audioSrc)
@@ -589,26 +579,20 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
 
   const embed = track ? (track.provider === 'yandex' ? yandexEmbed(track.url) : track.provider === 'spotify' ? spotifyEmbed(track.url) : null) : null
 
+  const providerLabel = track?.provider === 'youtube' ? 'YouTube' : track?.provider === 'yandex' ? 'Yandex Music' : track?.provider === 'spotify' ? 'Spotify' : 'Audio file'
+
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2.5 overflow-hidden p-3" data-testid="music-player-widget">
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden p-3" data-testid="music-player-widget">
       <div className="flex items-center gap-2">
-        <Music2 size={16} className="text-accent" />
-        <select
-          className="min-w-0 flex-1 rounded border border-line bg-bg px-2 py-1.5 text-xs text-text"
-          value={listIndex}
-          onChange={(e) => {
-            setListIndex(Number(e.target.value))
-            setTrackIndex(0)
-          }}
-        >
-          {lists.map((p, i) => (
-            <option key={p.id} value={i}>
-              {p.name} ({p.tracks.length})
-            </option>
-          ))}
-        </select>
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-bg-hover text-text">
+          <Music2 size={15} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-faint">Music player</div>
+          <div className="truncate text-[11px] text-text">{list.name}</div>
+        </div>
         <button
-          className="rounded p-1 text-text-faint hover:text-danger disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:text-text-faint"
+          className="rounded-md p-1.5 text-text-faint transition hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-30"
           title={lists.length > 1 ? 'Delete playlist' : 'The last playlist cannot be deleted'}
           aria-label={lists.length > 1 ? 'Delete playlist' : 'The last playlist cannot be deleted'}
           disabled={lists.length <= 1}
@@ -622,213 +606,194 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
         </button>
       </div>
 
-      <form className="flex gap-1.5" onSubmit={addTrack}>
-        <input
-          className="min-w-0 flex-1 rounded border border-line bg-bg px-2 py-1.5 text-[11px] text-text"
-          placeholder="YouTube / Yandex Music / Spotify / direct MP3 link"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-        />
-        <button
-          className="rounded bg-accent px-2 text-bg disabled:cursor-not-allowed disabled:opacity-40"
-          type="submit"
-          title="Add track"
-          aria-label="Add track"
-          disabled={!draft.trim()}
+      <div className="flex items-center gap-2 rounded-lg border border-line bg-bg p-2">
+        <select
+          className="min-w-0 flex-1 bg-transparent text-[11px] text-text outline-none"
+          value={listIndex}
+          aria-label="Playlist"
+          onChange={(e) => {
+            setListIndex(Number(e.target.value))
+            setTrackIndex(0)
+          }}
         >
-          <Plus size={13} />
-        </button>
-      </form>
-
-      <div className="min-h-[64px] flex-1 overflow-auto rounded border border-line bg-bg p-1">
-        {list.tracks.length === 0 ? (
-          <div className="p-4 text-center text-[11px] text-text-faint">
-            Add a song link to this playlist — it starts playing as soon as you add it.
-          </div>
-        ) : (
-          list.tracks.map((t, i) => (
-            <div key={t.id} className={`flex items-center gap-1 rounded px-2 py-1.5 ${i === trackIndex ? 'bg-bg-hover' : ''}`}>
-              <button
-                className="min-w-0 flex-1 truncate text-left text-[11px] text-text"
-                title={i === trackIndex ? (playing ? 'Pause' : 'Play') : `Play ${t.title}`}
-                onClick={() => {
-                  if (i === trackIndex) togglePlay()
-                  else setTrackIndex(i)
-                }}
-              >
-                {i === trackIndex && playing ? (
-                  <span className="mr-1 inline-flex items-end gap-[1.5px]" aria-label="Now playing" role="img">
-                    <span className="w-[2px] animate-pulse rounded-full bg-accent" style={{ height: 7 }} />
-                    <span className="w-[2px] animate-pulse rounded-full bg-accent" style={{ height: 11, animationDelay: '150ms' }} />
-                    <span className="w-[2px] animate-pulse rounded-full bg-accent" style={{ height: 5, animationDelay: '300ms' }} />
-                  </span>
-                ) : null}
-                {t.title} <span className="text-[9px] uppercase text-text-faint">· {t.provider}</span>
-              </button>
-              <button className="p-1 text-text-faint hover:text-danger" title={`Remove ${t.title}`} aria-label={`Remove ${t.title}`} onClick={() => removeTrack(t.id)}>
-                <Trash2 size={11} />
-              </button>
-            </div>
-          ))
-        )}
+          {lists.map((p, i) => (
+            <option key={p.id} value={i}>
+              {p.name} ({p.tracks.length})
+            </option>
+          ))}
+        </select>
+        <span className="rounded border border-line px-1.5 py-0.5 text-[9px] tabular-nums text-text-faint">{list.tracks.length} tracks</span>
       </div>
 
-      {track && (
-        <div className="flex items-center justify-center gap-2">
-          <button
-            className="rounded p-1.5 text-text-faint transition hover:text-text disabled:opacity-30"
-            disabled={list.tracks.length < 2}
-            onClick={() => advance(-1)}
-            title="Previous"
-          >
-            <SkipBack size={14} />
-          </button>
-          {controllable && (
-            <>
+      <div className="rounded-xl border border-line bg-bg-hover p-3">
+        <div className="flex items-center gap-3">
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border border-line bg-bg text-text">
+            <Music2 size={25} className={playing ? 'animate-pulse' : ''} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="mb-1 text-[9px] font-semibold uppercase tracking-[0.15em] text-text-faint">Now playing</div>
+            <div className="truncate text-sm font-medium text-text">{track?.title ?? 'Nothing queued'}</div>
+            <div className="mt-1 truncate text-[10px] text-text-faint">{track ? `${providerLabel} · ${playing ? 'Playing' : 'Paused'}` : 'Add a link below to begin'}</div>
+          </div>
+        </div>
+
+        {controllable && (
+          <>
+            <div className="mt-3 flex items-center gap-2" data-testid="music-player-seekbar">
+              <span className="w-9 text-right text-[10px] tabular-nums text-text-faint">{format(shown)}</span>
+              <div
+                ref={barRef}
+                role="slider"
+                aria-label="Seek"
+                aria-valuemin={0}
+                aria-valuemax={canSeek ? Math.floor(duration) : 0}
+                aria-valuenow={Math.floor(shown)}
+                aria-valuetext={format(shown)}
+                tabIndex={0}
+                className="group relative flex h-4 flex-1 cursor-pointer touch-none items-center"
+                onPointerDown={onBarDown}
+                onPointerMove={onBarMove}
+                onPointerUp={onBarUp}
+                onPointerCancel={onBarUp}
+                onKeyDown={onBarKey}
+              >
+                <div className="h-1 w-full overflow-hidden rounded-full bg-line transition-all duration-150 group-hover:h-1.5">
+                  <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
+                </div>
+                <div
+                  className="pointer-events-none absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent shadow transition-transform duration-150 group-hover:scale-125 group-active:scale-150"
+                  style={{ left: `${pct}%`, opacity: canSeek ? 1 : 0 }}
+                />
+              </div>
+              <span className="w-9 text-[10px] tabular-nums text-text-faint">{format(duration)}</span>
+            </div>
+            <div className="mt-2 flex items-center justify-center gap-2">
+              <button className="rounded-md p-1.5 text-text-faint transition hover:bg-bg hover:text-text disabled:opacity-30" disabled={list.tracks.length < 2} onClick={() => advance(-1)} title="Previous">
+                <SkipBack size={14} />
+              </button>
               <button
                 className="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-bg shadow transition hover:brightness-110 active:scale-90 disabled:opacity-40"
-                disabled={track.provider === 'youtube' && !ready}
+                disabled={track?.provider === 'youtube' && !ready}
                 onClick={togglePlay}
                 title={playing ? 'Pause' : 'Play'}
               >
                 {playing ? <Pause size={15} /> : <Play size={15} className="translate-x-[1px]" />}
               </button>
-              <button
-                className="flex h-8 w-8 items-center justify-center rounded-full border border-line text-text-faint transition hover:border-text-faint hover:text-text active:scale-90"
-                onClick={stop}
-                title="Stop"
-              >
+              <button className="flex h-8 w-8 items-center justify-center rounded-full border border-line text-text-faint transition hover:border-text-faint hover:text-text active:scale-90" onClick={stop} title="Stop">
                 <SquareStop size={15} />
               </button>
-            </>
+              <button className="rounded-md p-1.5 text-text-faint transition hover:bg-bg hover:text-text disabled:opacity-30" disabled={list.tracks.length < 2} onClick={() => advance(1)} title="Next">
+                <SkipForward size={14} />
+              </button>
+            </div>
+            <div className="mt-2 flex items-center justify-end gap-1.5">
+              <button
+                className="rounded-md p-1 text-text-faint transition hover:bg-bg hover:text-text"
+                title={muted ? 'Unmute' : 'Mute'}
+                onClick={() => {
+                  if (!muted) preMuteVolume.current = volume
+                  setMuted((m) => !m)
+                }}
+              >
+                {muted || volume === 0 ? <VolumeX size={13} /> : <Volume2 size={13} />}
+              </button>
+              <input
+                aria-label="Volume"
+                className="w-24 cursor-pointer"
+                type="range"
+                min={0}
+                max={100}
+                value={volume}
+                onChange={(e) => {
+                  const v = Number(e.target.value)
+                  setVolume(v)
+                  setMuted(v === 0)
+                }}
+                style={{ accentColor: 'var(--tok-color-accent)' }}
+              />
+              <span className="w-8 text-[10px] tabular-nums text-text-faint">{muted ? `${preMuteVolume.current}%` : `${volume}%`}</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      <form className="flex gap-1.5" onSubmit={addTrack}>
+        <input
+          className="min-w-0 flex-1 rounded-lg border border-line bg-bg px-2.5 py-2 text-[11px] text-text outline-none transition placeholder:text-text-faint focus:border-text-faint"
+          placeholder="Paste YouTube, Yandex, Spotify or audio link"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <button className="rounded-lg bg-accent px-2.5 text-bg disabled:cursor-not-allowed disabled:opacity-40" type="submit" title="Add track" aria-label="Add track" disabled={!draft.trim()}>
+          <Plus size={14} />
+        </button>
+      </form>
+
+      <div className="flex min-h-[72px] flex-1 flex-col overflow-hidden rounded-xl border border-line bg-bg">
+        <div className="flex items-center justify-between border-b border-line px-3 py-2">
+          <span className="text-[9px] font-semibold uppercase tracking-[0.15em] text-text-faint">Queue</span>
+          {track && <span className="max-w-[55%] truncate text-[10px] text-text-faint">{track.title}</span>}
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto p-1">
+          {list.tracks.length === 0 ? (
+            <div className="p-4 text-center text-[11px] text-text-faint">Your queue is empty. Add a song link above.</div>
+          ) : (
+            list.tracks.map((t, i) => (
+              <div key={t.id} className={`group flex items-center gap-2 rounded-lg px-2 py-2 ${i === trackIndex ? 'bg-bg-hover' : 'hover:bg-bg-hover/60'}`}>
+                <button
+                  className="flex min-w-0 flex-1 items-center gap-2 truncate text-left text-[11px] text-text"
+                  title={i === trackIndex ? (playing ? 'Pause' : 'Play') : `Play ${t.title}`}
+                  onClick={() => {
+                    if (i === trackIndex) togglePlay()
+                    else setTrackIndex(i)
+                  }}
+                >
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-line text-text-faint">
+                    {i === trackIndex && playing ? <Loader2 size={12} className="animate-spin" /> : <Music2 size={12} />}
+                  </span>
+                  <span className="min-w-0 truncate">{t.title}</span>
+                  <span className="shrink-0 text-[9px] uppercase text-text-faint">{t.provider}</span>
+                </button>
+                <button className="rounded p-1 text-text-faint opacity-60 transition hover:bg-bg hover:text-text group-hover:opacity-100" title={`Remove ${t.title}`} aria-label={`Remove ${t.title}`} onClick={() => removeTrack(t.id)}>
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            ))
           )}
+        </div>
+      </div>
+
+      {id && (
+        <div className="pointer-events-none absolute left-0 top-0 h-20 w-full overflow-hidden rounded border border-line bg-bg opacity-[0.01]" aria-hidden="true">
+          <img
+            className="h-full w-full object-cover"
+            src={`https://i.ytimg.com/vi/${id}/mqdefault.jpg`}
+            alt=""
+            onError={(e) => {
+              const target = e.currentTarget
+              if (!target.src.includes('/default.jpg')) target.src = `https://i.ytimg.com/vi/${id}/default.jpg`
+            }}
+          />
+          <div ref={hostRef} className="absolute inset-0" />
+        </div>
+      )}
+
+      {ytError && (
+        <div className="flex items-center gap-2 rounded-lg border border-line bg-bg p-2 text-[10px] text-text-faint">
+          <span className="min-w-0 flex-1">{ytError}</span>
           <button
-            className="rounded p-1.5 text-text-faint transition hover:text-text disabled:opacity-30"
-            disabled={list.tracks.length < 2}
-            onClick={() => advance(1)}
-            title="Next"
+            className="flex shrink-0 items-center gap-1 rounded-md border border-line px-2 py-1 text-text transition hover:bg-bg-hover"
+            onClick={() => {
+              apiPromise = null
+              setYtRetry((n) => n + 1)
+            }}
           >
-            <SkipForward size={14} />
+            <RotateCcw size={11} /> Retry
           </button>
         </div>
       )}
 
-      {id && (
-        <div className="relative h-20 overflow-hidden rounded border border-line bg-bg">
-          <img
-            className="h-full w-full object-cover opacity-50"
-            src={`https://i.ytimg.com/vi/${id}/hqdefault.jpg`}
-            alt=""
-            onError={(e) => {
-              const target = e.currentTarget
-              if (!target.src.includes('mqdefault')) {
-                target.src = `https://i.ytimg.com/vi/${id}/mqdefault.jpg`
-              }
-            }}
-          />
-          <div ref={hostRef} className="pointer-events-none absolute inset-0 opacity-[0.01]" />
-          {ytError ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-bg p-2 text-center">
-              <span className="text-[10px] text-danger">{ytError}</span>
-              <button
-                className="flex h-6 items-center gap-1 rounded bg-accent px-2 text-[10px] text-bg shadow hover:brightness-110"
-                onClick={() => {
-                  apiPromise = null
-                  setYtRetry((n) => n + 1)
-                }}
-              >
-                <RotateCcw size={11} /> Retry
-              </button>
-            </div>
-          ) : (
-            <>
-              <button
-                className="absolute inset-0 m-auto h-9 w-9 rounded-full bg-accent text-bg shadow transition hover:brightness-110 active:scale-90 disabled:opacity-50"
-                disabled={!ready}
-                onClick={togglePlay}
-                title={playing ? 'Pause' : 'Play'}
-              >
-                {playing ? <Pause size={15} className="mx-auto" /> : <Play size={15} className="mx-auto translate-x-[1px]" />}
-              </button>
-              {!ready && (
-                <div role="status" className="absolute inset-0 flex items-center justify-center gap-1.5 bg-bg/80 text-[10px] text-text-faint">
-                  <Loader2 size={12} className="animate-spin text-accent" /> Loading player…
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
-
-      {controllable && (
-        <div className="flex items-center gap-2" data-testid="music-player-seekbar">
-          <span className="w-11 text-right text-[10px] tabular-nums text-text-faint">{format(shown)}</span>
-          <div
-            ref={barRef}
-            role="slider"
-            aria-label="Seek"
-            aria-valuemin={0}
-            aria-valuemax={canSeek ? Math.floor(duration) : 0}
-            aria-valuenow={Math.floor(shown)}
-            aria-valuetext={format(shown)}
-            tabIndex={0}
-            className="group relative flex h-4 flex-1 cursor-pointer touch-none items-center"
-            onPointerDown={onBarDown}
-            onPointerMove={onBarMove}
-            onPointerUp={onBarUp}
-            onPointerCancel={onBarUp}
-            onKeyDown={onBarKey}
-          >
-            <div className="h-1 w-full overflow-hidden rounded-full bg-line transition-all duration-150 group-hover:h-1.5">
-              <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
-            </div>
-            <div
-              className="pointer-events-none absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent shadow transition-transform duration-150 group-hover:scale-125 group-active:scale-150"
-              style={{ left: `${pct}%`, opacity: canSeek ? 1 : 0 }}
-            />
-          </div>
-          <span className="w-11 text-[10px] tabular-nums text-text-faint">{format(duration)}</span>
-        </div>
-      )}
-
-      {controllable && (
-        <div className="flex items-center justify-end gap-1.5">
-            <button
-              className="rounded p-1 text-text-faint transition hover:text-text"
-              title={muted ? 'Unmute' : 'Mute'}
-              onClick={() => {
-                if (!muted) preMuteVolume.current = volume
-                setMuted((m) => !m)
-              }}
-            >
-              {muted || volume === 0 ? <VolumeX size={13} /> : <Volume2 size={13} />}
-            </button>
-            <input
-              aria-label="Volume"
-              className="w-24 cursor-pointer"
-              type="range"
-              min={0}
-              max={100}
-              value={volume}
-              onChange={(e) => {
-                const v = Number(e.target.value)
-                setVolume(v)
-                setMuted(v === 0)
-              }}
-              style={{ accentColor: 'var(--tok-color-accent)' }}
-            />
-            <span className="w-8 text-[10px] tabular-nums text-text-faint">{muted ? `${preMuteVolume.current}%` : `${volume}%`}</span>
-        </div>
-      )}
-
-      {mediaError && <div className="rounded border border-danger/40 bg-danger/10 p-2 text-[10px] text-danger">{mediaError}</div>}
-
-      {track?.provider === 'audio' && (
-        <div className="flex h-14 items-center justify-center gap-2 rounded border border-line bg-bg">
-          <Music2 size={15} className={`text-accent ${playing ? 'animate-pulse' : ''}`} />
-          <span className="max-w-[75%] truncate text-[11px] text-text">{track.title}</span>
-        </div>
-      )}
+      {mediaError && <div className="rounded-lg border border-line bg-bg p-2 text-[10px] text-text-faint">{mediaError}</div>}
 
       {track?.provider === 'audio' && audioSrc && (
         <audio
@@ -864,51 +829,30 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
         />
       )}
 
-      {track?.provider === 'youtube' && !id && (
-        <div className="rounded border border-line bg-bg p-2 text-[10px] text-text-faint">
-          Could not read a video id from this YouTube link — use a normal watch, youtu.be or shorts URL.
-        </div>
-      )}
+      {track?.provider === 'youtube' && !id && <div className="rounded-lg border border-line bg-bg p-2 text-[10px] text-text-faint">Could not read a video id from this YouTube link — use a normal watch, youtu.be or shorts URL.</div>}
 
       {(track?.provider === 'yandex' || track?.provider === 'spotify') &&
         (embed ? (
-          <>
-            <div className="rounded border border-line bg-bg p-2 text-[10px] text-text-faint">
-              Controls live in embed below — use the player directly.
-            </div>
+          <div className="overflow-hidden rounded-lg border border-line bg-bg">
+            <div className="border-b border-line px-3 py-2 text-[10px] text-text-faint">Controls for {providerLabel} are available below.</div>
             <iframe
               key={track.id}
               title={track.title}
               src={embed}
-              className="w-full rounded border border-line"
+              className="w-full"
               style={{ height: track.provider === 'spotify' ? 80 : 100 }}
               frameBorder={0}
               allow="autoplay; encrypted-media; clipboard-write"
               tabIndex={0}
             />
-          </>
-        ) : (
-          <div className="rounded border border-line bg-bg p-2 text-[10px] text-text-faint">
-            Could not detect a playable track id in this link — open it directly instead.
           </div>
+        ) : (
+          <div className="rounded-lg border border-line bg-bg p-2 text-[10px] text-text-faint">Could not detect a playable track id in this link.</div>
         ))}
 
-      {track && isSafeUrl(track.url) && sanitizeUrl(track.url) && (
-        <a className="flex items-center gap-1 text-[10px] text-text-faint hover:text-accent" href={sanitizeUrl(track.url) ?? undefined} target="_blank" rel="noreferrer noopener">
-          <ExternalLink size={11} /> Open current track
-        </a>
-      )}
-
-      <form className="flex gap-1.5" onSubmit={addList}>
-        <input
-          className="min-w-0 flex-1 rounded border border-line bg-bg px-2 py-1.5 text-[11px] text-text"
-          placeholder="New playlist name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <button className="rounded border border-line px-2 text-[11px] text-text" type="submit">
-          Create
-        </button>
+      <form className="flex gap-1.5 border-t border-line pt-2" onSubmit={addList}>
+        <input className="min-w-0 flex-1 rounded-lg border border-line bg-bg px-2.5 py-2 text-[11px] text-text outline-none placeholder:text-text-faint focus:border-text-faint" placeholder="New playlist name" value={name} onChange={(e) => setName(e.target.value)} />
+        <button className="rounded-lg border border-line px-2.5 text-[11px] text-text transition hover:bg-bg-hover" type="submit">Create</button>
       </form>
     </div>
   )

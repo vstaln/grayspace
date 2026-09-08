@@ -7,7 +7,6 @@ import type { WorkView } from './components/TitleBar'
 import { useCanvas, MAX_WIDGETS } from './hooks/useCanvas'
 import { useCoordination } from './hooks/useCoordination'
 import { Camera, MIN_H, MIN_W, NON_MAXIMIZABLE, Point, ResizeDir, Stroke, Widget, WidgetKind, WIDGET_DEFAULTS, WIDGET_H, WIDGET_W } from './types'
-import Toolbar from './components/Toolbar'
 import ErrorBoundary from './components/ErrorBoundary'
 import StrokesLayer from './components/StrokesLayer'
 import ConnectionsLayer from './components/ConnectionsLayer'
@@ -16,6 +15,7 @@ import { ConfirmProvider, useConfirm } from './components/ConfirmDialog'
 import { useSettings } from './hooks/useSettings'
 import { DRAW_CLICK_THRESHOLD_PX } from './lib/canvasMetrics'
 import { ToastContainer, usePersistErrorToasts, useToasts } from './components/Toast'
+import Toolbar from './components/Toolbar'
 
 // Heavy surfaces behind a first-use gate are also code-split: their modules
 // (board UI and the chat/code panes) no
@@ -29,12 +29,21 @@ const CodeView = lazy(() => import('./components/CodeView'))
 /** Per-session counter so local widget ids never collide (CANV-12). */
 let localCounter = 0
 
+// The frameless title bar is a 40px overlay at the top of the window. Canvas
+// widgets must never be allowed to move or resize into that reserved area.
+const TITLE_BAR_HEIGHT = 40
+
+function titleBarWorldY(cameraY: number, zoom: number): number {
+  return (TITLE_BAR_HEIGHT - cameraY) / (zoom || 1)
+}
+
 export default function App(): React.JSX.Element {
   // Which surface the title bar's switcher is showing. All three stay
   // mounted once started: the canvas owns live terminals, the browser owns
   // loaded pages, and Code owns its own terminal sessions — none of them
   // should be torn down just because another is on screen.
   const [activeView, setActiveView] = useState<WorkView>('canvas')
+  const [codeSidebarCollapsed, setCodeSidebarCollapsed] = useState(false)
   // The browser view is built on first use, so a session that never opens
   // it pays nothing for the guest process. Same for the Code view.
   const [chatStarted, setChatStarted] = useState(false)
@@ -94,6 +103,18 @@ export default function App(): React.JSX.Element {
     void window.api.code.save({ activeView: view, codeWorkspaceId: codeWorkspaceIdRef.current }).catch(() => {})
   }, [])
 
+  useEffect(() => {
+    const onMissionView = (event: Event): void => {
+      const view = (event as CustomEvent<{ view?: WorkView }>).detail?.view
+      if (view !== 'canvas' && view !== 'chat') return
+      if (view === 'chat') setChatStarted(true)
+      setActiveView(view)
+      void window.api.code.save({ activeView: view, codeWorkspaceId: codeWorkspaceIdRef.current }).catch(() => {})
+    }
+    window.addEventListener('orcspace:mission-view', onMissionView)
+    return () => window.removeEventListener('orcspace:mission-view', onMissionView)
+  }, [])
+
   const { toasts, push, dismiss } = useToasts()
   usePersistErrorToasts(push)
 
@@ -106,7 +127,12 @@ export default function App(): React.JSX.Element {
             <TitleBar activeView={activeView} onViewChange={showView} />
             <div className="flex flex-1 flex-col">
               <ErrorBoundary>
-                <OrcSpaceCanvas active={activeView === 'canvas'} activeView={activeView} />
+                <OrcSpaceCanvas
+                  active={activeView === 'canvas'}
+                  activeView={activeView}
+                  sidebarCollapsed={codeSidebarCollapsed}
+                  onToggleSidebar={() => setCodeSidebarCollapsed((collapsed) => !collapsed)}
+                />
               </ErrorBoundary>
             </div>
             {chatStarted && (
@@ -119,7 +145,7 @@ export default function App(): React.JSX.Element {
             {codeStarted && (
               <ErrorBoundary>
                 <Suspense fallback={<div role="status" className="grid h-full place-items-center text-text-dim">Loading…</div>}>
-                  <CodeView active={activeView === 'code'} />
+                  <CodeView active={activeView === 'code'} sidebarCollapsed={codeSidebarCollapsed} />
                 </Suspense>
               </ErrorBoundary>
             )}
@@ -158,7 +184,7 @@ function Wallpaper(): React.JSX.Element | null {
         {dimRatio > 0 && (
           <div
             className="wallpaper-dim"
-            style={{ backgroundColor: `rgba(0, 0, 0, ${dimRatio})` }}
+            style={{ backgroundColor: `rgba(8, 9, 11, ${dimRatio})` }}
           />
         )}
       </div>
@@ -177,7 +203,17 @@ function Wallpaper(): React.JSX.Element | null {
   )
 }
 
-function OrcSpaceCanvas({ active, activeView }: { active: boolean; activeView: WorkView }): React.JSX.Element {
+function OrcSpaceCanvas({
+  active,
+  activeView,
+  sidebarCollapsed,
+  onToggleSidebar
+}: {
+  active: boolean
+  activeView: WorkView
+  sidebarCollapsed: boolean
+  onToggleSidebar(): void
+}): React.JSX.Element {
   const { settings } = useSettings()
   const canvas = useCanvas()
   const {
@@ -191,7 +227,9 @@ function OrcSpaceCanvas({ active, activeView }: { active: boolean; activeView: W
     strokes,
     strokeColor,
     setStrokeColor,
-    connections
+    connections,
+    connectWidgets,
+    disconnectWidgets
   } = canvas
   const coordination = useCoordination()
   const confirm = useConfirm()
@@ -318,7 +356,7 @@ function OrcSpaceCanvas({ active, activeView }: { active: boolean; activeView: W
       const viewH = mainSize.h > 0 ? mainSize.h : window.innerHeight
       const margin = 32 / zoom
       const minX = (-camera.x) / zoom + margin
-      const minY = (-camera.y) / zoom + margin
+      const minY = Math.max((-camera.y) / zoom + margin, titleBarWorldY(camera.y, zoom))
       const maxX = (viewW - camera.x) / zoom - margin - Math.min(w, viewW / zoom - margin * 2)
       const maxY = (viewH - camera.y) / zoom - margin - Math.min(h, viewH / zoom - margin * 2)
       return {
@@ -336,7 +374,11 @@ function OrcSpaceCanvas({ active, activeView }: { active: boolean; activeView: W
     const cy = mainSize.h > 0 ? mainSize.h / 2 : window.innerHeight / 2
     const halfW = WIDGET_W / 2
     const halfH = WIDGET_H / 2
-    const world = toWorld(cx - halfW, cy - halfH)
+    // Convert the viewport center first, then subtract world-space half-size.
+    // Subtracting screen pixels before `toWorld` shifts the widget whenever
+    // zoom is not 1:1.
+    const center = toWorld(cx, cy)
+    const world = { x: center.x - halfW, y: center.y - halfH }
     const clamped = clampToVisibleWorld(world, WIDGET_W, WIDGET_H)
     if (!canvas.addWidget(clamped)) {
       setCanvasNotice('Canvas is full — close a widget before adding another.')
@@ -350,16 +392,125 @@ function OrcSpaceCanvas({ active, activeView }: { active: boolean; activeView: W
   }, [spawnTerminalAtCenter])
 
   const placeWidget = useCallback(
-    (kind: WidgetKind, point: Point): void => {
+    (kind: WidgetKind, point: Point, requestedId?: string, title?: string): string | null => {
       const defaults = WIDGET_DEFAULTS[kind]
       const w = defaults.w
       const h = defaults.h
-      if (!canvas.addWidget(clampToVisibleWorld(point, w, h), `${kind}-${Date.now()}-${++localCounter}`, undefined, kind)) {
+      const id = requestedId || `${kind}-${Date.now()}-${++localCounter}`
+      // Mission retries are idempotent: an already-mounted Planner is reused,
+      // never opened a second time for the same mission.
+      if (requestedId && widgetsRef.current.some((widget) => widget.id === requestedId)) return requestedId
+      if (!canvas.addWidget(clampToVisibleWorld(point, w, h), id, title, kind)) {
         setCanvasNotice('Canvas is full — close a widget before adding another.')
+        return null
       }
+      return id
     },
     [canvas.addWidget, clampToVisibleWorld]
   )
+
+  const missionLinksRef = useRef(new Map<string, { plannerId: string; terminalId: string; positioned: boolean }>())
+  const missionPlannerByPlanRef = useRef(new Map<string, string>())
+
+  // Mission mode always uses one stable Planner widget and one selected worker
+  // per run. The terminal itself is reserved by main's dispatch pipeline and
+  // arrives through control:add-widget, so this effect also handles either
+  // event arriving first without creating a duplicate Planner.
+  useEffect(() => {
+    const ensurePlanner = (planId: string | undefined, missionId: string | undefined, title: string | undefined, anchorTerminalId?: string): string => {
+      const existingForPlan = planId ? missionPlannerByPlanRef.current.get(planId) : undefined
+      const existingPlanner = widgetsRef.current.find((widget) => widget.kind === 'planner')
+      const plannerId = existingForPlan || existingPlanner?.id || `mission-planner-${planId || missionId || Date.now()}`
+      const anchor = anchorTerminalId ? widgetsRef.current.find((widget) => widget.id === anchorTerminalId) : undefined
+      const center = toWorld(
+        mainSize.w > 0 ? mainSize.w / 2 : window.innerWidth / 2,
+        mainSize.h > 0 ? mainSize.h / 2 : window.innerHeight / 2
+      )
+      const planner = widgetsRef.current.find((widget) => widget.id === plannerId)
+      if (!planner) {
+        const plannerTitle = title ? (title.startsWith('Mission ·') ? title : `Mission · ${title}`) : 'Mission Planner'
+        placeWidget(
+          'planner',
+          anchor
+            ? { x: anchor.x + anchor.w + 80, y: anchor.y }
+            : { x: center.x - WIDGET_DEFAULTS.planner.w / 2, y: center.y - WIDGET_DEFAULTS.planner.h / 2 },
+          plannerId,
+          plannerTitle
+        )
+      }
+      if (planId) missionPlannerByPlanRef.current.set(planId, plannerId)
+      return plannerId
+    }
+
+    const onMissionPlan = (event: Event): void => {
+      const detail = (event as CustomEvent<{ planId?: string; title?: string; anchorTerminalId?: string }>).detail
+      if (!detail?.planId) return
+      ensurePlanner(detail.planId, undefined, detail.title, detail.anchorTerminalId)
+    }
+    const onMissionStart = (event: Event): void => {
+      const detail = (event as CustomEvent<{
+        missionId?: string
+        planId?: string
+        title?: string
+        terminalId?: string
+      }>).detail
+      if (!detail?.missionId || !detail.terminalId) return
+      if (missionLinksRef.current.has(detail.missionId)) return
+      const plannerId = ensurePlanner(detail.planId, detail.missionId, detail.title)
+      missionLinksRef.current.set(detail.missionId, {
+        plannerId,
+        terminalId: detail.terminalId,
+        positioned: false
+      })
+    }
+    window.addEventListener('orcspace:mission-plan', onMissionPlan)
+    window.addEventListener('orcspace:mission-start', onMissionStart)
+    const onMissionWorker = (event: Event): void => {
+      const detail = (event as CustomEvent<{ planId?: string; terminalId?: string }>).detail
+      if (!detail?.planId || !detail.terminalId) return
+      const plannerId = missionPlannerByPlanRef.current.get(detail.planId)
+      if (plannerId) connectWidgets(plannerId, detail.terminalId)
+    }
+    window.addEventListener('orcspace:mission-worker', onMissionWorker)
+    return () => {
+      window.removeEventListener('orcspace:mission-plan', onMissionPlan)
+      window.removeEventListener('orcspace:mission-start', onMissionStart)
+      window.removeEventListener('orcspace:mission-worker', onMissionWorker)
+    }
+  }, [connectWidgets, mainSize.h, mainSize.w, placeWidget, toWorld])
+
+  useEffect(() => {
+    for (const link of missionLinksRef.current.values()) {
+      const planner = widgets.find((widget) => widget.id === link.plannerId)
+      const terminal = widgets.find((widget) => widget.id === link.terminalId)
+      if (!planner || !terminal) continue
+      if (!link.positioned) {
+        canvas.updateWidget(link.terminalId, {
+          x: planner.x + planner.w + 80,
+          y: planner.y + 35
+        })
+        link.positioned = true
+      }
+      connectWidgets(link.plannerId, link.terminalId)
+    }
+  }, [canvas.updateWidget, connectWidgets, widgets])
+
+  useEffect(() => {
+    const onConnect = (event: Event): void => {
+      const detail = (event as CustomEvent<{ controllerId?: string; terminalId?: string }>).detail
+      if (detail?.controllerId && detail.terminalId) connectWidgets(detail.controllerId, detail.terminalId)
+    }
+    const onDisconnect = (event: Event): void => {
+      const detail = (event as CustomEvent<{ controllerId?: string; terminalId?: string }>).detail
+      if (detail?.controllerId) disconnectWidgets(detail.controllerId, detail.terminalId)
+    }
+    window.addEventListener('orcspace:mission-connect', onConnect)
+    window.addEventListener('orcspace:mission-disconnect', onDisconnect)
+    return () => {
+      window.removeEventListener('orcspace:mission-connect', onConnect)
+      window.removeEventListener('orcspace:mission-disconnect', onDisconnect)
+    }
+  }, [connectWidgets, disconnectWidgets])
 
   /* Notes/Second Brain were removed; canvas widgets are self-contained. */
 
@@ -392,9 +543,13 @@ function OrcSpaceCanvas({ active, activeView }: { active: boolean; activeView: W
       const { x: origX, y: origY } = widget
       const startZoom = cameraRef.current.zoom
       const onMove = (ev: MouseEvent): void => {
+        const zoom = cameraRef.current.zoom || 1
         canvas.updateWidget(id, {
           x: origX + (ev.clientX - startX) / startZoom,
-          y: origY + (ev.clientY - startY) / startZoom
+          y: Math.max(
+            origY + (ev.clientY - startY) / startZoom,
+            titleBarWorldY(cameraRef.current.y, zoom)
+          )
         })
       }
       trackDrag(onMove)
@@ -435,6 +590,12 @@ function OrcSpaceCanvas({ active, activeView }: { active: boolean; activeView: W
         else if (kind === 'files') { w = Math.min(w, 760); h = Math.min(h, 620) }
         else if (kind === 'music-player') { w = Math.min(w, 620); h = Math.min(h, 580) }
         else if (kind === 'orchestration') { w = Math.min(w, 760); h = Math.min(h, 720) }
+        const minY = titleBarWorldY(cameraRef.current.y, cameraRef.current.zoom)
+        if (y < minY) {
+          const bottom = y + h
+          y = minY
+          h = Math.max(MIN_H, bottom - y)
+        }
         canvas.updateWidget(id, { x, y, w, h })
       }
       trackDrag(onMove)
@@ -595,9 +756,18 @@ function OrcSpaceCanvas({ active, activeView }: { active: boolean; activeView: W
         else if (k === 'files') { width = Math.min(width, 760); height = Math.min(height, 620) }
         else if (k === 'music-player') { width = Math.min(width, 620); height = Math.min(height, 580) }
         else if (k === 'orchestration') { width = Math.min(width, 760); height = Math.min(height, 720) }
+        const minY = titleBarWorldY(cameraRef.current.y, cameraRef.current.zoom)
+        if (y < minY) {
+          const bottom = y + height
+          y = minY
+          height = Math.max(MIN_H, bottom - y)
+        }
         canvas.updateWidget(id, { x, y, w: width, h: height })
       } else {
-        canvas.updateWidget(id, { x: widget.x + dx * step, y: widget.y + dy * step })
+        canvas.updateWidget(id, {
+          x: widget.x + dx * step,
+          y: Math.max(widget.y + dy * step, titleBarWorldY(cameraRef.current.y, cameraRef.current.zoom))
+        })
       }
     },
     [canvas]
@@ -607,6 +777,21 @@ function OrcSpaceCanvas({ active, activeView }: { active: boolean; activeView: W
   // focus; Shift+arrows make fine 10px steps.
   const onCanvasKey = (e: React.KeyboardEvent<HTMLElement>): void => {
     if (e.target !== e.currentTarget) return
+    handleCanvasShortcut(e)
+  }
+
+  // Canvas shortcuts should also work after focus lands on the app shell (for
+  // example after using the sidebar). Inputs, terminals, and widgets retain
+  // their own keyboard contracts.
+  const handleCanvasShortcut = (e: KeyboardEvent | React.KeyboardEvent<HTMLElement>): void => {
+    const target = e.target as HTMLElement | null
+    if (
+      target &&
+      target !== mainRef.current &&
+      target.closest(
+        'input,textarea,select,button,[role="button"],[contenteditable="true"],.widget,.xterm,.term-shell,.rail,.board,.board-shell,[role="dialog"],[role="menu"]'
+      )
+    ) return
     const dirs: Record<string, [number, number]> = {
       ArrowLeft: [-1, 0],
       ArrowRight: [1, 0],
@@ -644,8 +829,21 @@ function OrcSpaceCanvas({ active, activeView }: { active: boolean; activeView: W
     setCamera((c) => ({ ...c, x: c.x - dir[0] * step, y: c.y - dir[1] * step }))
   }
 
+  useEffect(() => {
+    if (!active) return
+    const onWindowKey = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented) return
+      handleCanvasShortcut(event)
+    }
+    window.addEventListener('keydown', onWindowKey)
+    return () => window.removeEventListener('keydown', onWindowKey)
+  }, [active, camera.zoom])
+
   const onCanvasPointerDown = (e: React.PointerEvent): void => {
-    if ((e.target as HTMLElement).closest('.widget, .board, .board-shell, .rail, [data-canvas-scroll-lock]')) return
+    // Portalled controls are not DOM descendants of the canvas widget that
+    // opened them. Guard them here as well as in the menu itself: otherwise a
+    // click on an agent item can start a canvas pan/draw underneath the menu.
+    if ((e.target as HTMLElement).closest('.widget, .board, .board-shell, .rail, [role="menu"], [data-canvas-scroll-lock]')) return
 
     if (tool === 'draw' && e.button === 0) {
       e.preventDefault()
@@ -842,20 +1040,23 @@ function OrcSpaceCanvas({ active, activeView }: { active: boolean; activeView: W
           
           // Save to media store
           const saved = await window.api.media.saveBytes(bytes, ext)
+          if (saved && 'error' in saved) {
+            setCanvasNotice(`Failed to save image: ${saved.error}`)
+            continue
+          }
           if (saved && 'path' in saved) {
             // Get world coordinates from drop point
-            const point = screenToWorld(e.clientX, e.clientY)
-            
-            // Check if it's a trivial image (small enough to be a marker)
-            const isTrivial = file.size < 10 * 1024 // 10KB threshold for trivial images
-            
-            if (isTrivial) {
-              // Place as a marker (use terminal defaults for small marker)
-              placeWidget('terminal', point)
-            } else {
-              // Open in browser widget for larger images
-              placeWidget('browser', point)
-              // TODO: Actually load the image in the browser widget
+            const point = toWorld(e.clientX, e.clientY)
+            // Display the dropped image in a browser widget. BrowserWidget
+            // reads it through the media bridge as a data URL; this avoids an
+            // empty terminal placeholder and makes the saved file useful.
+            const widgetId = placeWidget('browser', point)
+            if (widgetId) {
+              window.setTimeout(() => {
+                window.dispatchEvent(new CustomEvent('orcspace:open-image', {
+                  detail: { widgetId, path: saved.path, name: file.name }
+                }))
+              }, 0)
             }
           }
         } catch (err) {
@@ -993,6 +1194,8 @@ function OrcSpaceCanvas({ active, activeView }: { active: boolean; activeView: W
         taskCount={openTasks}
         onToggleBoard={onToggleBoard}
         onPickDir={onPickDir}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={onToggleSidebar}
       />
       <div className={active ? 'contents' : 'contents invisible pointer-events-none'} aria-hidden={!active} inert={!active}>
           <main
@@ -1047,7 +1250,8 @@ function OrcSpaceCanvas({ active, activeView }: { active: boolean; activeView: W
                   const cy = mainSize.h > 0 ? mainSize.h / 2 : window.innerHeight / 2
                   const halfW = WIDGET_W / 2
                   const halfH = WIDGET_H / 2
-                  const world = toWorld(cx - halfW, cy - halfH)
+                  const center = toWorld(cx, cy)
+                  const world = { x: center.x - halfW, y: center.y - halfH }
                   const clamped = clampToVisibleWorld(world, WIDGET_W, WIDGET_H)
                   if (!canvas.addWidget(clamped)) {
                     setCanvasNotice('Canvas is full — close a widget before adding another.')
@@ -1113,6 +1317,7 @@ function OrcSpaceCanvas({ active, activeView }: { active: boolean; activeView: W
             onPickSysMonitor={() => { placeWidget('sys-monitor', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickTimer={() => { placeWidget('timer', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickPlanner={() => { placeWidget('planner', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onPickMission={() => { placeWidget('mission', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickBoard={() => { placeWidget('board', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickOrchestration={() => { placeWidget('orchestration', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickBrowser={() => { placeWidget('browser', toWorld(menu.x, menu.y)); setMenu(null) }}
@@ -1197,4 +1402,6 @@ function clamp(value: number, min: number, max: number): number {
  *  the canvas column already carries pt-10, which keeps the frame clear of the
  *  transparent TitleBar. One stable identity for every maximized frame keeps
  *  the memo comparison all-equal. */
-const MAXIMIZED_STYLE: React.CSSProperties = { left: 0, top: 0, right: 0, bottom: 0, zIndex: 200 }
+// The frameless title bar is an absolute 40px overlay above the canvas. Keep
+// maximized widgets below it so their Restore/Close controls remain clickable.
+const MAXIMIZED_STYLE: React.CSSProperties = { left: 0, top: TITLE_BAR_HEIGHT, right: 0, bottom: 0, zIndex: 200 }

@@ -8,7 +8,7 @@ export interface VerifiedBadgeProps {
 }
 
 /**
- * Blue verified checkmark badge imported from Dashboard/assets/css/base.css & dashboard-app.jsx.
+ * Blue verified checkmark badge.
  */
 export function VerifiedBadge({
   size = 15,

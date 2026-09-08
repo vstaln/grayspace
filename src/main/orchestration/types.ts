@@ -42,6 +42,8 @@ export const MESSAGE_TYPES = [
   'escalation',
   /** Worker → coordinator: blocking question; the worker waits for a reply. */
   'ask',
+  /** Worker → human: a safety-sensitive action needs explicit approval. */
+  'permission',
   /** Any → any: the answer to an `ask`, addressed by `replyTo`. */
   'reply',
   /** Any → any: unstructured note or broadcast. */

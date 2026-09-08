@@ -345,7 +345,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     }
     core.locks.heartbeat(registered.agentId)
     const baseVersion = typeof body.baseVersion === 'number' ? body.baseVersion : undefined
-    return core.bus.submit<T>({ actorId: registered.agentId, type, target, payload, baseVersion })
+    return core.flow.submit<T>({ actorId: registered.agentId, type, target, payload, baseVersion })
   }
 
   const reply = <T>(result: CommandResult<T>, okStatus = 200): void => {
@@ -377,7 +377,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       workspaceDir: deps.defaultCwd() ?? null,
       terminals: terminals.list().length,
       managerId: coordination.managerId,
-      commands: core.bus.types()
+      commands: core.flow.types()
     })
   }
 
@@ -404,7 +404,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
         locks: core.locks.list(),
         plannerItems,
         journal: { lastSeq: core.journal.lastSeq, entries: core.journal.since(since) },
-        commands: core.bus.types(),
+        commands: core.flow.types(),
       })
     )
   }
@@ -449,7 +449,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     const body = method === 'GET' ? {} : await readJson(req)
     if (method === 'GET' && parts[1] === 'status') {
       core.actors.register({ id: 'system', type: 'system', label: 'OrcSpace', transport: 'internal' })
-      return reply(await core.bus.submit({ actorId: 'system', type: 'git.refresh', target: GIT_TARGET, payload: {} }))
+      return reply(await core.flow.submit({ actorId: 'system', type: 'git.refresh', target: GIT_TARGET, payload: {} }))
     }
     if (method === 'POST' && parts[1] === 'commit') {
       return reply(await submit(body, 'git.commit', GIT_TARGET, { message: body.message }))
@@ -577,7 +577,9 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
         return reply(
           await submit(body, 'terminal.write', `terminal:${worker.id}`, {
             text: String(body.text ?? ''),
-            pressEnter: body.pressEnter !== false
+            pressEnter: body.pressEnter !== false,
+            confirmDelivery: true,
+            deliveryTimeoutMs: typeof body.deliveryTimeoutMs === 'number' ? body.deliveryTimeoutMs : undefined
           })
         )
       }
@@ -844,7 +846,9 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     return reply(
       await submit(body, 'terminal.write', `terminal:${id}`, {
         text,
-        pressEnter: body.pressEnter !== false
+        pressEnter: body.pressEnter !== false,
+        confirmDelivery: body.confirmDelivery !== false,
+        deliveryTimeoutMs: typeof body.deliveryTimeoutMs === 'number' ? body.deliveryTimeoutMs : undefined
       })
     )
   }

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { patchWindowsPtyAgents } from '../scripts/patch-pty.mjs'
@@ -26,6 +26,35 @@ function ensureElectronPty() {
     const addonName = process.platform === 'win32' ? 'conpty.node' : 'pty.node'
     const addon = join(packageDir, 'build', 'Release', addonName)
     if (existsSync(addon)) return
+
+    // A previous Windows distribution contains the Electron-compatible addon.
+    // Reuse it when the machine has no Visual Studio C++ workload; otherwise a
+    // fresh checkout cannot start terminals even though the app was packaged.
+    if (process.platform === 'win32') {
+      const bundledRelease = join(
+        repoRoot,
+        'dist',
+        'win-unpacked',
+        'resources',
+        'app.asar.unpacked',
+        'node_modules',
+        '@homebridge',
+        'node-pty-prebuilt-multiarch',
+        'build',
+        'Release'
+      )
+      const bundledAddon = join(bundledRelease, addonName)
+      if (existsSync(bundledAddon)) {
+        mkdirSync(dirname(addon), { recursive: true })
+        for (const file of ['conpty.node', 'conpty_console_list.node', 'winpty-agent.exe', 'winpty.dll']) {
+          const source = join(bundledRelease, file)
+          if (existsSync(source)) copyFileSync(source, join(dirname(addon), file))
+        }
+        console.log(`[pty] Restored ${addonName} from the existing Windows distribution.`)
+        patchWindowsPtyAgents(packageDir)
+        return
+      }
+    }
 
     const nodeGyp = join(
       repoRoot,
@@ -88,6 +117,10 @@ const napi = existsSync(localBin) ? localBin : process.platform === 'win32' ? 'n
 const failed = []
 for (const crate of CRATES) {
   const crateDir = join(repoRoot, 'native', crate)
+  const hasNode = existsSync(crateDir) && readdirSync(crateDir).some((f) => f.endsWith('.node'))
+  if (hasNode && existsSync(join(crateDir, 'loader.cjs')) && !process.env.FORCE_NATIVE_REBUILD) {
+    continue
+  }
   const result = spawnSync(napi, ['build', '--platform', '--release'], {
     cwd: crateDir,
     stdio: 'inherit',

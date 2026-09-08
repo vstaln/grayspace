@@ -5,7 +5,7 @@ loadEnvFile()
 import { app, Menu } from 'electron'
 import { join } from 'path'
 import { IS_MAC, initAppSwitches, requestInstanceLock, initAutoUpdater, registerProtocols } from './bootstrap.ts'
-import { setupOrcProtocol } from './protocol.ts'
+import { setupOrcProtocol, setupMediaHeaders } from './protocol.ts'
 import { createAppStores } from './appStores.ts'
 import {
   createWindow,
@@ -113,6 +113,7 @@ if (hasInstanceLock) {
 
   app.whenReady().then(() => {
     setupOrcProtocol()
+    setupMediaHeaders()
     if (process.platform === 'win32') {
       app.setAppUserModelId(app.isPackaged ? 'com.orcspace.app' : 'com.orcspace.app.dev')
     }

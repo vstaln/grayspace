@@ -30,7 +30,7 @@ describe('file.* commands on the bus', () => {
   test('file.write creates and overwrites, journaling each commit', async () => {
     const { core } = harness()
     const abs = join(dir, 'a.txt')
-    const r1 = await core.bus.submit({
+    const r1 = await core.flow.submit({
       actorId: 'user',
       type: 'file.write',
       target: targetOf(abs),
@@ -39,7 +39,7 @@ describe('file.* commands on the bus', () => {
     assert.equal(r1.ok, true)
     assert.equal(fs.readFileSync(abs, 'utf8'), 'one')
 
-    const r2 = await core.bus.submit({
+    const r2 = await core.flow.submit({
       actorId: 'agent-a',
       type: 'file.write',
       target: targetOf(abs),
@@ -53,7 +53,7 @@ describe('file.* commands on the bus', () => {
     const { core } = harness()
     const abs = join(dir, 'locked.txt')
     core.locks.acquire({ resource: targetOf(abs), actorId: 'agent-a', reason: 'refactor' })
-    const res = await core.bus.submit({
+    const res = await core.flow.submit({
       actorId: 'user',
       type: 'file.write',
       target: targetOf(abs),
@@ -68,7 +68,7 @@ describe('file.* commands on the bus', () => {
     const { core } = harness()
     const a = join(dir, 'a.txt')
     const b = join(dir, 'b.txt')
-    const res = await core.bus.submit({
+    const res = await core.flow.submit({
       actorId: 'user',
       type: 'file.write',
       target: targetOf(a),
@@ -81,7 +81,7 @@ describe('file.* commands on the bus', () => {
   test('UNC / relative paths are refused', async () => {
     const { core } = harness()
     const unc = '\\\\host\\share\\x.txt'
-    const resUnc = await core.bus.submit({
+    const resUnc = await core.flow.submit({
       actorId: 'user',
       type: 'file.write',
       target: targetOf(unc),
@@ -90,7 +90,7 @@ describe('file.* commands on the bus', () => {
     assert.equal(resUnc.ok === false && resUnc.code, 'invalid')
 
     const rel = 'relative/path.txt'
-    const resRel = await core.bus.submit({
+    const resRel = await core.flow.submit({
       actorId: 'user',
       type: 'file.write',
       target: targetOf(rel),
@@ -103,7 +103,7 @@ describe('file.* commands on the bus', () => {
     const { core } = harness()
     const abs = join(dir, 'exists.txt')
     fs.writeFileSync(abs, '')
-    const dup = await core.bus.submit({
+    const dup = await core.flow.submit({
       actorId: 'user',
       type: 'file.create',
       target: targetOf(abs),
@@ -113,7 +113,7 @@ describe('file.* commands on the bus', () => {
 
     const subdir = join(dir, 'sub')
     fs.mkdirSync(subdir)
-    const dupDir = await core.bus.submit({
+    const dupDir = await core.flow.submit({
       actorId: 'user',
       type: 'file.mkdir',
       target: targetOf(subdir),
@@ -127,7 +127,7 @@ describe('file.* commands on the bus', () => {
     const src = join(dir, 'src.txt')
     const dst = join(dir, 'dst.txt')
     fs.writeFileSync(src, 'data')
-    const ok = await core.bus.submit({
+    const ok = await core.flow.submit({
       actorId: 'user',
       type: 'file.rename',
       target: targetOf(src),
@@ -140,7 +140,7 @@ describe('file.* commands on the bus', () => {
     // An existing destination must not be clobbered.
     const blocker = join(dir, 'blocked.txt')
     fs.writeFileSync(blocker, 'keep')
-    const refused = await core.bus.submit({
+    const refused = await core.flow.submit({
       actorId: 'user',
       type: 'file.rename',
       target: targetOf(dst),
@@ -154,7 +154,7 @@ describe('file.* commands on the bus', () => {
     const { core } = harness()
     const file = join(dir, 'gone.txt')
     fs.writeFileSync(file, '')
-    const del = await core.bus.submit({
+    const del = await core.flow.submit({
       actorId: 'user',
       type: 'file.delete',
       target: targetOf(file),
@@ -166,7 +166,7 @@ describe('file.* commands on the bus', () => {
     const folder = join(dir, 'folder')
     fs.mkdirSync(folder)
     fs.writeFileSync(join(folder, 'inner.txt'), '')
-    const delDir = await core.bus.submit({
+    const delDir = await core.flow.submit({
       actorId: 'user',
       type: 'file.delete',
       target: targetOf(folder),
@@ -175,7 +175,7 @@ describe('file.* commands on the bus', () => {
     assert.equal(delDir.ok, true)
     assert.equal(fs.existsSync(folder), false)
 
-    const missing = await core.bus.submit({
+    const missing = await core.flow.submit({
       actorId: 'user',
       type: 'file.delete',
       target: targetOf(file),
@@ -186,14 +186,14 @@ describe('file.* commands on the bus', () => {
 
   test('definitions are registered — schema validation works', async () => {
     const { core } = harness()
-    const def = core.bus.getDefinition('file.write')
+    const def = core.flow.getDefinition('file.write')
     assert.ok(def, 'file.write has a definition')
-    const catalog = core.bus.catalog().map((d) => d.type)
+    const catalog = core.flow.catalog().map((d) => d.type)
     assert.ok(catalog.includes('file.write'))
     assert.ok(catalog.includes('file.rename'))
 
     // Schema validation fires before the handler: missing content → invalid.
-    const badPayload = await core.bus.submit({
+    const badPayload = await core.flow.submit({
       actorId: 'user',
       type: 'file.write',
       target: targetOf(join(dir, 'x.txt')),
@@ -212,7 +212,7 @@ describe('file.* commands on the bus', () => {
     await Promise.all(
       paths.map(async (p, i) => {
         startedAt.set(p, Date.now() - t0)
-        return core.bus.submit({
+        return core.flow.submit({
           actorId: i === 0 ? 'user' : 'agent-a',
           type: 'file.write',
           target: targetOf(p),

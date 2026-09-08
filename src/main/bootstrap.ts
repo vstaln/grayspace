@@ -52,13 +52,21 @@ export function initAppSwitches(): void {
   app.commandLine.appendSwitch('enable-zero-copy')
   app.commandLine.appendSwitch('ignore-gpu-blocklist')
   app.commandLine.appendSwitch('enable-accelerated-2d-canvas')
-  // Prevent background throttling so Code view, Canvas, and background terminal streams never lag or freeze
-  app.commandLine.appendSwitch('disable-background-timer-throttling')
-  app.commandLine.appendSwitch('disable-renderer-backgrounding')
-  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+
+  // Resource & Memory Optimization:
+  // Cap V8 heap to 384 MB so the engine proactively garbage-collects and compacts
+  app.commandLine.appendSwitch('js-flags', '--max-old-space-size=384')
+  // Bound disk and media cache to 32 MB to prevent disk & RAM bloat
+  app.commandLine.appendSwitch('disk-cache-size', '33554432')
+  app.commandLine.appendSwitch('media-cache-size', '33554432')
+  // Disable telemetry, background component updaters, and crash reporter daemons
+  app.commandLine.appendSwitch('disable-breakpad')
+  app.commandLine.appendSwitch('disable-component-update')
+  app.commandLine.appendSwitch('disable-domain-reliability')
+  app.commandLine.appendSwitch('disable-features', 'MediaRouter')
+
   if (process.platform === 'win32') {
     app.commandLine.appendSwitch('use-angle', 'd3d11')
-    app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
   }
 }
 

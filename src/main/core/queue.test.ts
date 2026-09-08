@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
 import { ActorRegistry } from './actors.ts'
-import { CommandBus } from './bus.ts'
+import { CommandFlow } from './flow.ts'
 import { Journal } from './journal.ts'
 import { LockManager } from './locks.ts'
 import { ActorRateLimiter, PriorityCommandQueue } from './queue.ts'
@@ -80,11 +80,11 @@ describe('Priority Queue, Rate Limiter and Backpressure', () => {
     assert.equal(limiter.tryConsume('agent-1'), false)
   })
 
-  test('CommandBus responds with rate_limited (429) when agent exceeds rate quota', async () => {
+  test('CommandFlow responds with rate_limited (429) when agent exceeds rate quota', async () => {
     const actors = new ActorRegistry()
     const locks = new LockManager()
     const journal = new Journal()
-    const bus = new CommandBus({
+    const bus = new CommandFlow({
       actors,
       locks,
       journal,

@@ -669,7 +669,7 @@ function CreateAttachmentsPreview({
             )}
             <button
               type="button"
-              className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-bg-panel text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100 hover:bg-bg-raise"
+              className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-bg-panel text-text opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100 hover:bg-bg-raise"
               title="Remove"
               aria-label="Remove attachment"
               onClick={() => onRemove(idx)}
@@ -907,7 +907,7 @@ function PlanAttachments({
             )}
             <button
               type="button"
-              className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-bg-panel text-white opacity-0 transition-opacity group-hover/thumb:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100 hover:bg-bg-raise disabled:opacity-50"
+              className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-bg-panel text-text opacity-0 transition-opacity group-hover/thumb:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100 hover:bg-bg-raise disabled:opacity-50"
               title="Remove photo"
               aria-label="Remove photo"
               disabled={pending}

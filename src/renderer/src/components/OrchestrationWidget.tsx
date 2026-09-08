@@ -91,6 +91,11 @@ export default function OrchestrationWidget(): React.JSX.Element {
     return snapshot.messages.filter((m) => m.type === 'ask' && !answered.has(m.id))
   }, [snapshot.messages])
 
+  const pendingPermissions = useMemo(() => {
+    const answered = new Set(snapshot.messages.filter((m) => m.type === 'reply').map((m) => m.replyTo))
+    return snapshot.messages.filter((m) => m.type === 'permission' && !answered.has(m.id))
+  }, [snapshot.messages])
+
   const unaccounted = useMemo(() => dispatches.filter((d) => d.state === 'settled'), [dispatches])
   const running = useMemo(() => dispatches.filter((d) => d.state === 'running'), [dispatches])
 
@@ -173,6 +178,25 @@ export default function OrchestrationWidget(): React.JSX.Element {
 
       <div className="flex-1 overflow-y-auto px-3 py-2">
         {/* Things that need a person come first — everything else is agents' work. */}
+        {pendingPermissions.length > 0 && (
+          <Section icon={<ShieldAlert size={12} />} title="Permission required">
+            {pendingPermissions.map((permission) => (
+              <PermissionCard
+                key={permission.id}
+                permission={permission}
+                value={draft[permission.id] ?? ''}
+                busy={isBusy(permission.id)}
+                onChange={(value) => setDraft((d) => ({ ...d, [permission.id]: value }))}
+                onRespond={(approved) =>
+                  act(permission.id, () =>
+                    window.api.orchestration.respondToPermission(permission.id, approved, draft[permission.id] ?? '')
+                  )
+                }
+              />
+            ))}
+          </Section>
+        )}
+
         {pendingAsks.length > 0 && (
           <Section icon={<HelpCircle size={12} />} title="Waiting on you">
             {pendingAsks.map((ask) => (
@@ -371,6 +395,56 @@ function AskCard({
           title="Send reply"
         >
           <Send size={12} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function PermissionCard({
+  permission,
+  value,
+  busy,
+  onChange,
+  onRespond
+}: {
+  permission: OrcMessage
+  value: string
+  busy: boolean
+  onChange(value: string): void
+  onRespond(approved: boolean): void
+}): React.JSX.Element {
+  return (
+    <div className="mb-2 rounded-[8px] border border-line bg-bg-hover/25 p-2">
+      <p className="text-[10px] text-text-faint">
+        {permission.from}
+        {permission.taskId ? ` · ${permission.taskId}` : ''}
+      </p>
+      <p className="mt-0.5 text-text">{permission.body || permission.subject}</p>
+      <input
+        value={value}
+        disabled={busy}
+        placeholder="Optional note…"
+        aria-label="Permission note"
+        className="mt-1.5 w-full rounded-[6px] border border-line bg-bg-raise px-2 py-1 text-[11px] text-text outline-none focus:border-accent"
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <div className="mt-1.5 flex gap-1">
+        <button
+          type="button"
+          disabled={busy}
+          className="rounded-[6px] border border-line bg-bg-raise px-2 py-1 text-[11px] text-text hover:bg-bg-hover disabled:opacity-50"
+          onClick={() => onRespond(true)}
+        >
+          Allow
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          className="rounded-[6px] border border-line bg-bg-raise px-2 py-1 text-[11px] text-text-dim hover:bg-bg-hover disabled:opacity-50"
+          onClick={() => onRespond(false)}
+        >
+          Deny
         </button>
       </div>
     </div>

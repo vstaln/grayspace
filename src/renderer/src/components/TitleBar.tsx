@@ -19,6 +19,7 @@ import CodexIcon from './CodexIcon'
 import ClaudeIcon from './ClaudeIcon'
 import GrokIcon from './GrokIcon'
 import OpenCodeIcon from './OpenCodeIcon'
+import CursorIcon from './CursorIcon'
 import type { GitStatus, SystemStats } from '../../../preload/index.d'
 import { IS_MAC } from '../lib/platform'
 
@@ -54,6 +55,8 @@ function renderAgentIcon(id: string, size = 13): React.JSX.Element {
       return <GrokIcon size={size} />
     case 'opencode':
       return <OpenCodeIcon size={size} />
+    case 'cursor':
+      return <CursorIcon size={size} />
     default:
       return <Activity size={size} className="text-accent" />
   }
@@ -525,7 +528,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
 
                     {openAgents.length === 0 ? (
                       <div className="space-y-2">
-                        <div className="rounded-[8px] border border-line-soft/60 bg-black/20 p-2 text-center text-[11px] text-text-dim">
+                        <div className="rounded-[8px] border border-line-soft/60 bg-bg-hover p-2 text-center text-[11px] text-text-dim">
                           No active AI sessions detected. Showing recent CLI agent limits:
                         </div>
                         {(usageStats.agents || []).slice(0, 2).map((ag) => {
@@ -535,7 +538,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                           return (
                             <div
                               key={ag.id}
-                              className="rounded-[8px] border border-line-soft/60 bg-black/20 p-2 space-y-1.5 opacity-80"
+                              className="rounded-[8px] border border-line-soft/60 bg-bg-hover p-2 space-y-1.5 opacity-80"
                             >
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-1.5 min-w-0">
@@ -549,7 +552,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                                 </span>
                               </div>
                               {/* 5-Hour */}
-                              <div className="space-y-1 rounded bg-black/20 p-1.5 border border-white/5 text-[10px]">
+                              <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft text-[10px]">
                                 <div className="flex justify-between">
                                   <span className="text-text-dim flex items-center gap-1"><Clock size={10} className="text-[#38bdf8]" /> 5h Remaining:</span>
                                   <span className={`font-semibold tabular-nums ${getRemainingColor(rem5h)}`}>
@@ -565,7 +568,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                                 </div>
                               </div>
                               {/* Weekly */}
-                              <div className="space-y-1 rounded bg-black/20 p-1.5 border border-white/5 text-[10px]">
+                              <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft text-[10px]">
                                 <div className="flex justify-between">
                                   <span className="text-text-dim flex items-center gap-1"><Calendar size={10} className="text-[#7fd99a]" /> Weekly Remaining:</span>
                                   <span className={`font-semibold tabular-nums ${getRemainingColor(remWk)}`}>
@@ -582,7 +585,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                               </div>
                               {/* Monthly */}
                               {ag.monthly && remMo !== null && (
-                                <div className="space-y-1 rounded bg-black/20 p-1.5 border border-white/5 text-[10px]">
+                                <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft text-[10px]">
                                   <div className="flex justify-between">
                                     <span className="text-text-dim flex items-center gap-1"><Layers size={10} className="text-[#a78bfa]" /> Monthly Remaining:</span>
                                     <span className={`font-semibold tabular-nums ${getRemainingColor(remMo)}`}>
@@ -615,7 +618,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                           return (
                             <div
                               key={ag.id}
-                              className="rounded-[8px] border border-line-soft/80 bg-black/30 p-2.5 space-y-2.5 transition-colors hover:border-line"
+                              className="rounded-[8px] border border-line-soft/80 bg-bg-hover p-2.5 space-y-2.5 transition-colors hover:border-line"
                             >
                               {/* Agent Header */}
                               <div>
@@ -648,7 +651,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                               </div>
 
                               {/* 5-Hour Limit Remaining */}
-                              <div className="space-y-1 rounded bg-black/20 p-2 border border-white/5">
+                              <div className="space-y-1 rounded bg-bg-hover p-2 border border-line-soft">
                                 <div className="flex items-center justify-between text-[11px]">
                                   <span className="flex items-center gap-1 text-text font-medium">
                                     <Clock size={11} className="text-[#38bdf8]" />
@@ -671,7 +674,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                               </div>
 
                               {/* Weekly Limit Remaining */}
-                              <div className="space-y-1 rounded bg-black/20 p-2 border border-white/5">
+                              <div className="space-y-1 rounded bg-bg-hover p-2 border border-line-soft">
                                 <div className="flex items-center justify-between text-[11px]">
                                   <span className="flex items-center gap-1 text-text font-medium">
                                     <Calendar size={11} className="text-[#7fd99a]" />
@@ -695,7 +698,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
 
                               {/* Monthly Limit Remaining */}
                               {ag.monthly && remMo !== null && (
-                                <div className="space-y-1 rounded bg-black/20 p-2 border border-white/5">
+                                <div className="space-y-1 rounded bg-bg-hover p-2 border border-line-soft">
                                   <div className="flex items-center justify-between text-[11px]">
                                     <span className="flex items-center gap-1 text-text font-medium">
                                       <Layers size={11} className="text-[#a78bfa]" />
@@ -733,7 +736,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
 
                     <div className="space-y-2 text-[11px]">
                       {/* CPU */}
-                      <div className="rounded-[8px] border border-line-soft/60 bg-black/20 p-2">
+                      <div className="rounded-[8px] border border-line-soft/60 bg-bg-hover p-2">
                         <div className="mb-1 flex items-center justify-between">
                           <span className="flex items-center gap-1 text-text-dim">
                             <Cpu size={11} className="text-[#7aa2f7]" />
@@ -761,7 +764,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                       </div>
 
                       {/* RAM */}
-                      <div className="rounded-[8px] border border-line-soft/60 bg-black/20 p-2">
+                      <div className="rounded-[8px] border border-line-soft/60 bg-bg-hover p-2">
                         <div className="mb-1 flex items-center justify-between">
                           <span className="flex items-center gap-1 text-text-dim">
                             <HardDrive size={11} className="text-[#7fd99a]" />
@@ -903,7 +906,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                 {maximized ? <Copy size={13} strokeWidth={2} /> : <Square size={13} strokeWidth={2} />}
               </button>
               <button
-                className={`${ICON} text-text-dim hover:bg-[#e04343] hover:text-white`}
+                className={`${ICON} text-text-dim hover:bg-bg-hover hover:text-text`}
                 title="Close"
                 aria-label="Close"
                 onClick={() => void Promise.resolve(window.api.window.close()).catch(() => {})}

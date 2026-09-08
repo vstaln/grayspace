@@ -7,7 +7,16 @@ import { killProcessTree } from './procTree.ts'
 import { quoteWin32CmdArg } from './ipc/shared.ts'
 
 /** Chat models the pane offers — ids match the renderer's ChatPane picker. */
-export type ChatModelId = 'codex' | 'claude' | 'grok' | 'antigravity' | 'opencode'
+export type ChatModelId =
+  | 'codex'
+  | 'claude'
+  | 'grok'
+  | 'antigravity'
+  | 'opencode'
+  | 'gemini'
+  | 'cursor'
+  | 'aider'
+  | 'custom'
 
 export type ChatEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
 
@@ -16,6 +25,8 @@ export interface ChatSendOptions {
   effort?: ChatEffort
   /** Absolute image paths for CLIs that support native initial attachments. */
   images?: string[]
+  /** Custom CLI argv template. Use {prompt}, or the prompt is appended. */
+  command?: string
 }
 
 const MODEL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$/
@@ -26,6 +37,9 @@ interface ModelSpec {
   /** Non-interactive ("headless") arguments that make the CLI print its
    *  answer to stdout and exit instead of opening a TUI. */
   headlessArgs: string[]
+  modelFlag?: boolean
+  effortFlag?: boolean | 'codex-config' | 'opencode-variant'
+  customTemplate?: boolean
 }
 
 /**
@@ -35,13 +49,17 @@ interface ModelSpec {
  * visible failure instead of the old silent "отправлено в CLI" stub.
  */
 const MODELS: Record<ChatModelId, ModelSpec> = {
-  claude: { command: 'claude', headlessArgs: ['-p'] },
+  claude: { command: 'claude', headlessArgs: ['-p'], modelFlag: true, effortFlag: true },
   // JSONL keeps Codex' diagnostic banner, echoed prompt and token accounting
   // out of the chat bubble. ChatRunner extracts only agent messages below.
-  codex: { command: 'codex', headlessArgs: ['exec', '--skip-git-repo-check', '--json'] },
-  grok: { command: 'grok', headlessArgs: ['-p'] },
-  antigravity: { command: 'agy', headlessArgs: ['-p'] },
-  opencode: { command: 'opencode', headlessArgs: ['run'] }
+  codex: { command: 'codex', headlessArgs: ['exec', '--skip-git-repo-check', '--json'], modelFlag: true, effortFlag: 'codex-config' },
+  grok: { command: 'grok', headlessArgs: ['-p'], modelFlag: true, effortFlag: true },
+  antigravity: { command: 'agy', headlessArgs: ['-p'], modelFlag: true, effortFlag: true },
+  opencode: { command: 'opencode', headlessArgs: ['run'], modelFlag: true, effortFlag: 'opencode-variant' },
+  gemini: { command: 'gemini', headlessArgs: ['-p'], modelFlag: true },
+  cursor: { command: 'cursor-agent', headlessArgs: ['-p'], modelFlag: true },
+  aider: { command: 'aider', headlessArgs: ['--message'], modelFlag: true },
+  custom: { command: '', headlessArgs: [], customTemplate: true }
 }
 
 const IS_WIN = process.platform === 'win32'
@@ -105,13 +123,21 @@ export function buildChatProcessEnv(useElectronAsNode = false): Record<string, s
 }
 
 function buildInvocationArgs(spec: ModelSpec, prompt: string, options?: ChatSendOptions): string[] {
+  if (spec.customTemplate) {
+    const parsed = parseCustomCommand(options?.command ?? '')
+    const hasPlaceholder = parsed.args.some((arg) => arg.includes('{prompt}'))
+    const args = parsed.args.map((arg) => arg.replaceAll('{prompt}', prompt))
+    if (!hasPlaceholder) args.push(prompt)
+    return args
+  }
   const args = [...spec.headlessArgs]
-  if (options?.model) args.push('--model', options.model)
-  if (options?.effort) {
+  if (spec.modelFlag && options?.model) args.push('--model', options.model)
+  if (spec.effortFlag && options?.effort) {
     // Codex CLI 0.152+ removed the old --effort flag. Its equivalent is a
     // TOML config override; passing --effort makes `codex exec` fail before it
     // ever sees the prompt (the error shown in Chat).
-    if (spec.command === 'codex') args.push('--config', `model_reasoning_effort=${options.effort}`)
+    if (spec.effortFlag === 'codex-config') args.push('--config', `model_reasoning_effort=${options.effort}`)
+    else if (spec.effortFlag === 'opencode-variant') args.push('--variant', options.effort)
     else args.push('--effort', options.effort)
   }
   // Codex consumes images as repeatable --image arguments before the prompt.
@@ -130,9 +156,57 @@ export function buildChatInvocationArgs(model: ChatModelId, prompt: string, opti
   return buildInvocationArgs(MODELS[model], prompt, options)
 }
 
+export function parseCustomCommand(value: string): { command: string; args: string[] } {
+  const source = String(value ?? '').trim()
+  if (!source || source.length > 512) throw new Error('custom CLI command is required (max 512 characters)')
+  const tokens: string[] = []
+  let current = ''
+  let quote: '"' | "'" | null = null
+  for (const char of source) {
+    if (quote) {
+      if (char === quote) quote = null
+      else current += char
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current)
+        current = ''
+      }
+      continue
+    }
+    current += char
+  }
+  if (quote) throw new Error('custom CLI command has an unclosed quote')
+  if (current) tokens.push(current)
+  const command = tokens.shift() ?? ''
+  if (!command || /[\r\n\0]/.test(command)) throw new Error('custom CLI command is invalid')
+  return { command, args: tokens }
+}
+
 function resolveInvocation(spec: ModelSpec, prompt: string, options?: ChatSendOptions): ResolvedInvocation {
   const invocationArgs = buildInvocationArgs(spec, prompt, options)
   if (!IS_WIN) {
+    return { command: spec.command, args: invocationArgs, shell: false }
+  }
+
+  // A custom CLI may be an absolute path with spaces. Resolve it before the
+  // PATH scan; joining PATH entries to an already absolute command produces a
+  // malformed path and falls through to an unquoted cmd.exe invocation.
+  if (path.isAbsolute(spec.command) && fs.existsSync(spec.command)) {
+    const directExt = path.extname(spec.command).toLowerCase()
+    if (directExt === '.exe') return { command: spec.command, args: invocationArgs, shell: false }
+    if (directExt === '.cmd' || directExt === '.bat') {
+      return {
+        command: 'cmd.exe',
+        args: ['/d', '/s', '/c', spec.command, ...invocationArgs.map(quoteWin32CmdArg)],
+        shell: false
+      }
+    }
     return { command: spec.command, args: invocationArgs, shell: false }
   }
 
@@ -233,7 +307,7 @@ export class ChatRunner extends EventEmitter {
     if (typeof threadId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(threadId)) {
       return { error: 'invalid thread id' }
     }
-    const spec = MODELS[model]
+    let spec = MODELS[model]
     if (!spec) return { error: `unknown model: ${String(model)}` }
     if (typeof prompt !== 'string' || !prompt.trim()) return { error: 'empty prompt' }
     if (prompt.length > MAX_PROMPT_CHARS) {
@@ -241,6 +315,14 @@ export class ChatRunner extends EventEmitter {
     }
     if (options?.model !== undefined && !MODEL_NAME_RE.test(options.model)) {
       return { error: 'invalid model id' }
+    }
+    if (model === 'custom') {
+      try {
+        const parsed = parseCustomCommand(options?.command ?? '')
+        spec = { command: parsed.command, headlessArgs: parsed.args, customTemplate: true }
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) }
+      }
     }
     // A new message replaces whatever the thread was still generating.
     this.stop(threadId)

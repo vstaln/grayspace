@@ -9,6 +9,12 @@ import type { AppState } from './appState.ts'
 
 let mainWindow: BrowserWindow | null = null
 
+// Browser guests are untrusted content. Only capabilities that do not expose
+// device data or network surfaces are allowed without an explicit product flow.
+// Electron's permission API is allow-by-callback, so unknown/new permissions
+// must remain denied by default rather than being silently granted.
+const ALLOWED_WEBVIEW_PERMISSIONS = new Set(['fullscreen', 'pointerLock'])
+
 export function getMainWindow(): BrowserWindow | null {
   return mainWindow
 }
@@ -48,19 +54,16 @@ export function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
-    // Min width 1024: TitleBar centre island (~40px controls each side) +
-    // rail (56px) + board minimum (~900px). Updated from 800 to 1024 to accommodate
-    // the combined TitleBar + rail + board layout.
     minWidth: 1024,
     minHeight: 560,
-    show: true,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: false,
-    ...(IS_MAC ? { trafficLightPosition: { x: 14, y: 13 } } : {}),
+    show: false,
+    ...(IS_MAC
+      ? { titleBarStyle: 'hidden', trafficLightPosition: { x: 14, y: 13 } }
+      : { frame: false }),
     autoHideMenuBar: true,
     transparent: false,
     hasShadow: true,
-    backgroundColor: '#080808',
+    backgroundColor: '#08090b',
     title: APP_TITLE,
     webPreferences: {
       preload: getPreloadPath(),
@@ -68,19 +71,44 @@ export function createWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true,
-      spellcheck: false
+      spellcheck: false,
+      backgroundThrottling: true
     }
   })
 
-  win.on('ready-to-show', () => {
+  win.once('ready-to-show', () => {
     win.show()
     win.focus()
   })
 
-  // Forward renderer errors only (level 3 === error; 0 verbose / 1 info /
-  // 2 warning stay in the renderer devtools). Forwarding every console-message
-  // at info level drowned real failures in noise.
-  win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+  // Failsafe: guarantee window visibility even if Vite dev compilation delays initial paint
+  const showTimer = setTimeout(() => {
+    if (!win.isDestroyed() && !win.isVisible()) {
+      win.show()
+      win.focus()
+    }
+  }, 1200)
+  win.once('show', () => clearTimeout(showTimer))
+
+  // Forward renderer errors only (level 3 === error).
+  // Supports both legacy (event, level, message, line, sourceId) and modern (event, details) signatures.
+  win.webContents.on('console-message', (_event, ...args: unknown[]) => {
+    let level = 0
+    let message = ''
+    let line = 0
+    let sourceId = ''
+    if (args.length === 1 && typeof args[0] === 'object' && args[0] !== null) {
+      const details = args[0] as { level?: number; message?: string; lineNumber?: number; sourceId?: string }
+      level = details.level ?? 0
+      message = details.message ?? ''
+      line = details.lineNumber ?? 0
+      sourceId = details.sourceId ?? ''
+    } else {
+      level = Number(args[0]) || 0
+      message = String(args[1] || '')
+      line = Number(args[2]) || 0
+      sourceId = String(args[3] || '')
+    }
     if (level < 3) return
     console.error(`[Renderer:${level}] ${message} (${sourceId}:${line})`)
   })
@@ -212,17 +240,11 @@ export function setupWebContentsHandlers(sendFn: (channel: string, ...args: unkn
       if (!ok) e.preventDefault()
     })
 
-    // Browser guests get no privileged capabilities: deny media capture,
-    // geolocation and notifications outright; leave the rest (fullscreen,
-    // pointer lock, …) to the Chromium default handling.
+    // Browser guests get no privileged capabilities. Keep this deny-by-default
+    // because Electron may add permission names in future releases.
     try {
-      contents.session.setPermissionRequestHandler((webContents, permission, callback) => {
-        void webContents
-        if (permission === 'media' || permission === 'geolocation' || permission === 'notifications') {
-          callback(false)
-          return
-        }
-        callback(true)
+      contents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
+        callback(ALLOWED_WEBVIEW_PERMISSIONS.has(permission))
       })
     } catch {
       /* session may be torn down during shutdown */

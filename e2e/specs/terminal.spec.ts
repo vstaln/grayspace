@@ -6,6 +6,7 @@ import {
   terminalFrame,
   waitForTerminalShell,
   waitForTerminalOutput,
+  readTerminalOutput,
   listTerminals,
   type OrcSpaceFixture
 } from '../helpers/app'
@@ -72,4 +73,30 @@ test('the agent-launch button types the CLI command into the shell', async () =>
   // The default agent is Antigravity; the contract is that its real CLI command
   // reaches the shell without substituting a different provider.
   await waitForTerminalOutput(ctx, id, (output) => output.includes('agy'))
+})
+
+test('Code paste is delivered only to the focused terminal', async () => {
+  const { page } = ctx
+
+  await page.getByRole('tab', { name: 'Code' }).click()
+  await page.getByRole('button', { name: 'Launch', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Launch Code Session' })
+  await dialog.getByRole('button', { name: /Launch 4 terminals/ }).click()
+
+  const textareas = page.getByTestId('code-view').locator('.xterm-helper-textarea')
+  await expect(textareas).toHaveCount(4, { timeout: 30_000 })
+  await expect
+    .poll(async () => (await listTerminals(ctx)).filter((terminal) => terminal.id.startsWith('code-')).length, { timeout: 30_000 })
+    .toBe(4)
+
+  const codeTerminals = (await listTerminals(ctx)).filter((terminal) => terminal.id.startsWith('code-'))
+  const marker = `CODE_PASTE_${Date.now()}`
+  await page.evaluate(async (value) => { await navigator.clipboard.writeText(value) }, marker)
+  await textareas.nth(2).focus()
+  await page.keyboard.press('Control+Shift+V')
+
+  await expect.poll(async () => {
+    const outputs = await Promise.all(codeTerminals.map((terminal) => readTerminalOutput(ctx, terminal.id)))
+    return outputs.filter((output) => output.includes(marker)).length
+  }, { timeout: 10_000 }).toBe(1)
 })

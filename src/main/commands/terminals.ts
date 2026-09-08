@@ -38,9 +38,9 @@ export function registerTerminalCommands({
   forgetOrigin,
   defaultCwd
 }: CommandDeps): void {
-  const { bus } = core
+  const { flow } = core
 
-  bus.registerDefinition<
+  flow.registerDefinition<
     { title?: string; cwd?: string; agentOwned?: boolean },
     { id: string; title: string; cwd: string; ready: boolean }
   >({
@@ -104,7 +104,7 @@ export function registerTerminalCommands({
    * supplies the real cols/rows, which must be known before the shell starts
    * or full-screen TUIs render against the wrong geometry.
    */
-  bus.registerDefinition<
+  flow.registerDefinition<
     { cols?: number; rows?: number; cwd?: string },
     { ok: boolean; error?: string; scrollback?: string; live?: boolean }
   >({
@@ -145,9 +145,22 @@ export function registerTerminalCommands({
     }
   })
 
-  bus.registerDefinition<
-    { text?: string; command?: string; input?: string; content?: string; pressEnter?: boolean },
-    { ok: true; id: string; text: string }
+  flow.registerDefinition<
+    {
+      text?: string
+      command?: string
+      input?: string
+      content?: string
+      pressEnter?: boolean
+      confirmDelivery?: boolean
+      deliveryTimeoutMs?: number
+    },
+    {
+      ok: true
+      id: string
+      text: string
+      delivery?: { id: string; status: 'delivered'; confirmedAt: number; evidence: 'terminal-output' }
+    }
   >({
     type: 'terminal.write',
     description:
@@ -161,7 +174,9 @@ export function registerTerminalCommands({
         command: { type: 'string', description: 'Alias of text' },
         input: { type: 'string', description: 'Alias of text' },
         content: { type: 'string', description: 'Alias of text' },
-        pressEnter: { type: 'boolean', description: 'Submit after typing (default true)' }
+        pressEnter: { type: 'boolean', description: 'Submit after typing (default true)' },
+        confirmDelivery: { type: 'boolean', description: 'Wait for observable target-terminal output before reporting success' },
+        deliveryTimeoutMs: { type: 'number', description: 'Receipt timeout in milliseconds' }
       }
     },
     handler: {
@@ -216,6 +231,32 @@ export function registerTerminalCommands({
           // this command types, by contract, and a newline mid-text has never
           // been anything other than an accident of the source.
           const singleLine = text.replace(/\r\n|\r|\n/g, ' ')
+          if (command.payload?.confirmDelivery === true) {
+            const receipt = await terminals.deliverLine(id, singleLine, {
+              pressEnter: command.payload?.pressEnter !== false,
+              timeoutMs: command.payload?.deliveryTimeoutMs,
+              signal
+            })
+            if (!receipt.ok) {
+              throw new CommandError('failed', receipt.error, {
+                deliveryId: receipt.id,
+                terminalId: receipt.terminalId,
+                status: 'not_sent'
+              })
+            }
+            return {
+              ok: true as const,
+              id,
+              text: singleLine,
+              delivery: {
+                id: receipt.id,
+                status: 'delivered' as const,
+                confirmedAt: receipt.confirmedAt,
+                evidence: receipt.evidence
+              }
+            }
+          }
+
           const written = terminals.write(id, singleLine)
           if (!written.ok) throw new CommandError('failed', written.error)
           if (command.payload?.pressEnter !== false) {
@@ -260,7 +301,7 @@ export function registerTerminalCommands({
    * cross-actor exclusion comes from the lock gate below, which still runs —
    * an agent holding `terminal:<id>` still locks the user out.
    */
-  bus.registerDefinition<{ data: string }, { ok: true }>({
+  flow.registerDefinition<{ data: string }, { ok: true }>({
     type: 'terminal.input',
     description: '(Internal) raw keystrokes from the owning widget — no Enter added.',
     targetScheme: 'terminal',
@@ -283,7 +324,7 @@ export function registerTerminalCommands({
     }
   })
 
-  bus.registerDefinition<{ cols: number; rows: number }, { ok: true }>({
+  flow.registerDefinition<{ cols: number; rows: number }, { ok: true }>({
     type: 'terminal.resize',
     description: '(Internal) resize a terminal widget’s pty geometry.',
     targetScheme: 'terminal',
@@ -304,7 +345,7 @@ export function registerTerminalCommands({
     }
   })
 
-  bus.registerDefinition<Record<string, never>, { id: string }>({
+  flow.registerDefinition<Record<string, never>, { id: string }>({
     type: 'terminal.dispose',
     description: 'Kill a terminal’s shell process and drop its snapshot.',
     targetScheme: 'terminal',
