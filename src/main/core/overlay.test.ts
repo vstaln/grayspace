@@ -55,17 +55,17 @@ describe('Shadow Store Overlay — VersionRegistry overlay, Dry-Run, Speculation
 
     assert.equal(versions.current('n1'), 5)
 
-    // Create shadow overlay
+
     versions.createOverlay('shadow-1')
     assert.equal(versions.current('n1', 'shadow-1'), 5, 'reads base version initially')
 
-    // Bump in shadow overlay
+
     const shadowV1 = versions.bump('n1', 'shadow-1')
     assert.equal(shadowV1, 6)
     assert.equal(versions.current('n1', 'shadow-1'), 6, 'shadow sees bumped version')
     assert.equal(versions.current('n1'), 5, 'base remains unchanged at version 5')
 
-    // Commit shadow overlay
+
     versions.commit('shadow-1')
     assert.equal(versions.current('n1'), 6, 'base now reflects committed version')
   })
@@ -76,18 +76,18 @@ describe('Shadow Store Overlay — VersionRegistry overlay, Dry-Run, Speculation
 
     const baseNote = { id: 'n1', title: 'Base Note', version: 1 }
 
-    // Read through: no overlay entry returns base
+
     assert.deepEqual(manager.readComposite('note:n1', baseNote, 'overlay-test'), baseNote)
 
-    // Put overlay modification
+
     overlay.set('note:n1', { id: 'n1', title: 'Overlaid Note', version: 2 }, 2)
     assert.equal(manager.readComposite('note:n1', baseNote, 'overlay-test')?.title, 'Overlaid Note')
 
-    // Mark as deleted in overlay
+
     overlay.delete('note:n1', 3)
     assert.equal(manager.readComposite('note:n1', baseNote, 'overlay-test'), undefined)
 
-    // Discard overlay drops all modifications
+
     manager.discard('overlay-test')
     assert.deepEqual(manager.readComposite('note:n1', baseNote, 'overlay-test'), baseNote)
   })
@@ -104,7 +104,7 @@ describe('Shadow Store Overlay — VersionRegistry overlay, Dry-Run, Speculation
 
     const initialJournalSeq = journal.lastSeq
 
-    // Dry-run an update
+
     const dryRunResult = await bus.dryRun<{ id: string; body: string; version: number }>({
       actorId: 'user',
       type: 'note.update',
@@ -119,7 +119,7 @@ describe('Shadow Store Overlay — VersionRegistry overlay, Dry-Run, Speculation
     assert.equal(dryRunResult.diff[0].target, 'note:n1')
     assert.equal(dryRunResult.diff[0].op, 'put')
 
-    // Persistent state remains unchanged
+
     assert.equal(notes.get('n1')?.body, 'Base version')
     assert.equal(notes.get('n1')?.version, 1)
     assert.equal(journal.lastSeq, initialJournalSeq, 'no permanent journal entries written')
@@ -135,7 +135,7 @@ describe('Shadow Store Overlay — VersionRegistry overlay, Dry-Run, Speculation
       payload: { id: 'n1', body: 'Original text' }
     })
 
-    // Run Plan A (Refactor approach) vs Plan B (Rewrite approach)
+
     const speculation = await bus.speculate<{ id: string; body: string; version: number }>({
       'plan-a': [
         {
@@ -165,7 +165,7 @@ describe('Shadow Store Overlay — VersionRegistry overlay, Dry-Run, Speculation
     const planBValue = speculation['plan-b'].diff[0].value as { body: string }
     assert.equal(planBValue.body, 'Plan B: Clean rewrite')
 
-    // Base store is untouched during speculation
+
     assert.equal(notes.get('n1')?.body, 'Original text')
   })
 
@@ -175,7 +175,7 @@ describe('Shadow Store Overlay — VersionRegistry overlay, Dry-Run, Speculation
     const overlayId = 'try-experimental-features'
     const overlay = bus.createOverlay(overlayId)
 
-    // Execute command within the shadow overlay
+
     const result = await bus.submit<{ id: string; body: string; version: number }>(
       {
         actorId: 'user',
@@ -191,7 +191,7 @@ describe('Shadow Store Overlay — VersionRegistry overlay, Dry-Run, Speculation
     assert.equal(noteVersions.current('experimental', overlayId), 1)
     assert.equal(noteVersions.current('experimental'), 0)
 
-    // Rollback / discard in one single operation
+
     const discarded = bus.discardOverlay(overlayId)
     assert.equal(discarded, true)
     assert.equal(bus.hasOverlay(overlayId), false)

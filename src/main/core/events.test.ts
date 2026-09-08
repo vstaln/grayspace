@@ -103,25 +103,25 @@ describe('Event Sourcing Core — fold, replay, rewind, blame, fork', () => {
   })
 
   test('rewind reconstructs state at any historical sequence', () => {
-    // At seq 1: only n1 exists with initial text
+
     const atSeq1 = rewind(1, events, noteReducer, { snapshotSeq: 0, state: { notes: new Map() } })
     assert.equal(atSeq1.notes.size, 1)
     assert.equal(atSeq1.notes.get('n1')?.content, 'Initial text')
 
-    // At seq 3: n1 has updated content, n2 exists
+
     const atSeq3 = rewind(3, events, noteReducer, { snapshotSeq: 0, state: { notes: new Map() } })
     assert.equal(atSeq3.notes.size, 2)
     assert.equal(atSeq3.notes.get('n1')?.content, 'Human edited text')
     assert.equal(atSeq3.notes.get('n2')?.title, 'Second Note')
 
-    // At seq 4: before n1 deletion
+
     const atSeq4 = rewind(4, events, noteReducer, { snapshotSeq: 0, state: { notes: new Map() } })
     assert.equal(atSeq4.notes.size, 2)
     assert.equal(atSeq4.notes.has('n1'), true)
   })
 
   test('rewind works with snapshot base', () => {
-    // Snapshot taken at seq 2
+
     const snapshotAtSeq2 = {
       snapshotSeq: 2,
       state: {

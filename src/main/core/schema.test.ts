@@ -54,7 +54,7 @@ describe('Command Schema Registry & Validation', () => {
       }
     })
 
-    // Valid command succeeds
+
     const validRes = await bus.submit({
       actorId: 'user',
       type: 'note.create',
@@ -63,7 +63,7 @@ describe('Command Schema Registry & Validation', () => {
     })
     assert.equal(validRes.ok, true)
 
-    // Invalid command fails schema validation before handler runs
+
     const invalidRes = await bus.submit({
       actorId: 'user',
       type: 'note.create',
@@ -74,7 +74,7 @@ describe('Command Schema Registry & Validation', () => {
     assert.equal(invalidRes.code, 'invalid')
     assert.ok(invalidRes.message.includes('missing required field "title"'))
 
-    // Catalog reflects registered definitions
+
     const catalog = bus.catalog()
     assert.equal(catalog.length, 1)
     assert.equal(catalog[0].type, 'note.create')

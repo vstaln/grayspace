@@ -18,16 +18,16 @@ describe('Canvas Delta Patching and Fine-Grained Widget Versioning', () => {
     assert.equal(w1.version, 1)
     assert.equal(w2.version, 1)
 
-    // User drags only w1
+
     const patchedW1 = store.patchWidget('w1', { x: 50, y: 80 })
     assert.equal(patchedW1.version, 2)
     assert.equal(patchedW1.x, 50)
     assert.equal(patchedW1.y, 80)
 
-    // w2 version remains at 1
+
     assert.equal(store.widget('w2')?.version, 1)
 
-    // Batch delta patches
+
     const multiPatched = store.patchWidgets([
       { id: 'w1', patch: { z: 3 } },
       { id: 'w2', patch: { z: 4 } }

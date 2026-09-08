@@ -1,23 +1,23 @@
 #!/usr/bin/env node
-/**
- * `orc` — the OrcSpace agent CLI.
- *
- * This is the whole reason OrcSpace needs no protocol between agents. A CLI
- * coding agent already has one universal tool: the shell. So instead of
- * teaching it a transport, we hand it a command. Everything below is a thin,
- * highly-optimized RPC client for the loopback control server the app already runs —
- * it holds no state, needs no configuration, and dies with the command.
- *
- * Identity comes from the environment the app spawned the terminal with, so a
- * worker never has to know or invent an agent id:
- *
- *   ORCSPACE_URL       http://127.0.0.1:<port>
- *   ORCSPACE_TOKEN     the control token
- *   ORCSPACE_AGENT_ID  this terminal's id — the worker's actor id
- *
- * Output is human-readable by default and JSON with `--json`, because both
- * consumers matter: the model reads it, and so does the person watching.
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -25,16 +25,16 @@ import http from 'node:http'
 import { fileURLToPath } from 'node:url'
 
 const TOKEN_HEADER = 'x-orcspace-token'
-// Keep in sync with package.json and TERM_PROGRAM_VERSION in src/main/terminals.ts.
+
 const ORC_VERSION = '2.0.0'
 
-/**
- * Fast-path token discovery:
- * When running inside an OrcSpace terminal, ORCSPACE_TOKEN is always present in env.
- * We return it immediately with ZERO disk I/O.
- * If not set, we lazily probe known candidate directories in priority order and stop
- * at the first valid token found.
- */
+
+
+
+
+
+
+
 function getCandidateTokens() {
   const envToken = (process.env.ORCSPACE_TOKEN || '').trim()
   if (envToken.length >= 32) {
@@ -81,7 +81,7 @@ function getAllCandidateTokens(stopAtFirst = false) {
         }
       }
     } catch {
-      /* try next candidate */
+
     }
   }
   return tokens
@@ -93,7 +93,7 @@ function isProcessAlive(pid) {
     process.kill(pid, 0)
     return true
   } catch (err) {
-    // EPERM means the process exists but this user cannot signal it.
+
     return err?.code === 'EPERM'
   }
 }
@@ -102,8 +102,8 @@ function isLiveRuntime(raw) {
   if (!raw || typeof raw !== 'object') return false
   if (raw.app && raw.app !== 'orcspace') return false
   if (!isProcessAlive(raw.pid)) return false
-  // Older beacons did not include a pid. Do not let an abandoned beacon from
-  // an old install win forever when there is no process to validate.
+
+
   if (!Number.isInteger(raw.pid) && Number.isFinite(raw.writtenAt)) {
     if (Date.now() - raw.writtenAt > 24 * 60 * 60 * 1000) return false
   }
@@ -166,7 +166,7 @@ function getDiscoveredTargets() {
         }
       }
     } catch {
-      /* try next candidate */
+
     }
   }
 
@@ -187,13 +187,13 @@ const AGENT_ID = process.env.ORCSPACE_AGENT_ID || process.env.ORCSPACE_TERMINAL_
 let workingToken = null
 let workingTarget = null
 
-// ---------------------------------------------------------------- arg parsing
 
-/**
- * Flags are `--kebab-case value`, `--flag` (boolean) and `--no-flag` (false).
- * Deliberately permissive: a model that writes `--task-id` where the doc says
- * `--task` should get the call through, not a usage error.
- */
+
+
+
+
+
+
 function parseArgs(argv) {
   const flags = {}
   const positional = []
@@ -226,7 +226,7 @@ function parseArgs(argv) {
 
 const camel = (s) => s.replace(/-([a-z0-9])/g, (_, c) => c.toUpperCase())
 
-/** First flag present out of several spellings a model might reach for. */
+
 function pick(flags, ...names) {
   for (const name of names) {
     if (flags[name] !== undefined) return flags[name]
@@ -234,7 +234,7 @@ function pick(flags, ...names) {
   return undefined
 }
 
-/** `--files "a.ts,b.ts"` or `--files '["a.ts"]'` — accept both. */
+
 function list(value) {
   if (value === undefined || value === true) return undefined
   if (Array.isArray(value)) return value.map(String)
@@ -244,7 +244,7 @@ function list(value) {
       const parsed = JSON.parse(text)
       if (Array.isArray(parsed)) return parsed.map(String)
     } catch {
-      /* fall through to comma splitting */
+
     }
   }
   return text
@@ -258,7 +258,7 @@ const int = (value, fallback) => {
   return Number.isFinite(n) ? Math.trunc(n) : fallback
 }
 
-// ------------------------------------------------------------------ transport
+
 
 class OrcError extends Error {
   constructor(message, code) {
@@ -267,7 +267,7 @@ class OrcError extends Error {
   }
 }
 
-/** True only for a genuine "not found" — NOT for timeouts, 5xx or offline. */
+
 const isNotFound = (err) => err instanceof OrcError && (err.code === 'not_found' || err.code === 'http_404')
 
 async function requestTarget({ target, method, path, headers, body, signal, timeoutMs }) {
@@ -421,8 +421,8 @@ async function call(method, path, body, options = {}) {
         return response.payload && typeof response.payload === 'object' && response.payload.ok === true && 'data' in response.payload ? response.payload.data : response.payload
       } catch (err) {
         if (err instanceof OrcError && err.code === 'http_401') {
-          // A token file can be stale even when the runtime beacon is live.
-          // Expand once, then try the next discovered target if none match.
+
+
           if (candidateTokens.length === 1) {
             const all = getAllCandidateTokens(false)
             if (all.length > 1) {
@@ -435,8 +435,8 @@ async function call(method, path, body, options = {}) {
           continue
         }
         lastError = err
-        // An abandoned runtime beacon should not prevent trying the installed
-        // app's other beacon or the well-known fallback socket.
+
+
         if (err instanceof OrcError && ['offline', 'timeout', 'http_404'].includes(err.code)) break
         throw err
       }
@@ -462,11 +462,11 @@ function withQuery(path, params) {
   return qs ? `${path}?${qs}` : path
 }
 
-/**
- * A long poll can run for fifteen minutes. Emitting a heartbeat line to stderr
- * keeps the agent's terminal visibly alive without polluting stdout, which
- * stays reserved for the single JSON result the caller parses.
- */
+
+
+
+
+
 function beat(label) {
   const started = Date.now()
   const timer = setInterval(() => {
@@ -477,7 +477,7 @@ function beat(label) {
   return () => clearInterval(timer)
 }
 
-// -------------------------------------------------------------------- output
+
 
 let asJson = false
 
@@ -495,12 +495,12 @@ const dispatchLine = (d) =>
 const messageLine = (m) =>
   `  ${m.id}  ${m.type}  from=${m.from}${m.taskId ? ` task=${m.taskId}` : ''}${m.outcome ? ` outcome=${m.outcome}` : ''}\n    ${m.subject}${m.body ? `\n    ${m.body.split('\n').join('\n    ')}` : ''}`
 
-/**
- * One roster line: name, liveness, and — the point of the whole exercise —
- * what is actually running inside the terminal, not just its id.
- * `[claude]` is a fact from the dispatch; `[~antigravity]` is a guess from
- * the title/scrollback, hence the `~`.
- */
+
+
+
+
+
+
 const workerLine = (w) => {
   let line = `  ${w.self ? '*' : ' '} ${w.name}${w.name === w.id ? '' : ` (${w.id})`}`
   line += w.busy ? '  busy' : '  idle'
@@ -525,7 +525,7 @@ function age(ms) {
   return `${Math.floor(h / 24)}d`
 }
 
-// ------------------------------------------------------------------ commands
+
 
 const HELP = `orc — OrcSpace agent CLI
 
@@ -587,7 +587,6 @@ WORKER (dispatched agent reporting)
   orc send --type <t> [--to <who>]            send direct message or broadcast
 
 THE APP & CANVAS
-  orc board list | claim [<id>] | update [<id>] <state>   kanban board management
   orc plan list | create | update | toggle [<id>]         planner day tasks (create accepts --attachments)
   orc canvas list | place | move | rename | close         canvas widgets & viewport
   orc terminal open | send <id> <text> | read | close     direct terminal management
@@ -602,7 +601,7 @@ plan delete) require --yes to confirm.
 
 Add --json to any command for machine-readable output.`
 
-/** One-liner usage for `orc help <command>` and `<command> --help`. */
+
 const COMMAND_HELP = {
   whoami: 'orc whoami — identify your own agent, terminal & task.',
   context: 'orc context | orc ctx — project folder, Code Workspace and active task.',
@@ -644,7 +643,6 @@ const COMMAND_HELP = {
   terminal: 'orc terminal open | send <id> <text> | read | close — direct terminal management.',
   canvas: 'orc canvas list | place | move | rename | focus | close — canvas widgets & viewport.',
   plan: 'orc plan list | create | update | done | toggle | delete [<id>] — planner day tasks.',
-  board: 'orc board list | create | claim | update | done [<id>] — kanban board management.',
   git: 'orc git status | commit --message "..." — git audit integration.',
   journal: 'orc journal [--since N] — event audit log.',
   api: 'orc api <METHOD> <path> [json] — direct REST escape hatch.'
@@ -661,7 +659,7 @@ const KNOWN_COMMANDS = [
   'worker-start', 'dispatch', 'worker-show', 'worker-read', 'logs', 'worker-release',
   'worker-retain', 'dispatch-show', 'send', 'done', 'escalate', 'heartbeat', 'ask',
   'reply', 'ack', 'allow', 'deny', 'check', 'gate-create', 'gate-list', 'gate-resolve',
-  'board', 'claim', 'plan', 'canvas', 'terminal', 'git', 'journal', 'reset', 'doctor',
+  'plan', 'canvas', 'terminal', 'git', 'journal', 'reset', 'doctor',
   'api', 'version', 'help'
 ]
 
@@ -670,7 +668,7 @@ function commandHelp(name) {
   return COMMAND_HELP[canon] ?? COMMAND_HELP[name]
 }
 
-/** Closest known command within a typo distance, if any. */
+
 function suggestCommand(unknown) {
   let best = null
   let bestDist = 4
@@ -736,7 +734,7 @@ async function main(argv) {
   }
 
   switch (command) {
-    // ---- identity & diagnostics ---------------------------------------
+
     case 'whoami': {
       const [workersData, snapshot] = await Promise.all([
         get('/orchestration/workers'),
@@ -872,7 +870,7 @@ async function main(argv) {
       )
     }
 
-    // ---- runs ----------------------------------------------------------
+
     case 'run-create': {
       const objective = require1(pick(flags, 'objective', 'o') ?? positional[1], 'run-create needs --objective "..."')
       return emit(await post('/orchestration/runs', { objective }), (r) => `run ${r.id} — ${r.objective}`)
@@ -916,7 +914,7 @@ async function main(argv) {
       return emit(await post(`/orchestration/runs/${enc(id)}/close`), (r) => `run ${r.id} closed`)
     }
 
-    // ---- tasks ---------------------------------------------------------
+
     case 'task-create': {
       const spec = require1(pick(flags, 'spec', 'brief', 'body') ?? positional[1], 'task-create needs <spec>')
       const created = await post('/orchestration/tasks', {
@@ -976,7 +974,7 @@ async function main(argv) {
       )
     }
 
-    // ---- dispatch ------------------------------------------------------
+
     case 'worker-start':
     case 'dispatch': {
       const taskId = require1(pick(flags, 'task', 'taskId', 'id') ?? positional[1], `${command} needs <task-id>`)
@@ -1049,7 +1047,7 @@ async function main(argv) {
       return emit(data, (d) => (d.dispatches.length ? d.dispatches.map(dispatchLine).join('\n') : '  (none)'))
     }
 
-    // ---- mail ----------------------------------------------------------
+
     case 'send':
     case 'mail':
     case 'msg':
@@ -1182,7 +1180,7 @@ async function main(argv) {
       }
     }
 
-    // ---- gates ---------------------------------------------------------
+
     case 'gate-create':
       return emit(
         await post('/orchestration/gates', {
@@ -1223,7 +1221,7 @@ async function main(argv) {
         (g) => `gate ${g.id} resolved: ${g.resolution}`
       )
 
-    // ---- the other agents on the canvas --------------------------------
+
     case 'workers':
     case 'who':
     case 'ps': {
@@ -1263,15 +1261,11 @@ async function main(argv) {
         () => 'reset'
       )
 
-    // ---- the rest of the app -------------------------------------------
+
     case 'canvas':
       return emit(await canvas(positional[1], flags, positional))
     case 'plan':
       return emit(await plan(positional[1], flags, positional))
-    case 'board':
-      return emit(await board(positional[1], flags, positional))
-    case 'claim':
-      return emit(await board('claim', flags, positional))
     case 'terminal':
       return emit(await terminal(positional[1], flags, positional))
     case 'git':
@@ -1319,7 +1313,7 @@ async function main(argv) {
   }
 }
 
-// --------------------------------------------------------------- subdomains
+
 
 async function sendMessage(flags, type, extra = {}) {
   return post('/orchestration/messages', {
@@ -1334,13 +1328,13 @@ async function sendMessage(flags, type, extra = {}) {
   })
 }
 
-/** Who sent the `ask` — fast lookup via direct endpoint with fallback */
+
 async function lookupSender(askId) {
   try {
     const single = await get(`/orchestration/messages/${enc(askId)}`)
     if (single?.message?.from) return single.message.from
   } catch {
-    /* fallback */
+
   }
   try {
     const snapshot = await get('/orchestration')
@@ -1421,39 +1415,6 @@ async function plan(action, flags, positional = []) {
   }
 }
 
-async function board(action, flags, positional = []) {
-  const id = pick(flags, 'id', 'task') ?? (action === 'claim' || action === 'update' || action === 'done' || action === 'complete' ? positional[2] : undefined)
-  switch (action) {
-    case 'status':
-    case undefined:
-      return get('/coordination/status')
-    case 'list':
-      return get('/coordination/tasks')
-    case 'create':
-      return post('/coordination/tasks', {
-        title: require1(pick(flags, 'title') ?? positional[2], 'board create needs <title>'),
-        brief: pick(flags, 'brief'),
-        files: list(pick(flags, 'files')),
-        state: pick(flags, 'state')
-      })
-    case 'claim':
-      return post(`/coordination/tasks/${enc(require1(id, 'board claim needs <task-id>'))}/claim`, {})
-    case 'done':
-    case 'complete':
-      return patch(`/coordination/tasks/${enc(require1(id, `board ${action} needs <task-id>`))}`, {
-        state: 'done'
-      })
-    case 'update':
-      return patch(`/coordination/tasks/${enc(require1(id, 'board update needs <task-id>'))}`, {
-        state: require1(pick(flags, 'state') ?? positional[3], 'board update needs <state>')
-      })
-    case 'become-manager':
-      return post('/coordination/manager', {})
-    default:
-      throw new OrcError(`board: unknown action "${action}" (status|list|create|claim|done|update|become-manager)`, 'invalid')
-  }
-}
-
 async function terminal(action, flags, positional = []) {
   const id = pick(flags, 'id', 'terminal') ?? (action === 'send' || action === 'read' || action === 'close' ? positional[2] : undefined)
   switch (action) {
@@ -1475,7 +1436,7 @@ async function terminal(action, flags, positional = []) {
   }
 }
 
-// ----------------------------------------------------------------- utilities
+
 
 function require1(value, message) {
   if (value === undefined || value === null || value === '' || value === true) throw new OrcError(message, 'invalid')

@@ -1,25 +1,18 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { IpcRendererEvent } from 'electron'
-// Every exposed module is typed against the same declarations the renderer
-// sees (`src/preload/api.ts`, re-exported via `index.d.ts`). Drift between the
-// two files is therefore a compile error here instead of a runtime surprise in
-// the renderer: the old `Promise<unknown>` bodies silently widened every return
-// to a value the renderer's own types could not describe.
+
+
+
+
+
 import type {
   AppSettings,
   BrowserApi,
   CanvasApi,
   CanvasSnapshot,
-  ChatApi,
-  ChatExitPayload,
-  ChatSendOptions,
-  ChatModelCatalog,
-  ChatModelId,
   CodeApi,
   CodeSnapshot,
   ControlApi,
-  CoordinationApi,
-  CoordinationSnapshot,
   FileReadResult,
   FsApi,
   FsListResult,
@@ -37,8 +30,6 @@ import type {
   SettingsApi,
   SystemApi,
   SystemStats,
-  Task,
-  TaskState,
   TerminalApi,
   WindowApi,
   WorkspaceApi
@@ -53,7 +44,7 @@ const scopedChannelMap = new Map<
   }
 >()
 
-/** Subscribes to an id-scoped channel, multiplexing through a single IPC listener to prevent leaks. */
+
 function onScoped<T>(channel: string, id: string, cb: (payload: T) => void): () => void {
   let entry = scopedChannelMap.get(channel)
   if (!entry) {
@@ -113,7 +104,7 @@ const windowControls: WindowApi = {
 }
 
 const browser: BrowserApi = {
-  /** Main relays a guest page's blocked popup here so the pane opens it as a tab. */
+
   onOpenTab: (cb: (url: string) => void): (() => void) => onBroadcast('browser:onOpenTab', cb),
   clearData: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('browser:clear-data')
 }
@@ -130,9 +121,9 @@ const terminal: TerminalApi = {
     ipcRenderer.invoke('terminal:write', id, data),
   resize: (id: string, cols: number, rows: number): void =>
     ipcRenderer.send('terminal:resize', id, cols, rows),
-  // Invoke, matching the ipcMain.handle: a fire-and-forget `send` never gets
-  // the result, so the renderer could not tell a rejected dispose (an agent
-  // holds the terminal's lock) from a succeeded one (P10).
+
+
+
   dispose: (id: string): Promise<unknown> => ipcRenderer.invoke('terminal:dispose', id),
   setTitle: (id: string, title: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('terminal:set-title', id, title),
@@ -175,7 +166,7 @@ const workspace: WorkspaceApi = {
   onCodeWorkspaceChange: (cb) => onBroadcast('workspace:onCodeWorkspaceChange', cb),
   onDirChange: (cb: (dir: string | null) => void): (() => void) =>
     onBroadcast('workspace:onDirChange', cb),
-  // remembered folders
+
   recent: (): Promise<RecentDir[]> => ipcRenderer.invoke('workspace:recent'),
   openRecent: (path: string): Promise<string | { error: string }> => ipcRenderer.invoke('workspace:open-recent', path),
   pinRecent: (path: string): Promise<RecentDir[]> => ipcRenderer.invoke('workspace:pin-recent', path),
@@ -212,41 +203,10 @@ const mission: MissionApi = {
   start: (input) => ipcRenderer.invoke('mission:start', input)
 }
 
-const coordination: CoordinationApi = {
-  status: (): Promise<CoordinationSnapshot> => ipcRenderer.invoke('coordination:status'),
-  createTask: (input: {
-    title: string
-    brief?: string
-    state?: TaskState
-    tags?: string[]
-    dueAt?: number
-    assignee?: string
-  }): Promise<Task | { error: string }> => ipcRenderer.invoke('coordination:create-task', input),
-  updateTask: (
-    id: string,
-    patch: {
-      state?: TaskState
-      title?: string
-      brief?: string
-      tags?: string[]
-      dueAt?: number | null
-      assignee?: string | null
-      baseVersion?: number
-    }
-  ): Promise<Task | { error: string }> =>
-    ipcRenderer.invoke('coordination:update-task', id, patch),
-  deleteTask: (id: string): Promise<void | { error: string }> => ipcRenderer.invoke('coordination:delete-task', id),
-  resetManager: (): Promise<CoordinationSnapshot> => ipcRenderer.invoke('coordination:reset-manager'),
-  releaseLocks: (): Promise<CoordinationSnapshot> => ipcRenderer.invoke('coordination:release-locks'),
-  onChange: (cb: (snapshot: CoordinationSnapshot) => void): (() => void) =>
-    onBroadcast('coordination:onChange', cb)
-}
 
-/**
- * Day outline — not board tasks. Items can be checked off, slotted to a day
- * and time, and reordered by hand. Lives in its own store so the planner stays
- * independent of the kanban "scheduled tasks" view.
- */
+
+
+
 const planner: PlannerApi = {
   list: (): Promise<PlanItem[]> => ipcRenderer.invoke('planner:list'),
   create: (input: {
@@ -321,26 +281,9 @@ const fs: FsApi = {
 
 const system: SystemApi = {
   stats: (): Promise<SystemStats | { error: string }> => ipcRenderer.invoke('system:stats'),
+  releaseLocks: (): Promise<{ ok: boolean } | { error: string }> => ipcRenderer.invoke('system:release-locks'),
   onPersistError: (cb: (payload: { store: string; message: string; at: number }) => void): (() => void) =>
     onBroadcast('system:persistError', cb)
-}
-
-const chat: ChatApi = {
-  send: (threadId: string, model: ChatModelId, prompt: string, options?: ChatSendOptions): Promise<{ ok: true } | { error: string }> =>
-    ipcRenderer.invoke('chat:send', threadId, model, prompt, options),
-  listModels: (): Promise<ChatModelCatalog> => ipcRenderer.invoke('chat:models'),
-  stop: (threadId: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('chat:stop', threadId),
-  dispose: (threadId: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('chat:dispose', threadId),
-  onData: (cb: (threadId: string, chunk: string) => void): (() => void) => {
-    const listener = (_e: IpcRendererEvent, threadId: string, chunk: string): void => cb(threadId, chunk)
-    ipcRenderer.on('chat:onData', listener)
-    return () => ipcRenderer.removeListener('chat:onData', listener)
-  },
-  onExit: (cb: (threadId: string, payload: ChatExitPayload) => void): (() => void) => {
-    const listener = (_e: IpcRendererEvent, threadId: string, payload: ChatExitPayload): void => cb(threadId, payload)
-    ipcRenderer.on('chat:onExit', listener)
-    return () => ipcRenderer.removeListener('chat:onExit', listener)
-  }
 }
 
 contextBridge.exposeInMainWorld('api', {
@@ -349,7 +292,6 @@ contextBridge.exposeInMainWorld('api', {
   workspace,
   settings,
   media,
-  coordination,
   orchestration,
   mission,
   planner,
@@ -359,6 +301,5 @@ contextBridge.exposeInMainWorld('api', {
   fs,
   system,
   browser,
-  chat,
   window: windowControls
 })

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-/**
- * Reproducible Windows installer entry point.
- *
- * Keeps the release path in one place so a developer cannot accidentally ship
- * an installer made from stale renderer output or a broken native addon.
- */
+
+
+
+
+
+
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -16,12 +16,12 @@ const dist = join(root, 'dist')
 const skipTests = process.argv.includes('--skip-tests')
 const nodeMajor = Number.parseInt(process.versions.node.split('.')[0], 10)
 
-/**
- * Keep npm and every npm lifecycle script on the same supported Node runtime
- * as this builder. On Windows `npm.cmd` normally selects the first system
- * node.exe next to the shim; that can silently switch a Node 22 build to Node
- * 26 and make node-pty fail because no Node 26 prebuild exists.
- */
+
+
+
+
+
+
 function npmInvocation(args) {
   const runtimeDir = dirname(process.execPath)
   const delimiter = process.platform === 'win32' ? ';' : ':'
@@ -39,7 +39,7 @@ function npmInvocation(args) {
         if (existsSync(cli)) return { command: process.execPath, args: [cli, ...args], env }
       }
     } catch {
-      /* fall through to the normal npm shim */
+
     }
   }
   return { command: 'npm.cmd', args, env }
@@ -47,13 +47,13 @@ function npmInvocation(args) {
 
 function run(command, args, env = process.env) {
   console.log(`\n==> ${command} ${args.join(' ')}`)
-  // Windows exposes npm as a .cmd shim; shell mode is required for that shim
-  // to behave consistently when launched from Node.
+
+
   const result = spawnSync(command, args, {
     cwd: root,
     stdio: 'inherit',
-    // Only command shims need a shell. Direct executables must stay unshelled
-    // so paths such as `C:\\Program Files\\nodejs` are passed as one argument.
+
+
     shell: process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(command),
     env,
   })
@@ -71,12 +71,12 @@ function sha256(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
-/**
- * Validate the unpacked application before hashing release artifacts. The
- * installer can be perfectly large while silently omitting the one resource
- * that makes the product useful: the authenticated `orc` shim, native
- * accelerators, or the renderer bundle containing Music Player.
- */
+
+
+
+
+
+
 function verifyUnpackedRelease(packageJson) {
   const unpacked = join(dist, 'win-unpacked')
   const resources = join(unpacked, 'resources')
@@ -88,23 +88,24 @@ function verifyUnpackedRelease(packageJson) {
     join(resources, 'cli', 'orc.bat'),
     join(resources, 'native', 'canvas-core', 'loader.cjs'),
     join(resources, 'native', 'storage-core', 'loader.cjs'),
+    join(resources, 'native', 'orcspace-engine.exe'),
     join(resources, 'app.asar.unpacked', 'node_modules', '@homebridge', 'node-pty-prebuilt-multiarch', 'build', 'Release', 'conpty.node')
   ]
   const missing = requiredFiles.filter((file) => !existsSync(file))
   if (missing.length) throw new Error(`Unpacked release is incomplete:\n${missing.join('\n')}`)
 
   const asar = readFileSync(join(resources, 'app.asar'))
-  // These strings are stable product contracts, and checking them catches a
-  // stale/empty renderer archive without depending on an external asar CLI.
+
+
   for (const marker of ['music-player', 'youtube.com/iframe_api', 'Mission Controller']) {
     if (!asar.includes(marker)) throw new Error(`Renderer bundle is missing required feature marker: ${marker}`)
   }
 
   const cliShim = join(resources, 'cli', 'orc.cmd')
-  // Invoke the batch shim through an explicit cmd.exe command line so a
-  // checkout under `C:\\Program Files\\...` is quoted correctly. Using
-  // spawnSync(..., { shell: true }) leaves the quoting to two nested shells
-  // and can split the shim path at its first space.
+
+
+
+
   const help = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'call orc.cmd --help'], {
     cwd: join(resources, 'cli'),
     encoding: 'utf8',

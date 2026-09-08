@@ -2,7 +2,7 @@ import * as fs from 'fs'
 import { dirname, join } from 'path'
 import { randomBytes } from 'crypto'
 
-/** Safe atomic text write used for the managed OrcSpace guide. */
+
 export function writeConfigAtomic(file: string, content: string, ensureDir: string | null = null): void {
   if (ensureDir) fs.mkdirSync(ensureDir, { recursive: true })
   const dir = dirname(file)
@@ -10,7 +10,7 @@ export function writeConfigAtomic(file: string, content: string, ensureDir: stri
   const temp = join(dir, `.${Date.now()}-${process.pid}-${randomBytes(6).toString('hex')}.tmp`)
   fs.writeFileSync(temp, content, 'utf8')
   try { fs.renameSync(temp, file) } catch (error) {
-    try { fs.rmSync(temp, { force: true }) } catch { /* best effort */ }
+    try { fs.rmSync(temp, { force: true }) } catch {  }
     throw error
   }
 }

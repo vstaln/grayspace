@@ -5,13 +5,13 @@ import type { JournalEntry } from './core/index.ts'
 
 const point = (x: number, y: number) => ({ x, y })
 
-/**
- * These fixtures used to exist only to cross-check the Rust sanitizer against
- * the TypeScript one, and skipped entirely on a machine with no Rust build.
- * The native path is gone (it was ~90x slower than this one — see the note in
- * canvasState.ts), so they now pin the sanitizer's own edge-case behaviour,
- * which is what every install actually runs.
- */
+
+
+
+
+
+
+
 describe('canvas stroke sanitizer edge cases', () => {
   test('valid strokes survive with points in order', () => {
     const out = sanitizeStrokesJs([{ id: 'a', color: '#fff', points: [point(1, 2), point(3, 4)] }])
@@ -30,7 +30,7 @@ describe('canvas stroke sanitizer edge cases', () => {
     const out = sanitizeStrokesJs([{ id: 'a', color: '', points: [point(0, 0), point(-0, 1)] }])
     assert.equal(out.length, 1)
     assert.equal(out[0].color, '')
-    // -0 is folded to +0 so a round-trip through JSON cannot flip the sign.
+
     assert.ok(Object.is(out[0].points[1].x, 0))
   })
 
@@ -58,11 +58,11 @@ describe('canvas stroke sanitizer edge cases', () => {
   })
 })
 
-/**
- * The equivalence suite above only runs where the Rust binary was built. This
- * one pins the behaviour of the TypeScript fallback directly, because that is
- * the sanitizer every install without a native build actually uses.
- */
+
+
+
+
+
 describe('sanitizeStrokesJs', () => {
   test('keeps a well-formed stroke intact', () => {
     const result = sanitizeStrokesJs([{ id: 'a', color: '#fff', points: [point(1, 2), point(3, 4)] }])
@@ -135,11 +135,11 @@ describe('sanitizeStrokesJs', () => {
 })
 
 
-/**
- * `CanvasStore.reduce` is copy-on-write: it clones the widget map only in the
- * branch that writes one. That is only safe while it never writes through the
- * caller's state, and while callers never clear a map it handed straight back.
- */
+
+
+
+
+
 describe('CanvasStore.reduce purity', () => {
   const widget = (id: string): CanvasWidget => ({
     id,

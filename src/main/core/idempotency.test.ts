@@ -20,7 +20,7 @@ describe('Idempotency — Idempotency-Key caching and retry deduplication', () =
     let executions = 0
     bus.register<{ title: string }, { id: string; version: number }>('note.create', {
       ignoreVersion: true,
-      apply: ({ command }) => {
+      apply: () => {
         executions += 1
         return { id: `note-${executions}`, version: noteVersions.bump('n1') }
       }
@@ -28,7 +28,7 @@ describe('Idempotency — Idempotency-Key caching and retry deduplication', () =
 
     const key = 'idem-req-12345'
 
-    // First attempt
+
     const res1 = await bus.submit({
       idempotencyKey: key,
       actorId: 'agent-1',
@@ -41,7 +41,7 @@ describe('Idempotency — Idempotency-Key caching and retry deduplication', () =
     assert.equal(executions, 1)
     const originalSeq = res1.seq
 
-    // Second attempt with exact same key (e.g. network timeout retry)
+
     const res2 = await bus.submit({
       idempotencyKey: key,
       actorId: 'agent-1',

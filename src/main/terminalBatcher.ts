@@ -5,11 +5,11 @@ export interface BatcherOptions {
   maxBatchBytes?: number
 }
 
-/**
- * Frame-aligned terminal stream batcher (60 FPS / 16ms or 32KB threshold).
- * Consolidates high-frequency PTY chunks into single IPC messages per animation frame,
- * preventing UI thread starvation when multiple terminals stream build outputs.
- */
+
+
+
+
+
 export class TerminalStreamBatcher extends EventEmitter {
   private readonly pending = new Map<string, string[]>()
   private readonly pendingBytes = new Map<string, number>()
@@ -19,8 +19,8 @@ export class TerminalStreamBatcher extends EventEmitter {
 
   constructor(options: BatcherOptions = {}) {
     super()
-    this.frameIntervalMs = options.frameIntervalMs ?? 16 // ~60 FPS
-    this.maxBatchBytes = options.maxBatchBytes ?? 32 * 1024 // 32 KB threshold
+    this.frameIntervalMs = options.frameIntervalMs ?? 16
+    this.maxBatchBytes = options.maxBatchBytes ?? 32 * 1024
   }
 
   push(terminalId: string, chunk: string): void {
@@ -53,9 +53,9 @@ export class TerminalStreamBatcher extends EventEmitter {
     this.timer.unref?.()
   }
 
-  /** Flushes one terminal's pending batch immediately, bypassing the frame
-   *  timer — used right before an exit/detach notice so the last output chunk
-   *  cannot arrive after (and thus render below) that notice. */
+
+
+
   flush(terminalId: string): void {
     this.flushTerminal(terminalId)
   }

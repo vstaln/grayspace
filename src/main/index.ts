@@ -1,4 +1,4 @@
-// Loaded first: config reads process.env at import time
+
 import { config as loadEnvFile } from 'dotenv'
 loadEnvFile()
 
@@ -17,18 +17,16 @@ import {
   setupWebContentsHandlers
 } from './windowManager.ts'
 import { setupKeyboardShortcuts, setupTerminalEvents } from './terminalEvents.ts'
-import { setupLifecycle, snapshotTerminals } from './appLifecycle.ts'
-import { APP_TITLE } from './config'
+import { setupLifecycle } from './appLifecycle.ts'
 import { startControlServer } from './controlServer'
 import { ensureOrcExecutable } from './orcCli.ts'
 import { syncOrcGuide } from './orchestration/guide.ts'
-import { clearRuntimePresence, writeRuntimePresence } from './runtimePresence'
+import { writeRuntimePresence } from './runtimePresence'
 import { registerIpc, originTerminalId, forgetTerminalOrigin } from './ipc'
 import { registerCommands } from './commands/index.ts'
 import { onPersistError } from './persistNotifier.ts'
-import { chatRunner } from './chatRunner.ts'
 
-// --- bootstrap ---
+
 registerProtocols()
 initAppSwitches()
 if (process.env.ORCSPACE_DEV_USER_DATA) {
@@ -40,25 +38,23 @@ if (process.env.ORCSPACE_DEV_USER_DATA) {
 }
 const hasInstanceLock = requestInstanceLock()
 if (!hasInstanceLock) {
-  // bootstrap already called app.exit(0)
+
 }
 
-// shared broadcast for persist errors -> renderer toast
+
 onPersistError((payload) => send('system:persistError', payload))
 
-// --- stores ---
+
 const {
   core,
   state,
   terminals,
   terminalBatcher,
   snapshots,
-  coordination,
   canvas,
   code,
   planner,
   orchestration,
-  disposePlannerSync
 } = createAppStores()
 
 let controlServer: { close(): void } | null = null
@@ -73,13 +69,12 @@ function syncAgentConfigsFor(dir: string): void {
   syncOrcGuide(dir)
 }
 
-// --- events ---
+
 setupKeyboardShortcuts(terminals)
 setupTerminalEvents({
   terminals,
   terminalBatcher,
   snapshots,
-  coordination,
   planner,
   canvas,
   code,
@@ -90,14 +85,11 @@ setupWebContentsHandlers(send)
 setupLifecycle({
   terminals,
   snapshots,
-  coordination,
   planner,
   canvas,
   code,
-  chat: chatRunner,
   core,
   orchestration,
-  disposePlannerSync,
   getControlServer: () => controlServer,
   setControlServer: (v) => { controlServer = v },
   getOrchestrationSignal: () => orchestrationSignal,
@@ -163,7 +155,6 @@ if (hasInstanceLock) {
     registerCommands({
       core,
       canvas,
-      board: coordination,
       planner,
       orchestration,
       terminals,
@@ -179,7 +170,6 @@ if (hasInstanceLock) {
     registerIpc({
       core,
       terminals,
-      coordination,
       planner,
       orchestration,
       canvas,
@@ -205,7 +195,6 @@ if (hasInstanceLock) {
     controlServer = startControlServer({
       core,
       terminals,
-      coordination,
       planner,
       orchestration,
       canvas,

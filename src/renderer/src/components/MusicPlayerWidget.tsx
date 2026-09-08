@@ -89,8 +89,8 @@ function youtubeApi(): Promise<YTApi> {
           reject(new Error('YouTube API unavailable'))
         }
       }
-      // Preserve existing queue: chain instead of overwrite. The previous
-      // handler runs exactly once, inside wrappedHandler.
+
+
       window.onYouTubeIframeAPIReady = wrappedHandler
 
       if (!document.querySelector('script[src*="youtube.com/iframe_api"]')) {
@@ -186,8 +186,8 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
     } catch {}
   }, [key, lists])
 
-  // Reads the playlist through a ref so a track queued from inside the
-  // YouTube effect always advances against the current tracklist.
+
+
   const advance = (delta: 1 | -1): void => {
     const currentList = listRef.current
     if (!currentList || currentList.tracks.length === 0) return
@@ -209,8 +209,8 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
     setReady(false)
     setYtError(null)
 
-    // Clear previous children and create dedicated element for YT to replace
-    // This isolates the YouTube iframe from React's virtual DOM reconciliation.
+
+
     hostRef.current.innerHTML = ''
     const mountEl = document.createElement('div')
     mountEl.style.width = '100%'
@@ -222,9 +222,9 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
         if (cancelled || !hostRef.current || !id) return
         const p = new api.Player(mountEl, {
           videoId: id,
-          // Keep the preview inside the widget and avoid loading the full
-          // YouTube site. The privacy-enhanced host also works around a
-          // subset of provider-specific embed failures.
+
+
+
           host: 'https://www.youtube-nocookie.com',
           playerVars: {
             autoplay: 1,
@@ -232,8 +232,8 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
             rel: 0,
             playsinline: 1,
             enablejsapi: 1,
-            // YouTube rejects custom schemes as an API origin. Packaged builds
-            // use `orc://app`, so keep a valid HTTPS origin for the iframe API.
+
+
             origin: window.location.origin.startsWith('http') ? window.location.origin : 'https://www.youtube.com'
           },
           events: {
@@ -256,9 +256,9 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
                 const fetched = info?.title
                 const targetId = track?.id
                 if (fetched && targetId) {
-                  // Guarded, because this runs on every player mount: mapping
-                  // unconditionally would hand back a fresh array each time
-                  // and re-render plus rewrite localStorage for nothing.
+
+
+
                   setLists((prev) =>
                     prev.some((pl) => pl.tracks.some((t) => t.id === targetId && t.title === 'YouTube track'))
                       ? prev.map((pl) => ({
@@ -344,7 +344,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
         } catch {}
       }
     }, 500)
-    // Do not keep Electron alive when widget is hidden/minimized
+
     ;(timer as unknown as { unref?: () => void }).unref?.()
     return () => window.clearInterval(timer)
   }, [ready])
@@ -374,8 +374,8 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
     } catch {}
   }, [muteKey, muted])
 
-  // Unmount audio cleanup: pause, revoke src, and abandon any pending play
-  // promise so the widget does not leak a playing <audio> after removal.
+
+
   useEffect(() => {
     aliveRef.current = true
     return () => {
@@ -384,9 +384,9 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
       if (a) {
         try {
           a.pause()
-          // Removing src and calling load() releases the network resource and
-          // clears the internal decoder; without this a removed-but-playing
-          // element keeps its HTTP stream and audio thread alive.
+
+
+
           a.removeAttribute('src')
           a.load()
         } catch {}
@@ -544,7 +544,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
     setDraft('')
     setMediaError(null)
 
-    // Fetch real title in background if available
+
     void fetchTrackTitle(kind, url).then((fetchedTitle) => {
       if (aliveRef.current && fetchedTitle) {
         setLists((prev) =>

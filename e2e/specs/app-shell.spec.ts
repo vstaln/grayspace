@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test'
 import { launchOrcSpace, waitForCanvas, closeOrcSpace, type OrcSpaceFixture } from '../helpers/app'
 
-/**
- * Journey 1 — the app boots from the built output into a working canvas.
- * Journey 10 — canvas pan/zoom gestures move the world layer.
- */
+
+
+
+
 let ctx: OrcSpaceFixture
 
 test.beforeAll(async () => {
@@ -19,17 +19,17 @@ test.afterAll(async () => {
 test('the shell starts and renders the canvas chrome', async () => {
   const { page } = ctx
 
-  // Rail: every entry the user needs day to day.
-  for (const id of ['rail-board', 'rail-folders', 'rail-settings']) {
+
+  for (const id of ['rail-folders', 'rail-settings']) {
     await expect(page.getByTestId(id)).toBeVisible()
   }
-  // Floating toolbar with the drawing tool switcher.
+
   await expect(page.getByTestId('tool-select')).toBeVisible()
   await expect(page.getByTestId('tool-draw')).toBeVisible()
   await expect(page.getByTestId('tool-erase')).toBeVisible()
 
-  // The app is genuinely alive: its loopback control API answers and reports
-  // server status.
+
+
   await expect.poll(async () => {
     const data = await (await fetch(`http://127.0.0.1:${ctx.controlPort}/health`, {
       headers: { 'x-orcspace-token': ctx.controlToken }
@@ -45,7 +45,7 @@ test('ctrl+wheel zooms the world layer, plain wheel pans it', async () => {
 
   const before = await transform()
 
-  // Ctrl+wheel zooms toward the cursor (the translate terms change too).
+
   await page.getByTestId('canvas').dispatchEvent('wheel', {
     deltaX: 0,
     deltaY: -240,
@@ -55,7 +55,7 @@ test('ctrl+wheel zooms the world layer, plain wheel pans it', async () => {
   })
   await expect.poll(transform, { timeout: 3000 }).not.toBe(before)
 
-  // A plain wheel pans — the transform changes again.
+
   const zoomed = await transform()
   await page.getByTestId('canvas').dispatchEvent('wheel', {
     deltaX: 0,
@@ -72,22 +72,22 @@ test('keyboard zoom: Ctrl++ zooms in, Ctrl+- zooms out, Ctrl+0 resets', async ()
   const world = page.getByTestId('canvas').locator(':scope > div').first()
   const transform = (): Promise<string> => world.evaluate((el) => (el as HTMLElement).style.transform)
 
-  // The shell tests share one fixture page; start this journey from the
-  // canonical camera instead of inheriting the pan from the wheel test.
+
+
   await page.keyboard.press('Control+0')
   await expect.poll(transform, { timeout: 3000 }).toBe('translate3d(0px, 0px, 0px) scale(1)')
   const before = await transform()
 
-  // Zoom in with Ctrl++
+
   await page.keyboard.press('Control+=')
   await expect.poll(transform, { timeout: 3000 }).not.toBe(before)
   const zoomed = await transform()
 
-  // Zoom out with Ctrl+-
+
   await page.keyboard.press('Control+-')
   await expect.poll(transform, { timeout: 3000 }).not.toBe(zoomed)
 
-  // Reset with Ctrl+0
+
   await page.keyboard.press('Control+0')
   await expect.poll(transform, { timeout: 3000 }).toBe(before)
 })
@@ -96,7 +96,7 @@ test('minimum window size: no horizontal overflow at 800x560', async () => {
   const minCtx = await launchOrcSpace({ viewport: { width: 800, height: 560 } })
   await waitForCanvas(minCtx.page)
 
-  // The canvas should not extend beyond the viewport (no horizontal overflow).
+
   const canvasWidth = await minCtx.page.getByTestId('canvas').evaluate((el) => el.scrollWidth)
   const viewportWidth = await minCtx.page.evaluate(() => window.innerWidth)
   await expect(canvasWidth).toBeLessThanOrEqual(viewportWidth)
@@ -111,13 +111,13 @@ test('2x HiDPI ink: canvas renders at 2x device scale (skip if no canvas)', asyn
     test.skip()
   }
   await expect(page.getByTestId('canvas')).toBeVisible()
-  // At 2x device scale, canvas backing store should be 2x viewport resolution.
+
   const backingWidth = await page.evaluate(() => {
     const canvas = document.querySelector('[data-testid="canvas"]') as HTMLCanvasElement | null
     if (!canvas) return 0
     return canvas.width
   })
   const viewportWidth = await page.evaluate(() => window.innerWidth)
-  // Backing width should be approximately 2x viewport width (allowing for DPR precision).
+
   await expect(backingWidth).toBeGreaterThanOrEqual(viewportWidth * 1.5)
 })

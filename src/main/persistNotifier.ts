@@ -18,7 +18,7 @@ export function notifyPersistError(store: string, error: unknown): void {
   try {
     emitter.emit('persistError', payload)
   } catch (err) {
-    // A throwing UI listener must not propagate back into the store write path.
+
     console.error('[persistError] listener threw', err)
   }
 }

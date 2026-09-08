@@ -1,4 +1,3 @@
-﻿import * as fs from 'fs'
 import { copyFileSync, existsSync } from 'fs'
 import { readStoreJson, writeJsonAtomic } from '../storage.ts'
 
@@ -19,13 +18,13 @@ export interface MigrationResult<T = unknown> {
   error?: string
 }
 
-/**
- * Bidirectional schema migrations as code with dry-run test and automatic backup.
- */
+
+
+
 export class MigrationRunner {
-  /**
-   * Pure in-memory migration pipeline with test run and rollback validation.
-   */
+
+
+
   static migrateData<T = unknown>(
     data: unknown,
     currentVersion: number,
@@ -38,7 +37,7 @@ export class MigrationRunner {
     let stepsApplied = 0
 
     if (targetVersion > currentVersion) {
-      // Migrate UP
+
       for (const m of sorted) {
         if (m.version > version && m.version <= targetVersion) {
           current = m.up(current)
@@ -47,7 +46,7 @@ export class MigrationRunner {
         }
       }
     } else if (targetVersion < currentVersion) {
-      // Migrate DOWN
+
       const reversed = sorted.slice().reverse()
       for (const m of reversed) {
         if (m.version <= version && m.version > targetVersion) {
@@ -61,9 +60,9 @@ export class MigrationRunner {
     return { data: current as T, finalVersion: version, stepsApplied }
   }
 
-  /**
-   * File-backed migration with dry-run, backup creation, and atomic persistence.
-   */
+
+
+
   static migrateFile<T = Record<string, unknown>>(
     filePath: string,
     targetVersion: number,
@@ -94,7 +93,7 @@ export class MigrationRunner {
     }
 
     try {
-      // 1. In-memory dry-run test
+
       const dryRun = this.migrateData<Record<string, unknown>>(
         JSON.parse(JSON.stringify(raw)),
         currentVersion,
@@ -102,11 +101,11 @@ export class MigrationRunner {
         migrations
       )
 
-      // 2. Create automated backup before disk write
+
       const backupFile = `${filePath}.bak-${Date.now()}`
       copyFileSync(filePath, backupFile)
 
-      // 3. Persist migrated data with stamped schemaVersion
+
       dryRun.data[versionKey] = dryRun.finalVersion
       writeJsonAtomic(filePath, dryRun.data)
 

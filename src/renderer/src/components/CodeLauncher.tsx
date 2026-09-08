@@ -15,9 +15,9 @@ export interface CodeAgent {
   Icon: React.ComponentType<{ size?: number }>
 }
 
-/** Same command set as the per-terminal agent picker in WidgetFrame, plus the
- *  one this panel adds (OpenCode) — kept here rather than imported so neither
- *  file has to widen its own list for the other's sake. */
+
+
+
 export const CODE_AGENTS: CodeAgent[] = [
   { id: 'claude', label: 'Claude Code', command: 'claude', Icon: ClaudeIcon },
   { id: 'codex', label: 'Codex', command: 'codex', Icon: CodexIcon },
@@ -35,7 +35,7 @@ const COUNTS = [1, 2, 4, 8, 12] as const
 
 interface Props {
   onClose(): void
-  /** Resolves once the terminals have been placed; the panel closes itself. */
+
   onLaunch(agent: CodeAgent, count: number): void
   currentCount?: number
 }

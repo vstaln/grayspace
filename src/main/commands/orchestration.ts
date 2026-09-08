@@ -15,15 +15,15 @@ const STRING_LIST: CommandPayloadSchema['properties'][string] = {
   items: { type: 'string' }
 }
 
-/**
- * Orchestration on the flow.
- *
- * Every dispatch, reply and completion is a command like any other, which is
- * the point: the journal ends up holding "agent-2 was told to do task X" right
- * next to the file writes agent-2 then made, and the locks an agent takes
- * while working are the same locks the board already understands. An
- * orchestration layer that kept its own side-channel would have neither.
- */
+
+
+
+
+
+
+
+
+
 export function registerOrchestrationCommands(deps: CommandDeps): void {
   const { core, orchestration, terminals, requestWidget, originWidgetId, defaultCwd } = deps
   const { flow } = core
@@ -33,7 +33,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
   flow.registerVersions('dispatch', orchestration.dispatchVersions)
   flow.registerVersions('gate', orchestration.gateVersions)
 
-  // ---- runs --------------------------------------------------------------
+
 
   flow.registerDefinition<{ objective?: string }, ReturnType<typeof orchestration.createRun>>({
     type: 'run.create',
@@ -60,7 +60,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
     handler: { apply: ({ command }) => orchestration.closeRun(idOf(command.target, 'run')) }
   })
 
-  // ---- tasks -------------------------------------------------------------
+
 
   flow.registerDefinition<
     { runId?: string; title?: string; spec?: string; deps?: string[] },
@@ -115,14 +115,14 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
     }
   })
 
-  // ---- dispatch ----------------------------------------------------------
 
-  /**
-   * Starts a worker: opens (or reuses) a terminal, records the attempt, and
-   * types the preamble into the shell. Everything the worker needs to report
-   * back — its task id, its dispatch id, the exact commands — arrives in that
-   * one injection, which is why nothing else has to be configured.
-   */
+
+
+
+
+
+
+
   flow.registerDefinition<
     { taskId?: string; terminalId?: string; agent?: string; command?: string; inject?: boolean },
     { dispatchId: string; taskId: string; terminalId: string; agent: string; injected: boolean }
@@ -153,8 +153,8 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
         let terminalId = String(p.terminalId ?? '').trim()
         let opened = false
         if (terminalId) {
-          // Accept a worker's visible name, not just its id — a coordinator
-          // that just renamed a worker will address it by that name next.
+
+
           terminalId = resolveWorker({ terminals, orchestration }, terminalId, actor.id).id
           const busy = orchestration.dispatchForTerminal(terminalId)
           if (busy) {
@@ -165,9 +165,9 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
           terminalId = info.id
           opened = true
           requestWidget({ id: info.id, title: info.title, from: originWidgetId() })
-          // The widget answers with `terminal.spawn`, which queues behind this
-          // command; hand the queue on before waiting or every dispatch that
-          // opens its own terminal deadlocks into a timeout.
+
+
+
           unblock()
           const ready = await terminals.waitUntilRunning(info.id, 10_000, signal)
           if (!ready) {
@@ -178,8 +178,8 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
           }
         }
 
-        // The dispatch id has to exist before the preamble is written, because
-        // the preamble is what tells the worker its own dispatch id.
+
+
         const dispatch = orchestration.createDispatch({
           taskId: task.id,
           terminalId,
@@ -191,9 +191,9 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
 
         let injected = false
         if (p.inject !== false) {
-          // A freshly opened terminal is a bare shell: start the CLI first, and
-          // give it a moment to draw before typing into it. An existing
-          // terminal is assumed to already have an agent waiting at a prompt.
+
+
+
           if (opened) {
             const start = String(p.command ?? agent)
             if (!await submitPtyLine(terminals, terminalId, start, signal)) {
@@ -283,7 +283,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
     }
   })
 
-  // ---- mail --------------------------------------------------------------
+
 
   flow.registerDefinition<
     {
@@ -332,9 +332,9 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
         }
         const runId = resolveRunId(p.runId)
 
-        // A completion report is not just mail: it is the event that settles
-        // the attempt. Doing both here keeps them atomic — there is no window
-        // where a coordinator has read "done" but the task still says running.
+
+
+
         let settled: { taskId: string; status: string; promoted: string[] } | undefined
         if (type === 'worker_done') {
           const dispatchId = String(p.dispatchId ?? '')
@@ -353,8 +353,8 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
           runId,
           type,
           from: actor.id,
-          // A name typed by an agent becomes a concrete terminal id here, so a
-          // typo fails now rather than becoming mail nobody is addressed by.
+
+
           to: resolveRecipient(
             { terminals, orchestration, knownActor: (id) => !!core.actors.get(id) },
             p.to,
@@ -403,7 +403,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
     }
   })
 
-  // ---- decision gates ----------------------------------------------------
+
 
   flow.registerDefinition<
     { runId?: string; taskId?: string; question?: string; options?: string[] },
@@ -453,7 +453,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
     }
   })
 
-  /** Bare commands act on the newest open run so agents need not pass ids around. */
+
   function resolveRunId(explicit?: string): string {
     if (explicit) return orchestration.requireRun(explicit).id
     const active = orchestration.activeRun()
@@ -469,10 +469,7 @@ async function submitPtyLine(
   signal?: AbortSignal
 ): Promise<boolean> {
   const singleLine = text.replace(/\r\n|\r|\n/g, ' ')
-  const typed = terminals.write(terminalId, singleLine)
-  if (!typed.ok) return false
-  await delay(30, signal)
-  return terminals.write(terminalId, '\r').ok
+  return (await terminals.writeLine(terminalId, singleLine, { signal })).ok
 }
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {

@@ -9,16 +9,16 @@ const ELECTRON_VERSION = '43.3.0'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-/**
- * Rebuild the PTY native addon for Electron's ABI.
- * On Windows it compiles conpty.node; on macOS/Linux it compiles pty.node.
- * This guarantees terminal widgets work in Electron regardless of npmRebuild: false.
- *
- * The Windows agent patch runs FIRST, before any early return: node_modules
- * survives across builds, so a repeat build finds conpty.node already built
- * and returns early — gating the patch behind that return left upgraded
- * installs unpatched (and the 5s kill hang in place) forever.
- */
+
+
+
+
+
+
+
+
+
+
 function ensureElectronPty() {
   try {
     const packageDir = join(repoRoot, 'node_modules', '@homebridge', 'node-pty-prebuilt-multiarch')
@@ -27,9 +27,9 @@ function ensureElectronPty() {
     const addon = join(packageDir, 'build', 'Release', addonName)
     if (existsSync(addon)) return
 
-    // A previous Windows distribution contains the Electron-compatible addon.
-    // Reuse it when the machine has no Visual Studio C++ workload; otherwise a
-    // fresh checkout cannot start terminals even though the app was packaged.
+
+
+
     if (process.platform === 'win32') {
       const bundledRelease = join(
         repoRoot,
@@ -76,7 +76,7 @@ function ensureElectronPty() {
     if (result.status !== 0 || !existsSync(addon)) {
       console.warn(`[pty] Non-fatal: Failed to build ${addonName}; using standard fallback.`)
     }
-    // A fresh compile drops pristine agent sources — re-apply the patch.
+
     patchWindowsPtyAgents(packageDir)
   } catch (err) {
     console.warn(`[pty] ensureElectronPty warning:`, err.message)
@@ -94,15 +94,15 @@ if (cargoCheck.status !== 0) {
   process.exit(0)
 }
 
-/**
- * Resolve `@napi-rs/cli` out of the repo's own node_modules instead of trusting
- * PATH. `npm run build:native` happens to put `node_modules/.bin` on PATH, but
- * every other way of reaching this script — `node native/build.mjs`, a wrapper
- * shell, CI calling it directly — does not, and the crate loop below treats a
- * missing binary as "no Rust available" and silently ships the TypeScript
- * fallbacks. The app then runs its slow paths with nothing but a warning that
- * scrolls past in the build log.
- */
+
+
+
+
+
+
+
+
+
 const localBin = join(
   repoRoot,
   'node_modules',
@@ -111,9 +111,9 @@ const localBin = join(
 )
 const napi = existsSync(localBin) ? localBin : process.platform === 'win32' ? 'napi.cmd' : 'napi'
 
-// Each crate degrades independently: one failing to build must not stop the
-// others, and must never fail `npm run build:native` — every native crate
-// here backs an optional acceleration path with a TypeScript fallback.
+
+
+
 const failed = []
 for (const crate of CRATES) {
   const crateDir = join(repoRoot, 'native', crate)

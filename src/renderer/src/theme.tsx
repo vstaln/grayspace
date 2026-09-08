@@ -8,8 +8,8 @@ export const THEMES: { id: ThemeName; label: string; hint: string }[] = [
   { id: 'photo', label: 'Photo', hint: 'Custom wallpaper with adjustable blur & dim' }
 ]
 
-/** `photo` floats panels on a blurred, semi-opaque surface over the real
- *  desktop showing through the transparent window. */
+
+
 const TRANSLUCENT: ThemeName[] = ['photo']
 
 function readStoredTheme(): ThemeName {
@@ -17,7 +17,7 @@ function readStoredTheme(): ThemeName {
   try {
     saved = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null
   } catch {
-    // Storage can be unavailable in restricted/sandboxed renderer contexts.
+
   }
   return THEMES.some((t) => t.id === saved) ? (saved as ThemeName) : 'dark'
 }
@@ -25,19 +25,19 @@ function readStoredTheme(): ThemeName {
 interface ThemeValue {
   theme: ThemeName
   setTheme: (theme: ThemeName) => void
-  /** Data URL of the wallpaper, or null when the user has not picked one. */
+
   background: string | null
-  /** True once getBackground has resolved (even with null) — gates the CTA to avoid flicker. */
+
   backgroundLoaded: boolean
-  /** 0–90: percent of black laid over the wallpaper. */
+
   dim: number
   setDim: (dim: number) => void
-  /** 0–90: percent of Gaussian blur applied to the wallpaper. */
+
   blur: number
   setBlur: (blur: number) => void
   pickBackground: () => Promise<string | null>
   clearBackground: () => void
-  /** Set when the last pick failed, so the settings menu can explain why. */
+
   error: string | null
 }
 
@@ -55,12 +55,12 @@ const ThemeContext = createContext<ThemeValue>({
   error: null
 })
 
-/**
- * Only safe image data-URLs from main's media picker. Reject anything else so
- * a poisoned value (settings file, devtools, compromised IPC) cannot inject
- * CSS via `url("...")` (quotes, `)`, etc.). Shared by App's wallpaper and the
- * Sidebar background preview — both must enforce the same rule.
- */
+
+
+
+
+
+
 export function wallpaperBackgroundImage(background: string | null): string | undefined {
   if (!background) return undefined
   if (!/^data:image\/(png|jpe?g|gif|webp|avif|bmp);base64,[A-Za-z0-9+/=]+$/i.test(background)) {
@@ -69,7 +69,7 @@ export function wallpaperBackgroundImage(background: string | null): string | un
   return `url("${background}")`
 }
 
-/** Applies the theme to <html data-theme> (CSS hooks into that) and persists it. */export function ThemeProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
+export function ThemeProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const [theme, setTheme] = useState<ThemeName>(readStoredTheme)
   const [background, setBackground] = useState<string | null>(null)
   const [backgroundLoaded, setBackgroundLoaded] = useState(false)
@@ -82,24 +82,24 @@ export function wallpaperBackgroundImage(background: string | null): string | un
   useEffect(() => {
     const root = document.documentElement
     root.setAttribute('data-theme', theme)
-    // A single flag lets every translucent rule target both themes at once.
+
     if (TRANSLUCENT.includes(theme)) root.setAttribute('data-translucent', '')
     else root.removeAttribute('data-translucent')
     try {
       localStorage.setItem(STORAGE_KEY, theme)
     } catch {
-      // The theme still applies for this session when persistence is blocked.
+
     }
   }, [theme])
 
-  // The wallpaper and its dim live in the main process (they outgrow localStorage
-  // and must survive a cache clear), so they are loaded once on mount.
+
+
   useEffect(() => {
     const settingsRequest = ++settingsRequestRef.current
     void window.api.settings.get().then(
       (s) => {
-        // A slider can be used before this IPC read resolves. Keep the
-        // user's newer value instead of restoring the stale startup snapshot.
+
+
         if (settingsRequest !== settingsRequestRef.current) return
         setDimState(s.backgroundDim ?? 45)
         setBlurState(s.backgroundBlur ?? 40)
@@ -119,9 +119,9 @@ export function wallpaperBackgroundImage(background: string | null): string | un
     )
   }, [])
 
-  // PERF-003: the dim slider fires on every step; keep the UI instant but
-  // collapse the IPC+writeJsonAtomic+fsync storm into one call after the
-  // slider settles — the last value is what should reach disk anyway.
+
+
+
   const dimTimerRef = useRef<number | null>(null)
   const setDim = useCallback((next: number): void => {
     const clamped = Math.min(90, Math.max(0, Math.round(next)))
@@ -170,7 +170,7 @@ export function wallpaperBackgroundImage(background: string | null): string | un
     setError(null)
     const next = result.dataUrl ?? null
     setBackground(next)
-    // Picking a picture is only ever meant to show it, so switch themes for them.
+
     if (next) setTheme('photo')
     return next
   }, [])
@@ -178,8 +178,8 @@ export function wallpaperBackgroundImage(background: string | null): string | un
   const clearBackground = useCallback(async (): Promise<void> => {
     ++backgroundRequestRef.current
     setError(null)
-    // Update the visible state immediately. A slow delete must not leave the
-    // old image displayed, nor can its completion race a newer pick.
+
+
     setBackground(null)
     try {
       await window.api.settings.clearBackground()

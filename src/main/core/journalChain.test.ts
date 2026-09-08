@@ -26,7 +26,7 @@ describe('Journal Cryptographic Hash-Chain (Tamper-Evidence)', () => {
     assert.ok(e2.hash)
     assert.equal(e2.prevHash, e1.hash)
 
-    // Verification passes
+
     const verification = journal.verifyIntegrity()
     assert.equal(verification.valid, true)
     assert.equal(verification.totalEntries, 2)

@@ -8,7 +8,7 @@ describe('Materialized Projections over the Journal', () => {
     const journal = new Journal()
     const projections = new ProjectionManager(journal, { windowMs: 3600_000 })
 
-    // Simulate journal commits
+
     journal.append({
       phase: 'commit',
       actorId: 'user',
@@ -36,7 +36,7 @@ describe('Materialized Projections over the Journal', () => {
       version: 2
     })
 
-    // 1. Resource History Projection
+
     const n1Hist = projections.resourceHistory('note:n1')
     assert.ok(n1Hist)
     assert.equal(n1Hist.target, 'note:n1')
@@ -44,7 +44,7 @@ describe('Materialized Projections over the Journal', () => {
     assert.equal(n1Hist.version, 2)
     assert.equal(n1Hist.lastActorId, 'user')
 
-    // 2. Actor Activity Projection
+
     const userAct = projections.actorStatus('user')
     assert.ok(userAct)
     assert.equal(userAct.commitCount, 2)
@@ -55,7 +55,7 @@ describe('Materialized Projections over the Journal', () => {
     assert.equal(codexAct.commitCount, 1)
     assert.deepEqual(codexAct.touchedResources, ['task:t1'])
 
-    // 3. Rolling Recent Digest
+
     const digest = projections.recentDigest()
     assert.equal(digest.totalCommits, 3)
     assert.equal(digest.byScheme['note'], 2)

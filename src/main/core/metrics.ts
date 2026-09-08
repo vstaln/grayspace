@@ -1,12 +1,12 @@
-/**
- * Dependency-free counters/gauges/timings for the write path.
- *
- * Deliberately not a general metrics library: the bus needs a handful of
- * numbers (queue depth, conflicts, apply latency) observable from the sys
- * monitor, with zero allocation on the hot path beyond a Map increment.
- */
+
+
+
+
+
+
+
 export interface TimingStats {
-  /** Samples kept (sliding window). */
+
   count: number
   avgMs: number
   maxMs: number

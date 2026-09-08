@@ -79,18 +79,6 @@ function shortAgentName(id: string, name: string): string {
   }
 }
 
-function getPercentColor(percent: number): string {
-  if (percent > 80) return 'text-[#f87171]'
-  if (percent > 50) return 'text-[#e6c07b]'
-  return 'text-[#38bdf8]'
-}
-
-function getProgressBg(percent: number): string {
-  if (percent > 80) return 'bg-[#f87171]'
-  if (percent > 50) return 'bg-[#e6c07b]'
-  return 'bg-[#38bdf8]'
-}
-
 function getRemainingColor(rem: number): string {
   if (rem < 20) return 'text-[#f87171]'
   if (rem < 50) return 'text-[#e6c07b]'
@@ -110,35 +98,35 @@ function formatTokens(tokens?: number): string {
   return `${tokens} tokens`
 }
 
-export type WorkView = 'canvas' | 'chat' | 'code'
+export type WorkView = 'canvas' | 'code'
 
-/**
- * One geometry for the whole bar, declared once so the three islands cannot
- * drift apart: every island is the same height, radius, border and inner
- * padding, and every control inside them is the same 22px tall with the same
- * 6px radius. Changing the bar's scale is a change to these five lines.
- */
+
+
+
+
+
+
 const ISLAND =
   'flex h-[34px] items-center gap-[3px] rounded-full border border-[#2a2a2e] bg-[#1c1c1f] p-[3px]'
-/** A labelled capsule: icon + text. The border is always there, transparent
- *  when the control is idle, so turning it on cannot nudge the row by a pixel. */
+
+
 const PILL =
   'flex h-[28px] flex-none items-center gap-1.5 rounded-full border border-transparent px-3 text-[13px] font-medium transition-colors duration-150 cursor-pointer select-none outline-none'
-/** An icon-only capsule — the window buttons. */
+
 const ICON =
   'grid h-[28px] w-[32px] flex-none place-items-center rounded-full border border-transparent transition-colors duration-150 cursor-pointer outline-none'
 const QUIET = 'text-[#8a8a90] hover:bg-[#232326] hover:text-[#ececec]'
 const ON = 'bg-[#2a2a2e] text-[#ececec] border-transparent'
 
 interface Props {
-  /** Owned by App: the switcher only reports intent, the surfaces live there. */
+
   activeView: WorkView
   onViewChange: (view: WorkView) => void
 }
 
-// Memoized: App re-renders on every camera frame; the bar's own state (git
-// poll, flash, maximized) is what should drive its renders, not the canvas
-// moving underneath it. `onViewChange` is a stable useCallback in App.
+
+
+
 export default React.memo(function TitleBar({ activeView, onViewChange }: Props): React.JSX.Element {
   const [maximized, setMaximized] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
@@ -172,7 +160,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
   }, [gitOpen, usageOpen])
 
   useEffect(() => {
-    // On failure the default (restored window) is the safe assumption.
+
     void window.api.window.isMaximized().then(setMaximized).catch(() => setMaximized(false))
     return window.api.window.onMaximizeChange(setMaximized)
   }, [])
@@ -243,9 +231,9 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
     const seq = ++usageSeqRef.current
     try {
       const res = await window.api.system.stats()
-      // A slower poll must not overwrite a newer sample (for example after
-      // the window becomes visible again). The sequence also invalidates
-      // replies that arrive after this component has unmounted.
+
+
+
       if (seq !== usageSeqRef.current) return
       if (res && !('error' in res)) {
         setUsageStats(res as SystemStats)
@@ -259,7 +247,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
     }
   }, [])
 
-  // Poll usage every 5 seconds as requested by user
+
   useEffect(() => {
     void refreshUsage()
     const timer = setInterval(() => {
@@ -308,12 +296,12 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
 
   const noDrag = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
 
-  // No `onDoubleClick` here on purpose. The bar is a `-webkit-app-region:
-  // drag` caption area, and both platforms already give a caption
-  // double-click the native maximize/restore (macOS honours the system
-  // "double-click a window's title bar to" preference, Windows treats the
-  // region as HTCAPTION). Adding a JS `toggleMaximize()` on top of that fires
-  // *after* the native toggle and immediately undoes it.
+
+
+
+
+
+
 
   return (
     <div
@@ -321,14 +309,14 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
       style={
         {
           WebkitAppRegion: 'drag',
-          // macOS draws its traffic lights inside this bar (the window is
-          // frameless but keeps them). Reserve the gutter they sit in so the
-          // left island never lands underneath close/minimise/zoom.
+
+
+
           ...(IS_MAC ? { paddingLeft: 78 } : {})
         } as React.CSSProperties
       }
     >
-      {/* Left island: transient status messages only. */}
+      {}
       <div className="flex h-10 min-w-0 max-w-[340px] flex-none items-center gap-1.5" style={noDrag}>
         {flash && (
           <div role="status" className={`${ISLAND} min-w-0 px-3`}>
@@ -337,7 +325,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
         )}
       </div>
 
-      {/* Centre island: Canvas / Chat / Code switch the visible surface. */}
+      {}
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
         <div
           className={`${ISLAND} pointer-events-auto`}
@@ -371,16 +359,6 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
           <button
             type="button"
             role="tab"
-            onClick={() => onViewChange('chat')}
-            aria-selected={activeView === 'chat'}
-            className={`${PILL} ${activeView === 'chat' ? ON : QUIET}`}
-            title="Chat"
-          >
-            <span>Chat</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
             onClick={() => onViewChange('code')}
             aria-selected={activeView === 'code'}
             className={`${PILL} ${activeView === 'code' ? ON : QUIET}`}
@@ -393,10 +371,10 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
 
       <div className="flex-1" />
 
-      {/* Right island: Usage, Git, then the window itself. */}
+      {}
       <div className="flex h-10 flex-none items-center" style={noDrag}>
         <div ref={rightIslandRef} className={`${ISLAND} relative`}>
-          {/* Usage button */}
+          {}
           <button
             type="button"
             aria-haspopup="dialog"
@@ -509,7 +487,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                 )
               ) : (
                 <div className="space-y-3 text-[12px]">
-                  {/* Active AI Sessions Section */}
+                  {}
                   <div>
                     <div className="mb-1.5 flex items-center justify-between text-[11px]">
                       <span className="flex items-center gap-1 font-semibold text-text">
@@ -551,7 +529,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                                   Idle
                                 </span>
                               </div>
-                              {/* 5-Hour */}
+                              {}
                               <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft text-[10px]">
                                 <div className="flex justify-between">
                                   <span className="text-text-dim flex items-center gap-1"><Clock size={10} className="text-[#38bdf8]" /> 5h Remaining:</span>
@@ -567,7 +545,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                                   <span>{ag.fiveHour.resetInfo}</span>
                                 </div>
                               </div>
-                              {/* Weekly */}
+                              {}
                               <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft text-[10px]">
                                 <div className="flex justify-between">
                                   <span className="text-text-dim flex items-center gap-1"><Calendar size={10} className="text-[#7fd99a]" /> Weekly Remaining:</span>
@@ -583,7 +561,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                                   <span>{ag.weekly.resetInfo}</span>
                                 </div>
                               </div>
-                              {/* Monthly */}
+                              {}
                               {ag.monthly && remMo !== null && (
                                 <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft text-[10px]">
                                   <div className="flex justify-between">
@@ -620,7 +598,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                               key={ag.id}
                               className="rounded-[8px] border border-line-soft/80 bg-bg-hover p-2.5 space-y-2.5 transition-colors hover:border-line"
                             >
-                              {/* Agent Header */}
+                              {}
                               <div>
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center gap-1.5 min-w-0">
@@ -650,7 +628,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                                 )}
                               </div>
 
-                              {/* 5-Hour Limit Remaining */}
+                              {}
                               <div className="space-y-1 rounded bg-bg-hover p-2 border border-line-soft">
                                 <div className="flex items-center justify-between text-[11px]">
                                   <span className="flex items-center gap-1 text-text font-medium">
@@ -673,7 +651,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                                 </div>
                               </div>
 
-                              {/* Weekly Limit Remaining */}
+                              {}
                               <div className="space-y-1 rounded bg-bg-hover p-2 border border-line-soft">
                                 <div className="flex items-center justify-between text-[11px]">
                                   <span className="flex items-center gap-1 text-text font-medium">
@@ -696,7 +674,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                                 </div>
                               </div>
 
-                              {/* Monthly Limit Remaining */}
+                              {}
                               {ag.monthly && remMo !== null && (
                                 <div className="space-y-1 rounded bg-bg-hover p-2 border border-line-soft">
                                   <div className="flex items-center justify-between text-[11px]">
@@ -727,7 +705,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                     )}
                   </div>
 
-                  {/* System Resources Section */}
+                  {}
                   <div className="border-t border-line-soft pt-2">
                     <div className="mb-1.5 flex items-center gap-1 text-[11px] font-semibold text-text">
                       <Activity size={12} className="text-accent" />
@@ -735,7 +713,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                     </div>
 
                     <div className="space-y-2 text-[11px]">
-                      {/* CPU */}
+                      {}
                       <div className="rounded-[8px] border border-line-soft/60 bg-bg-hover p-2">
                         <div className="mb-1 flex items-center justify-between">
                           <span className="flex items-center gap-1 text-text-dim">
@@ -763,7 +741,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                         )}
                       </div>
 
-                      {/* RAM */}
+                      {}
                       <div className="rounded-[8px] border border-line-soft/60 bg-bg-hover p-2">
                         <div className="mb-1 flex items-center justify-between">
                           <span className="flex items-center gap-1 text-text-dim">
@@ -792,7 +770,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                         </div>
                       </div>
 
-                      {/* Terminals & Uptime */}
+                      {}
                       <div className="flex justify-between text-[10px] text-text-dim px-0.5">
                         <span>Active Terminals: <span className="text-accent font-medium">{usageStats.terminalsCount}</span></span>
                         <span>Uptime: <span className="text-text font-medium">{formatUptime(usageStats.uptime)}</span></span>
@@ -804,7 +782,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
             </div>
           )}
 
-          {/* Git button */}
+          {}
           <button
             type="button"
             aria-haspopup="dialog"
@@ -825,9 +803,9 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
               size={14}
               className={`flex-none ${gitStatus?.repo ? (dirtyCount > 0 ? 'text-accent' : 'text-text-dim') : 'text-text-faint'}`}
             />
-            {/* The branch name is the widest thing on the bar; past this width the
-                right island would run into the centred view switcher (the OS-level
-                minWidth is 800). The icon + dirty dot still carry the state. */}
+            {
+
+}
             <span className="hidden min-[1000px]:inline max-w-[110px] truncate">
               {gitStatus?.repo ? gitStatus.branch || 'HEAD' : 'Git'}
             </span>
@@ -881,10 +859,10 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
             </div>
           )}
 
-          {/* macOS renders its own traffic lights at the far left of this bar,
-              so a second set of window buttons on the right is both redundant
-              and non-native. Windows and Linux keep them — the frame is off and
-              they are the only way to minimise, maximise or close. */}
+          {
+
+
+}
           {!IS_MAC && (
             <>
               <span className="mx-0.5 h-4 w-px flex-none bg-line-soft/80" />

@@ -16,7 +16,7 @@ describe('Priority Queue, Rate Limiter and Backpressure', () => {
       unblockFirst = r
     })
 
-    // First running command blocks the pump
+
     const p1 = queue.enqueue({
       id: 'task-1',
       actorId: 'agent',
@@ -27,7 +27,7 @@ describe('Priority Queue, Rate Limiter and Backpressure', () => {
       }
     })
 
-    // Enqueue low, then normal, then high while queue is blocked
+
     const pLow = queue.enqueue({
       id: 'task-low',
       actorId: 'agent',
@@ -55,11 +55,11 @@ describe('Priority Queue, Rate Limiter and Backpressure', () => {
       }
     })
 
-    // Release first command
+
     unblockFirst()
     await Promise.all([p1, pLow, pNormal, pHigh])
 
-    // High must execute before normal and low
+
     assert.deepEqual(log, ['first', 'high', 'normal', 'low'])
   })
 
@@ -67,13 +67,13 @@ describe('Priority Queue, Rate Limiter and Backpressure', () => {
     let now = 1000
     const limiter = new ActorRateLimiter({ capacity: 3, refillPerSec: 1, now: () => now })
 
-    // Consume burst capacity
+
     assert.equal(limiter.tryConsume('agent-1'), true)
     assert.equal(limiter.tryConsume('agent-1'), true)
     assert.equal(limiter.tryConsume('agent-1'), true)
     assert.equal(limiter.tryConsume('agent-1'), false, 'exhausted')
 
-    // Advance clock 2 seconds -> refills 2 tokens
+
     now += 2000
     assert.equal(limiter.tryConsume('agent-1'), true)
     assert.equal(limiter.tryConsume('agent-1'), true)

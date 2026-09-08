@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Cross-platform setup — Node.js runner for `npm run setup` / `node scripts/setup.mjs`.
-// Manages dependencies, native accelerators, and app launch.
+
+
 
 import { spawnSync, spawn } from 'node:child_process'
 import { existsSync, rmSync } from 'node:fs'
@@ -62,7 +62,7 @@ async function alive(url, ms = 1000) {
 console.log('\n OrcSpace Setup — Unified Canvas & Agent Coordination')
 console.log(` Backend :${APP_PORT} (Control + renderer)\n` + '─'.repeat(58))
 
-// 1. Preflight check
+
 const nodeVersion = process.version
 const nodeMajor = parseInt(nodeVersion.slice(1).split('.')[0], 10)
 
@@ -73,9 +73,9 @@ if (nodeMajor < MIN_NODE_MAJOR) {
 }
 console.log(` [ok] Node.js ${nodeVersion} (${process.platform}-${process.arch})`)
 
-// npm is the only supported package manager for the checked-in lockfile.
-// Failing early here avoids a half-installed app when a machine has no npm
-// shim (common with portable Node installations on Windows).
+
+
+
 const npmCheck = spawnSync(npmCommand, ['--version'], {
   stdio: 'ignore',
   shell: process.platform === 'win32'
@@ -85,7 +85,7 @@ if (npmCheck.status !== 0) {
   process.exit(1)
 }
 
-// Check cargo (optional)
+
 const cargoCheck = spawnSync('cargo', ['--version'], { shell: process.platform === 'win32' })
 if (cargoCheck.status === 0) {
   console.log(` [ok] Rust accelerator available`)
@@ -93,7 +93,7 @@ if (cargoCheck.status === 0) {
   console.log(` [i] Rust not installed — using TypeScript fallback accelerators`)
 }
 
-// 2. Handle reset mode
+
 if (flags.reset) {
   console.log('\n ==> Resetting locks and workspace state...')
   sh('node', ['scripts/reset.mjs', '--all'])
@@ -101,7 +101,7 @@ if (flags.reset) {
   process.exit(0)
 }
 
-// 3. Clean reinstall if requested
+
 if (flags.reinstall) {
   console.log('\n ==> Cleaning existing dependencies...')
   try {
@@ -112,7 +112,7 @@ if (flags.reinstall) {
   }
 }
 
-// 4. App Dependencies — also detect broken install (folder exists but no .bin/electron)
+
 if (!existsSync(join(root, 'node_modules')) || !existsSync(join(root, 'node_modules', '.bin')) || !existsSync(join(root, 'node_modules', 'electron'))) {
   const msg = existsSync(join(root, 'node_modules')) ? 'broken install detected — reinstalling...' : 'Installing app dependencies...'
   console.log(`\n ==> ${msg}`)
@@ -125,7 +125,7 @@ if (!existsSync(join(root, 'node_modules')) || !existsSync(join(root, 'node_modu
   console.log(' [ok] App dependencies present.')
 }
 
-// 5. Native Accelerators
+
 console.log(' ==> Building native accelerators...')
 if (!sh(npmCommand, ['run', 'build:native'])) {
   console.error(' [x] Native accelerator build failed.')
@@ -133,7 +133,7 @@ if (!sh(npmCommand, ['run', 'build:native'])) {
   process.exit(1)
 }
 
-// 6. Production Build mode
+
 if (flags.build) {
   const distScript = process.platform === 'darwin' ? 'dist:mac' : 'dist'
   if (!sh(npmCommand, ['run', distScript])) {
@@ -149,7 +149,7 @@ if (flags.noStart) {
   process.exit(0)
 }
 
-// 7. Check if already running or launch
+
 const isRunning = await alive(`http://127.0.0.1:${APP_PORT}/presence`)
 
 if (isRunning) {
@@ -173,7 +173,7 @@ if (isRunning) {
   }
 }
 
-// 8. Verify Service Health
+
 console.log('\n ==> Service Health Check:')
 try {
   const r = await fetch(`http://127.0.0.1:${APP_PORT}/presence`, { signal: AbortSignal.timeout(2000) })

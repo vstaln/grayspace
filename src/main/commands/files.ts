@@ -4,25 +4,25 @@ import { isLocalPath } from '../media.ts'
 import { writeTextAtomicAsync } from '../storage.ts'
 import type { CommandDeps } from './index.ts'
 
-/** Largest single file.write payload: generous for real files, bounded against OOM. */
+
 const MAX_FILE_WRITE_BYTES = 50 * 1024 * 1024
 
-/**
- * Filesystem mutation as commands.
- *
- * The renderer's old fs handlers wrote straight to disk: no lock, no journal,
- * no version gate — while agents edited the same tree from their own tools.
- * Routing every mutation through the bus closes that hole: a write takes the
- * normalized `file:` lock (so an agent holding the file keeps the user out,
- * same as terminals), lands in the journal (attributed, replayable), and its
- * lane serializes concurrent writers to one path while leaving every other
- * path untouched.
- *
- * The target is the lock/lane identity; the payload carries the original
- * spelling of the path, because the bus lower-cases targets and a Linux drive
- * would not forgive writing to the folded name. A mismatch between the two is
- * refused — locking file:A must never be able to justify writing file:B.
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 function assertTargetMatches(target: string, absPath: string): void {
   const parsed = parseResource(target)
   if (!parsed || parsed.scheme !== 'file') throw new CommandError('invalid', `${target} is not a file resource`)
@@ -61,8 +61,8 @@ export function registerFileCommands({ core }: CommandDeps): void {
           throw new CommandError('invalid', `content exceeds ${MAX_FILE_WRITE_BYTES} bytes`)
         }
         try {
-          // Crash-safe write (temp + fsync + rename): a bare writeFile can
-          // leave a truncated file if the app dies mid-flush.
+
+
           await writeTextAtomicAsync(abs, content)
           return { ok: true }
         } catch (err) {

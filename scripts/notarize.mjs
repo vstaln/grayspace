@@ -1,10 +1,10 @@
 ﻿import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-/**
- * electron-builder afterSign hook for Apple Notarization.
- * Automatically triggered when building for macOS if Apple credentials are provided.
- */
+
+
+
+
 export default async function notarizing(context) {
   const { electronPlatformName, appOutDir } = context
   if (electronPlatformName !== 'darwin') return

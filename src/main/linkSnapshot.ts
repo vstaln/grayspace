@@ -1,4 +1,4 @@
-import { CONTROL_PORT, getActiveControlPort } from './config.ts'
+import { getActiveControlPort } from './config.ts'
 import { getIpcSocketPath } from './ipcSocket.ts'
 
 export const APP_VERSION = '2.0.0'
@@ -14,10 +14,8 @@ export interface PresenceInfo {
 }
 
 export interface SnapshotInfo extends PresenceInfo {
-  managerId: string | null
   terminals: unknown[]
   widgets: unknown[]
-  tasks: unknown[]
   locks: unknown[]
   planner: {
     items: unknown[]
@@ -54,7 +52,7 @@ export function buildPresence(input: {
   }
 }
 
-/** Secret-bearing keys that must never appear on /presence or in runtime.json. */
+
 export const FORBIDDEN_PRESENCE_KEYS = [
   'token',
   'controlToken',
@@ -99,10 +97,8 @@ export function summarizePlanner(items: Array<{ day?: string; done?: boolean; pr
 
 export function buildSnapshot(input: {
   workspaceDir: string | null | undefined
-  managerId: string | null
   terminals: unknown[]
   widgets: unknown[]
-  tasks: unknown[]
   locks: unknown[]
   plannerItems: Array<{ day?: string; done?: boolean; project?: string }>
   journal: { lastSeq: number; entries: unknown[] }
@@ -110,10 +106,8 @@ export function buildSnapshot(input: {
 }): SnapshotInfo {
   return {
     ...buildPresence(input),
-    managerId: input.managerId,
     terminals: input.terminals,
     widgets: input.widgets,
-    tasks: input.tasks,
     locks: input.locks,
     planner: {
       items: input.plannerItems,

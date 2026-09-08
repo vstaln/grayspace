@@ -2,28 +2,27 @@ import * as fs from 'fs'
 import * as os from 'os'
 import { dirname, join } from 'path'
 import { writeConfigAtomic } from '../atomicFile.ts'
-import { safeParseJson, sanitizeParsed } from '../safeJson.ts'
 
-/**
- * Markers around the block this app owns. Everything between them is rewritten
- * on every sync; everything outside is the user's and is never touched.
- */
+
+
+
+
 const BEGIN = '<!-- BEGIN ORCSPACE (managed) -->'
 const END = '<!-- END ORCSPACE (managed) -->'
 
-/** The instruction files the major CLI agents read on startup, by convention. */
+
 const GUIDE_FILES = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md'] as const
 
-/**
- * What an agent needs to know to coordinate, written where it will actually
- * read it.
- *
- * The CLI is discoverable in principle — it is on PATH and has `--help` — but
- * an agent only runs `--help` for a command it already believes exists. This
- * block is what makes it exist. Kept short on purpose: it competes for
- * attention with the user's own instructions, and a wall of flags would get
- * skimmed.
- */
+
+
+
+
+
+
+
+
+
+
 function guideBody(): string {
   return [
     BEGIN,
@@ -96,29 +95,27 @@ function guideBody(): string {
     'orc escalate --body "..."    # you are stuck and need intervention',
     '```',
     '',
-    '**Planner & Kanban Tasks.** The day planner and kanban board are live and synced.',
-    'You can pick tasks directly and report progress:',
+    '**Planner.** The day planner is the workspace task list.',
+    'Use it to track work and report progress:',
     '',
     '```sh',
     'orc plan list                                # see all planner tasks',
-    'orc board list                               # list kanban tasks',
-    'orc board claim <id>                         # claim a task (moves to In Progress with your name)',
-    'orc board update <id> done                   # complete a task (moves to Done and checks off in Planner)',
+    'orc plan list                                # see all planner tasks',
     '```',
     '',
     '**The rest of the app** is the same CLI: `orc canvas`, `orc plan`,',
-    '`orc board`, `orc terminal`, `orc git`, `orc journal`. Add `--json` for parseable',
+    '`orc terminal`, `orc git`, `orc journal`. Add `--json` for parseable',
     'output. Prefer putting results on the canvas or a task over loose files —',
     'the user is looking at the canvas, not at your scrollback.',
     END
   ].join('\n')
 }
 
-/**
- * Writes the managed block into every major agent guide. Each CLI has its own
- * discovery convention, so all three must exist before a freshly launched
- * agent can reliably learn about `orc`.
- */
+
+
+
+
+
 export function syncOrcGuide(dir: string): void {
   if (!dir) return
   purgeLegacyMcpConfigs(dir)
@@ -136,13 +133,13 @@ export function syncOrcGuide(dir: string): void {
   }
 }
 
-/**
- * Removes obsolete orcspace MCP server configurations from global and project
- * configs (Codex, Claude, Cursor, Windsurf, OpenCode) so agents do not warn
- * about failed MCP handshakes on startup.
- */
+
+
+
+
+
 export function purgeLegacyMcpConfigs(dir?: string): void {
-  // 1. Clean Codex ~/.codex/config.toml
+
   try {
     const home = os.homedir()
     const codexConfig = join(home, '.codex', 'config.toml')
@@ -154,10 +151,10 @@ export function purgeLegacyMcpConfigs(dir?: string): void {
       }
     }
   } catch {
-    /* best effort */
+
   }
 
-  // 2. Clean workspace .mcp.json and opencode.json
+
   if (dir) {
     for (const rel of ['.mcp.json', 'opencode.json', join('.cursor', 'mcp.json')]) {
       try {
@@ -175,16 +172,16 @@ export function purgeLegacyMcpConfigs(dir?: string): void {
           }
         }
       } catch {
-        /* best effort */
+
       }
     }
   }
 }
 
-/**
- * Swaps the managed block in place, or appends one. Anything the user wrote
- * around it survives untouched — this file is theirs, we are a guest in it.
- */
+
+
+
+
 export function replaceManagedBlock(current: string, body: string): string {
   const start = current.indexOf(BEGIN)
   const end = current.indexOf(END)

@@ -104,10 +104,9 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
   const [search, setSearch] = useState('')
   const [showHidden, setShowHidden] = useState(false)
   const [previewFile, setPreviewFile] = useState<FileReadResult | null>(null)
-  const [previewLoading, setPreviewLoading] = useState(false)
   const [actionNotice, setActionNotice] = useState<string | null>(null)
 
-  // Creation modals / inputs
+
   const [creatingType, setCreatingType] = useState<'file' | 'dir' | null>(null)
   const [newItemName, setNewItemName] = useState('')
   const [createBusy, setCreateBusy] = useState(false)
@@ -120,21 +119,21 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
   const aliveRef = useRef(true)
   useFocusTrap(previewRef, Boolean(previewFile))
 
-  // Request sequencing: a slower earlier `fs.list`/`fs.readFile` response must
-  // not overwrite the result of a newer navigation or preview.
+
+
   const dirSeq = useRef(0)
   const previewSeq = useRef(0)
   const closePreview = useCallback((): void => {
-    // A late read response must not reopen a preview the user already closed.
+
     previewSeq.current += 1
     setPreviewFile(null)
   }, [])
 
-  // Sync on WORKSPACE CHANGE only. Clamping here on every navigation used to
-  // fight the user: fs.list is not scoped to the workspace, so stepping above
-  // the root (← button / C: crumb) rendered fine and then this effect yanked
-  // the view back to the root — a visible bounce plus a second fs:list
-  // round-trip. Navigation stays free; only a real workspace switch clamps.
+
+
+
+
+
   const lastWorkspaceRef = useRef<string | null | undefined>(undefined)
   useEffect(() => {
     const changed = lastWorkspaceRef.current !== workspaceDir
@@ -199,9 +198,9 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
     aliveRef.current = true
     return () => {
       aliveRef.current = false
-      // Invalidate an in-flight list/preview reply when the widget is removed;
-      // otherwise a late IPC response can set state on an unmounted widget or
-      // reopen a preview after the user closed the frame.
+
+
+
       dirSeq.current += 1
       previewSeq.current += 1
     }
@@ -279,22 +278,22 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
     }
   }
 
-  /** Enters inline rename mode for an entry (UI-audit: the rename machinery
-   *  existed but nothing ever set `renamingPath`, so it was unreachable). */
+
+
   const startRename = (entry: FileEntry): void => {
     if (fsActionBusyRef.current) return
-    // Clear a flag left armed by an earlier Escape: the input unmounts without
-    // blurring, and a stale flag swallowed the next rename's Enter commit.
+
+
     renameCancelled.current = false
     setRenamingPath(entry.path)
     setRenamingName(entry.name)
   }
 
   const handleRename = async (): Promise<void> => {
-    // A single keypress on Enter triggers both `onKeyDown` and the subsequent
-    // `onBlur` from the unmounting input; without this gate both paths would
-    // race to rename the same entry twice (the second hit reading the now
-    // cleared `renamingPath` and bailing out — but only after a wasted IPC).
+
+
+
+
     if (renameInFlightRef.current || fsActionBusyRef.current) return
     if (renameCancelled.current) {
       renameCancelled.current = false
@@ -406,7 +405,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg-panel text-text">
-      {/* Top action / navigation bar */}
+      {}
       <div className="flex flex-none items-center justify-between gap-1.5 border-b border-line-soft px-3 py-2 text-xs">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <button
@@ -419,7 +418,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
             <ArrowLeft size={13} />
           </button>
 
-          {/* Breadcrumbs */}
+          {}
           <div className="flex items-center gap-0.5 text-[11px] text-text-dim whitespace-nowrap">
             {breadcrumbs.length > 0 ? (
               breadcrumbs.map((crumb, idx) => (
@@ -442,7 +441,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
           </div>
         </div>
 
-        {/* Action icons */}
+        {}
         <div className="flex flex-none items-center gap-1">
           <button
             className="grid h-6 w-6 place-items-center rounded-[6px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
@@ -489,7 +488,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
         </div>
       </div>
 
-      {/* Search and filter bar */}
+      {}
       <div className="flex flex-none items-center gap-2 border-b border-line-soft px-3 py-1.5">
         <div className="relative flex min-w-0 flex-1 items-center">
           <Search size={12} className="pointer-events-none absolute left-2 text-text-faint" />
@@ -522,14 +521,14 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
         </button>
       </div>
 
-      {/* Action Notice toast */}
+      {}
       {actionNotice && (
         <div className="flex-none border-b border-accent/30 bg-accent/10 px-3 py-1 text-[11px] text-accent">
           {actionNotice}
         </div>
       )}
 
-      {/* Inline Creation Input Bar */}
+      {}
       {creatingType && (
         <div className="flex flex-none items-center gap-2 border-b border-line-soft bg-bg-hover px-3 py-1.5">
           {creatingType === 'file' ? <FilePlus size={13} className="text-accent" /> : <FolderPlus size={13} className="text-accent" />}
@@ -564,7 +563,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
         </div>
       )}
 
-      {/* Main File Table / List */}
+      {}
       <div className="min-h-0 flex-1 overflow-auto">
         {error ? (
           <div className="flex flex-col items-center gap-2 p-4 text-center text-xs text-danger">
@@ -715,7 +714,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
         )}
       </div>
 
-      {/* Bottom Status Bar */}
+      {}
       <div className="flex flex-none items-center justify-between border-t border-line-soft px-3 py-1 text-[11px] text-text-faint">
         <div>
           {filteredItems.length} {filteredItems.length === 1 ? 'item' : 'items'}
@@ -725,10 +724,10 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
         </div>
       </div>
 
-      {/* File Preview Modal / Drawer. Portaled to <body> on purpose: the widget
-          frame is `transform: scale(zoom)` + `overflow-hidden`, and a `fixed`
-          overlay inside it would resolve against the transformed ancestor — scaled
-          with the canvas and clipped to the widget's box. */}
+      {
+
+
+}
       {previewFile &&
         createPortal(
           <div
@@ -765,8 +764,8 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                 <button
                   className="flex items-center gap-1.5 rounded-[8px] border border-line px-2.5 py-1 text-xs text-text-dim hover:bg-bg-hover hover:text-text"
                   onClick={async () => {
-                    // `content` is falsy for a 0-byte file too — still copy and
-                    // confirm, otherwise the button feels dead (UI-audit).
+
+
                     if (previewFile.content !== undefined) {
                       try {
                         await navigator.clipboard.writeText(previewFile.content)

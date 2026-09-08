@@ -5,13 +5,13 @@ interface State {
   retryCount: number
 }
 
-/**
- * Without this, a render-phase exception anywhere in the tree unmounts the
- * whole app silently — and because the window is `transparent: true` with a
- * fully-transparent `backgroundColor`, what's left behind is a plain black
- * rectangle with no error, no text, nothing to act on. This turns that into
- * a visible message instead.
- */
+
+
+
+
+
+
+
 export default class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State> {
   state: State = { error: null, retryCount: 0 }
 
@@ -33,9 +33,9 @@ export default class ErrorBoundary extends React.Component<{ children: React.Rea
         <button
           className="mt-2 rounded-[10px] border border-line px-4 py-2 text-sm hover:bg-bg-hover"
           onClick={() => {
-            // A render exception can be caused by transient widget/IPC state;
-            // retry once in place. If React catches the same tree again,
-            // reload the renderer so stale module and DOM state are discarded.
+
+
+
             if (this.state.retryCount > 0) {
               window.location.reload()
               return

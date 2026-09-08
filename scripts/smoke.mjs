@@ -6,8 +6,8 @@ import net from 'node:net'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-// import.meta.dirname needs Node >= 20.11; resolve from the module URL so the
-// script fails late (with diagnostics) rather than at line one everywhere.
+
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const executable = path.join(root, 'dist', 'win-unpacked', 'OrcSpace.exe')
 const requestedControlPort = process.env.WORKSPACE_CONTROL_PORT
@@ -30,7 +30,7 @@ function freePort() {
   })
 }
 
-/** Accepts only a real decimal port; "" / "0" / "8x" fall back to a free one. */
+
 function parsePort(value) {
   if (value === undefined || value === null) return null
   const text = String(value).trim()
@@ -87,7 +87,7 @@ async function waitForToken(deadline) {
       const token = fs.readFileSync(path.join(userDataDir, 'control-token'), 'utf8').trim()
       if (token.length >= 32) return token
     } catch {
-      // The app creates the profile and token during startup.
+
     }
     await new Promise(resolve => setTimeout(resolve, 250))
   }
@@ -104,7 +104,7 @@ async function waitForControl(token, deadline) {
         if (body?.ok === true) return
       }
     } catch {
-      // Retry until the app finishes startup.
+
     }
     await new Promise(resolve => setTimeout(resolve, 250))
   }
@@ -114,7 +114,7 @@ async function waitForControl(token, deadline) {
 function stop() {
   if (!child || exited) return
   if (process.platform === 'win32' && child.pid) {
-    // /t is important: the app owns the whole process tree.
+
     spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
       stdio: 'ignore',
       timeout: 5_000,
@@ -134,8 +134,8 @@ function emergencyStop() {
 }
 
 try {
-  // This timer covers a hung fetch, a stuck child shutdown, or any future
-  // await added to the checks. The smoke command must never hold CI forever.
+
+
   hardStopTimer = setTimeout(emergencyStop, timeoutMs + 5_000)
   const deadline = Date.now() + timeoutMs
   const token = await waitForToken(deadline)
@@ -147,9 +147,9 @@ try {
 } finally {
   if (hardStopTimer) clearTimeout(hardStopTimer)
   stop()
-  // On Windows taskkill /f returns before the dying tree has released its file
-  // handles, so a single rmSync usually races the app process and
-  // leaks the profile. Retry briefly until the handles are gone.
+
+
+
   const removalDeadline = Date.now() + 5_000
   let removed = false
   while (Date.now() < removalDeadline) {

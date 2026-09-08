@@ -18,7 +18,7 @@ describe('killProcessTree script', () => {
     ])
     assert.match(script, /pid = 11; notAfter = \[int64\]1700000000000/)
     assert.match(script, /pid = 22; notAfter = \[int64\]1700000000500/)
-    // The expensive part — the WMI walk — happens once, not once per root.
+
     assert.equal(script.match(/Get-CimInstance/g)?.length, 1)
   })
 

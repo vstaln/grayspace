@@ -7,12 +7,12 @@ export interface CasStats {
   totalBytes: number
 }
 
-/**
- * Content-Addressed Storage (CAS) for deduplicated immutable artifacts:
- * diffs, command stdout, PTY logs, checkpoints, snapshots.
- *
- * Objects are stored as `cas/objects/ab/cdef1234...` named by sha256(content).
- */
+
+
+
+
+
+
 export class ContentAddressedStore {
   private readonly rootDir: string
   private readonly memoryStore = new Map<string, Buffer>()
@@ -25,7 +25,7 @@ export class ContentAddressedStore {
       try {
         fs.mkdirSync(join(this.rootDir, 'objects'), { recursive: true })
       } catch {
-        /* ignore */
+
       }
     }
   }
@@ -126,9 +126,9 @@ export class ContentAddressedStore {
     return { totalObjects, totalBytes }
   }
 
-  /**
-   * Garbage Collector: removes all blobs not present in `referencedHashes`.
-   */
+
+
+
   gc(referencedHashes: Iterable<string>): { removed: number; freedBytes: number } {
     const keep = new Set(referencedHashes)
     let removed = 0
@@ -161,7 +161,7 @@ export class ContentAddressedStore {
             fs.unlinkSync(filePath)
             removed += 1
           } catch {
-            /* ignore */
+
           }
         }
       }

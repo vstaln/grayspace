@@ -33,28 +33,28 @@ export interface CommandFlowOptions {
   locks: LockManager
   journal: Journal
   now?: () => number
-  /** TTL of the implicit lock the bus takes around a single apply. */
+
   implicitLockTtlMs?: number
   maxQueueLength?: number
   rateLimitPerSec?: number
   rateLimitBurst?: number
 }
 
-/**
- * The unified write path of OrcSpace.
- *
- * Implements:
- * - Schema validation as single source of truth + command catalog.
- * - Idempotency-Key caching and replay prevention.
- * - Priority queue with user preemption and actor rate-limiting backpressure.
- * - In-flight command cancellation (AbortSignal).
- * - Multi-command atomic transactions (flow.transact).
- * - Shadow overlays for dry-run and speculative planning.
- */
-/**
- * Central command dispatcher: the single, observable write path for OrcSpace.
- *
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 export class CommandFlow extends EventEmitter {
   private readonly handlers = new Map<string, CommandHandler<never, unknown>>()
   private readonly definitions = new Map<string, CommandDefinition>()
@@ -69,7 +69,7 @@ export class CommandFlow extends EventEmitter {
   readonly pQueue: PriorityCommandQueue
   private readonly cancellations = new Map<string, AbortController>()
   private readonly now: () => number
-  /** Counters/gauges/latencies of the write path — surfaced via {@link stats}. */
+
   readonly metrics = new MetricsRegistry()
   private cmdCounter = 0
 
@@ -90,7 +90,7 @@ export class CommandFlow extends EventEmitter {
     this.pQueue = new PriorityCommandQueue({ maxQueueLength: options.maxQueueLength ?? 500 })
   }
 
-  // ---- Schema and command registration ------------------------------------
+
 
   register<P, R>(type: string, handler: CommandHandler<P, R>): void {
     if (!type.trim()) throw new Error('command type must not be empty')
@@ -103,8 +103,8 @@ export class CommandFlow extends EventEmitter {
     if (this.definitions.has(def.type) || this.handlers.has(def.type)) {
       throw new Error(`command ${def.type} is already registered`)
     }
-    // Validate before mutating either registry. This keeps the catalog and
-    // handler map consistent when registration is attempted twice.
+
+
     this.definitions.set(def.type, def as CommandDefinition)
     if (def.handler) {
       try {
@@ -154,12 +154,12 @@ export class CommandFlow extends EventEmitter {
     return source.versionOf(target) ?? 0
   }
 
-  /**
-   * The queue lanes a command contends for: one per normalized resource id.
-   * Commands on disjoint resources never share a lane, so a paced
-   * `terminal.write` in one shell no longer parks a note edit behind it —
-   * same-target commands still run strictly one at a time.
-   */
+
+
+
+
+
+
   private lanesOf(command: Command): string[] {
     const parsed = parseResource(command.target)
     if (!parsed) return [command.target]
@@ -172,7 +172,7 @@ export class CommandFlow extends EventEmitter {
     return [...lanes].sort()
   }
 
-  /** Live write-path metrics plus queue gauges, for sys-monitor-style surfaces. */
+
   stats(): ReturnType<MetricsRegistry['snapshot']> & { queueDepth: number; busyLanes: number } {
     return {
       ...this.metrics.snapshot(),
@@ -181,15 +181,15 @@ export class CommandFlow extends EventEmitter {
     }
   }
 
-  // ---- Shared execution pipeline -------------------------------------------
-  //
-  // `apply` and `applyTransaction` run the same gates in the same order:
-  // prepare → lock gate → version gate → intent → handler → commit/abort.
-  // These helpers are that pipeline; sharing them is what stops single-command
-  // and transactional semantics from drifting apart again (they already had —
-  // transient commands skipped locks in one path but not the other).
 
-  /** Handler lookup, payload-schema validation, target normalization, actor check. */
+
+
+
+
+
+
+
+
   private prepare(raw: Command): { handler: CommandHandler<never, unknown>; command: Command } {
     const handler = this.handlers.get(raw.type)
     if (!handler) throw new CommandError('unknown_command', `no handler for ${raw.type}`)
@@ -207,14 +207,14 @@ export class CommandFlow extends EventEmitter {
     return { handler, command: { ...raw, target } }
   }
 
-  /** Refuses to touch a resource another actor holds. */
+
   private assertUnlockedFor(cmd: Command): void {
     if (!this.locks.isLockedByOther(cmd.target, cmd.actorId)) return
     const lock = this.locks.holder(cmd.target)
     throw new CommandError('locked', `${cmd.target} is locked by ${lock?.actorId}`, { lock })
   }
 
-  /** Takes the implicit gate lock; caller releases the returned id in `finally`. */
+
   private takeImplicitLockFor(cmd: Command, ttlMs: number | undefined, reason: string): ResourceId {
     this.locks.acquire({
       resource: cmd.target,
@@ -231,11 +231,11 @@ export class CommandFlow extends EventEmitter {
     try {
       if (this.locks.holder(lock)?.implicit === true) this.locks.release(lock, actorId)
     } catch {
-      /* the TTL sweeper or an operator may have dropped it already */
+
     }
   }
 
-  /** Optimistic-concurrency gate against a possibly simulated current version. */
+
   private assertVersionGate(handler: CommandHandler<never, unknown>, cmd: Command, expectedCurrent: number): void {
     if (handler.ignoreVersion === true || typeof cmd.baseVersion !== 'number' || cmd.baseVersion === expectedCurrent) {
       return
@@ -247,7 +247,7 @@ export class CommandFlow extends EventEmitter {
     )
   }
 
-  /** Appends to the real journal, or mirrors the entry into a shadow overlay's log. */
+
   private journalOrOverlay(
     entry: {
       phase: JournalPhase
@@ -268,13 +268,13 @@ export class CommandFlow extends EventEmitter {
     return this.journal.append(entry)
   }
 
-  /** Prefers the store-reported version, then a version the handler created, then entry-point version. */
+
   private resolveResultVersion(target: ResourceId, overlayId: string | undefined, data: unknown, fallback: number): number {
     const created = (data as { version?: unknown } | null)?.version
     return this.versionOf(target, overlayId) || (typeof created === 'number' ? created : 0) || fallback
   }
 
-  // ---- In-flight cancellation ---------------------------------------------
+
 
   cancel(commandId: string, reason = 'cancelled'): boolean {
     const ctrl = this.cancellations.get(commandId)
@@ -286,7 +286,7 @@ export class CommandFlow extends EventEmitter {
     return true
   }
 
-  // ---- Shadow overlay management ------------------------------------------
+
 
   createOverlay(overlayId: string): ShadowOverlay {
     const overlay = this.overlays.create(overlayId)
@@ -385,12 +385,12 @@ export class CommandFlow extends EventEmitter {
     return out
   }
 
-  // ---- Single command submit ----------------------------------------------
+
 
   submit<T = unknown>(command: Command, options?: { overlayId?: string }): Promise<CommandResult<T>> {
-    // The caller's object is never mutated: the bus owns its copy from here on.
-    // A caller re-submitting the same literal must not find an id, or any other
-    // bus-assigned field, written onto it as a side effect.
+
+
+
     const cmd: Command = { ...command }
     this.cmdCounter += 1
     const commandId = cmd.id || `cmd-${this.now()}-${this.cmdCounter}`
@@ -398,7 +398,7 @@ export class CommandFlow extends EventEmitter {
     const submittedAt = this.now()
     this.metrics.inc('flow.submitted')
 
-    // 1. Idempotency Check
+
     if (cmd.idempotencyKey) {
       const cached = this.idempotency.get<T>(cmd.idempotencyKey)
       if (cached) {
@@ -407,10 +407,10 @@ export class CommandFlow extends EventEmitter {
       }
     }
 
-    // 2. Rate Limiting Check
-    // Privilege is a property of who you are, not of what you ask for: letting
-    // a command's own `priority: 'high'` buy a rate-limit exemption would let
-    // any external agent mark its loop high and bypass runaway protection.
+
+
+
+
     const actor = this.actors.get(cmd.actorId)
     const isPrivileged = !actor || actor.type === 'user' || actor.type === 'system'
     if (!isPrivileged && !this.rateLimiter.tryConsume(cmd.actorId)) {
@@ -423,12 +423,12 @@ export class CommandFlow extends EventEmitter {
       })
     }
 
-    // 2b. Hot-path fast lane. `terminal.input` (one command per keypress) and
-    // `terminal.resize` are marked bypassQueue: they mutate a pty, not shared
-    // state, so serializing them behind the rest of the app's writes bought
-    // nothing and cost every keystroke the latency of whatever the lane was
-    // busy with. They still run through apply() — validation, actor check and
-    // the lock gate all still apply.
+
+
+
+
+
+
     const fastHandler = this.handlers.get(cmd.type)
     if (fastHandler?.bypassQueue === true && !options?.overlayId) {
       const fastCtrl = new AbortController()
@@ -442,15 +442,15 @@ export class CommandFlow extends EventEmitter {
       return fast
     }
 
-    // 3. Setup In-flight Cancellation Controller
+
     const abortCtrl = new AbortController()
     this.cancellations.set(commandId, abortCtrl)
 
-    // 4. Priority Enqueue
-    // enqueue() throws synchronously when the queue is full; submit() itself
-    // is not async, so a `void submit(...).catch(...)` caller would never see
-    // that rejection. Convert the throw into the same {ok:false} result the
-    // rate-limiter path already returns, keeping "submit never throws".
+
+
+
+
+
     let taskPromise: Promise<CommandResult<T>>
     try {
       taskPromise = this.pQueue.enqueue({
@@ -488,13 +488,13 @@ export class CommandFlow extends EventEmitter {
     return taskPromise
   }
 
-  /**
-   * Runs a command from inside another handler. With per-resource lanes the
-   * old ambient depth counter is unreliable — a concurrent top-level command
-   * on another lane would make an external submit look "nested" — so nesting
-   * is now declared, not detected: pass `{ nested: true }` to skip the queue,
-   * or nothing to behave exactly like {@link submit}.
-   */
+
+
+
+
+
+
+
   async submitNested<T = unknown>(
     command: Command,
     options?: { overlayId?: string; signal?: AbortSignal; nested?: boolean }
@@ -505,7 +505,7 @@ export class CommandFlow extends EventEmitter {
     return this.submit<T>(command, options)
   }
 
-  // ---- Transactions (Atomic multi-command flow.transact) -------------------
+
 
   transact<T = unknown[]>(
     commands: Command[],
@@ -521,7 +521,7 @@ export class CommandFlow extends EventEmitter {
       })
     }
 
-    // Idempotency Check
+
     if (options?.idempotencyKey) {
       const cached = this.idempotency.get<T, TransactionResult<T>>(options.idempotencyKey)
       if (cached) {
@@ -553,10 +553,10 @@ export class CommandFlow extends EventEmitter {
           id: txId,
           priority: options?.priority ?? (primaryActor?.type === 'user' ? 'high' : 'normal'),
           actorId: primaryActorId,
-          // A transaction contends on every target it touches: claiming all of
-          // its lanes up front (all-or-nothing, never holding some while waiting
-          // for others) serializes it against any overlapping single command or
-          // transaction without any lock-ordering deadlock being possible.
+
+
+
+
           lanes: this.lanesOfCommands(commands),
           run: () => this.applyTransaction<T>(commands, options, abortCtrl.signal, txId)
         }).finally(() => {
@@ -597,16 +597,16 @@ export class CommandFlow extends EventEmitter {
     try {
       if (signal?.aborted) throw new CommandError('cancelled', 'transaction cancelled before execution')
 
-      // 1. Validation & Actor verification — through the shared pipeline, so a
-      // transactional command can never accept what a solo command would refuse.
+
+
       const primaryActor = this.actors.require(primaryActorId)
       this.actors.touch(primaryActor.id)
 
       const validated = commands.map((rawCmd) => this.prepare(rawCmd))
       const validatedCommands: Command[] = validated.map((v) => v.command)
 
-      // 2. Atomic Lock Gate: check every target first, then take — all-or-
-      // nothing, so a foreign lock late in the plan cannot leave half held.
+
+
       if (!overlayId) {
         for (const v of validated) {
           if (v.handler.requiresLock !== false) this.assertUnlockedFor(v.command)
@@ -620,7 +620,7 @@ export class CommandFlow extends EventEmitter {
         }
       }
 
-      // 3. Atomic Version Gate — simulated bumps let one target repeat in-plan.
+
       const simulatedVersions = new Map<ResourceId, number>()
       for (const v of validated) {
         const cmd = v.command
@@ -631,7 +631,7 @@ export class CommandFlow extends EventEmitter {
         simulatedVersions.set(cmd.target, currentVersion + 1)
       }
 
-      // 4. Single Intent Phase in Journal
+
       const intentEntry = {
         phase: 'intent' as const,
         actorId: primaryActorId,
@@ -651,13 +651,13 @@ export class CommandFlow extends EventEmitter {
         const overlay = this.overlays.get(overlayId)
         overlay?.recordLog({ seq: 0, at: this.now(), ...intentEntry })
       } else {
-        // A transaction always journals: it is the atomic unit recovery
-        // replays, whatever the individual commands inside it are marked.
+
+
         this.journal.append(intentEntry)
       }
       intentWritten = true
 
-      // 5. Apply each command sequentially
+
       for (const v of validated) {
         if (signal?.aborted) throw new CommandError('cancelled', 'transaction aborted mid-execution')
 
@@ -686,7 +686,7 @@ export class CommandFlow extends EventEmitter {
         }
       }
 
-      // 6. Single Commit Phase in Journal
+
       let commitSeq = this.journal.lastSeq + 1
       const commitEntry = {
         phase: 'commit' as const,
@@ -761,7 +761,7 @@ export class CommandFlow extends EventEmitter {
     }
   }
 
-  // ---- Internal single apply -----------------------------------------------
+
 
   private async apply<T>(
     command: Command,
@@ -775,8 +775,8 @@ export class CommandFlow extends EventEmitter {
     try {
       if (signal?.aborted) throw new CommandError('cancelled', 'command cancelled before execution')
 
-      // prepare → lock gate → version gate — the same pipeline a transaction
-      // runs, so solo and batched writes can never drift apart.
+
+
       const prepared = this.prepare(cmd)
       const { handler } = prepared
       cmd = prepared.command
@@ -784,22 +784,22 @@ export class CommandFlow extends EventEmitter {
       const actor = this.actors.require(cmd.actorId)
       this.actors.touch(actor.id)
 
-      // ---- lock gate ----------------------------------------------------
+
       if (!overlayId && handler.requiresLock !== false) {
         this.assertUnlockedFor(cmd)
-        // A transient command is gated by the lock but never takes one: its
-        // apply is synchronous, so there is no window for another actor to
-        // slip in, and acquiring + releasing per keypress was pure overhead.
+
+
+
         if (handler.transient !== true && !this.locks.isHeldBy(cmd.target, actor.id)) {
           implicitLock = this.takeImplicitLockFor(cmd, undefined, cmd.type)
         }
       }
 
-      // ---- version gate --------------------------------------------------
+
       const currentVersion = this.versionOf(cmd.target, overlayId)
       this.assertVersionGate(handler, cmd, currentVersion)
 
-      // ---- intent ----------------------------------------------------------
+
       if (overlayId) {
         this.journalOrOverlay(
           { phase: 'intent', actorId: actor.id, type: cmd.type, target: cmd.target, payload: cmd.payload },
@@ -811,7 +811,7 @@ export class CommandFlow extends EventEmitter {
         intentWritten = true
       }
 
-      // ---- apply ----------------------------------------------------------
+
       const apply = handler.apply as (ctx: {
         command: Command
         actor: typeof actor
@@ -839,8 +839,8 @@ export class CommandFlow extends EventEmitter {
         overlay?.set(cmd.target, data, version)
         overlay?.recordLog({ seq: commitSeq, at: this.now(), ...commitEntry })
       } else if (handler.transient === true) {
-        // Nothing was journaled for this command, so it did not advance the
-        // sequence; report where the log actually stands.
+
+
         commitSeq = this.journal.lastSeq
       } else {
         const entry = this.journal.append(commitEntry)

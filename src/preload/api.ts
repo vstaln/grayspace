@@ -1,42 +1,8 @@
-export type TaskState = 'backlog' | 'queued' | 'in_progress' | 'review' | 'done' | 'cancelled'
 
-export interface Task {
-  id: string
-  title: string
-  brief: string
-  files: string[]
-  state: TaskState
-  createdBy: string
-  assignee?: string
-  tags: string[]
-  dueAt?: number
-  maxSteps: number
-  maxReviewIterations: number
-  createdAt: number
-  updatedAt: number
-  /** Optimistic-concurrency version; send it back as `baseVersion` to edit safely. */
-  version: number
-}
 
-/**
- * A live lock on a resource, addressed `scheme:id` (`file:src/a.ts`,
- * `note:n1`, `git:repo`). Locks are never persisted — every holder is dead
- * after a restart — and every one of them expires on its own TTL.
- */
-export interface ResourceLock {
-  resource: string
-  actorId: string
-  acquiredAt: number
-  expiresAt: number
-  reason?: string
-  implicit: boolean
-}
 
-export interface CoordinationSnapshot {
-  managerId: string | null
-  tasks: Task[]
-  locks: ResourceLock[]
-}
+
+
 
 export interface TerminalApi {
   create(
@@ -50,12 +16,12 @@ export interface TerminalApi {
   resize(id: string, cols: number, rows: number): void
   dispose(id: string): Promise<unknown>
   setTitle?(id: string, title: string): Promise<{ ok: boolean; error?: string }>
-  /**
-   * Widget unmounted without an intentional close (folder switch, redraw).
-   * Parks the shell — does not kill Claude Code or other long sessions.
-   */
+
+
+
+
   detach(id: string): void
-  /** Reports whether this terminal widget currently holds keyboard focus. */
+
   setFocused(focused: boolean, id: string): void
   onData(id: string, cb: (data: string) => void): () => void
   onExit(id: string, cb: (exitCode: number) => void): () => void
@@ -89,7 +55,7 @@ export interface CodeWorkspaceState {
 export interface WorkspaceApi {
   getDir(): Promise<string | null>
   pickDir(): Promise<string | null>
-  /** Creates a new logical workspace with its own private working folder. */
+
   create(name: string): Promise<string | { error: string } | null>
   rename(path: string, name: string): Promise<RecentDir[] | { error: string }>
   codeWorkspaces(): Promise<CodeWorkspaceState>
@@ -106,8 +72,6 @@ export interface WorkspaceApi {
 }
 
 export type LinkSyntax = 'wiki' | 'dollar' | 'both'
-export type UserRole = 'member' | 'lead'
-
 export interface LocalModelSettings {
   enabled: boolean
   serverBin: string
@@ -123,16 +87,15 @@ export interface AppSettings {
   missionMode: boolean
   linkSyntax: LinkSyntax
   windowsShell: 'cmd' | 'powershell'
-  role: UserRole
   userName: string
   backgroundImage?: string
-  /** 0–90 % black laid over the wallpaper. */
+
   backgroundDim: number
-  /** 0–90 % blur applied to the wallpaper. */
+
   backgroundBlur: number
-  /** Model the built-in assistant plans with. */
+
   assistantModel?: string
-  /** Masked OpenRouter API key; plaintext stays in the main process. */
+
   openRouterApiKey?: string
   openRouterModel?: string
   localModel: LocalModelSettings
@@ -154,44 +117,44 @@ export interface SettingsApi {
       localModel?: Partial<LocalModelSettings>
     }
   ): Promise<AppSettings>
-  /** The stored wallpaper as a data URL, or null when none is set. */
+
   getBackground(): Promise<string | null>
   pickBackground(): Promise<{ dataUrl?: string | null; error?: string }>
   clearBackground(): Promise<null>
   onChange(cb: (settings: AppSettings) => void): () => void
 }
 
-/** A picture copied into the app's own store, addressable by absolute path. */
+
 export interface MediaFile { name: string; path: string }
 
 export interface MediaApi {
-  /** Saves the clipboard bitmap, or null when the clipboard holds no image. */
+
   saveClipboard(): Promise<MediaFile | null>
-  /**
-   * Same bitmap, written to the OS temp dir instead of the durable store — for
-   * a paste whose only job is to hand a path to a command (terminals).
-   */
+
+
+
+
   saveClipboardScratch(): Promise<MediaFile | null>
   saveBytes(bytes: Uint8Array, ext: string): Promise<MediaFile | { error: string } | null>
-  /** saveBytes' throwaway twin, for the same terminal-paste case. */
+
   saveBytesScratch(bytes: Uint8Array, ext: string): Promise<MediaFile | { error: string } | null>
-  /** Reads an image back as a data URL; null when missing or not an image. */
+
   dataUrl(path: string): Promise<string | null>
-  /**
-   * Resolves a dropped `File`'s real filesystem path — sandbox +
-   * contextIsolation strip `File.path` in the renderer, so a drag-and-drop of
-   * a screenshot (or any file) onto a terminal needs this to hand the shell a
-   * usable path instead of an opaque in-memory blob.
-   */
+
+
+
+
+
+
   getPathForFile(file: File): string
 }
 
-// ---- orchestration ---------------------------------------------------------
 
-/**
- * The fleet, as the window sees it. Agents drive all of this through the `orc`
- * CLI; the window mirrors it and owns the few decisions only a human can make.
- */
+
+
+
+
+
 export type OrcTaskStatus = 'pending' | 'ready' | 'dispatched' | 'completed' | 'failed' | 'blocked'
 export type OrcMessageType =
   | 'dispatch'
@@ -284,14 +247,14 @@ export interface OrcSnapshot {
 
 export interface OrchestrationApi {
   snapshot(runId?: string): Promise<OrcSnapshot>
-  /** Reads the run's mail without consuming it — acking is the agent's job. */
+
   inbox(runId?: string): Promise<OrcMessage[]>
-  /** Answers a worker that is blocked on `orc ask`. */
+
   reply(askId: string, body: string): Promise<unknown>
-  /** Answers a safety permission request with an explicit permission subject. */
+
   respondToPermission(askId: string, approved: boolean, note?: string): Promise<unknown>
   resolveGate(gateId: string, resolution: string): Promise<unknown>
-  /** Accounts for a settled worker: keep its terminal, or hand it back. */
+
   account(dispatchId: string, state: 'retained' | 'released', closeTerminal?: boolean): Promise<unknown>
   closeRun(runId: string): Promise<unknown>
   onChange(cb: () => void): () => void
@@ -314,48 +277,19 @@ export interface MissionApi {
   } | { error: string }>
 }
 
-export interface CoordinationApi {
-  status(): Promise<CoordinationSnapshot>
-  createTask(input: {
-    title: string
-    brief?: string
-    state?: TaskState
-    tags?: string[]
-    dueAt?: number
-    assignee?: string
-  }): Promise<Task | { error: string }>
-  updateTask(
-    id: string,
-    patch: {
-      state?: TaskState
-      title?: string
-      brief?: string
-      tags?: string[]
-      dueAt?: number | null
-      assignee?: string | null
-      baseVersion?: number
-    }
-  ): Promise<Task | { error: string }>
-  deleteTask(id: string): Promise<void | { error: string }>
-  resetManager(): Promise<CoordinationSnapshot>
-  releaseLocks(): Promise<CoordinationSnapshot>
-  onChange(cb: (snapshot: CoordinationSnapshot) => void): () => void
-}
 
-/**
- * One line of the personal day plan. Distinct from a board {@link Task}: no
- * assignee, no state machine — just a hand-ordered outline the human (or a
- * manager agent) can check off.
- */
+
+
+
 export interface PlanItem {
   id: string
   title: string
   note: string
-  /** Optional group label shown in the planner sidebar (e.g. "Update 1.0.27"). */
+
   project?: string
-  /** `YYYY-MM-DD`, or unset when the item is not slotted to a day. */
+
   day?: string
-  /** `HH:MM`, or unset when there is no particular time. */
+
   time?: string
   done: boolean
   createdBy: string
@@ -363,7 +297,7 @@ export interface PlanItem {
   createdAt: number
   updatedAt: number
   version: number
-  /** Absolute paths to attached photos (media store). */
+
   attachments?: string[]
 }
 
@@ -391,7 +325,7 @@ export interface PlannerApi {
       baseVersion?: number
     }
   ): Promise<PlanItem | { error: string }>
-  /** Check / uncheck. Omit `done` to flip. */
+
   toggle(id: string, done?: boolean, baseVersion?: number): Promise<PlanItem | { error: string }>
   delete(id: string): Promise<void | { error: string }>
   onChange(cb: (items: PlanItem[]) => void): () => void
@@ -402,15 +336,15 @@ export interface PlannerApi {
 export interface CanvasWidget {
   id: string
   title: string
-  kind?: 'terminal' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration' | 'mission'
+  kind?: 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration' | 'mission'
   x: number
   y: number
   w: number
   h: number
   z: number
   maximized?: boolean
-  /** Stamped by the main process; echo it back on save so the merge can tell
-   *  this window's own layout apart from a concurrent write. */
+
+
   version?: number
   updatedAt?: number
 }
@@ -434,10 +368,10 @@ export interface CanvasSnapshot {
 export interface CanvasApi {
   load(): Promise<CanvasSnapshot>
   onChange(cb: (snapshot: CanvasSnapshot) => void): () => void
-  /**
-   * Writes the window's live layout back. Merged, not replaced: a widget an
-   * agent created or moved since this window last read the canvas survives.
-   */
+
+
+
+
   save(snapshot: { widgets: CanvasWidget[]; camera: { x: number; y: number; zoom: number }; strokes: CanvasStroke[] }): Promise<
     { applied: number; skipped: number; removed: number } | { error: string }
   >
@@ -452,7 +386,7 @@ export interface CodeSession {
   status?: 'active' | 'finished'
 }
 
-export type WorkView = 'canvas' | 'code' | 'chat'
+export type WorkView = 'canvas' | 'code'
 
 export interface CodeSnapshot {
   schemaVersion: number
@@ -469,7 +403,7 @@ export interface CodeApi {
   onChange(cb: (snapshot: CodeSnapshot) => void): () => void
 }
 
-/** Repository status for the open project folder (main/git.ts). */
+
 export interface GitStatus {
   repo: boolean
   root?: string
@@ -488,7 +422,7 @@ export interface GitStatus {
 
 export interface GitApi {
   status(): Promise<GitStatus | { error: string }>
-  /** Stages everything and commits; takes the `git:repo` lock on the way. */
+
   commit(message: string): Promise<{ hash: string } | { error: string }>
 }
 
@@ -549,7 +483,7 @@ export interface SystemTerminalInfo {
   agentOwned?: boolean
 }
 
-/** Live write-path metrics from the CommandFlow (see core/metrics.ts). */
+
 export interface FlowStats {
   counters: Record<string, number>
   gauges: Record<string, number>
@@ -613,6 +547,7 @@ export interface SystemStats {
 
 export interface SystemApi {
   stats(): Promise<SystemStats | { error: string }>
+  releaseLocks(): Promise<{ ok: boolean } | { error: string }>
   onPersistError(cb: (payload: { store: string; message: string; at: number }) => void): () => void
 }
 
@@ -627,48 +562,4 @@ export interface WindowApi {
   close(): void
   isMaximized(): Promise<boolean>
   onMaximizeChange(cb: (maximized: boolean) => void): () => void
-}
-
-export type ChatModelId =
-  | 'codex'
-  | 'claude'
-  | 'grok'
-  | 'antigravity'
-  | 'opencode'
-  | 'gemini'
-  | 'cursor'
-  | 'aider'
-  | 'custom'
-
-export type ChatEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
-
-export interface ChatSendOptions {
-  model?: string
-  effort?: ChatEffort
-  images?: string[]
-  /** Custom CLI argv template. Use {prompt}, or the prompt is appended. */
-  command?: string
-}
-
-export interface ChatModelOption {
-  id: string
-  label: string
-  efforts?: ChatEffort[]
-}
-
-export type ChatModelCatalog = Partial<Record<ChatModelId, { models: ChatModelOption[]; defaultModel?: string; defaultEffort?: ChatEffort }>>
-
-export interface ChatExitPayload {
-  exitCode: number
-  cancelled?: boolean
-  timedOut?: boolean
-}
-
-export interface ChatApi {
-  send(threadId: string, model: ChatModelId, prompt: string, options?: ChatSendOptions): Promise<{ ok: true } | { error: string }>
-  listModels(): Promise<ChatModelCatalog>
-  stop(threadId: string): Promise<{ ok: boolean }>
-  dispose(threadId: string): Promise<{ ok: boolean }>
-  onData(cb: (threadId: string, chunk: string) => void): () => void
-  onExit(cb: (threadId: string, payload: ChatExitPayload) => void): () => void
 }

@@ -1,10 +1,10 @@
 ﻿import type { JournalEntry, ResourceId } from './types.ts'
 
-/**
- * Reducer function for an event-sourced store.
- * Pure and deterministic: (state, event) => newState.
- */
-export type EventReducer<S, P = unknown> = (state: S, event: JournalEntry) => S
+
+
+
+
+export type EventReducer<S> = (state: S, event: JournalEntry) => S
 
 export interface StoreSnapshot<S> {
   snapshotSeq: number
@@ -13,10 +13,10 @@ export interface StoreSnapshot<S> {
   updatedAt?: number
 }
 
-/**
- * Folds a sequence of journal entries (events) into an accumulated state.
- * Only 'commit' phase entries represent committed domain events.
- */
+
+
+
+
 export function fold<S>(
   events: Iterable<JournalEntry>,
   reducer: EventReducer<S>,
@@ -31,9 +31,9 @@ export function fold<S>(
   return state
 }
 
-/**
- * Replays committed events to compute or verify the resulting state.
- */
+
+
+
 export function replay<S>(
   events: Iterable<JournalEntry>,
   reducer: EventReducer<S>,
@@ -42,10 +42,10 @@ export function replay<S>(
   return fold(events, reducer, initialState)
 }
 
-/**
- * Rewinds state to a historical sequence number 	argetSeq.
- * Starts from ase (snapshot or initial state) and folds committed events up to 	argetSeq.
- */
+
+
+
+
 export function rewind<S>(
   targetSeq: number,
   events: Iterable<JournalEntry>,
@@ -73,10 +73,10 @@ export function rewind<S>(
   return state
 }
 
-/**
- * Blame: extracts the audit trail for a specific resource target.
- * Returns all committed events touching 	arget, oldest first.
- */
+
+
+
+
 export function blame(
   target: ResourceId,
   events: Iterable<JournalEntry>
@@ -100,9 +100,9 @@ export function blame(
   return history
 }
 
-/**
- * Deep clones state for branching/forking.
- */
+
+
+
 export function fork<S>(
   _forkId: string,
   state: S,
@@ -113,9 +113,7 @@ export function fork<S>(
   if (typeof structuredClone === 'function') {
     try {
       return structuredClone(state) as S
-    } catch {
-      /* not structurally cloneable — fall through to per-kind copies */
-    }
+    } catch {}
   }
   if (Array.isArray(state)) {
     return state.map((item) => (typeof item === 'object' && item !== null ? { ...item } : item)) as unknown as S

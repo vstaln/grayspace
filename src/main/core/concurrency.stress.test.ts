@@ -108,7 +108,7 @@ describe('CommandFlow — concurrency stress', () => {
   })
 
   test('mixed concurrent: some with baseVersion, some blind', async () => {
-    const { bus, notes } = harness()
+    const { bus } = harness()
     await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'initial' } })
 
     const blind1 = bus.submit({
@@ -140,12 +140,12 @@ describe('CommandFlow — concurrency stress', () => {
   })
 
   test('concurrent lock acquisition does not deadlock', async () => {
-    const { bus, locks, notes } = harness()
-    // Create note first
+    const { bus, locks } = harness()
+
     await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'initial' } })
     locks.acquire({ resource: 'note:n1', actorId: 'agent-a', reason: 'refactor' })
 
-    const blocked = await bus.submit({
+    await bus.submit({
       actorId: 'user',
       type: 'note.update',
       target: 'note:n1',

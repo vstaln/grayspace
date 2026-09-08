@@ -26,17 +26,17 @@ export interface CommandDefinition<P = unknown, R = unknown> {
   payloadSchema: CommandPayloadSchema
   requiresLock?: boolean
   ignoreVersion?: boolean
-  /** See CommandHandler.transient — skips the journal for hot, stateless commands. */
+
   transient?: boolean
-  /** See CommandHandler.bypassQueue — skips the single-lane queue. */
+
   bypassQueue?: boolean
   handler?: CommandHandler<P, R>
 }
 
-/**
- * Validates an input payload against a CommandPayloadSchema.
- * Returns null if valid, or an error message if invalid.
- */
+
+
+
+
 export function validatePayload(schema: CommandPayloadSchema, payload: unknown): string | null {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return 'payload must be a JSON object'

@@ -4,7 +4,6 @@ import * as os from 'os'
 import { extname, join, normalize, resolve, sep } from 'path'
 import { CONTROL_PORT, MAX_TERMINAL_WRITE_BYTES, getActiveControlPort, setActiveControlPort } from './config.ts'
 import { getIpcSocketPath, prepareSocketPath, setActiveSocketPath } from './ipcSocket.ts'
-import { CoordinationStore, USER_AUTHOR } from './coordination.ts'
 import { TerminalManager } from './terminals.ts'
 import { CanvasStore } from './canvasState.ts'
 import type { PlannerStore } from './plannerStore.ts'
@@ -13,7 +12,6 @@ import type { MessageType } from './orchestration/types.ts'
 import { listWorkers, resolveWorker } from './orchestration/workers.ts'
 import { CONTROL_TOKEN_HEADER, controlToken } from './controlToken.ts'
 import { CANVAS_TARGET } from './commands/canvas.ts'
-import { TASK_MANAGER_TARGET } from './commands/board.ts'
 import { GIT_TARGET } from './commands/git.ts'
 import { NEW } from './commands/index.ts'
 import { applyLoopbackCors, isLoopbackRequest, secretsEqual } from './netGuard.ts'
@@ -24,11 +22,11 @@ import { fileResource, parseResource, type ActorType, type CommandErrorCode, typ
 const MAX_BODY_BYTES = 1_000_000
 const BODY_TIMEOUT_MS = 30_000
 
-/**
- * Sliding-window request cap for the loopback API. The token gates
- * who may call, but a compromised local process that stole the token could
- * otherwise hammer the bus as fast as the event loop allows.
- */
+
+
+
+
+
 const RATE_LIMIT_WINDOW_MS = 10_000
 const RATE_LIMIT_MAX_PRESENCE = 120
 const RATE_LIMIT_MAX_API = 600
@@ -56,26 +54,25 @@ type Json = Record<string, unknown>
 interface ControlDeps {
   core: Core
   terminals: TerminalManager
-  coordination: CoordinationStore
   planner: PlannerStore
   orchestration: OrchestrationStore
   canvas: CanvasStore
   state: AppState
   defaultCwd(): string | undefined
-  /** Optional custom port. If omitted and WORKSPACE_CONTROL_PORT is not set, portless IPC is used. */
+
   port?: number
-  /** Optional custom socket / named pipe path. Defaults to getIpcSocketPath(). */
+
   socketPath?: string
-  /** Optional packaged renderer directory; served by this same listener. */
+
   rendererDir?: string
   broadcast?(channel: string, payload: unknown): void
-  /** Called whenever the server successfully binds, passing the assigned port. */
+
   onPortAssigned?(port: number): void
-  /** Called whenever the pipe server successfully binds, passing the socket path. */
+
   onSocketAssigned?(socketPath: string): void
 }
 
-/** How a failed command maps onto HTTP for callers that only speak status codes. */
+
 const STATUS_BY_CODE: Record<CommandErrorCode, number> = {
   conflict: 409,
   locked: 409,
@@ -90,10 +87,10 @@ const STATUS_BY_CODE: Record<CommandErrorCode, number> = {
   cancelled: 499
 }
 
-/**
- * Local IPC & loopback HTTP surface that CLI agents (`orc`)
- * and local tooling drive the app through.
- */
+
+
+
+
 export function startControlServer(deps: ControlDeps): http.Server {
   const token = controlToken()
   const socketPath = deps.socketPath ?? getIpcSocketPath()
@@ -109,7 +106,7 @@ export function startControlServer(deps: ControlDeps): http.Server {
       return serveRendererFile(deps.rendererDir, url.pathname, res, method === 'HEAD')
     }
 
-    // Presence and CORS preflight OPTIONS are unauthenticated:
+
     if (method === 'OPTIONS') {
       if (!isLoopbackRequest(req)) return sendJson(res, 403, { error: 'loopback only' })
       res.writeHead(204)
@@ -132,9 +129,6 @@ export function startControlServer(deps: ControlDeps): http.Server {
     void route(req, res, deps).catch((err) => {
       console.error('control request failed', err)
       if (!res.headersSent) {
-        const status = typeof (err as { statusCode?: unknown })?.statusCode === 'number'
-          ? (err as { statusCode: number }).statusCode
-          : 500
         if (err instanceof URIError) return sendJson(res, 400, { error: 'invalid URL encoding' })
         const raw = (err as { statusCode?: unknown })?.statusCode
         const status2 = typeof raw === 'number' && Number.isInteger(raw) && raw >= 400 && raw <= 599 ? (raw as number) : 500
@@ -144,7 +138,7 @@ export function startControlServer(deps: ControlDeps): http.Server {
     })
   }
 
-  // 1. Always start local Named Pipe / Unix Domain Socket listener for portless IPC
+
   const pipeServer = http.createServer(handleRequest)
   let activeSocket = socketPath
   pipeServer.on('error', (err: NodeJS.ErrnoException) => {
@@ -168,7 +162,7 @@ export function startControlServer(deps: ControlDeps): http.Server {
     deps.onSocketAssigned?.(socketPath)
   })
 
-  // 2. Determine if TCP listener should also be opened
+
   const shouldListenTcp = deps.port !== undefined || Boolean(process.env.WORKSPACE_CONTROL_PORT)
   if (!shouldListenTcp) {
     return pipeServer
@@ -231,16 +225,16 @@ function isRendererPath(pathname: string): boolean {
 function serveRendererFile(rendererDir: string, pathname: string, res: http.ServerResponse, head: boolean): void {
   let relative: string
   try {
-    // URL paths begin with `/`, but a leading slash is a filesystem root on
-    // Windows. Strip it before resolving so `/` and `/assets/*` stay inside
-    // the packaged renderer directory instead of resolving to `C:\index.html`.
+
+
+
     const decoded = decodeURIComponent(pathname === '/' ? '/index.html' : pathname)
     relative = normalize(decoded).replace(/^[/\\]+/, '')
   } catch {
     res.writeHead(400).end(); return
   }
-  // Prevent path traversal: resolve and verify the result is within rendererDir
-  // Windows FS is case-insensitive, so compare lower-cased.
+
+
   const resolved = resolve(rendererDir, relative)
   const lowerResolved = resolved.toLowerCase()
   const lowerDir = rendererDir.toLowerCase()
@@ -272,7 +266,7 @@ function isTrustedCaller(req: http.IncomingMessage, token: string): boolean {
   return typeof presented === 'string' && secretsEqual(presented, token)
 }
 
-/** Built-in actor ids that HTTP callers must never claim. */
+
 const RESERVED_ACTOR_IDS = new Set(['user', 'assistant', 'system'])
 
 function registerHttpAgent(
@@ -291,7 +285,7 @@ function registerHttpAgent(
       code: 'invalid'
     }
   }
-  // Only allow alphanumeric, dash, underscore, dot, and @ - no colons or special chars that could inject into targets
+
   if (!/^[A-Za-z0-9._@-]+$/.test(agentId)) {
     return {
       ok: false,
@@ -325,7 +319,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
   const url = new URL(req.url || '/', 'http://localhost')
   const parts = url.pathname.split('/').filter(Boolean)
   const method = req.method || 'GET'
-  const { terminals, coordination, planner, canvas, core, orchestration } = deps
+  const { terminals, planner, canvas, core, orchestration } = deps
 
   if (rateLimitedApi()) {
     return sendJson(res, 429, { error: 'too many requests' })
@@ -357,8 +351,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     })
   }
 
-  // Authenticated project context lets CLI agents distinguish a filesystem
-  // project from the logical Code Workspace currently selected inside it.
+
+
   if (method === 'GET' && parts[0] === 'workspace' && parts[1] === 'code') {
     const stateWithCode = deps.state as AppState & { codeWorkspaceState?: (folder?: string) => unknown }
     return sendJson(res, 200, stateWithCode.codeWorkspaceState
@@ -366,7 +360,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       : { workspaces: [], activeId: null, folder: deps.defaultCwd() ?? null })
   }
 
-  // ---- health ------------------------------------------------------------
+
   if (method === 'GET' && (parts.length === 0 || parts[0] === 'health')) {
     return sendJson(res, 200, {
       ok: true,
@@ -376,14 +370,12 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       controlPort: getActiveControlPort(),
       workspaceDir: deps.defaultCwd() ?? null,
       terminals: terminals.list().length,
-      managerId: coordination.managerId,
       commands: core.flow.types()
     })
   }
 
-  // ---- snapshot (control one-shot, used by setup and tooling) ---------------
+
   if (method === 'GET' && parts[0] === 'snapshot') {
-    const coord = coordination.snapshot()
     const plannerItems = planner.list()
     const shells = terminals.list().map((t) => ({ ...t, kind: 'terminal' as const }))
     const others = canvas
@@ -397,10 +389,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       200,
       buildSnapshot({
         workspaceDir: deps.defaultCwd() ?? null,
-        managerId: coord.managerId,
         terminals: shells,
         widgets: [...shells, ...others],
-        tasks: coord.tasks,
         locks: core.locks.list(),
         plannerItems,
         journal: { lastSeq: core.journal.lastSeq, entries: core.journal.since(since) },
@@ -409,7 +399,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     )
   }
 
-  // ---- locks --------------------------------------------------------------
+
   if (parts[0] === 'locks') {
     if (method === 'GET') return sendJson(res, 200, { locks: core.locks.list() })
     const body = await readJson(req)
@@ -444,7 +434,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     }
   }
 
-  // ---- git ----------------------------------------------------------------
+
   if (parts[0] === 'git') {
     const body = method === 'GET' ? {} : await readJson(req)
     if (method === 'GET' && parts[1] === 'status') {
@@ -456,20 +446,20 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     }
   }
 
-  // ---- journal ------------------------------------------------------------
+
   if (method === 'GET' && parts[0] === 'journal') {
     const sinceRaw = Number(url.searchParams.get('since') || 0)
     const since = Number.isFinite(sinceRaw) && sinceRaw >= 0 ? sinceRaw : 0
     return sendJson(res, 200, { lastSeq: core.journal.lastSeq, entries: core.journal.since(since) })
   }
 
-  // ---- orchestration ------------------------------------------------------
+
   if (parts[0] === 'orchestration') {
     const runIdParam = url.searchParams.get('runId') || undefined
     const callerId = (): { ok: true; agentId: string } | { ok: false; status: number; error: string; code: CommandErrorCode } =>
       registerHttpAgent(core, url.searchParams.get('agentId') ?? req.headers['x-agent-id'])
 
-    // ---- reads --------------------------------------------------------
+
     if (method === 'GET' && parts.length === 1) {
       return sendJson(res, 200, orchestration.snapshot(runIdParam))
     }
@@ -543,7 +533,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       })
     }
 
-    // ---- the worker roster --------------------------------------------
+
     if (parts[1] === 'workers') {
       const registered = callerId()
       const caller = registered.ok ? registered.agentId : undefined
@@ -585,7 +575,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       }
     }
 
-    // ---- blocking inbox read (orc check --wait) -----------------------
+
     if (method === 'GET' && parts[1] === 'inbox') {
       const registered = callerId()
       if (!registered.ok) return sendJson(res, registered.status, { error: registered.error, code: registered.code })
@@ -613,7 +603,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       return sendJson(res, 200, { messages, waited: true })
     }
 
-    // ---- blocking reply read (orc ask) --------------------------------
+
     if (method === 'GET' && parts[1] === 'replies' && parts[2]) {
       const askId = decodeURIComponent(parts[2])
       const existing = orchestration.replyTo(askId)
@@ -629,7 +619,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       return sendJson(res, 200, { reply: answered ?? null, waited: true })
     }
 
-    // ---- writes -------------------------------------------------------
+
     if (method === 'POST' && parts[1] === 'runs' && parts.length === 2) {
       const body = await readJson(req)
       return reply(await submit(body, 'run.create', NEW.run, body), 201)
@@ -683,61 +673,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     }
   }
 
-  // ---- coordination -------------------------------------------------------
-  if (parts[0] === 'coordination') {
-    if (method === 'GET' && parts[1] === 'status') return sendJson(res, 200, coordination.snapshot())
-    if (method === 'GET' && parts[1] === 'tasks') return sendJson(res, 200, { tasks: coordination.snapshot().tasks })
-    if (method === 'GET' && parts[1] === 'locks') return sendJson(res, 200, { locks: core.locks.list() })
 
-    if (method === 'POST' && parts[1] === 'locks') {
-      const body = await readJson(req)
-      const registered = registerHttpAgent(core, body.agentId)
-      if (!registered.ok) return sendJson(res, registered.status, { error: registered.error, code: registered.code })
-      try {
-        const lock = coordination.lockExtraFile(
-          String(body.taskId ?? ''),
-          registered.agentId,
-          String(body.path ?? ''),
-          typeof body.ttlMs === 'number' ? body.ttlMs : undefined
-        )
-        return sendJson(res, 200, { lock })
-      } catch (err) {
-        const code = (err as { code?: CommandErrorCode }).code ?? 'failed'
-        return sendJson(res, STATUS_BY_CODE[code] ?? 400, {
-          error: (err as Error).message,
-          code,
-          ...((err as { details?: Json }).details ?? {})
-        })
-      }
-    }
-
-    if (method === 'POST' && parts[1] === 'manager') {
-      const body = await readJson(req)
-      return reply(await submit(body, 'manager.claim', TASK_MANAGER_TARGET, {}))
-    }
-    if (method === 'DELETE' && parts[1] === 'manager') {
-      const body = await readJson(req)
-      return reply(await submit(body, 'manager.release', TASK_MANAGER_TARGET, {}))
-    }
-    if (method === 'POST' && parts[1] === 'tasks' && parts.length === 2) {
-      const body = await readJson(req)
-      return reply(await submit(body, 'task.create', NEW.task, body), 201)
-    }
-    if (method === 'POST' && parts[1] === 'tasks' && parts[3] === 'claim') {
-      const body = await readJson(req)
-      return reply(await submit(body, 'task.claim', `task:${decodeURIComponent(parts[2])}`, {}))
-    }
-    if (method === 'PATCH' && parts[1] === 'tasks' && parts.length === 3) {
-      const body = await readJson(req)
-      return reply(await submit(body, 'task.update', `task:${decodeURIComponent(parts[2])}`, body))
-    }
-    if (method === 'DELETE' && parts[1] === 'tasks' && parts.length === 3) {
-      const body = await readJson(req)
-      return reply(await submit(body, 'task.delete', `task:${decodeURIComponent(parts[2])}`, {}))
-    }
-  }
-
-  // ---- planner ------------------------------------------------------------
   if (parts[0] === 'planner') {
     if (method === 'GET' && parts.length === 1) {
       const items = planner.list()
@@ -783,7 +719,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     }
   }
 
-  // ---- widgets / terminals ------------------------------------------------
+
   if (method === 'GET' && parts[0] === 'widgets' && parts.length === 1) {
     const others = canvas
       .listWidgets()
@@ -838,8 +774,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     const id = rawId
     const body = await readJson(req)
     const text = typeof body.text === 'string' ? body.text : ''
-    // Refuse oversized writes here so they never queue on the bus or land in
-    // the journal; the pty layer enforces the same cap as a second gate.
+
+
     if (Buffer.byteLength(text, 'utf8') > MAX_TERMINAL_WRITE_BYTES) {
       return sendJson(res, 413, { error: `write exceeds ${MAX_TERMINAL_WRITE_BYTES} bytes` })
     }
@@ -873,8 +809,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
 function runTarget(runId: unknown): string {
   const id = String(runId ?? '').trim()
   if (!id) return NEW.run
-  // runIds are generated as `run-<counter>`; reject path-shaped input before
-  // it can become a resource target the lock gate would then honor.
+
+
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) {
     throw Object.assign(new Error('invalid runId'), { statusCode: 400 })
   }
@@ -887,7 +823,7 @@ function clampInt(raw: string | null, fallback: number, min: number, max: number
   return Math.min(max, Math.max(min, Math.trunc(parsed)))
 }
 
-/** decodeURIComponent that returns null instead of throwing on malformed `%`. */
+
 function safeDecode(part: string): string | null {
   try {
     return decodeURIComponent(part)
@@ -896,7 +832,7 @@ function safeDecode(part: string): string | null {
   }
 }
 
-/** Active long-poll waiters; caps fd/timer exhaustion with a stolen token. */
+
 let activeWaiters = 0
 const MAX_WAITERS = 50
 
@@ -907,8 +843,8 @@ function waitForInbox(
   timeoutMs: number,
   req: http.IncomingMessage
 ): Promise<unknown[]> {
-  // A stolen token must not exhaust fds/timers with hour-long polls: beyond
-  // the cap, answer immediately with whatever is already there (usually []).
+
+
   if (activeWaiters >= MAX_WAITERS) return Promise.resolve(orchestration.inbox(agentId, filter))
   activeWaiters += 1
   return new Promise((resolve) => {
@@ -980,7 +916,7 @@ function readJson(req: http.IncomingMessage): Promise<Json> {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      // Don't destroy — let the caller send JSON error; just stop collecting and drain.
+
       req.resume()
       const error = new Error(message) as Error & { statusCode: number }
       error.statusCode = statusCode
@@ -1051,7 +987,7 @@ function sendJson(res: http.ServerResponse, status: number, data: unknown): void
     })
     res.end(body)
   } catch {
-    // Socket disconnected
+
   }
 }
 
@@ -1080,5 +1016,3 @@ function uniqueProjects(items: { project?: string }[]): string[] {
   }
   return out
 }
-
-export { USER_AUTHOR }

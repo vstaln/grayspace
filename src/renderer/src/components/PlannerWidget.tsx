@@ -1,14 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useConfirm } from './ConfirmDialog'
-import { Bot, Check, ImagePlus, Loader, Paperclip, Plus, Trash2, X, ImageOff } from 'lucide-react'
+import { Check, ImagePlus, Loader, Paperclip, Plus, Trash2, X, ImageOff } from 'lucide-react'
 import DatePicker from './DatePicker'
-import type { PlanItem, Task } from '../../../preload/index.d'
+import type { PlanItem } from '../../../preload/index.d'
 import { pasteHasImage, saveImageFromPaste } from '../lib/paste'
-import { useCoordination } from '../hooks/useCoordination'
 
 type Scope = 'all' | 'today' | 'week' | 'inbox'
 
-/** Local calendar day as `YYYY-MM-DD`. */
+
 function todayKey(d = new Date()): string {
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
@@ -36,15 +35,14 @@ function inWeek(day: string | undefined, today: string, weekEnd: string): boolea
   return Boolean(day && day >= today && day <= weekEnd)
 }
 
-/**
- * Personal day outline — checklist UI (not the board schedule).
- *
- * Matches a Linear/Nexa-style task list: scope chips, progress counter,
- * numbered rows with circle checkboxes. Checking one off does not move a
- * board card. Agents see the same data via orc plan list / orc plan toggle.
- */
+
+
+
+
+
+
+
 export default function PlannerWidget(): React.JSX.Element {
-  const coordination = useCoordination()
   const [items, setItems] = useState<PlanItem[]>([])
   const [scope, setScope] = useState<Scope>('today')
   const [projectFilter, setProjectFilter] = useState<string | null>(null)
@@ -64,10 +62,6 @@ export default function PlannerWidget(): React.JSX.Element {
   const aliveRef = useRef(true)
   const confirm = useConfirm()
 
-  const tasksMap = useMemo(() => {
-    return new Map((coordination.snapshot?.tasks || []).map((t) => [t.id, t]))
-  }, [coordination.snapshot?.tasks])
-
   useEffect(() => {
     aliveRef.current = true
     let mounted = true
@@ -75,9 +69,9 @@ export default function PlannerWidget(): React.JSX.Element {
     let latestBroadcast: PlanItem[] | null = null
     const unbind = window.api.planner.onChange((next) => {
       if (!mounted) return
-      // A change can arrive while the initial list request is still in flight.
-      // Buffer it so the slower list response cannot overwrite a freshly
-      // created/toggled plan line.
+
+
+
       if (loadingInitial) latestBroadcast = next
       else setItems(next)
       if (aliveRef.current) setLoading(false)
@@ -210,8 +204,8 @@ export default function PlannerWidget(): React.JSX.Element {
 
   const add = async (): Promise<void> => {
     const text = title.trim()
-    // Do not create while an image is still being copied; otherwise the task
-    // is persisted without that attachment and the late copy is then cleared.
+
+
     if (!text || creating || creatingRef.current || createAttachBusyRef.current) return
     const day =
       scope === 'inbox' || scope === 'all' ? undefined : todayKey()
@@ -288,7 +282,7 @@ export default function PlannerWidget(): React.JSX.Element {
       return
     }
     if (pendingIdsRef.current.has(item.id)) return
-    // optimistically mark pending
+
     pendingIdsRef.current.add(item.id)
     setPendingIds((cur) => new Set(cur).add(item.id))
     try {
@@ -365,7 +359,7 @@ export default function PlannerWidget(): React.JSX.Element {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Header: title + progress */}
+      {}
       <div className="flex flex-none items-start justify-between gap-3 border-b border-line-soft px-3.5 pt-3 pb-2.5">
         <div className="min-w-0">
           <div className="truncate text-[14px] font-semibold tracking-tight text-text">{headerTitle}</div>
@@ -388,7 +382,7 @@ export default function PlannerWidget(): React.JSX.Element {
       </div>
 
       <div className="flex min-h-0 flex-1">
-        {/* Project rail — hidden on narrow widgets to preserve list width */}
+        {}
         {projects.length > 0 && (
           <aside className="hidden w-[118px] min-[380px]:flex flex-none flex-col gap-0.5 overflow-auto border-r border-line-soft px-1.5 py-2">
             <div className="px-1.5 pb-1 text-[9px] font-medium tracking-wider text-text-faint uppercase">
@@ -428,7 +422,7 @@ export default function PlannerWidget(): React.JSX.Element {
         )}
 
         <div className="flex min-w-0 flex-1 flex-col overflow-auto">
-          {/* Project filter fallback for narrow widgets (rail is hidden <380px) */}
+          {}
           {projects.length > 0 && (
             <div className="flex-none px-3 pt-2 min-[380px]:hidden">
               <select
@@ -446,7 +440,7 @@ export default function PlannerWidget(): React.JSX.Element {
               </select>
             </div>
           )}
-          {/* Scope chips */}
+          {}
           <div
             className="flex flex-none flex-wrap gap-1 px-3 pt-2.5 pb-1.5"
             role="tablist"
@@ -480,7 +474,7 @@ export default function PlannerWidget(): React.JSX.Element {
             ))}
           </div>
 
-          {/* Add row */}
+          {}
           <div
             className="flex flex-none flex-col gap-1.5 px-3 pb-2"
             onDragOver={(e) => {
@@ -570,7 +564,7 @@ export default function PlannerWidget(): React.JSX.Element {
             </p>
           </div>
 
-          {/* Checklist */}
+          {}
           <div className="px-2 pb-2">
             {loading ? (
               <div className="flex flex-col gap-2 px-1 pt-4" role="status" aria-label="Loading tasks">
@@ -594,7 +588,6 @@ export default function PlannerWidget(): React.JSX.Element {
                   <PlanRow
                     key={item.id}
                     item={item}
-                    task={tasksMap.get(item.id)}
                     index={index + 1}
                     showDay={scope !== 'today'}
                     pending={pendingIds.has(item.id)}
@@ -690,7 +683,6 @@ function CreateAttachmentsPreview({
 
 function PlanRow({
   item,
-  task,
   index,
   showDay,
   pending,
@@ -702,7 +694,6 @@ function PlanRow({
   onRemoveAttachment
 }: {
   item: PlanItem
-  task?: Task
   index: number
   showDay: boolean
   pending: boolean
@@ -715,7 +706,6 @@ function PlanRow({
 }): React.JSX.Element {
   const fileRef = useRef<HTMLInputElement | null>(null)
   const [dragOver, setDragOver] = useState(false)
-  const isWorking = task && (task.state === 'in_progress' || task.state === 'review')
 
   return (
     <li
@@ -736,7 +726,7 @@ function PlanRow({
         }
       }}
       onPaste={(e) => {
-        // Only intercept image pastes; text pastes must keep native behaviour
+
         if (pasteHasImage(e.nativeEvent as unknown as ClipboardEvent)) {
           void onPasteImage(e.nativeEvent as unknown as ClipboardEvent)
         }
@@ -770,15 +760,6 @@ function PlanRow({
             >
               {item.title}
             </span>
-            {isWorking && (
-              <span
-                className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 text-[9.5px] font-medium text-amber-300 animate-pulse"
-                title={`Active in progress: ${task.assignee || 'worker'}`}
-              >
-                <Bot size={10} />
-                <span>{task.assignee || 'In Progress'}</span>
-              </span>
-            )}
           </div>
           {(item.note || item.project || item.time || showDay) && (
             <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-[18px] text-[10px] text-text-faint">

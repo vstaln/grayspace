@@ -1,19 +1,19 @@
 import type { Dispatch, OrcTask, Run } from './types.ts'
 
-/**
- * The contract injected into a worker's terminal when it is dispatched.
- *
- * This text is the whole reason orchestration needs no protocol. A CLI agent
- * already has one universal tool — the shell — so the coordination surface is
- * a command it can type. What it lacks is the knowledge that the command
- * exists, which task it owns, and that it owes exactly one report. That is
- * what the preamble supplies, and why a worker whose dispatch carries no
- * preamble is not allowed to send lifecycle mail: without this text it cannot
- * know its own dispatch id, so anything claiming to be its report is stale.
- *
- * Kept blunt and imperative on purpose. It is read by a model that is about to
- * start working, and every hedge is a chance to skip the report.
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 export function buildPreamble(input: { run: Run; task: OrcTask; dispatchId: string; agent: string }): string {
   const { run, task, dispatchId } = input
   return [
@@ -63,14 +63,14 @@ export function buildPreamble(input: { run: Run; task: OrcTask; dispatchId: stri
     '    Include changed files and concrete verification evidence in the body.',
     '',
     'You also have the rest of the app: orc canvas, orc plan,',
-    'orc board, orc terminal, orc git. Run `orc --help` for the full surface.',
+    'orc plan, orc terminal, orc git. Run `orc --help` for the full surface.',
     '--- END DISPATCH ---',
     '',
     'Begin now.'
   ].join('\n')
 }
 
-/** Short form written into the mail body, so the inbox shows what was sent. */
+
 export function dispatchSummary(dispatch: Dispatch, task: OrcTask): string {
   return `${task.id} → ${dispatch.terminalId} (${dispatch.agent})\n\n${task.spec}`
 }

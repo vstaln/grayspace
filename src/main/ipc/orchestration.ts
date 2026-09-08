@@ -3,15 +3,15 @@ import { NEW } from '../commands/index.ts'
 import { makeSend, unwrap } from './shared.ts'
 import type { IpcDeps } from './types.ts'
 
-/**
- * The window's view of the fleet.
- *
- * Agents drive orchestration through the `orc` CLI; this is the other half —
- * the human watching it happen, and stepping in where only a human can: answering
- * a worker's question, resolving a decision gate, releasing a terminal whose
- * worker is done. Those three are the operator's half of the contract, so they
- * are the writes exposed here. Everything else the UI does is a read.
- */
+
+
+
+
+
+
+
+
+
 export function registerOrchestrationIpc(deps: IpcDeps): void {
   const { orchestration, core } = deps
   const send = makeSend(core)
@@ -23,13 +23,13 @@ export function registerOrchestrationIpc(deps: IpcDeps): void {
     agent: string
   }>()
 
-  /**
-   * Mission mode is one atomic user gesture from the renderer, but it still
-   * uses the normal journaled run → task → dispatch pipeline. Keeping this in
-   * main is important: dispatch.start owns terminal reservation, selected CLI
-   * startup and the worker preamble, so a second renderer cannot accidentally
-   * open a duplicate worker for the same mission.
-   */
+
+
+
+
+
+
+
   ipcMain.handle(
     'mission:start',
     async (
@@ -91,8 +91,8 @@ export function registerOrchestrationIpc(deps: IpcDeps): void {
         return result
       } catch (error) {
         if (runId) {
-          // A failed terminal reservation must not leave an orphaned mission
-          // run visible in the orchestration panel.
+
+
           await send('run.close', `run:${runId}`, {}).catch(() => {})
         }
         return { error: error instanceof Error ? error.message : String(error) }
@@ -103,8 +103,8 @@ export function registerOrchestrationIpc(deps: IpcDeps): void {
   ipcMain.handle('orchestration:snapshot', (_e, runId?: string) => orchestration.snapshot(runId || undefined))
 
   ipcMain.handle('orchestration:inbox', (_e, runId?: string) =>
-    // The human reads the coordinator's mail without consuming it: acking here
-    // would silently steal a message an agent is about to act on.
+
+
     orchestration.listMessages({ runId: runId || undefined, limit: 200 })
   )
 
@@ -129,7 +129,7 @@ export function registerOrchestrationIpc(deps: IpcDeps): void {
     if (!ask) return { error: `no message "${askId}"` }
     if (ask.type !== 'permission') return { error: `message "${askId}" is not a permission request` }
 
-    // A retry after the UI/network boundary must not send a second decision.
+
     const existing = orchestration.replyTo(askId)
     if (existing) return existing
 

@@ -4,13 +4,13 @@ import { timerPersist } from '../lib/timerPersist'
 
 const PRESETS = [5, 15, 25, 45]
 
-/**
- * A countdown, and a stopwatch when it runs out.
- *
- * Time is tracked as a deadline, not by decrementing a counter on an interval:
- * a background tab throttles its timers, and a counter that ticks slower than
- * a second is a clock that lies.
- */
+
+
+
+
+
+
+
 export default function TimerWidget({ widgetId }: { widgetId?: string }): React.JSX.Element {
   const persistKey = widgetId ?? '__singleton__'
   const cached = timerPersist.get(persistKey)
@@ -27,10 +27,10 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
   const rang = useRef(cached?.rang ?? false)
   const titleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // A minimized timer's body is display:none; ticking (and re-rendering) 5×/s
-  // for a number nobody can see is pure waste. Time is kept as a deadline, so
-  // skipped ticks lose nothing — the next visible tick recomputes from the
-  // clock (PERF-timer-gate).
+
+
+
+
   const rootRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -49,9 +49,9 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
     }
   }, [isCustom])
 
-  // WidgetFrame temporarily re-parents the body when a timer is maximized.
-  // Persist the live snapshot on every state transition so that remount does
-  // not reset a running countdown to the 25-minute preset.
+
+
+
   useEffect(() => {
     if (!widgetId) return
     timerPersist.set(persistKey, {
@@ -70,18 +70,18 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
   useEffect(() => {
     if (!running) return
     const tick = (): void => {
-      // Hidden (minimized) widget: skip the state write entirely while time
-      // remains — the ring check below must still run so the notification
-      // fires on time even while nobody is watching the digits.
+
+
+
       const visible = rootRef.current?.offsetParent != null
       const left = deadline.current - Date.now()
       if (visible) setRemaining(left)
       else if (left > 0) return
-      // Ring once when the countdown crosses zero — the widget keeps counting
-      // up after that, so without this gate it would re-fire every 200ms.
+
+
       if (left <= 0 && !rang.current) {
         rang.current = true
-        // Persist the rang flip so a remount doesn't re-ring.
+
         if (widgetId) {
           timerPersist.set(persistKey, {
             totalMs,
@@ -100,7 +100,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
             new Notification('OrcSpace', { body: 'Timer finished' })
           }
         } catch {
-          /* notifications are optional chrome */
+
         }
         try {
           window.dispatchEvent(new CustomEvent('orcspace:title-flash', { detail: '⏱ Timer finished' }))
@@ -109,13 +109,13 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
           if (titleTimerRef.current !== null) clearTimeout(titleTimerRef.current)
           titleTimerRef.current = setTimeout(() => {
             titleTimerRef.current = null
-            // Only restore if nothing replaced the flash title meanwhile —
-            // a second timer ringing sets the same title, and restoring over
-            // it (or over an app-set title) would clobber the wrong value.
+
+
+
             if (document.title === '⏱ Timer — OrcSpace') document.title = previous
           }, 4000)
         } catch {
-          /* ignore */
+
         }
       }
     }
@@ -130,13 +130,13 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
     deadline.current = Date.now() + base
     rang.current = false
     setRunning(true)
-    // Best-effort: ask once so the ring can use a system notification later.
+
     try {
       if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
         void Notification.requestPermission()
       }
     } catch {
-      /* ignore */
+
     }
   }
 
@@ -203,8 +203,8 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
   }
 
   const over = remaining <= 0
-  // Past zero the widget keeps counting up rather than sitting at 00:00 — the
-  // useful question after a timer ends is usually "how long ago".
+
+
   const shown = Math.abs(over ? -remaining : remaining)
   const progress = totalMs > 0 ? Math.min(1, Math.max(0, remaining / totalMs)) : 0
   const isPresetActive = !isCustom && PRESETS.some((min) => totalMs === min * 60_000)

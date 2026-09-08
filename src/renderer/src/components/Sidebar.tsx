@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Code2, FolderOpen, FolderPlus, KanbanSquare, MessageSquare, Palette, Pencil, Pin, Plus, Settings, UserRound, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
-import type { CodeWorkspaceState, RecentDir, UserRole } from '../../../preload/index.d'
+import { Code2, FolderOpen, FolderPlus, Palette, Pencil, Pin, Plus, Settings, UserRound, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import type { CodeWorkspaceState, RecentDir } from '../../../preload/index.d'
 import type { WorkView } from './TitleBar'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { THEMES, useTheme, wallpaperBackgroundImage } from '../theme'
@@ -10,11 +10,7 @@ import { VerifiedBadge } from './VerifiedBadge'
 
 interface Props {
   workspaceDir: string | null
-  managerId: string | null
   activeView?: WorkView
-  boardOpen: boolean
-  taskCount: number
-  onToggleBoard(): void
   onPickDir(): void
   sidebarCollapsed?: boolean
   onToggleSidebar?(): void
@@ -78,19 +74,6 @@ function IconButton({
   )
 }
 
-const ROLES: { id: UserRole; label: string; hint: string }[] = [
-  {
-    id: 'lead',
-    label: 'Lead (Orchestrator)',
-    hint: 'Full control over kanban tasks, agent orchestration, and system management.'
-  },
-  {
-    id: 'member',
-    label: 'Member (Contributor)',
-    hint: 'Works on assigned tasks and notes without modifying orchestration roles.'
-  }
-]
-
 const SETTINGS_TABS = [
   { id: 'appearance' as const, label: 'Appearance', Icon: Palette },
   { id: 'account' as const, label: 'Account', Icon: UserRound }
@@ -103,24 +86,23 @@ const FAVORITE_WIDGETS = [
   ['timer', 'Timer', 'Countdown or stopwatch'],
   ['planner', 'Planner', 'Daily agenda and checklist'],
   ['mission', 'Mission Controller', 'Connect an AI terminal to a guided Planner workflow'],
-  ['board', 'Kanban Board', 'Interactive task board on canvas'],
   ['orchestration', 'Orchestration', 'The agent fleet: tasks, workers and their questions'],
   ['browser', 'Browser', 'Embedded web page'],
   ['links', 'Links', 'Saved links'],
   ['music-player', 'Music Player', 'Stream YouTube, Yandex Music, Spotify or MP3 links']
 ] as const
 
-/*
- * The settings surface is built from a few primitives and two button classes,
- * so every panel in it keeps the same rhythm: a quiet caption, one line of
- * help, then the control. Nothing here paints a colour of its own — selection
- * is a brighter hairline and a step in fill, the same language the rail and
- * the widget frames use.
- *
- * Vertical rhythm is `flex flex-col gap-*`, never `space-y-*`: the gap belongs
- * to the container, so a conditional child (the Remove button, an error line)
- * cannot leave a stray margin behind when it unmounts.
- */
+
+
+
+
+
+
+
+
+
+
+
 const CAPTION = 'text-[10px] font-medium tracking-[0.09em] text-text-faint uppercase'
 const BTN_QUIET =
   'rounded-[8px] border border-line-soft px-3 py-1.5 text-[11px] text-text-dim transition-colors duration-150 hover:border-line hover:bg-bg-hover hover:text-text'
@@ -147,7 +129,7 @@ function Section({
   )
 }
 
-/** A pickable card. Selected reads as "lit hairline + lifted fill", never as a tinted slab. */
+
 function Choice({
   selected,
   label,
@@ -184,7 +166,7 @@ function Choice({
   )
 }
 
-/** Label, track and value on one line — the reading stays next to the handle. */
+
 function Slider({
   label,
   value,
@@ -211,13 +193,11 @@ function Slider({
   )
 }
 
-/** Full settings dialog: portaled to body so the rail's drag region / stacking context cannot clip it. */
+
 function SettingsModal({
-  workspaceDir,
-  managerId
+  workspaceDir
 }: {
   workspaceDir?: string | null
-  managerId?: string | null
 }): React.JSX.Element {
   const { theme, setTheme, background, dim, setDim, blur, setBlur, pickBackground, clearBackground, error } = useTheme()
   const { settings, update, error: settingsError } = useSettings()
@@ -285,9 +265,9 @@ function SettingsModal({
 
   const dialog =
     open &&
-    // Portal layer sits above the rail (z-45000) and the Browser/Code panes
-    // (z-40000): this modal is opened from the rail in every view, so painting
-    // it beneath either made Settings/Account look dead there (UI-audit P0).
+
+
+
     createPortal(
       <div
         className="fixed inset-0 z-[50000] flex items-center justify-center bg-bg/80 p-6 backdrop-blur-[2px]"
@@ -420,8 +400,8 @@ function SettingsModal({
                             }
                             className="h-3 w-3 flex-none accent-white"
                           />
-                          {/* Name and hint read as one line, so the hint sits right after
-                              the name instead of being flung to the far edge of the panel. */}
+                          {
+}
                           <span className="w-28 flex-none">{label}</span>
                           <span className="min-w-0 flex-1 truncate text-[11px] text-text-faint">{hint}</span>
                         </label>
@@ -463,7 +443,7 @@ function SettingsModal({
 
             {tab === 'account' && (
               <div className="flex max-w-xl flex-col gap-8">
-                {/* Identity is a plain row, not a card — the avatar already frames it. */}
+                {}
                 <div className="flex items-center gap-3.5">
                   <div className="grid h-11 w-11 flex-none place-items-center rounded-full border border-line-soft bg-bg-raise text-[13px] font-medium text-text select-none">
                     {(userName.trim() || settings.userName || 'you').slice(0, 2).toUpperCase()}
@@ -476,14 +456,14 @@ function SettingsModal({
                       <VerifiedBadge size={14} />
                     </div>
                     <p className="text-[11px] text-text-faint">
-                      {settings.role === 'lead' ? 'Lead' : 'Member'} · operator <span className="font-mono">user</span>
+                      operator <span className="font-mono">user</span>
                     </p>
                   </div>
                 </div>
 
                 <Section
                   title="Display name"
-                  hint="Shown as the assignee on Kanban cards and as the author of notes you create."
+                  hint="Shown across your workspace."
                 >
                   <input
                     className="w-full rounded-[8px] border border-line-soft bg-transparent px-3 py-2.5 text-xs text-text outline-none transition-colors duration-150 focus:border-line"
@@ -505,35 +485,11 @@ function SettingsModal({
                   </div>
                 </Section>
 
-                <Section
-                  title="Workspace role"
-                  hint="Determines your orchestration and editing capabilities across the workspace."
-                >
-                  <div className="grid grid-cols-2 gap-2.5">
-                    {ROLES.map((item) => (
-                      <Choice
-                        key={item.id}
-                        selected={settings.role === item.id}
-                        label={item.label}
-                        hint={item.hint}
-                        onClick={() => {
-                          void update({ role: item.id })
-                          setNotice(`Role switched to ${item.label}.`)
-                        }}
-                      />
-                    ))}
-                  </div>
-                </Section>
-
                 <Section title="Session">
                   <dl className="flex flex-col gap-2 text-[11px] text-text-faint">
                     <div className="flex gap-3">
                       <dt className="w-28 flex-none">Active folder</dt>
                       <dd className="min-w-0 flex-1 truncate font-mono text-text-dim">{workspaceDir || 'None'}</dd>
-                    </div>
-                    <div className="flex gap-3">
-                      <dt className="w-28 flex-none">Lead manager</dt>
-                      <dd className="min-w-0 flex-1 truncate font-mono text-text-dim">{managerId || 'None'}</dd>
                     </div>
                     <div className="flex gap-3">
                       <dt className="w-28 flex-none">Credentials</dt>
@@ -572,17 +528,13 @@ function SettingsModal({
 
 
 
-// Memoized: the canvas re-renders on every camera frame, and this rail sits
-// next to it in the same tree. All props are stable primitives or stable
-// callbacks (App keeps them in useCallback), so the memo lets the rail skip
-// every pan/zoom frame it has no stake in (PERF-rail-memo).
+
+
+
+
 export default React.memo(function Sidebar({
   workspaceDir,
-  managerId,
   activeView = 'canvas',
-  boardOpen,
-  taskCount,
-  onToggleBoard,
   onPickDir,
   sidebarCollapsed = false,
   onToggleSidebar
@@ -605,7 +557,7 @@ export default React.memo(function Sidebar({
   const avatarInitials = avatarName.slice(0, 2).toUpperCase()
   const expanded = activeView !== 'canvas' && !(activeView === 'code' && sidebarCollapsed)
 
-  // Remembered folders live in the main process, so mirror them live.
+
   useEffect(() => {
     void window.api.workspace
       .recent()
@@ -661,7 +613,7 @@ export default React.memo(function Sidebar({
     }
   }, [foldersOpen])
 
-  // Keep the folders menu inside the viewport (same Math.min pattern as ContextMenu).
+
   useEffect(() => {
     if (!foldersOpen) return
     const el = foldersMenuRef.current
@@ -675,9 +627,9 @@ export default React.memo(function Sidebar({
   }, [foldersOpen, recent.length])
 
   const open = async (path: string): Promise<void> => {
-    // Both a bus `{ error }` reply and a rejected invoke (deleted folder,
-    // unreachable drive) must surface — an uncaught reject would only hit the
-    // global console handler and the menu would silently stay open.
+
+
+
     try {
       window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
       const result = await window.api.workspace.openRecent(path)
@@ -759,7 +711,7 @@ export default React.memo(function Sidebar({
         const result = await window.api.workspace.rename(renameTarget.id, nextName)
         if (result && !Array.isArray(result) && 'error' in result) {
           setFoldersError(result.error)
-          // Don't auto-close on failure; keep dialog open so user can retry
+
           return
         }
         setFoldersError(null)
@@ -767,7 +719,7 @@ export default React.memo(function Sidebar({
         const result = await window.api.workspace.renameCodeWorkspace(renameTarget.id, nextName)
         if ('error' in result) {
           setFoldersError(result.error)
-          // Don't auto-close on failure
+
           return
         }
         setFoldersError(null)
@@ -775,12 +727,8 @@ export default React.memo(function Sidebar({
       setRenameTarget(null)
     } catch (err) {
       setFoldersError(err instanceof Error ? err.message : String(err))
-      // Don't auto-close on failure
-    }
-  }
 
-  const renameWorkspace = (path: string, currentName: string): void => {
-    openRename('folder', path, currentName)
+    }
   }
 
   const renameCodeWorkspace = (id: string, currentName: string): void => {
@@ -807,7 +755,7 @@ export default React.memo(function Sidebar({
     return () => window.removeEventListener('keydown', onKey)
   }, [createOpen])
 
-  const RAIL_ITEM_IDS = ['board', 'folders'] as const
+  const RAIL_ITEM_IDS = ['folders'] as const
   type RailItemId = (typeof RAIL_ITEM_IDS)[number]
   const [order, setOrder] = useState<RailItemId[]>(() => {
     try {
@@ -818,7 +766,7 @@ export default React.memo(function Sidebar({
         return [...filtered, ...missing]
       }
     } catch {
-      // ignore malformed storage
+
     }
     return [...RAIL_ITEM_IDS]
   })
@@ -835,17 +783,12 @@ export default React.memo(function Sidebar({
       return next
     })
   }
-  // Persist rail order outside the state updater (side-effect inside updater runs twice in StrictMode)
+
   React.useEffect(() => {
     try { localStorage.setItem('rail-order', JSON.stringify(order)) } catch {}
   }, [order])
 
   const railItems: Record<RailItemId, React.ReactNode> = {
-    board: (
-      <IconButton label={`Task Board, ${taskCount} open`} testId="rail-board" active={boardOpen} pressed={boardOpen} expanded={boardOpen} badge={taskCount} onClick={onToggleBoard}>
-        <KanbanSquare size={17} />
-      </IconButton>
-    ),
     folders: (
       <div className="relative" ref={foldersRef}>
         <IconButton
@@ -866,12 +809,12 @@ export default React.memo(function Sidebar({
             aria-label="Workspace Folders"
             className="absolute top-0 left-[calc(100%+10px)] z-[9500] w-72 max-w-[calc(100vw-70px)] max-h-[calc(100vh-120px)] overflow-auto rounded-[10px] border border-line bg-bg-panel p-2 shadow-2xl"
             onKeyDown={(e) => {
-              // Only handle Escape if this is the frontmost dialog (frontmost trap)
+
               if (e.key === 'Escape') {
                 e.stopPropagation()
                 setFoldersOpen(false)
               }
-              // Arrow nav for menu items
+
               const items = Array.from(
                 (e.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('[role="menuitem"]')
               )
@@ -884,7 +827,7 @@ export default React.memo(function Sidebar({
                 e.preventDefault()
                 items[(idx - 1 + items.length) % items.length]?.focus()
               } else if (e.key === 'Enter') {
-                // Focus return is handled natively via button focus
+
               }
             }}
           >
@@ -946,36 +889,6 @@ export default React.memo(function Sidebar({
   }
 
   const renderExpanded = (): React.JSX.Element => {
-    if (activeView === 'chat') {
-      return (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex h-8 flex-none items-center justify-between border-b border-line-soft px-2.5">
-            <span className="text-[10px] font-semibold tracking-[0.08em] text-text-faint uppercase">Chat</span>
-            <button
-              type="button"
-              aria-label="New chat"
-              title="New chat"
-              onClick={() => window.dispatchEvent(new CustomEvent('orcspace:new-chat'))}
-              className="grid h-6 w-6 place-items-center rounded text-text-faint transition hover:bg-bg-hover hover:text-text"
-            >
-              <Plus size={13} />
-            </button>
-          </div>
-          <div data-chat-sidebar-slot className="min-h-0 flex-1" />
-          <button
-            type="button"
-            onClick={() => {
-              window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
-              onPickDir()
-            }}
-            className="mx-1.5 mb-1.5 flex flex-none items-center justify-center gap-1.5 rounded-[7px] bg-bg-hover px-1.5 py-1 text-[10px] font-medium text-text-dim transition hover:bg-bg-raise hover:text-text"
-          >
-            <FolderPlus size={12} /> Open folder
-          </button>
-        </div>
-      )
-    }
-
     const contextLabel = 'Code sessions'
     return (
       <div className="flex min-h-0 flex-1 flex-col">
@@ -1062,10 +975,10 @@ export default React.memo(function Sidebar({
             <button
               type="button"
               className="flex w-full items-center gap-1.5 rounded-[7px] px-1.5 py-1 text-[11px] text-text-dim transition hover:bg-bg-hover hover:text-text"
-              onClick={() => window.dispatchEvent(new CustomEvent(activeView === 'code' ? 'orcspace:open-code-launcher' : 'orcspace:new-chat'))}
+              onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-code-launcher'))}
             >
-              {activeView === 'code' ? <Code2 size={13} /> : <MessageSquare size={13} />}
-              {activeView === 'code' ? 'Launch session' : 'New chat'}
+              <Code2 size={13} />
+              Launch session
             </button>
           </div>
         </div>
@@ -1204,7 +1117,7 @@ export default React.memo(function Sidebar({
     {createDialog}
     {renameDialog}
     <aside
-      className={`rail-shell rail relative z-[45000] flex flex-none flex-col gap-1 border-r border-line pt-10 pb-2 glass:border-line-soft select-none ${expanded ? (activeView === 'chat' ? 'is-expanded w-[240px]' : 'is-expanded w-[200px]') + ' items-stretch' : 'w-rail items-center'}`}
+      className={`rail-shell rail relative z-[45000] flex flex-none flex-col gap-1 border-r border-line pt-10 pb-2 glass:border-line-soft select-none ${expanded ? 'is-expanded w-[200px] items-stretch' : 'w-rail items-center'}`}
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       <button
@@ -1259,7 +1172,7 @@ export default React.memo(function Sidebar({
         </>
       )}
       <div className={expanded ? 'px-2' : ''}>
-        <SettingsModal workspaceDir={workspaceDir} managerId={managerId} />
+        <SettingsModal workspaceDir={workspaceDir} />
       </div>
     </aside>
     </>

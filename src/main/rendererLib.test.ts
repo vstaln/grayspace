@@ -1,20 +1,18 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 
-// Pure renderer libs — tested from main so they run in the existing
-// `npm test` (node:test) without a jsdom / vitest harness.
+
+
 import { isSafeUrl, sanitizeUrl, safeHref } from '../renderer/src/lib/sanitizeUrl.ts'
 import { renderMarkdownInlineLinks, renderMarkdownSafe, extractSafeLinks } from '../renderer/src/lib/markdown.ts'
 import { DRAW_CLICK_THRESHOLD_PX } from '../renderer/src/lib/canvasMetrics.ts'
 import { pasteHasImage } from '../renderer/src/lib/paste.ts'
 import {
   provider,
-  isSupportedAudioUrl,
   sanitizeAudioSrc,
   videoId,
   yandexEmbed,
   spotifyEmbed,
-  titleFor,
   coerceList,
   formatDuration
 } from '../renderer/src/lib/music.ts'

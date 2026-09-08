@@ -1,6 +1,6 @@
 import React from 'react'
 
-/** Official Grok mark, kept as a single path so it stays crisp at toolbar size. */
+
 export default function GrokIcon({ size = 13 }: { size?: number }): React.JSX.Element {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">

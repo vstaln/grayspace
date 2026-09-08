@@ -31,10 +31,10 @@ export function isSupportedAudioUrl(url: string): boolean {
   }
 }
 
-// Inline data:audio URIs are handy in tests but can balloon localStorage past
-// quota (a 1-minute WAV base64s to ~1MB). Cap them at ~2000 chars and reject
-// any other `data:` form for persistence, which keeps the saved playlist under
-// control and avoids shipping huge blobs through the store.
+
+
+
+
 const DATA_URL_CAP = 2000
 
 export function sanitizeAudioSrc(url: string): string | null {
@@ -86,7 +86,7 @@ export function videoId(url: string): string | null {
   }
 }
 
-/** Yandex's public embed widget streams the track itself — no auth, no download. */
+
 export function yandexEmbed(url: string): string | null {
   try {
     const u = new URL(url)
@@ -98,7 +98,7 @@ export function yandexEmbed(url: string): string | null {
   return null
 }
 
-/** Spotify's oEmbed-style iframe — plays preview inline. */
+
 export function spotifyEmbed(url: string): string | null {
   try {
     const u = new URL(url)
@@ -120,7 +120,7 @@ export function titleFor(kind: Provider, url: string): string {
   return kind === 'youtube' ? 'YouTube track' : kind === 'spotify' ? 'Spotify track' : 'Yandex Music track'
 }
 
-/** A playlist that survived a round-trip through localStorage, or null. */
+
 export function coerceList(value: unknown): Playlist | null {
   if (!value || typeof value !== 'object') return null
   const raw = value as Partial<Playlist>

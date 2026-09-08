@@ -96,7 +96,7 @@ describe('CommandFlow — flow.transact (Multi-step atomic transactions)', () =>
     assert.equal(notes.get('n1')?.version, 2)
     assert.equal(tasks.get('t1')?.title, 'Implement Spec')
 
-    // Single intent and commit in journal for the transaction
+
     assert.equal(entries.length, 2)
     assert.equal(entries[0].phase, 'intent')
     assert.equal(entries[0].type, 'flow.transact')
@@ -105,9 +105,9 @@ describe('CommandFlow — flow.transact (Multi-step atomic transactions)', () =>
   })
 
   test('all-or-nothing rollback when a step fails mid-plan', async () => {
-    const { bus, notes, entries, locks } = createTransactionHarness()
+    const { bus, entries, locks } = createTransactionHarness()
 
-    // Step 1 would create note n1, but step 2 fails
+
     const txRes = await bus.transact([
       {
         actorId: 'agent-1',
@@ -127,17 +127,17 @@ describe('CommandFlow — flow.transact (Multi-step atomic transactions)', () =>
     assert.equal(txRes.code, 'invalid')
     assert.equal(txRes.message, 'step failed intentionally')
 
-    // Journal records abort
+
     const abortEntry = entries.find((e) => e.phase === 'abort')
     assert.ok(abortEntry)
     assert.equal(abortEntry.type, 'flow.transact')
 
-    // Locks are fully released
+
     assert.equal(locks.holder('note:n1'), undefined)
   })
 
   test('pre-execution version conflict rejects entire transaction before any command runs', async () => {
-    const { bus, notes, entries } = createTransactionHarness()
+    const { bus, entries } = createTransactionHarness()
 
     await bus.submit({
       actorId: 'user',
@@ -146,7 +146,7 @@ describe('CommandFlow — flow.transact (Multi-step atomic transactions)', () =>
       payload: { id: 'n1', body: 'v1' }
     })
 
-    // Transaction expects note:n1 to be at baseVersion 99 (stale)
+
     const txRes = await bus.transact([
       {
         actorId: 'user',
@@ -165,7 +165,7 @@ describe('CommandFlow — flow.transact (Multi-step atomic transactions)', () =>
 
     assert.equal(txRes.ok, false)
     assert.equal(txRes.code, 'conflict')
-    // No task t1 created because pre-check failed
+
     const taskFound = entries.some((e) => e.type === 'task.create' && e.phase === 'commit')
     assert.equal(taskFound, false)
   })
@@ -173,7 +173,7 @@ describe('CommandFlow — flow.transact (Multi-step atomic transactions)', () =>
   test('pre-execution lock conflict rejects entire transaction if any target is held by another actor', async () => {
     const { bus, locks } = createTransactionHarness()
 
-    // Agent 2 holds task:t1
+
     locks.acquire({ resource: 'task:t1', actorId: 'agent-2', reason: 'working' })
 
     const txRes = await bus.transact([

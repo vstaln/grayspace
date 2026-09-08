@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
-import { renderMarkdownSafe, renderMarkdownInlineLinks, extractSafeLinks } from '../renderer/src/lib/markdown.ts'
+import { renderMarkdownSafe, extractSafeLinks } from '../renderer/src/lib/markdown.ts'
 
 describe('renderMarkdownSafe — markdown rendering and security', () => {
   test('renders basic formatting without double-escaping', () => {

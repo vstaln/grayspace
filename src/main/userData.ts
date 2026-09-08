@@ -7,7 +7,7 @@ export function getUserDataDir(): string {
     try {
       return electronApp.getPath('userData')
     } catch {
-      /* app may not be initialized in test mode */
+
     }
   }
   const testPath = process.env.ORCSPACE_TEST_USER_DATA || process.env.ORCSPACE_DEV_USER_DATA

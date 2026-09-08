@@ -58,7 +58,7 @@ const logCache = new Map<string, LogCacheEntry>()
 
 function parseQuotaFromTerminalOutput(rawText: string): ExactQuotaData | null {
   if (!rawText) return null
-  // Strip ANSI escape sequences and carriage returns
+
   const clean = rawText
     // eslint-disable-next-line no-control-regex
     .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
@@ -71,28 +71,28 @@ function parseQuotaFromTerminalOutput(rawText: string): ExactQuotaData | null {
     updatedAt: Date.now()
   }
 
-  // 1. Account email (e.g. "Account: owendtatew@gmail.com" or "Logged in as owendtatew@gmail.com")
+
   const emailMatch = clean.match(/(?:Account|Logged in as|User)[:\s]+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i)
   if (emailMatch) {
     result.accountEmail = emailMatch[1].trim()
     found = true
   }
 
-  // 2. Tier Name (e.g. "(Google AI Pro)", "Google AI Pro", "Pro Plan", "Claude Pro", "Plus Subscriber")
+
   const tierMatch = clean.match(/(?:Plan|Tier|Subscription|\()?\s*(Google AI Pro|Claude Pro|ChatGPT Plus|Pro Plan|Team Plan|Enterprise)\s*\)?/i)
   if (tierMatch) {
     result.tierName = tierMatch[1].trim()
     found = true
   }
 
-  // 3. Active Model Name (e.g. "Gemini 3.7 Flash", "Gemini 3.7 Flash (High)", "Claude 3.7 Sonnet", "DeepSeek-V3", "GPT-4o")
+
   const modelMatch = clean.match(/(Gemini\s+(?:3\.7|3|2\.5|2\.0|1\.5)\s+(?:Flash|Pro)(?:\s*\((?:High|Medium|Low)\))?|Claude\s+(?:3\.7|3\.5)\s+(?:Sonnet|Opus|Haiku)|GPT-4o|o3-mini|o1|DeepSeek[- ](?:V3|R1))/i)
   if (modelMatch) {
     result.modelName = modelMatch[1].trim()
     found = true
   }
 
-  // 4. Weekly Limit Remaining (e.g., "[██████████████░░░░░░░░░░] 59.01%", "59% remaining · Refreshes in 133h 50m")
+
   const weeklyMatch = clean.match(/Weekly\s+Limit\s+Remaining[\s\S]*?([0-9]+(?:\.[0-9]+)?)\s*%/i)
   if (weeklyMatch) {
     const rem = parseFloat(weeklyMatch[1])
@@ -109,7 +109,7 @@ function parseQuotaFromTerminalOutput(rawText: string): ExactQuotaData | null {
     found = true
   }
 
-  // 5. Five Hour Limit Remaining (e.g., "[████████████████████░░░░] 81.35%")
+
   const fiveHourMatch = clean.match(/(?:Five\s+Hour|5[- ]?Hour)\s+Limit\s+Remaining[\s\S]*?([0-9]+(?:\.[0-9]+)?)\s*%/i)
   if (fiveHourMatch) {
     const rem = parseFloat(fiveHourMatch[1])
@@ -120,7 +120,7 @@ function parseQuotaFromTerminalOutput(rawText: string): ExactQuotaData | null {
     }
   }
 
-  // 6. Monthly Limit Remaining (e.g. "Monthly Limit Remaining: 75.50%", "30-Day Limit Remaining", "Monthly Quota: 80% remaining")
+
   const monthlyMatch = clean.match(/(?:Monthly|Month|30[- ]?Day)\s+(?:Limit\s+Remaining|Quota)[\s\S]*?([0-9]+(?:\.[0-9]+)?)\s*%/i)
   if (monthlyMatch) {
     const rem = parseFloat(monthlyMatch[1])
@@ -137,7 +137,7 @@ function parseQuotaFromTerminalOutput(rawText: string): ExactQuotaData | null {
     found = true
   }
 
-  // 7. Fallback alternative patterns (e.g. "Quota: 81.35% remaining", "5h limit: 81.35%")
+
   if (!result.fiveHourRemaining) {
     const alt5hMatch = clean.match(/5h\s*(?:limit|quota|session)?\s*[:=-]?\s*([0-9]+(?:\.[0-9]+)?)\s*%\s*(?:remaining|rem)/i)
     if (alt5hMatch) {
@@ -267,7 +267,7 @@ function parseJsonlHistory(filePaths: string[], isSec = false): {
               }
             }
           } catch {
-            // ignore malformed lines
+
           }
         }
 
@@ -296,7 +296,7 @@ function parseJsonlHistory(filePaths: string[], isSec = false): {
         oldest5h = fileOldest5h
       }
     } catch {
-      // ignore read errors
+
     }
   }
 
@@ -346,7 +346,7 @@ function checkPresenceLocks(dirPath?: string): boolean {
       if (now - stat.mtimeMs < 5 * 60_000) return true
     }
   } catch {
-    // ignore
+
   }
   return false
 }
@@ -442,10 +442,10 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
     }
   ]
 
-  // Check active terminals inside OrcSpace & parse real-time output for quota displays
+
   const activeTerminals = deps?.terminals ? deps.terminals.list() : []
 
-  // Check each terminal's full output for live Quota screens
+
   if (deps?.terminals && typeof deps.terminals.fullOutput === 'function') {
     for (const t of activeTerminals) {
       if (!t.alive) continue
@@ -468,13 +468,13 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
           }
         }
       } catch {
-        // ignore
+
       }
     }
   }
 
-  // One bounded tail per terminal, computed once and shared by every agent:
-  // the old loop lowercased the full 50 KB scrollback per agent per terminal.
+
+
   const tails: string[] = deps?.terminals && typeof deps.terminals.fullOutput === 'function'
     ? activeTerminals.map((t) => {
         if (!t.alive) return ''
@@ -488,7 +488,7 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
     : activeTerminals.map(() => '')
 
   return AGENTS.map((agent) => {
-    // 1. Detect open status from terminals, process list, presence locks, or recent activity
+
     let openCount = 0
     const lowerId = agent.id.toLowerCase()
     const lowerCmd = agent.command.toLowerCase()
@@ -514,15 +514,15 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
       }
     }
 
-    // Process table match
+
     const hasProc = agent.processNames.some((pName) => procList.includes(pName.toLowerCase()))
     const hasPresence = checkPresenceLocks(agent.presenceDirPath)
 
-    // 2. Read history and usage (5h, 7d, 30d)
+
     const { requests5h, requestsWeekly, requestsMonthly, tokens5h, tokensWeekly, tokensMonthly, lastTs, oldest5h, fileModifiedRecently } =
       parseJsonlHistory(agent.historyPaths, agent.isSecondTimestamp)
 
-    // Very recent prompt activity (within 10 minutes) also indicates open/active session
+
     const recentActivity = lastTs > 0 && now - lastTs < 10 * 60 * 1000
 
     const isOpen = openCount > 0 || hasProc || hasPresence || (fileModifiedRecently && recentActivity)
@@ -539,7 +539,7 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
       resetInfo5h = formatTimeRemaining(msLeft)
     }
 
-    // Check if we have exact quota parsed from terminal output
+
     const exact = exactQuotaCache.get(agent.id)
     const hasExactQuota = Boolean(
       exact &&

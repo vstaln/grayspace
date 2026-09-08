@@ -32,11 +32,8 @@ export default defineConfig({
       }
     },
     plugins: [react(), uno()],
-    // PERF-006: the renderer used to ship as one 1.05 MiB chunk. Split the
-    // heavy terminal runtime and the framework out so first paint does not
-    // parse and compile everything at once.
     build: {
-      chunkSizeWarningLimit: 500, // KB; warn if any chunk exceeds 500 KB
+      chunkSizeWarningLimit: 500,
       rollupOptions: {
         output: {
           manualChunks(id: string): string | undefined {

@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert'
-import { describe, test, beforeEach } from 'node:test'
+import { describe, test } from 'node:test'
 import { getUserDataDir } from './userData.ts'
 
 describe('userData - getUserDataDir', () => {
@@ -12,7 +12,7 @@ describe('userData - getUserDataDir', () => {
   })
 
   test('throws when Electron app unavailable and no test env', () => {
-    // Remove the env var if set
+
     delete (process as any).env.ORCSPACE_TEST_USER_DATA
     let threw = false
     try {

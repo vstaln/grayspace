@@ -17,8 +17,8 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     return result.filePaths[0]
   })
 
-  /** Creates a logical Workspace backed by its own private working folder.
-   * One Workspace owns the whole screen; terminals are sessions inside it. */
+
+
   ipcMain.handle('workspace:create', async (_e, rawName: unknown) => {
     const name = typeof rawName === 'string' ? rawName.trim() : ''
     if (!name || name.length > 80 || name === '.' || name === '..' || /[<>:"/\\|?*\u0000-\u001f]/.test(name) || /[. ]$/.test(name)) {
@@ -72,20 +72,20 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     return result
   })
 
-  // ---- remembered project folders ----------------------------------------
+
   ipcMain.handle('workspace:recent', () => deps.state.get().recent)
-  /** Reopens a folder already in the list without going through the OS dialog. */
+
   ipcMain.handle('workspace:open-recent', (_e, path: string) => {
-    // isLocalPath rejects UNC/network paths: existsSync('\\\\host\\share')
-    // would make the main process initiate an SMB connection (NTLM hash leak),
-    // and a network location must not become the workspace dir.
+
+
+
     if (typeof path !== 'string' || !isLocalPath(path) || !fs.existsSync(path)) {
       deps.state.removeRecent(String(path))
       return { error: 'Folder unavailable' }
     }
-    // Same rule handleSecondInstanceArgs applies to argv: a file must not
-    // become the workspace dir — terminals would silently fall back to the
-    // home directory while the UI claims the file's folder is open.
+
+
+
     try {
       if (!fs.statSync(path).isDirectory()) return { error: 'Not a folder' }
     } catch {

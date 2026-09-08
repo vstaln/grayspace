@@ -14,7 +14,7 @@ export function registerSettingsIpc(deps: IpcDeps): void {
     return next
   })
 
-  // ---- wallpaper ---------------------------------------------------------
+
   const backgroundDir = (): string => join(app.getPath('userData'), BACKGROUND_DIR_NAME)
 
   const backgroundDataUrl = async (): Promise<string | null> => {
@@ -22,7 +22,7 @@ export function registerSettingsIpc(deps: IpcDeps): void {
     if (!path) return null
     try {
       const url = await media.dataUrl(path)
-      // The copy was deleted out from under us — forget it instead of retrying forever.
+
       if (!url) state.patchSettings({ backgroundImage: null })
       return url
     } catch {
@@ -47,27 +47,27 @@ export function registerSettingsIpc(deps: IpcDeps): void {
     }
 
     try {
-      // Async variants throughout: the copy can be a full 24 MB, and a sync
-      // stat/mkdir/copy chain here froze every PTY chunk and IPC reply for the
-      // duration (PERF-wallpaper-async).
+
+
+
       if ((await fs.promises.stat(source)).size > media.MAX_MEDIA_BYTES)
         return { error: 'File exceeds 24 MB — please select a smaller image.' }
 
       const dir = backgroundDir()
       await fs.promises.mkdir(dir, { recursive: true })
-      // One wallpaper at a time: clearing the folder first keeps old copies from
-      // accumulating in userData every time the picture is changed.
+
+
       for (const name of await fs.promises.readdir(dir)) {
         try {
           await fs.promises.rm(join(dir, name), { force: true })
         } catch {
-          /* a locked leftover must not block the new pick */
+
         }
       }
       const rawExt = extname(source).toLowerCase() || '.png'
-      // Dialog `filters` are advisory — the picker still accepts any file when
-      // the user types a name. Only persist real image extensions so a picked
-      // .exe/.html can never land in backgrounds/ and be served back as a URL.
+
+
+
       const safeExt = media.IMAGE_EXTENSIONS.includes(rawExt.slice(1)) ? rawExt : '.png'
       const target = join(dir, `background-${Date.now()}${safeExt}`)
       await fs.promises.copyFile(source, target)
@@ -80,12 +80,12 @@ export function registerSettingsIpc(deps: IpcDeps): void {
   ipcMain.handle('settings:clear-background', async () => {
     state.patchSettings({ backgroundImage: null })
     try {
-      // Removing a copied wallpaper can involve a sizeable file. Keep this
-      // off Electron's main thread so clearing it cannot freeze PTY output or
-      // other IPC while the settings dialog is open.
+
+
+
       await fs.promises.rm(backgroundDir(), { recursive: true, force: true })
     } catch {
-      /* the setting is already cleared; a stale copy on disk is harmless */
+
     }
     return null
   })

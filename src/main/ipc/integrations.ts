@@ -2,12 +2,12 @@ import * as media from '../media.ts'
 import { ipcMain } from './shims.ts'
 import type { IpcDeps } from './types.ts'
 
-export function registerIntegrationsIpc(deps: IpcDeps): void {
-  // ---- pasted pictures ---------------------------------------------------
+export function registerIntegrationsIpc(_deps: IpcDeps): void {
+
   ipcMain.handle('media:save-clipboard', () => media.saveClipboardImage())
-  /** Terminal paste: a throwaway path in the temp dir, not the durable store. */
+
   ipcMain.handle('media:save-clipboard-scratch', () => media.saveClipboardImageToScratch())
-  /** Paste of a real File: the renderer already holds the bytes, so it sends them. */
+
   ipcMain.handle('media:save-bytes', (_e, bytes: Uint8Array, ext: string) => {
     if (!bytes?.byteLength) return null
     if (bytes.byteLength > media.MAX_MEDIA_BYTES) return { error: 'Image exceeds 24 MB' }

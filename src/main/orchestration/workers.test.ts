@@ -6,7 +6,7 @@ import { test, describe, beforeEach, afterEach } from 'node:test'
 import { OrchestrationStore } from './store.ts'
 import { detectRunning, listWorkers, resolveRecipient, resolveWorker } from './workers.ts'
 
-/** Just enough TerminalManager for the resolver: it only reads `list()`. */
+
 function fakeTerminals(
   rows: { id: string; title: string; cwd?: string; alive?: boolean; output?: string; activeAt?: number }[]
 ): never {
@@ -91,7 +91,7 @@ describe('worker resolution', () => {
     assert.equal(detectRunning('Agent Terminal 1', 'move cursor position 0,0'), undefined)
     assert.equal(detectRunning('Agent Terminal 1', 'myclaudefork ready'), undefined)
     assert.equal(detectRunning('Agent Terminal 1', 'welcome to claude!'), '~claude')
-    // Title prefixes stay broad: `cursor: …` is a deliberate label, not prose.
+
     assert.equal(detectRunning('cursor: fix login', null), '~cursor')
     assert.equal(detectRunning('cline: refactor', null), '~cline')
   })
@@ -124,7 +124,7 @@ describe('worker resolution', () => {
       { id: 'term-2', title: 'backend-worker' }
     ])
     assert.throws(() => resolveWorker(d, 'backend'), /matches several workers/)
-    // …but the full name still resolves.
+
     assert.equal(resolveWorker(d, 'backend-api').id, 'term-1')
   })
 
@@ -158,10 +158,10 @@ describe('worker resolution', () => {
       const task = orchestration.createTask({ runId, spec: 'a', createdBy: 'coord' })
       orchestration.createDispatch({ taskId: task.id, terminalId: 'term-9', agent: 'claude', preamble: 'p' })
 
-      // A terminal literally named "claude" must not shadow the @claude group.
+
       const d = deps([{ id: 'term-1', title: 'claude' }])
       assert.equal(resolveRecipient(d, '@claude'), '@claude')
-      // Without the @, the name still means that one terminal.
+
       assert.equal(resolveRecipient(d, 'claude'), 'term-1')
     })
 
@@ -170,11 +170,11 @@ describe('worker resolution', () => {
     })
 
     test('a known actor with no terminal is still addressable', () => {
-      // The case this exists for: a worker asked a question, then its pane was
-      // closed. Refusing the reply would leave that ask blocked forever.
+
+
       const d = { terminals: fakeTerminals(three), orchestration, knownActor: (id: string) => id === 'gone-worker' }
       assert.equal(resolveRecipient(d as never, 'gone-worker'), 'gone-worker')
-      // An unknown name is still an error — the fallback is not a free pass.
+
       assert.throws(() => resolveRecipient(d as never, 'never-existed'), /no worker called/)
     })
   })

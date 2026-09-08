@@ -9,10 +9,10 @@ export function runtimeFile(): string {
   return join(getUserDataDir(), RUNTIME_FILE_NAME)
 }
 
-/**
- * Beacon the running app writes so a local tool (e.g. start.bat) can find
- * it without knowing the control token. No secrets — ports and paths only.
- */
+
+
+
+
 export function writeRuntimePresence(input: {
   workspaceDir: string | null | undefined
 }): string {
@@ -31,7 +31,7 @@ export function clearRuntimePresence(): void {
   try {
     fs.unlinkSync(runtimeFile())
   } catch {
-    /* already gone, or never written */
+
   }
 }
 

@@ -60,6 +60,10 @@ test-results/
 playwright-report/
 playwright/.cache/
 
+# Rust build output
+native/target/
+native/pty-core/
+
 # Audit screens & temporary review outputs
 .audit-screens*/
 .ui-review/

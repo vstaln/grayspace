@@ -5,7 +5,7 @@ import * as os from 'node:os'
 import { join } from 'node:path'
 import { pruneScratch, saveBytesToScratch, scratchDir, SCRATCH_TTL_MS } from './media.ts'
 
-/** Backdates a file's mtime so it reads as older than the TTL without waiting. */
+
 function ageFile(path: string, msOld: number): void {
   const past = new Date(Date.now() - msOld)
   fs.utimesSync(path, past, past)
@@ -50,8 +50,8 @@ describe('saveBytesToScratch', () => {
       assert.equal(fs.existsSync(saved.path), true)
     } finally {
       fs.rmSync(leftover, { force: true })
-      // saveBytesToScratch content-addresses by hash; recompute to clean up
-      // without depending on the returned path surviving assertion failures above.
+
+
       for (const name of fs.readdirSync(dir)) {
         if (fs.readFileSync(join(dir, name)).toString() === 'a fresh paste') fs.rmSync(join(dir, name), { force: true })
       }

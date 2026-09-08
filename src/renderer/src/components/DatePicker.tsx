@@ -10,7 +10,7 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December'
 ]
 
-/** `YYYY-MM-DD` in local time — matches the value a native `<input type="date">` produces. */
+
 function toKey(d: Date): string {
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
@@ -25,7 +25,7 @@ function fromKey(key: string): Date | null {
   return new Date(Number(y), Number(m) - 1, Number(d))
 }
 
-/** Monday-first weekday index: Sunday (0) becomes 6, everything else shifts down one. */
+
 function mondayIndex(d: Date): number {
   return (d.getDay() + 6) % 7
 }
@@ -35,22 +35,22 @@ function addDays(d: Date, delta: number): Date {
 }
 
 interface Props {
-  /** `YYYY-MM-DD`, or empty for "no date chosen". */
+
   value: string
   onChange: (value: string) => void
   disabled?: boolean
   placeholder?: string
   ariaLabel?: string
   className?: string
-  /** Optional display transform for the trigger label (e.g. "Today", "3 Aug"). */
+
   formatValue?: (value: string) => string
 }
 
-/**
- * A calendar dropdown replacing the OS-themed native `<input type="date">`
- * popup, which does not follow the app's own theme (CANV-31). Value stays the
- * same `YYYY-MM-DD` string a date input produces, so callers do not change.
- */
+
+
+
+
+
 export default function DatePicker({
   value,
   onChange,
@@ -67,8 +67,8 @@ export default function DatePicker({
   const panelRef = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
 
-  // Reopening should always frame the month the current value is in, not
-  // wherever the user last scrolled to.
+
+
   const openPicker = useCallback((): void => {
     if (disabled) return
     setViewMonth(fromKey(value) ?? new Date())
@@ -81,10 +81,10 @@ export default function DatePicker({
     const reposition = (): void => {
       const rect = triggerRef.current?.getBoundingClientRect()
       if (!rect) return
-      // The calendar is ~320px tall; a trigger near the bottom edge would push
-      // it past the viewport and get clipped. Flip it above instead. Re-run
-      // this when the window moves/resizes so a portal never drifts away from
-      // its trigger.
+
+
+
+
       const below = rect.bottom + 4
       const top = below + PANEL_H > window.innerHeight ? Math.max(4, rect.top - PANEL_H - 4) : below
       setPos({
@@ -110,11 +110,11 @@ export default function DatePicker({
     }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
-      // Consume the Escape here, in the CAPTURE phase: without this the same
-      // keydown also reaches App's canvas chain and closed whatever panel sits
-      // under the picker (e.g. Esc over a planner date closed the Task Board
-      // behind it too). Bubble-phase stopPropagation cannot do that — App's
-      // own window listener may run first depending on registration order.
+
+
+
+
+
       e.stopPropagation()
       e.stopImmediatePropagation()
       setOpen(false)
@@ -171,11 +171,11 @@ export default function DatePicker({
             aria-modal="true"
             aria-label="Choose date"
             className="fixed z-[9800] w-[264px] max-w-[calc(100vw-8px)] rounded-[12px] border border-line-soft bg-bg-panel p-2.5 shadow-2xl"
-            // Rendered on open but hidden until the layout effect measures the
-            // trigger — avoids a first-frame pop-in at the fallback position.
+
+
             style={{ left: pos?.left ?? 0, top: pos?.top ?? 0, visibility: pos ? 'visible' : 'hidden' }}
-            // Portal bubbles through the widget tree to <main>: without this a
-            // click in the panel also triggers canvas draw/erase/pan gestures.
+
+
             onPointerDown={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}
           >
@@ -241,8 +241,8 @@ export default function DatePicker({
                     key={i}
                     type="button"
                     data-date={key}
-                    // Roving tabindex: the selected day (else today) is the tab
-                    // stop; arrows move focus within the grid.
+
+
                     tabIndex={isSelected || (!value && isToday) ? 0 : -1}
                     onClick={() => pick(d)}
                     aria-current={isToday ? 'date' : undefined}

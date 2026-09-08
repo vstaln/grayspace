@@ -7,9 +7,9 @@ export interface VerifiedBadgeProps {
   title?: string
 }
 
-/**
- * Blue verified checkmark badge.
- */
+
+
+
 export function VerifiedBadge({
   size = 15,
   className = '',

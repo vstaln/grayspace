@@ -7,11 +7,11 @@ import { LockManager } from './locks.ts'
 import { VersionRegistry } from './versioned.ts'
 import { CommandError, type JournalEntry } from './types.ts'
 
-/**
- * A minimal note store standing in for the real ones: an object with a body
- * and a version, mutated only through the bus. Every concurrency property the
- * four real stores need holds or fails here first.
- */
+
+
+
+
+
 function harness(options: { now?: () => number } = {}): {
   bus: CommandFlow
   locks: LockManager
@@ -67,9 +67,9 @@ describe('CommandFlow — the lost update', () => {
     const { bus, notes } = harness()
     await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'v1' } })
 
-    // The agent read the note at version 1 and went off to think about it.
+
     const agentSawVersion = 1
-    // Meanwhile the user edited it in the UI.
+
     const userEdit = await bus.submit({
       actorId: 'user',
       type: 'note.update',
@@ -220,9 +220,9 @@ describe('CommandFlow — sequencing', () => {
       bus.submit({ actorId: 'agent-a', type: 'trace.step', target: 'canvas:main', payload: { tag: 'fast', delay: 0 } }),
       bus.submit({ actorId: 'agent-b', type: 'trace.step', target: 'note:n1', payload: { tag: 'other', delay: 0 } })
     ])
-    // Same lane: strict submission order, no overlap.
+
     assert.deepEqual(order.filter((t) => t !== 'other'), ['slow', 'fast'])
-    // Different lane: the third command was never held behind the first two.
+
     assert.ok(order.includes('other'), 'disjoint resource ran to completion')
     assert.equal(maxLivePerTarget, 1, 'two handlers on one resource ran at once')
   })
@@ -268,19 +268,19 @@ describe('CommandFlow — sequencing', () => {
 })
 
 describe('CommandFlow — waiting on the outside world', () => {
-  /**
-   * Per-resource lanes fixed the historical shape of this bug for disjoint
-   * targets, but the same-target variant remains: a handler holding its
-   * resource's lane while waiting for a follow-up command aimed at that very
-   * resource waits forever. `unblock` is still the way out of that one.
-   */
+
+
+
+
+
+
   test('a handler awaiting a follow-up on the SAME resource deadlocks without unblock', async () => {
     const { bus } = harness()
     let answered = false
     bus.register<Record<string, never>, { answered: boolean }>('widget.request', {
       apply: async () => {
-        // The "renderer" replies out of band, as a fresh submission — to the
-        // resource whose lane this handler is holding.
+
+
         setTimeout(() => void bus.submit({ actorId: 'user', type: 'widget.answer', target: 'widget:new', payload: {} }), 0)
         const deadline = Date.now() + 100
         while (!answered && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5))
@@ -308,8 +308,8 @@ describe('CommandFlow — waiting on the outside world', () => {
     let answered = false
     bus.register<Record<string, never>, { answered: boolean }>('widget.request', {
       apply: async () => {
-        // The reply targets another widget — another lane — so it flows while
-        // this handler holds widget:new.
+
+
         setTimeout(() => void bus.submit({ actorId: 'user', type: 'widget.answer', target: 'widget:w1', payload: {} }), 0)
         const deadline = Date.now() + 500
         while (!answered && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5))
@@ -370,8 +370,8 @@ describe('CommandFlow — waiting on the outside world', () => {
     })
 
     const observing = bus.submit({ actorId: 'user', type: 'slow.observe', target: 'note:n1', payload: {} })
-    // Another actor writing to the same resource is still refused while the
-    // unblocked handler runs; the queue is free, the resource is not.
+
+
     const intruder = await bus.submit({
       actorId: 'agent-a',
       type: 'note.create',
@@ -421,7 +421,7 @@ describe('CommandFlow — the journal', () => {
 
     test('a command interrupted mid-apply is reported as unfinished', async () => {
       const { bus, journal } = harness()
-      // Simulates the crash window: intent on disk, no commit after it.
+
       journal.append({ phase: 'intent', actorId: 'assistant', type: 'widget.delete', target: 'widget:w1' })
       await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'a' } })
 
@@ -452,9 +452,9 @@ describe('CommandFlow — the journal', () => {
       const { bus, notes } = harness()
       await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'v1' } })
 
-      // Submit 5 concurrent writes all claiming baseVersion 1.
-      // The first one (serialized first) will succeed since baseVersion 1 matches v1,
-      // advancing the version to 2. The remaining 4 should get conflicts.
+
+
+
       const promises = []
       for (let i = 0; i < 5; i++) {
         promises.push(
@@ -469,23 +469,23 @@ describe('CommandFlow — the journal', () => {
       }
       const results = await Promise.all(promises)
 
-      // Exactly one succeeds (the first serialized), rest are conflicts
+
       const successes = results.filter((r) => r.ok).length
       const conflicts = results.filter((r) => r.ok === false && r.code === 'conflict').length
       assert.equal(successes, 1, 'first serialized write succeeds with matching baseVersion')
       assert.equal(conflicts, 4, 'remaining 4 detected as conflicts')
-      // Version should have advanced once
+
       assert.equal(notes.get('n1')?.body, 'stale-0', 'version advanced once')
     })
 
     test('mixed concurrent: some with baseVersion, some blind', async () => {
-      const { bus, notes, actors } = harness()
+      const { bus, actors } = harness()
       actors.register({ id: 'agent-a', type: 'agent', label: 'Codex', transport: 'cli' })
       actors.register({ id: 'agent-b', type: 'agent', label: 'Codex', transport: 'cli' })
 
       await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'initial' } })
 
-      // Two blind writes (last-writer-wins)
+
       const blind1 = bus.submit({
         actorId: 'agent-a',
         type: 'note.update',
@@ -499,7 +499,7 @@ describe('CommandFlow — the journal', () => {
         payload: { body: 'blind-b' }
       })
 
-      // One with stale baseVersion
+
       const stale = bus.submit({
         actorId: 'agent-a',
         type: 'note.update',
@@ -510,7 +510,7 @@ describe('CommandFlow — the journal', () => {
 
       const [b1, b2, s] = await Promise.all([blind1, blind2, stale])
 
-      // Blind writes should both succeed (last-writer-wins), stale should fail
+
       const blindOk = b1.ok && b2.ok
       const staleFailed = s.ok === false && s.code === 'conflict'
       assert.ok(blindOk || staleFailed, 'mixed concurrent: blind succeeds, stale conflicts')
@@ -519,12 +519,12 @@ describe('CommandFlow — the journal', () => {
     test('concurrent lock acquisition does not deadlock', async () => {
       const { bus, locks, actors } = harness()
       await bus.submit({ actorId: 'user', type: 'note.create', target: 'note:n1', payload: { id: 'n1', body: 'initial' } })
-      // Register additional actors for this test
+
       actors.register({ id: 'agent-b', type: 'agent', label: 'Codex', transport: 'cli' })
       actors.register({ id: 'agent-c', type: 'agent', label: 'Codex', transport: 'cli' })
-      // agent-a acquires an explicit lock first
+
       locks.acquire({ resource: 'note:n1', actorId: 'agent-a', reason: 'refactor' })
-      // Now agent-b and agent-c try to write while agent-a holds the lock
+
       const blockedB = await bus.submit({
         actorId: 'agent-b',
         type: 'note.update',
@@ -538,13 +538,13 @@ describe('CommandFlow — the journal', () => {
         payload: { body: 'nope-c' }
       })
 
-      // Both should be refused as locked
+
       assert.equal(blockedB.ok, false)
       assert.equal(blockedB.code, 'locked')
       assert.equal(blockedC.ok, false)
       assert.equal(blockedC.code, 'locked')
 
-      // After agent-a releases, others can write
+
       locks.release('note:n1', 'agent-a')
       const after = await bus.submit({
         actorId: 'agent-b',
@@ -573,7 +573,7 @@ describe('CommandFlow — the journal', () => {
         }
       })
 
-      // Fire 10 concurrent commands with varying delays
+
       const numCommands = 10
       const promises = []
       for (let i = 0; i < numCommands; i++) {
@@ -588,18 +588,18 @@ describe('CommandFlow — the journal', () => {
       }
       await Promise.all(promises)
 
-      // Orders should be serialized (FIFO from the queue)
-      // The queue processes one at a time, so order depends on submission order
-      // but should be consistent (no interleaving)
+
+
+
       assert.ok(order.length === numCommands, `all ${numCommands} commands executed`)
-      // Verify no duplicate tags
+
       const uniqueTags = new Set(order)
       assert.equal(uniqueTags.size, numCommands, 'no duplicate tags')
     })
 
     test('concurrent handler throws do not leak locks', async () => {
       const { bus, locks } = harness()
-      // Submit many commands that throw - note.explode already registered in harness
+
       const promises = []
       for (let i = 0; i < 5; i++) {
         promises.push(
@@ -613,7 +613,7 @@ describe('CommandFlow — the journal', () => {
       }
       await Promise.all(promises)
 
-      // All locks should be released
+
       const heldLocks = locks.list()
       assert.equal(heldLocks.length, 0, 'no locks left after concurrent throwing handlers')
     })

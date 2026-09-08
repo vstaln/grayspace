@@ -55,15 +55,15 @@ export interface Core {
   flow: CommandFlow
   projections: ProjectionManager
   cas: ContentAddressedStore
-  /** Releases the locks of every actor that has gone quiet. */
+
   sweepDeadActors(): void
   dispose(): void
 }
 
-/**
- * Wires the core components together. Everything else in the app —
- * stores, transports, the assistant — takes this object and nothing else.
- */
+
+
+
+
 export function createCore(
   options: {
     sink?: JournalSink
@@ -81,9 +81,9 @@ export function createCore(
   const projections = new ProjectionManager(journal, { now })
   const cas = new ContentAddressedStore({ rootDir: options.casRootDir })
 
-  // The system actor exists so internal maintenance (migrations, recovery,
-  // shutdown flushes) is attributable in the journal like everything else,
-  // rather than appearing as an anonymous write.
+
+
+
   actors.register({ id: 'system', type: 'system', label: 'OrcSpace', transport: 'internal' })
 
   const sweepDeadActors = (): void => {

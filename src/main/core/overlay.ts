@@ -6,10 +6,10 @@ export interface OverlayRecord<T = unknown> {
   version: number
 }
 
-/**
- * An isolated shadow overlay layer.
- * Captures mutations to state and journal entries without touching the base store or disk.
- */
+
+
+
+
 export class ShadowOverlay {
   readonly id: string
   readonly createdAt: number
@@ -76,9 +76,9 @@ export class ShadowOverlay {
   }
 }
 
-/**
- * Manages shadow overlays across stores and the command bus.
- */
+
+
+
 export class OverlayManager {
   private readonly overlays = new Map<string, ShadowOverlay>()
   private readonly now: () => number
@@ -112,9 +112,9 @@ export class OverlayManager {
     return Array.from(this.overlays.keys()).sort()
   }
 
-  /**
-   * Reads a composite value: checks the specified overlay first, falls back to base.
-   */
+
+
+
   readComposite<T>(target: ResourceId, baseValue: T | undefined, overlayId?: string): T | undefined {
     if (!overlayId) return baseValue
     const overlay = this.overlays.get(overlayId)
@@ -125,9 +125,9 @@ export class OverlayManager {
     return record.value
   }
 
-  /**
-   * Reads a composite list: merges base items with overlay additions/updates/deletions.
-   */
+
+
+
   readCompositeList<T extends { id: string }>(
     baseItems: T[],
     getTarget: (item: T) => ResourceId,
@@ -139,13 +139,13 @@ export class OverlayManager {
 
     const itemMap = new Map<string, T>()
     for (const item of baseItems) {
-      const target = getTarget(item)
-      if (overlay.isDeleted(target)) continue
-      const overlaid = overlay.get<T>(target)
+      const itemTarget = getTarget(item)
+      if (overlay.isDeleted(itemTarget)) continue
+      const overlaid = overlay.get<T>(itemTarget)
       itemMap.set(item.id, overlaid && !overlaid.deleted ? overlaid.value : item)
     }
 
-    for (const [target, record] of overlay.entries()) {
+    for (const [, record] of overlay.entries()) {
       if (record.deleted || record.value == null) continue
       const val = record.value as T
       if (val && typeof val.id === 'string') {

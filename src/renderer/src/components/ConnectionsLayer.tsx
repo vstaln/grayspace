@@ -6,50 +6,50 @@ interface Props {
   widgets: Widget[]
 }
 
-/** Anchor point: the middle of a widget's header, in world coordinates. */
+
 function anchor(w: Widget): { x: number; y: number } {
   return { x: w.x + w.w / 2, y: w.y }
 }
 
-/**
- * A quadratic arc bowed upward between two points — the same shape the
- * reference sketch uses, like a cable slung between two poles rather than a
- * straight wire.
- */
+
+
+
+
+
 function arcPath(a: { x: number; y: number }, b: { x: number; y: number }): { d: string; midX: number; midY: number } {
   const dx = b.x - a.x
   const dy = b.y - a.y
   const dist = Math.hypot(dx, dy)
-  // The bow is proportional to the span so a short hop and a cross-canvas link
-  // both read as the same kind of curve rather than one looking like a spike.
+
+
   const bow = Math.min(120, Math.max(24, dist * 0.22))
   const midX = (a.x + b.x) / 2
   const midY = (a.y + b.y) / 2 - bow
   return { d: `M ${a.x} ${a.y} Q ${midX} ${midY} ${b.x} ${b.y}`, midX, midY }
 }
 
-/** How long the brighter "just connected" flare plays before settling. */
+
 const FLARE_MS = 1600
 
-/**
- * Lit arcs between an agent's terminal and the ones it opened — the only
- * visible record of "this shell spawned that one" once both are just windows
- * side by side on the canvas. A freshly opened link flares brighter and runs
- * a dot along the curve once; every link keeps a faint, slow shimmer after
- * that so a canvas full of terminals still reads as a tree.
- */
+
+
+
+
+
+
+
 function ConnectionsLayer({ connections, widgets }: Props): React.JSX.Element | null {
   const hasConnections = connections.length > 0
-  // React's useId() contains ":" characters, which break url(#...) references
-  // in SVG filter attributes — sanitise before use.
+
+
   const rawId = React.useId()
   const filterId = rawId.replace(/:/g, '')
-  // No links on the canvas is the common case, and `widgets` gets a fresh
-  // array identity on every drag/resize frame — building a 200-entry lookup
-  // map per frame for a layer that draws nothing is pure overhead. Bail before
-  // the map, and before the <svg>/<filter> subtree exists at all.
-  // Keyed by the stable id list rather than the `widgets` array identity, so a
-  // drag frame that moves widgets without adding/removing any reuses the map.
+
+
+
+
+
+
   const widgetIdsKey = widgets.map((w) => w.id).join('\n')
   const byId = useMemo(
     () => (hasConnections ? new Map(widgets.map((w) => [w.id, w])) : new Map<string, Widget>()),
@@ -79,9 +79,9 @@ function ConnectionsLayer({ connections, widgets }: Props): React.JSX.Element | 
 export default React.memo(ConnectionsLayer)
 
 function ConnectionArc({ d, bornAt, filterId }: { d: string; bornAt: number; filterId: string }): React.JSX.Element {
-  // Local timer rather than a prop computed by the parent: the flare has to
-  // turn itself off a moment after it starts, and nothing else in this app
-  // re-renders the canvas on a plain interval to notice that for it.
+
+
+
   const [fresh, setFresh] = useState(() => Date.now() - bornAt < FLARE_MS)
   useEffect(() => {
     if (!fresh) return
@@ -92,17 +92,17 @@ function ConnectionArc({ d, bornAt, filterId }: { d: string; bornAt: number; fil
 
   return (
     <g className={fresh ? 'conn-arc conn-arc-fresh' : 'conn-arc'}>
-      {/* Resting thread: a thin, steady line so the relationship is visible
-          even long after the flare has played. */}
+      {
+}
       <path d={d} className="conn-thread" fill="none" />
-      {/* The glow pass — wider, blurred, brighter while fresh. */}
+      {}
       <path d={d} className="conn-glow" fill="none" filter={`url(#conn-blur-${filterId})`} />
-      {/* A single point of light travelling the arc once on arrival. Finite
-          animations only: an `repeatCount="indefinite"` shimmer here used to
-          keep the compositor animating every link on the canvas forever, a
-          constant GPU/CPU tax for decoration nobody watches after the first
-          second (PERF-conn-idle). The resting thread below carries the
-          relationship once the flare has played. */}
+      {
+
+
+
+
+}
       {fresh && (
         <circle r="3.2" className="conn-flare-dot" fill="#ffffff">
           <animateMotion dur="1.1s" begin="0s" fill="freeze" path={d} keyPoints="0;1" keyTimes="0;1" calcMode="spline" keySplines="0.22 0.61 0.36 1" />

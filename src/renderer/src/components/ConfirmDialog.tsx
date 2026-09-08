@@ -1,9 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
-import { useFocusTrap, isTopTrap, nextTrapId } from '../hooks/useFocusTrap'
+import { useFocusTrap, isTopTrap } from '../hooks/useFocusTrap'
 
 interface ConfirmOptions {
   title?: string
-  /** Renders the confirm button in the danger palette — for destructive actions. */
+
   danger?: boolean
   confirmLabel?: string
   cancelLabel?: string
@@ -12,18 +12,17 @@ interface ConfirmOptions {
 interface PendingConfirm extends ConfirmOptions {
   message: string
   resolve(value: boolean): void
-  hashCode?: number
 }
 
 type Confirm = (message: string, options?: ConfirmOptions) => Promise<boolean>
 
 const ConfirmContext = createContext<Confirm>(async () => false)
 
-/**
- * In-app replacement for `window.confirm`. Electron's native dialog looks like
- * an OS/browser chrome window dropped on top of the app — this renders the same
- * yes/no prompt as one more panel in the app's own style instead.
- */
+
+
+
+
+
 export function ConfirmProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const [pending, setPending] = useState<PendingConfirm | null>(null)
   const pendingRef = useRef<PendingConfirm | null>(null)
@@ -33,13 +32,13 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
 
   const confirm = useCallback<Confirm>(
     (message, options) => {
-      // Queue new confirms when one is already pending
+
       if (pendingRef.current) {
         return new Promise<boolean>((resolve) => {
           setPendingQueue((prev) => [...prev, { message, resolve, ...options } as PendingConfirm])
         })
       }
-      // Show immediately
+
       return new Promise<boolean>((resolve) => {
         pendingRef.current = { message, resolve, ...options } as PendingConfirm
         setPending({ message, resolve, ...options } as PendingConfirm)
@@ -48,7 +47,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
     []
   )
 
-  // Window-level Escape handler with frontmost check
+
   useEffect(() => {
     if (!pending) return
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -64,8 +63,8 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
   const settle = (value: boolean): void => {
     pending?.resolve(value)
     pendingRef.current = null
-    
-    // If there are queued confirms, show the next one
+
+
     if (pendingQueue.length > 0) {
       const next = pendingQueue[0]
       setPendingQueue((prev) => prev.slice(1))
@@ -93,14 +92,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
             aria-label={pending.title || 'Confirmation'}
             aria-describedby="confirm-msg"
             className="max-h-[calc(100vh-24px)] w-full max-w-[340px] overflow-auto rounded-[10px] border border-line bg-bg-panel p-4 shadow-2xl"
-            tabIndex={-1}  // Add tabIndex=-1 for focus trapping
-            onKeyDown={(e) => {
-              // Only handle Escape if this is the frontmost trap
-              if (e.key === 'Escape' && isTopTrap(pendingRef.current?.hashCode ?? 0)) {
-                e.stopPropagation()
-                settle(false)
-              }
-            }}
+            tabIndex={-1}
           >
             {pending.title && (
               <h2 className="mb-1.5 truncate text-[13px] font-semibold text-text">{pending.title}</h2>
@@ -136,7 +128,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
   )
 }
 
-/** `if (await confirm('Delete it?')) …` — same shape as `window.confirm`, minus the OS chrome. */
+
 export function useConfirm(): Confirm {
   return useContext(ConfirmContext)
 }

@@ -20,7 +20,7 @@ describe('TerminalManager', () => {
     const agent2 = manager.reserve({ prefix: 'agent' })
     assert.equal(agent2.title, 'Agent Terminal 1')
 
-    // Dispose agent 1 and verify number reuse
+
     manager.dispose(agent1.id)
     const agent3 = manager.reserve({ prefix: 'agent' })
     assert.equal(agent3.title, 'Agent Terminal 2')
@@ -36,7 +36,7 @@ describe('TerminalManager', () => {
     manager.setTitle(term.id, 'Renamed')
     assert.equal(manager.list().find((t) => t.id === term.id)?.title, 'Renamed')
 
-    // Empty title ignored
+
     manager.setTitle(term.id, '   ')
     assert.equal(manager.list().find((t) => t.id === term.id)?.title, 'Renamed')
 
@@ -50,11 +50,11 @@ describe('TerminalManager', () => {
     manager.appendOutput(term.id, 'hello')
     assert.equal(manager.readOutput(term.id, true), 'hello')
 
-    // Enough output to push the earlier chunks past the retained window.
+
     for (let i = 0; i < 200; i += 1) manager.appendOutput(term.id, 'x'.repeat(1_000))
     const unread = manager.readOutput(term.id, true)
     assert.ok(unread && unread.length > 0)
-    // Nothing new since the drain.
+
     assert.equal(manager.readOutput(term.id, false), '')
 
     manager.appendOutput(term.id, 'tail')
@@ -71,11 +71,11 @@ describe('TerminalManager', () => {
     assert.equal(manager.readOutput(term.id, false), 'hello world\n')
     assert.equal(manager.readOutput(term.id, false), 'hello world\n')
 
-    // Clear advances offset for agent reads
+
     assert.equal(manager.readOutput(term.id, true), 'hello world\n')
     assert.equal(manager.readOutput(term.id, false), '')
 
-    // More output arrives
+
     manager.appendOutput(term.id, 'next command output\n')
     assert.equal(manager.readOutput(term.id, false), 'next command output\n')
     assert.equal(manager.fullOutput(term.id), 'hello world\nnext command output\n')
@@ -127,6 +127,29 @@ describe('TerminalManager', () => {
 
     assert.equal(result.ok, true)
     assert.deepEqual(writes, ['hello world', '\r'])
+    manager.disposeAll()
+  })
+
+  test('raw input waits for an in-flight delivery on the same terminal', async () => {
+    const manager = new TerminalManager()
+    const term = manager.reserve()
+    const writes: string[] = []
+    const record = (
+      manager as unknown as { terminals: Map<string, { pty: { write(data: string): void } | null }> }
+    ).terminals.get(term.id)
+    assert.ok(record)
+    record.pty = { write: (data: string) => writes.push(data) }
+
+    const delivery = manager.deliverLine(term.id, 'serialized message', { timeoutMs: 500 })
+    const rawInput = manager.writeInput(term.id, ' ')
+    setTimeout(() => {
+      manager.appendOutput(term.id, 'serialized message\r\n')
+      manager.emit('data', term.id, 'serialized message\r\n')
+    }, 50)
+
+    assert.equal((await delivery).ok, true)
+    assert.equal((await rawInput).ok, true)
+    assert.deepEqual(writes, ['serialized message', '\r', ' '])
     manager.disposeAll()
   })
 

@@ -13,37 +13,36 @@ import {
   type ResourceId
 } from './core/index.ts'
 
-/** Bumped whenever the persisted shape changes. */
+
 export const PLANNER_SCHEMA_VERSION = 2
 
-/** Snapshot cache taken every N committed events. */
+
 export const PLANNER_SNAPSHOT_INTERVAL = 50
 
-/**
- * One line on the plan: a thing to do, optionally slotted to a day and time.
- * Deliberately not a board task — a task is a unit of *delegable* work with an
- * assignee and a state machine; a plan item is the human's own outline for a
- * day, kept even after it's done, ordered by hand rather than by deadline.
- */
+
+
+
+
+
 export interface PlanItem {
   id: string
   title: string
   note: string
-  /** Optional group label (e.g. "Update 1.0.27") for the sidebar / filters. */
+
   project?: string
-  /** `YYYY-MM-DD`, or unset for a plan item with no particular day. */
+
   day?: string
-  /** `HH:MM`, or unset for a day item with no particular time. */
+
   time?: string
   done: boolean
   createdBy: string
-  /** Manual ordering within a day — drag-reordered, not sorted by field. */
+
   order: number
   createdAt: number
   updatedAt: number
-  /** Optimistic-concurrency version, owned by the Command Bus. */
+
   version: number
-  /** Absolute paths to attached photos (stored via media store). */
+
   attachments?: string[]
 }
 
@@ -55,11 +54,11 @@ export interface PlannerSnapshot {
 
 export type PlannerState = Map<string, PlanItem>
 
-/**
- * The planner: a flat, hand-ordered outline, persisted per profile.
- *
- * Event sourced: state = fold(events), JSON file acts as snapshot cache.
- */
+
+
+
+
+
 export class PlannerStore extends EventEmitter {
   private readonly items = new Map<string, PlanItem>()
   private counter = 0
@@ -67,7 +66,7 @@ export class PlannerStore extends EventEmitter {
   private persistTimer: ReturnType<typeof setTimeout> | null = null
   private snapshotSeq = 0
   private eventsSinceSnapshot = 0
-  /** Async-write plumbing — same crash-safe ordering as CoordinationStore. */
+
   private writeChain: Promise<void> = Promise.resolve()
   private writeSeq = 0
   private syncFlushedSeq = 0
@@ -77,11 +76,11 @@ export class PlannerStore extends EventEmitter {
     return join(getUserDataDir(), 'workspace-planner.json')
   }
 
-  // ---- Event sourcing: Reducer --------------------------------------------
 
-  /**
-   * Pure state reduction: state = reduce(state, event).
-   */
+
+
+
+
   static reduce(state: PlannerState, event: JournalEntry): PlannerState {
     if (event.phase !== 'commit') return state
     const next = new Map(state)
@@ -124,7 +123,7 @@ export class PlannerStore extends EventEmitter {
           updatedAt: event.at,
           version: event.version ?? existing.version + 1
         }
-        // Drop empty attachments to keep persisted JSON lean and old snapshots cache-friendly
+
         if (updated.attachments && updated.attachments.length === 0) delete (updated as Partial<PlanItem>).attachments
         next.set(targetId, updated)
       }
@@ -146,9 +145,9 @@ export class PlannerStore extends EventEmitter {
     return next
   }
 
-  /**
-   * Applies an event to this store instance using the reducer.
-   */
+
+
+
   applyEvent(event: JournalEntry): void {
     if (event.phase !== 'commit') return
     const nextMap = PlannerStore.reduce(this.items, event)
@@ -173,19 +172,19 @@ export class PlannerStore extends EventEmitter {
     }
   }
 
-  /**
-   * Folds historical events into state.
-   */
+
+
+
   foldEvents(events: Iterable<JournalEntry>, initialState: PlannerState = new Map()): PlannerState {
     return fold(events, PlannerStore.reduce, initialState)
   }
 
-  // ---- Loading & Snapshot Cache -------------------------------------------
+
 
   private ensure(tailEvents?: JournalEntry[]): void {
     if (this.loaded) return
-    // Loaded is only flagged once the read succeeded: a transient EBUSY/EACCES
-    // must not leave the planner looking empty for the whole session.
+
+
     const raw = readStoreJson<Record<string, unknown>>(this.file, {})
     this.loaded = true
     const items = Array.isArray(raw.items) ? raw.items : []
@@ -196,7 +195,7 @@ export class PlannerStore extends EventEmitter {
     this.snapshotSeq = Number(raw.snapshotSeq) || 0
     this.versions.seed(this.items.values())
 
-    // Replay NDJSON journal tail if provided
+
     if (tailEvents && tailEvents.length > 0) {
       const tailToApply = tailEvents.filter((e) => e.seq > this.snapshotSeq && e.phase === 'commit')
       if (tailToApply.length > 0) {
@@ -226,7 +225,7 @@ export class PlannerStore extends EventEmitter {
     }
   }
 
-  // ---- Event Sourcing Free Features: rewind, blame, replay, fork -----------
+
 
   rewind(targetSeq: number, events: Iterable<JournalEntry> = []): PlanItem[] {
     this.ensure()
@@ -257,7 +256,7 @@ export class PlannerStore extends EventEmitter {
     return Array.from(forkedMap.values()).sort(sortPlanItems)
   }
 
-  // ---- Persistence --------------------------------------------------------
+
 
   private changed(): void {
     this.emit('change', this.list())
@@ -281,7 +280,7 @@ export class PlannerStore extends EventEmitter {
     }
   }
 
-  /** Durable, blocking write. Shutdown only (`dispose`). */
+
   private flush(): void {
     if (this.persistTimer !== null) {
       clearTimeout(this.persistTimer)
@@ -297,12 +296,12 @@ export class PlannerStore extends EventEmitter {
     }
   }
 
-  /**
-   * The periodic write, off the main thread (PERF-planner-async): the fsync in
-   * the synchronous twin stalls IPC and pty handling while a plan edit is
-   * still mid-flight in the UI. Chained + seq-guarded so an older async copy
-   * can never rename over the newer durable shutdown write.
-   */
+
+
+
+
+
+
   private flushAsync(): void {
     if (!this.loaded) return
     this.writeSeq += 1
@@ -310,7 +309,7 @@ export class PlannerStore extends EventEmitter {
     const snapshot = this.payloadForPersist()
     this.writeChain = this.writeChain
       .catch(() => {
-        /* a failed write must not strand the chain */
+
       })
       .then(async () => {
         if (seq <= this.syncFlushedSeq) return
@@ -338,7 +337,7 @@ export class PlannerStore extends EventEmitter {
     this.flush()
   }
 
-  // ---- Store Accessors & Mutations ----------------------------------------
+
 
   private nextId(): string {
     this.counter += 1
@@ -355,13 +354,9 @@ export class PlannerStore extends EventEmitter {
 
   get(id: string, overlayId?: string): PlanItem | undefined {
     this.ensure()
-    const target = this.versions.target(id)
-    if (overlayId && this.versions.hasOverlay(overlayId)) {
-      // If version is known in overlay, check item
-      const item = this.items.get(id)
-      if (item) return { ...item, version: this.versions.current(id, overlayId) }
-    }
-    return this.items.get(id)
+    const item = this.items.get(id)
+    if (!item || !overlayId || !this.versions.hasOverlay(overlayId)) return item
+    return { ...item, version: this.versions.current(id, overlayId) }
   }
 
   list(overlayId?: string): PlanItem[] {
@@ -477,7 +472,7 @@ function sortPlanItems(a: PlanItem, b: PlanItem): number {
   return a.order - b.order
 }
 
-/** Local calendar day as `YYYY-MM-DD`. */
+
 function localDayKey(d = new Date()): string {
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
@@ -522,7 +517,7 @@ function normalizeTime(value: unknown): string | undefined {
   return hours < 24 && minutes < 60 ? value : undefined
 }
 
-/** Persisted-data variant: never throws, so one corrupt item cannot brick the store. */
+
 function safeDay(value: unknown): string | undefined {
   try {
     return normalizeDay(value)
@@ -578,7 +573,7 @@ function normalizeAttachments(value: unknown): string[] | undefined {
     if (typeof entry !== 'string') continue
     const trimmed = entry.trim()
     if (!trimmed) continue
-    // Cap path length to avoid persisting garbage; media store paths are well under this.
+
     if (trimmed.length > 1024) continue
     out.push(trimmed.slice(0, 1024))
     if (out.length >= 12) break

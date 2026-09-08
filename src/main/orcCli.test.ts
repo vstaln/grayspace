@@ -13,7 +13,6 @@ const { OrchestrationStore } = await import('./orchestration/store.ts')
 const { registerCommands } = await import('./commands/index.ts')
 const { TerminalManager } = await import('./terminals.ts')
 const { TerminalSnapshots } = await import('./terminalSnapshots.ts')
-const { CoordinationStore } = await import('./coordination.ts')
 const { PlannerStore } = await import('./plannerStore.ts')
 const { CanvasStore } = await import('./canvasState.ts')
 const { startControlServer } = await import('./controlServer.ts')
@@ -25,7 +24,6 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
   let core: ReturnType<typeof createCore>
   let orchestration: InstanceType<typeof OrchestrationStore>
   let terminals: InstanceType<typeof TerminalManager>
-  let coordination: InstanceType<typeof CoordinationStore>
   let planner: InstanceType<typeof PlannerStore>
   let canvas: InstanceType<typeof CanvasStore>
   let snapshots: InstanceType<typeof TerminalSnapshots>
@@ -38,7 +36,6 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     core = createCore()
     orchestration = new OrchestrationStore({ file: join(userData, 'orchestration.json') })
     terminals = new TerminalManager()
-    coordination = new CoordinationStore(core.locks)
     planner = new PlannerStore()
     canvas = new CanvasStore()
     snapshots = new TerminalSnapshots()
@@ -46,7 +43,6 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     registerCommands({
       core,
       canvas,
-      board: coordination,
       planner,
       orchestration,
       terminals,
@@ -67,7 +63,6 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     server = startControlServer({
       core,
       terminals,
-      coordination,
       planner,
       orchestration,
       canvas,
@@ -90,7 +85,6 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
     orchestration.dispose()
     planner.dispose()
-    coordination.dispose()
     delete process.env.ORCSPACE_TEST_USER_DATA
     fs.rmSync(userData, { recursive: true, force: true })
   })
@@ -119,7 +113,7 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
           try {
             parsed = JSON.parse(stdout)
           } catch {
-            /* ignore */
+
           }
           const exitCode = error ? (typeof error.code === 'number' ? error.code : 1) : 0
           resolve({
@@ -159,14 +153,14 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
   })
 
   test('full run & task lifecycle via orc CLI commands', async () => {
-    // 1. Create a run
+
     const runRes = await runOrc(['run-create', '--objective', 'Test Suite Goal'])
     assert.equal(runRes.status, 0)
     const runData = runRes.json as { id: string; objective: string }
     assert.ok(runData.id.startsWith('run-'))
     assert.equal(runData.objective, 'Test Suite Goal')
 
-    // 2. Create tasks with dependencies (using positional and flag args)
+
     const task1Res = await runOrc(['task-create', 'Initial build spec', '--title', 'Task 1'])
     assert.equal(task1Res.status, 0)
     const task1 = task1Res.json as { id: string; status: string; title: string }
@@ -178,32 +172,32 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     const task2 = task2Res.json as { id: string; status: string }
     assert.equal(task2.status, 'pending')
 
-    // 3. Inspect task details with task-show
+
     const showRes = await runOrc(['task-show', task1.id])
     assert.equal(showRes.status, 0)
     const showTask = showRes.json as { id: string; title: string; spec: string }
     assert.equal(showTask.id, task1.id)
     assert.equal(showTask.spec, 'Initial build spec')
 
-    // 4. List tasks with alias
+
     const listRes = await runOrc(['tasks', '--ready'])
     assert.equal(listRes.status, 0)
     const listData = listRes.json as { tasks: Array<{ id: string }> }
     assert.equal(listData.tasks.length, 1)
     assert.equal(listData.tasks[0].id, task1.id)
 
-    // 5. Inspect run with run-show
+
     const showRunRes = await runOrc(['run-show', runData.id])
     assert.equal(showRunRes.status, 0)
     const showRun = showRunRes.json as { run: { id: string }; tasks: unknown[] }
     assert.equal(showRun.run.id, runData.id)
     assert.equal(showRun.tasks.length, 2)
 
-    // 6. Update task status
+
     const updateRes = await runOrc(['task-update', task1.id, '--status', 'blocked'])
     assert.equal(updateRes.status, 0)
 
-    // 7. Close run
+
     const closeRes = await runOrc(['run-close', runData.id])
     assert.equal(closeRes.status, 0)
   })
@@ -232,49 +226,35 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     const taskRes = await runOrc(['task-create', 'Subtask for agent', '--title', 'Subtask 1'])
     const task = taskRes.json as { id: string }
 
-    // Send direct message
+
     const sendRes = await runOrc(['send', '--type', 'ask', '--subject', 'Which database?', '--body', 'PostgreSQL or SQLite?'])
     assert.equal(sendRes.status, 0)
     const sent = sendRes.json as { id: string; type: string }
     assert.equal(sent.type, 'ask')
 
-    // Check inbox with orc check
+
     const checkRes = await runOrc(['check', '--all'])
     assert.equal(checkRes.status, 0)
     const inbox = checkRes.json as { messages: Array<{ id: string; subject: string }> }
     assert.ok(inbox.messages.length >= 1)
 
-    // Reply to the question
+
     const replyRes = await runOrc(['reply', sent.id, 'Use SQLite'])
     assert.equal(replyRes.status, 0)
     const replyMsg = replyRes.json as { id: string; type: string; replyTo: string }
     assert.equal(replyMsg.type, 'reply')
     assert.equal(replyMsg.replyTo, sent.id)
 
-    // Dispatch task onto a worker
+
     const dispRes = await runOrc(['worker-start', task.id, 'claude'])
     assert.equal(dispRes.status, 0)
     const disp = dispRes.json as { dispatchId: string }
 
-    // Send done report with dispatchId
+
     const doneRes = await runOrc(['done', '--outcome', 'succeeded', '--task-id', task.id, '--dispatch-id', disp.dispatchId, '--files', 'db.ts'])
     assert.equal(doneRes.status, 0)
     const doneMsg = doneRes.json as { settled?: { status: string } }
     assert.equal(doneMsg.settled?.status, 'completed')
-  })
-
-  test('kanban board commands with positional claim and update', async () => {
-    const createRes = await runOrc(['board', 'create', 'Refactor engine', '--brief', 'Clean up handlers'])
-    assert.equal(createRes.status, 0)
-    const created = createRes.json as { id: string; title: string }
-    const taskId = created.id
-    assert.ok(taskId)
-
-    const claimRes = await runOrc(['board', 'claim', taskId])
-    assert.equal(claimRes.status, 0)
-
-    const updateRes = await runOrc(['board', 'update', taskId, 'done'])
-    assert.equal(updateRes.status, 0)
   })
 
   test('planner commands with create, list, toggle, delete', async () => {

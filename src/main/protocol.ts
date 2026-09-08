@@ -8,10 +8,10 @@ const protocol = electronAny.protocol
 const net = electronAny.net
 const session = electronAny.session
 
-/**
- * Handles `orc://app/...` requests directly from the packaged/built renderer files
- * without opening any HTTP/TCP port.
- */
+
+
+
+
 export function setupOrcProtocol(rendererDir = join(__dirname, '../renderer')): void {
   if (!protocol || typeof protocol.handle !== 'function') return
 
@@ -28,7 +28,7 @@ export function setupOrcProtocol(rendererDir = join(__dirname, '../renderer')): 
       const normalizedRenderer = normalize(rendererDir)
       const baseWithSep = normalizedRenderer.endsWith(sep) ? normalizedRenderer : normalizedRenderer + sep
 
-      // Path traversal security check
+
       if (filePath !== normalizedRenderer && !filePath.startsWith(baseWithSep)) {
         return new Response('Forbidden', { status: 403 })
       }
@@ -37,7 +37,7 @@ export function setupOrcProtocol(rendererDir = join(__dirname, '../renderer')): 
         return net.fetch(pathToFileURL(filePath).toString())
       }
 
-      // SPA fallback
+
       const indexFile = join(rendererDir, 'index.html')
       if (fs.existsSync(indexFile)) {
         return net.fetch(pathToFileURL(indexFile).toString())
@@ -53,12 +53,12 @@ export function setupOrcProtocol(rendererDir = join(__dirname, '../renderer')): 
 
 const configuredSessions = new WeakSet<object>()
 
-/**
- * Configures request and response headers for embedded media providers
- * (YouTube, Spotify, Yandex Music) so that iframe players function reliably
- * without origin-rejection or framing errors across custom schemes (orc://app)
- * and local development origins.
- */
+
+
+
+
+
+
 export function setupMediaHeaders(targetSession?: any): void {
   const sess = targetSession ?? (typeof session !== 'undefined' ? session.defaultSession : undefined)
   if (!sess || typeof sess !== 'object' || !sess.webRequest) return

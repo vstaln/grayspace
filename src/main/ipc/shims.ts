@@ -1,11 +1,11 @@
 import * as electron from 'electron'
 
-/**
- * The real electron APIs, or whatever `globalThis.__electronMock` installed —
- * the IPC test suite runs these registrars in a plain Node process with a
- * hand-rolled ipcMain. Resolved once at first import and shared by every
- * registrar module.
- */
+
+
+
+
+
+
 function resolveElectronModule<T extends object>(name: string): T {
   return new Proxy({} as T, {
     get(_target, prop) {
@@ -27,5 +27,4 @@ export const dialog = resolveElectronModule<typeof electron.dialog>('dialog')
 export const shell = resolveElectronModule<typeof electron.shell>('shell')
 export const BrowserWindow = resolveElectronModule<typeof electron.BrowserWindow>('BrowserWindow')
 export const session = resolveElectronModule<typeof electron.session>('session')
-
 

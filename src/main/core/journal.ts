@@ -4,9 +4,9 @@ import type { JournalEntry, JournalPhase, ResourceId } from './types.ts'
 
 export const GENESIS_HASH = '0000000000000000000000000000000000000000000000000000000000000000'
 
-/**
- * Computes deterministic cryptographic SHA-256 hash for a journal entry.
- */
+
+
+
 export function computeEntryHash(
   prevHash: string,
   entry: {
@@ -36,34 +36,34 @@ export function computeEntryHash(
   return createHash('sha256').update(content).digest('hex')
 }
 
-/**
- * Where journal entries go once the bus has produced them. Kept as an
- * interface so `core/` stays filesystem-free: the app plugs in an NDJSON file
- * sink, tests plug in nothing at all.
- */
+
+
+
+
+
 export interface JournalSink {
   append(entry: JournalEntry): void
-  /** Called on shutdown; must flush anything buffered. */
+
   flush?(): void
 }
 
 export interface JournalOptions {
   sink?: JournalSink
   now?: () => number
-  /** How many entries to keep in memory for the recovery/undo window. */
+
   memoryLimit?: number
-  /** Sequence to continue from after a restart (highest seq already on disk). */
+
   startSeq?: number
-  /** Tail already on disk — loaded so recovery and `since()` work after restart. */
+
   seed?: readonly JournalEntry[]
 }
 
-/**
- * The append-only, tamper-evident log of everything that happened.
- *
- * Implements cryptographic hash-chaining: each entry contains the SHA-256 hash
- * of its predecessor, making any tampering, deletion or alteration mathematically detectable.
- */
+
+
+
+
+
+
 export class Journal extends EventEmitter {
   private readonly entries: JournalEntry[] = []
   private readonly sink?: JournalSink
@@ -132,10 +132,10 @@ export class Journal extends EventEmitter {
     return entry
   }
 
-  /**
-   * Verifies the cryptographic hash-chain of all entries.
-   * Returns `{ valid: true }` if untouched, or details of the first broken entry.
-   */
+
+
+
+
   verifyIntegrity(entries: readonly JournalEntry[] = this.entries): {
     valid: boolean
     totalEntries: number
@@ -168,10 +168,10 @@ export class Journal extends EventEmitter {
     return { valid: true, totalEntries: entries.length }
   }
 
-  /** Entries after `seq`, oldest first — the renderer's change stream. */
+
   since(seq: number, limit = 500): JournalEntry[] {
-    // Walk forward from the cursor so the limit drops the NEWEST entries,
-    // never the ones the consumer has not seen yet.
+
+
     const out: JournalEntry[] = []
     for (const entry of this.entries) {
       if (entry.seq <= seq) continue
@@ -185,17 +185,17 @@ export class Journal extends EventEmitter {
     return this.entries.slice(-limit)
   }
 
-  /** All in-memory journal entries in sequence order. */
+
   all(): JournalEntry[] {
     return this.entries.slice()
   }
 
-  /** All committed events (phase === 'commit') in sequence order. */
+
   allCommits(): JournalEntry[] {
     return this.entries.filter((e) => e.phase === 'commit')
   }
 
-  /** Committed events after sequence `seq`. */
+
   commitsSince(seq: number, limit = 5_000): JournalEntry[] {
     const out: JournalEntry[] = []
     for (const entry of this.entries) {
@@ -207,7 +207,7 @@ export class Journal extends EventEmitter {
     return out
   }
 
-  /** Committed events addressing a specific target resource. */
+
   commitsForTarget(target: ResourceId): JournalEntry[] {
     return this.entries.filter((e) => e.phase === 'commit' && e.target === target)
   }

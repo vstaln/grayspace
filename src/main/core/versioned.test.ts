@@ -22,8 +22,8 @@ describe('VersionRegistry', () => {
     const versions = new VersionRegistry('task')
     versions.seed([{ id: 't1', version: 7 }, { id: 't2' }])
     assert.equal(versions.current('t1'), 7)
-    // A task saved before versions existed must not start at 0, or the first
-    // client to read it could not send a baseVersion that ever matches.
+
+
     assert.equal(versions.current('t2'), 1)
   })
 

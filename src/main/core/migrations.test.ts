@@ -39,13 +39,13 @@ describe('Bidirectional Schema Migrations as Code', () => {
   test('migrates schema up and down correctly in-memory', () => {
     const v1Data: CanvasV1 = { items: [{ id: 'w1', name: 'Terminal Widget' }] }
 
-    // Migrate UP (v1 -> v2)
+
     const upRes = MigrationRunner.migrateData<CanvasV2>(v1Data, 1, 2, canvasMigrations)
     assert.equal(upRes.finalVersion, 2)
     assert.equal(upRes.stepsApplied, 1)
     assert.deepEqual(upRes.data.widgets, [{ id: 'w1', title: 'Terminal Widget', version: 1 }])
 
-    // Migrate DOWN (v2 -> v1)
+
     const downRes = MigrationRunner.migrateData<CanvasV1>(upRes.data, 2, 1, canvasMigrations)
     assert.equal(downRes.finalVersion, 1)
     assert.equal(downRes.stepsApplied, 1)

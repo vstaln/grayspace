@@ -84,42 +84,42 @@ for (const { fullPath, relPath } of files) {
   const entryName = `OrcSpace/${relPath}`
   const nameBuffer = Buffer.from(entryName, 'utf8')
 
-  // Local File Header
+
   const localHeader = Buffer.alloc(30 + nameBuffer.length)
-  localHeader.writeUInt32LE(0x04034b50, 0) // Signature
-  localHeader.writeUInt16LE(20, 4) // Version needed
-  localHeader.writeUInt16LE(0x0800, 6) // Flags (UTF-8)
-  localHeader.writeUInt16LE(8, 8) // Compression method: Deflate
+  localHeader.writeUInt32LE(0x04034b50, 0)
+  localHeader.writeUInt16LE(20, 4)
+  localHeader.writeUInt16LE(0x0800, 6)
+  localHeader.writeUInt16LE(8, 8)
   localHeader.writeUInt16LE(time, 10)
   localHeader.writeUInt16LE(date, 12)
   localHeader.writeUInt32LE(crc, 14)
   localHeader.writeUInt32LE(compressedData.length, 18)
   localHeader.writeUInt32LE(rawData.length, 22)
   localHeader.writeUInt16LE(nameBuffer.length, 26)
-  localHeader.writeUInt16LE(0, 28) // Extra field length
+  localHeader.writeUInt16LE(0, 28)
   nameBuffer.copy(localHeader, 30)
 
   localHeaders.push(localHeader, compressedData)
 
-  // Central Directory Header
+
   const centralHeader = Buffer.alloc(46 + nameBuffer.length)
-  centralHeader.writeUInt32LE(0x02014b50, 0) // Signature
-  centralHeader.writeUInt16LE(0x0314, 4) // Version made by (Unix, 2.0)
-  centralHeader.writeUInt16LE(20, 6) // Version needed (2.0)
-  centralHeader.writeUInt16LE(0x0800, 8) // Flags (UTF-8)
-  centralHeader.writeUInt16LE(8, 10) // Compression method: Deflate
+  centralHeader.writeUInt32LE(0x02014b50, 0)
+  centralHeader.writeUInt16LE(0x0314, 4)
+  centralHeader.writeUInt16LE(20, 6)
+  centralHeader.writeUInt16LE(0x0800, 8)
+  centralHeader.writeUInt16LE(8, 10)
   centralHeader.writeUInt16LE(time, 12)
   centralHeader.writeUInt16LE(date, 14)
   centralHeader.writeUInt32LE(crc, 16)
   centralHeader.writeUInt32LE(compressedData.length, 20)
   centralHeader.writeUInt32LE(rawData.length, 24)
   centralHeader.writeUInt16LE(nameBuffer.length, 28)
-  centralHeader.writeUInt16LE(0, 30) // Extra field length
-  centralHeader.writeUInt16LE(0, 32) // Comment length
-  centralHeader.writeUInt16LE(0, 34) // Disk number start
-  centralHeader.writeUInt16LE(0, 36) // Internal attributes
-  centralHeader.writeUInt32LE(unixMode << 16, 38) // External attributes (Unix permissions)
-  centralHeader.writeUInt32LE(offset, 42) // Relative offset of local header
+  centralHeader.writeUInt16LE(0, 30)
+  centralHeader.writeUInt16LE(0, 32)
+  centralHeader.writeUInt16LE(0, 34)
+  centralHeader.writeUInt16LE(0, 36)
+  centralHeader.writeUInt32LE(unixMode << 16, 38)
+  centralHeader.writeUInt32LE(offset, 42)
   nameBuffer.copy(centralHeader, 46)
 
   centralHeaders.push(centralHeader)
@@ -130,16 +130,16 @@ const centralDirOffset = offset
 let centralDirSize = 0
 for (const h of centralHeaders) centralDirSize += h.length
 
-// End of Central Directory Record
+
 const eocd = Buffer.alloc(22)
-eocd.writeUInt32LE(0x06054b50, 0) // Signature
-eocd.writeUInt16LE(0, 4) // Disk number
-eocd.writeUInt16LE(0, 6) // Start disk
-eocd.writeUInt16LE(files.length, 8) // Entries on this disk
-eocd.writeUInt16LE(files.length, 10) // Total entries
-eocd.writeUInt32LE(centralDirSize, 12) // Central dir size
-eocd.writeUInt32LE(centralDirOffset, 16) // Central dir offset
-eocd.writeUInt16LE(0, 20) // Comment length
+eocd.writeUInt32LE(0x06054b50, 0)
+eocd.writeUInt16LE(0, 4)
+eocd.writeUInt16LE(0, 6)
+eocd.writeUInt16LE(files.length, 8)
+eocd.writeUInt16LE(files.length, 10)
+eocd.writeUInt32LE(centralDirSize, 12)
+eocd.writeUInt32LE(centralDirOffset, 16)
+eocd.writeUInt16LE(0, 20)
 
 const finalZipBuffer = Buffer.concat([...localHeaders, ...centralHeaders, eocd])
 writeFileSync(zipPath, finalZipBuffer)
@@ -250,4 +250,3 @@ writeFileSync(updateCmdPath, installerScriptHeader + chunkedBase64 + '\n', 'utf8
 
 console.log(` [ok] Created ${installerCmdPath} (${(statSync(installerCmdPath).size / 1024 / 1024).toFixed(2)} MB)`)
 console.log(` [ok] Created ${updateCmdPath} (${(statSync(updateCmdPath).size / 1024 / 1024).toFixed(2)} MB)`)
-

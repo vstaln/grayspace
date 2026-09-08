@@ -7,7 +7,7 @@ import { after, beforeEach, describe, test } from 'node:test'
 const userData = fs.mkdtempSync(join(os.tmpdir(), 'orcspace-planner-test-'))
 process.env.ORCSPACE_TEST_USER_DATA = userData
 
-const { PlannerStore, PLANNER_SCHEMA_VERSION } = await import('./plannerStore.ts')
+const { PlannerStore } = await import('./plannerStore.ts')
 
 after(() => {
   delete process.env.ORCSPACE_TEST_USER_DATA

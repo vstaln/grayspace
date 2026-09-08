@@ -16,11 +16,11 @@ const AGENTS = [
 type MissionState = 'idle' | 'starting' | 'running' | 'completed' | 'failed'
 type ActiveMission = { planId: string; title: string; runId: string; taskId: string; terminalId: string }
 
-/**
- * The controller owns the journaled run → task → dispatch workflow directly.
- * Keeping this in main avoids the old fragile READY handshake and long prompt
- * typed into another terminal.
- */
+
+
+
+
+
 export default function MissionWidget({ widgetId }: Props): React.JSX.Element {
   const { settings } = useSettings()
   const [terminals, setTerminals] = useState<SystemTerminalInfo[]>([])
@@ -39,7 +39,7 @@ export default function MissionWidget({ widgetId }: Props): React.JSX.Element {
     try {
       const stats = await window.api.system.stats()
       if (!('error' in stats)) setTerminals(stats.activeTerminals.filter((item) => item.id !== widgetId))
-    } catch { /* app may be shutting down */ }
+    } catch {  }
   }
 
   useEffect(() => {
@@ -49,8 +49,8 @@ export default function MissionWidget({ widgetId }: Props): React.JSX.Element {
     return () => window.clearInterval(timer)
   }, [widgetId])
 
-  // A worker reports through Orc. Reflect that lifecycle in the Planner item
-  // so the user never has to manually check a completed mission off.
+
+
   useEffect(() => {
     const refreshMission = async (): Promise<void> => {
       const mission = activeMissionRef.current
@@ -73,7 +73,7 @@ export default function MissionWidget({ widgetId }: Props): React.JSX.Element {
             setActiveMission(null)
           }
         }
-      } catch { /* retried on the next orchestration event */ }
+      } catch {  }
     }
     const off = window.api.orchestration.onChange(() => void refreshMission())
     void refreshMission()
@@ -125,9 +125,9 @@ export default function MissionWidget({ widgetId }: Props): React.JSX.Element {
     setActiveMission(next)
     setState('running')
     setStatus(`${selectedAgent.label} is working through OrcSpace…`)
-    // Only announce the canvas Planner after the main-process dispatch has
-    // succeeded. A busy/invalid terminal can fail mission:start; announcing
-    // earlier would leave an orphaned Planner widget after its item is deleted.
+
+
+
     window.dispatchEvent(new CustomEvent('orcspace:mission-plan', { detail: { planId: plan.id, title } }))
     window.dispatchEvent(new CustomEvent('orcspace:mission-start', { detail: { missionId: result.runId, planId: plan.id, title, terminalId: result.terminalId } }))
     window.dispatchEvent(new CustomEvent('orcspace:mission-worker', { detail: { planId: plan.id, terminalId: result.terminalId } }))

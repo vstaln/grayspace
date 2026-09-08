@@ -1,7 +1,6 @@
 import { app } from 'electron'
 import type { TerminalManager } from './terminals.ts'
 import type { TerminalStreamBatcher } from './terminalBatcher.ts'
-import type { CoordinationStore } from './coordination.ts'
 import type { PlannerStore } from './plannerStore.ts'
 import type { CanvasStore } from './canvasState.ts'
 import type { CodeStore } from './codeState.ts'
@@ -12,14 +11,13 @@ export function setupTerminalEvents(deps: {
   terminals: TerminalManager
   terminalBatcher: TerminalStreamBatcher
   snapshots: TerminalSnapshots
-  coordination: CoordinationStore
   planner: PlannerStore
   canvas: CanvasStore
   code: CodeStore
   send: (channel: string, ...args: unknown[]) => void
   isShuttingDown: () => boolean
 }): void {
-  const { terminals, terminalBatcher, snapshots, coordination, planner, canvas, code, send, isShuttingDown } = deps
+  const { terminals, terminalBatcher, snapshots, planner, canvas, code, send, isShuttingDown } = deps
 
   terminals.on('data', (id: string, chunk: string) => {
     terminalBatcher.push(id, chunk)
@@ -34,9 +32,6 @@ export function setupTerminalEvents(deps: {
   terminals.on('release', (info: { id: string; title: string; cwd: string; scrollback: string }) => {
     if (isShuttingDown()) return
     snapshots.saveAsync({ id: info.id, title: info.title, cwd: info.cwd, scrollback: info.scrollback })
-  })
-  coordination.on('change', (snapshot) => {
-    send('coordination:onChange', snapshot)
   })
   planner.on('change', (items) => send('planner:onChange', items))
   canvas.on('change', (snapshot) => send('canvas:onChange', snapshot))

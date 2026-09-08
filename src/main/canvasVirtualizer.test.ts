@@ -70,14 +70,14 @@ describe('Canvas Virtualization, Viewport Culling & LOD', () => {
     assert.equal(result.visibleStrokes[0].id, 's-vis')
   })
 
-  /**
-   * A scale test, not a stopwatch. This used to assert `elapsed < 10ms` on a
-   * wall clock, which says nothing about the algorithm and everything about
-   * what else the machine happened to be doing: on a loaded box the same
-   * culling pass measured 77ms and failed the whole suite at random. What the
-   * test is actually there to protect is that culling is a single linear pass
-   * that keeps only what the viewport can see — so that is what it asserts.
-   */
+
+
+
+
+
+
+
+
   test('culls 5,000 widgets down to the handful the viewport can show', () => {
     const widgets: CanvasWidget[] = []
     for (let i = 0; i < 5000; i += 1) {
@@ -100,11 +100,11 @@ describe('Canvas Virtualization, Viewport Culling & LOD', () => {
 
     assert.ok(result.visibleWidgetCount > 0, 'the widgets around the camera must survive')
     assert.ok(result.culledWidgetCount > 4000, 'almost everything is off-screen and must be dropped')
-    // Nothing is invented and nothing is lost: every widget is either kept or
-    // culled, exactly once.
+
+
     assert.equal(result.visibleWidgetCount + result.culledWidgetCount, widgets.length)
     assert.equal(result.visibleWidgets.length, result.visibleWidgetCount)
-    // Everything kept genuinely overlaps the world viewport the cull computed.
+
     const box = result.worldViewport
     for (const v of result.visibleWidgets) {
       const w = v.widget

@@ -11,15 +11,15 @@ describe('TerminalStreamBatcher (Frame Batching & High-Throughput Protection)', 
       batches.push({ id, chunk })
     })
 
-    // Simulate 50 small character-by-character PTY chunks
+
     for (let i = 0; i < 50; i += 1) {
       batcher.push('term-1', `chunk-${i}; `)
     }
 
-    // Immediately after pushing, no IPC event dispatched yet
+
     assert.equal(batches.length, 0)
 
-    // Wait for frame interval flush
+
     await new Promise((r) => setTimeout(r, 40))
 
     assert.equal(batches.length, 1)
@@ -38,11 +38,11 @@ describe('TerminalStreamBatcher (Frame Batching & High-Throughput Protection)', 
       batches.push({ id, chunk })
     })
 
-    // Large burst output
+
     batcher.push('term-2', 'A'.repeat(60))
     assert.equal(batches.length, 0)
 
-    batcher.push('term-2', 'B'.repeat(60)) // total 120 >= 100 threshold -> immediate flush
+    batcher.push('term-2', 'B'.repeat(60))
     assert.equal(batches.length, 1)
     assert.equal(batches[0].chunk.length, 120)
 

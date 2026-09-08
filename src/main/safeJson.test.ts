@@ -4,14 +4,14 @@ import { safeParseJson, sanitizeParsed } from './safeJson.ts'
 
 describe('safeParseJson — prototype-pollution defense', () => {
   test('rejects poisoned __proto__ keys without polluting Object.prototype', () => {
-    // Baseline: Object.prototype is clean
+
     assert.equal((Object.prototype as Record<string, unknown>).polluted, undefined)
     const input = JSON.stringify({ a: 1, __proto__: { polluted: 'yes' } })
     const parsed = safeParseJson<Record<string, unknown>>(input)
     assert.ok(parsed)
     assert.equal(parsed?.a, 1)
-    // The key may appear as a real own property; what matters is that the
-    // prototype was not mutated globally.
+
+
     assert.equal((Object.prototype as Record<string, unknown>).polluted, undefined)
     assert.equal(({} as Record<string, unknown>).polluted, undefined)
   })
@@ -52,8 +52,8 @@ describe('safeParseJson — prototype-pollution defense', () => {
   })
 
   test('sanitizeParsed neutralizes already-parsed data', () => {
-    // Simulates an already-parsed object whose prototype was somehow
-    // smuggled in: Object.assign on a poisoned object bypasses the reviver.
+
+
     const target: Record<string, unknown> = {}
     const polluted = JSON.parse('{"__proto__":{"stillHere":42}}')
     Object.assign(target, polluted)

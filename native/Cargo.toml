@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "orcspace-app",
+]
+exclude = ["canvas-core", "storage-core"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

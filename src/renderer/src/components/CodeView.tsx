@@ -24,7 +24,7 @@ function agentForPersisted(agentId: string, label: string, command: string): Cod
   const found = CODE_AGENTS.find((a) => a.id === agentId)
   if (found && found.command === command) return found
   if (found && agentId !== 'custom') return found
-  // Fallback for custom or unknown agents — preserve stored label/command
+
   return { id: agentId || 'custom', label: label || command || 'Other CLI', command, Icon: TerminalIcon }
 }
 
@@ -38,8 +38,8 @@ function extractCounter(id: string): number | null {
 }
 
 interface Props {
-  /** The view keeps its sessions alive while hidden, same as BrowserPane —
-   *  switching to Canvas and back must not kill a running agent. */
+
+
   active: boolean
   sidebarCollapsed?: boolean
 }
@@ -70,7 +70,7 @@ const SessionCard = React.memo(function SessionCard({
   onDragStart(id: string): void
   onDragOver(id: string): void
   onDragEnd(): void
-  /** In the featured layout, the small cards can be swapped into the big slot. */
+
   promotable?: boolean
   maximized: boolean
   onToggleMaximize(): void
@@ -90,10 +90,10 @@ const SessionCard = React.memo(function SessionCard({
       } ${dragging ? 'opacity-45' : ''} ${dropTarget ? 'ring-2 ring-accent ring-inset' : ''}`}
       style={style}
     >
-      {/* Promotion lives on the header, never on the terminal below it: a click
-          in the body is how the user selects an agent's output to copy, and
-          swapping the layout out from under that selection is what made
-          copying from a small session impossible (CODE-03). */}
+      {
+
+
+}
       <div
         draggable={!editing && !maximized}
         aria-grabbed={dragging || undefined}
@@ -231,8 +231,8 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
   const sessionsRef = useRef<Session[]>(sessions)
   sessionsRef.current = sessions
   const [launcherOpen, setLauncherOpen] = useState(false)
-  // Which session is the "big" one in the 3-session featured layout. Falls
-  // back to the first session whenever this points at one that's gone.
+
+
   const [featuredId, setFeaturedId] = useState<string | null>(null)
   const [maximizedId, setMaximizedId] = useState<string | null>(null)
   const featuredIdRef = useRef<string | null>(featuredId)
@@ -241,10 +241,10 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
   maximizedIdRef.current = maximizedId
   const [draggedSessionId, setDraggedSessionId] = useState<string | null>(null)
   const [dropTargetId, setDropTargetId] = useState<string | null>(null)
-  // Auto-open the launcher only on a hidden→visible transition, not on every
-  // sessions-length change: otherwise closing the last session while looking
-  // at this view would immediately pop the dialog back open over the empty
-  // grid the user just cleaned (CODE-02).
+
+
+
+
   const wasActiveRef = useRef(false)
 
   useEffect(() => {
@@ -253,7 +253,7 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
     return () => window.removeEventListener('orcspace:open-code-launcher', openLauncher)
   }, [])
 
-  // ---- persistence (code sessions survive restarts per workspace) ----
+
   const hydratedRef = useRef(false)
   const skipNextSaveRef = useRef(false)
   const hydrationRunRef = useRef(0)
@@ -302,13 +302,13 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
     const run = ++hydrationRunRef.current
     const changesAtStart = codeChangeSeqRef.current
     hydratedRef.current = false
-    // Hydration itself is not an external update. Keeping this flag armed
-    // here loses the first session when the restored snapshot is empty (the
-    // `setSessions([])` below is a no-op, so no save effect consumes it).
-    // External broadcasts arm the flag separately below.
+
+
+
+
     skipNextSaveRef.current = false
-    // Do not show or accidentally save sessions belonging to the previous
-    // workspace while this workspace is being loaded.
+
+
     setSessions([])
     setFeaturedId(null)
     setMaximizedId(null)
@@ -318,8 +318,8 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
         if (run !== hydrationRunRef.current) return
         if (codeChangeSeqRef.current !== changesAtStart) {
           hydratedRef.current = true
-          // A user action happened while load was in flight. Keep the live
-          // state and let the normal debounced save persist it.
+
+
           skipNextSaveRef.current = false
           setSessions((current) => [...current])
           return
@@ -330,12 +330,12 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
           title: s.title ?? s.label,
           status: s.status === 'finished' ? 'finished' : 'active'
         }))
-        // Re-launch persisted agents when their old PTY is gone. TerminalWidget
-        // consumes this only for a fresh process and ignores it on reconnect.
+
+
         for (const session of restored) {
           if (session.status === 'active' && !isBrowserSession(session)) queueInitialCommand(session.id, session.agent.command)
         }
-        // Keep counter ahead of any restored id so new sessions never collide
+
         let maxCounter = 0
         for (const s of restored) {
           const c = extractCounter(s.id)
@@ -349,7 +349,7 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
       })
       .catch(() => {
         if (run !== hydrationRunRef.current) return
-        // Keep hydrated false so next save is skipped; background retry via workspace change or manual?
+
         hydratedRef.current = true
       })
   }, [])
@@ -379,7 +379,7 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
     }
   }, [hydrate])
 
-  // Save on sessions/featured/maximized changes (debounced)
+
   useEffect(() => {
     if (!hydratedRef.current) return
     if (skipNextSaveRef.current) {
@@ -414,16 +414,16 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
     }
   }, [sessions, featuredId, maximizedId])
 
-  // External updates (workspace switch from main, or another renderer)
+
   useEffect(() => {
     return window.api.code.onChange((snapshot) => {
       if (!snapshot || !Array.isArray(snapshot.sessions)) return
-      // A broadcast received while the initial/workspace hydrate is in flight
-      // is expected, not a user edit. Counting it here makes hydrate discard
-      // its authoritative load result and leave the view empty.
+
+
+
       if (!hydratedRef.current) return
       codeChangeSeqRef.current += 1
-      // If we have unsaved local edits, don't overwrite them with stale snapshot
+
       if (dirtyRef.current) return
       skipNextSaveRef.current = true
       const restored: Session[] = (snapshot.sessions ?? []).map((s) => ({
@@ -444,10 +444,10 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
       setSessions(restored)
       setFeaturedId(snapshot.featuredId ?? null)
       setMaximizedId(snapshot.maximizedId ?? null)
-      // If the incoming snapshot is identical to local state, React may bail
-      // out of all three setters and the save effect will never run to consume
-      // the skip flag. Clear it on the next task so the next user edit is not
-      // silently skipped.
+
+
+
+
       setTimeout(() => {
         if (skipNextSaveRef.current) skipNextSaveRef.current = false
       }, 0)
@@ -460,8 +460,8 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
     wasActiveRef.current = active
   }, [active, sessions.length])
 
-  // The shared Workspace sidebar mirrors this list even while Code is hidden.
-  // The event is renderer-local and complements the durable CodeStore snapshot.
+
+
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('orcspace:code-sessions', {
       detail: sessions.map((session) => ({
@@ -496,17 +496,17 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
 
   const launch = useCallback((agent: CodeAgent, count: number): void => {
     markLocalChange()
-    // Build ids and queue initial commands OUTSIDE the updater: updaters must
-    // stay pure (they may re-run), and a re-run would mint discarded ids with
-    // orphaned queued commands. The updater below only clamps to room left.
+
+
+
     const amount = Math.min(count, Math.max(0, MAX_CODE_SESSIONS - sessionsRef.current.length))
     const created: Session[] = []
     for (let i = 0; i < amount; i++) {
       const id = makeSessionId()
-      // TerminalWidget reads this once its pty actually attaches (see
-      // takeInitialCommand in TerminalWidget.tsx) — queueing it ahead of
-      // mount is what lets "launch" both create the terminal and start
-      // the agent in it in one gesture.
+
+
+
+
       if (agent.id !== 'browser') queueInitialCommand(id, agent.command)
       created.push({ id, agent, title: agent.label, status: 'active' })
     }
@@ -559,9 +559,9 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
       ;[next[sourceIndex], next[targetIndex]] = [next[targetIndex], next[sourceIndex]]
       return next
     })
-    // The three-session layout uses featuredId for the large slot. Swap that
-    // identity too, while keeping the actual session objects keyed by id so
-    // their PTYs/xterm instances remain mounted and untouched.
+
+
+
     setFeaturedId((current) => {
       if (current === sourceId) return targetId
       if (current === targetId) return sourceId
@@ -592,10 +592,10 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
   }>>(new Map())
 
   const getSessionHandlers = (id: string) => {
-    // Cached per id so SessionCard's memo actually holds: the underlying
-    // callbacks (closeSession/finishSession/renameSession) only depend on the
-    // stable markLocalChange, so a cached bundle never goes stale. Entries are
-    // dropped by closeSession and swept by the effect below.
+
+
+
+
     const cached = handlerCacheRef.current.get(id)
     if (cached) return cached
     const handlers = {
@@ -624,34 +624,32 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
     }
   }, [sessions])
 
-  // Columns scale with the actual session count. Three sessions get three
-  // equal columns so the last card never leaves a large empty quadrant.
+
+
   const columns = sessions.length <= 1 ? 1 : sessions.length === 2 ? 2 : sessions.length <= 4 ? 2 : sessions.length === 5 ? 6 : sessions.length <= 6 ? 3 : 4
 
-  // With exactly 3 sessions a grid used to promote one terminal to a big
-  // left slot (featured). That caused closing 1 of 4 → 3 to auto-promote
-  // sessions[0] and make another card "fly" to the top-right. Disable the
-  // automatic fallback — featured layout now only applies when the user has
-  // explicitly clicked a small card to promote it.
-  // Every session keeps the same grid parent and equal placement. This avoids
-  // the old featured 2x2 arrangement, which left an empty quadrant at three.
+
+
+
+
+
+
+
   const placementOf = (sessionId: string): React.CSSProperties => {
     if (sessions.length !== 5) return {}
     const index = sessions.findIndex((session) => session.id === sessionId)
-    // Six tracks let three cards fill the first row while the two cards in
-    // the second row sit in the middle instead of leaving a dangling card at
-    // the far left and an empty column at the far right.
+
+
+
     return { gridColumn: `${index < 3 ? index * 2 + 1 : index === 3 ? 2 : 4} / span 2` }
   }
 
   return (
     <div
-      // Above every canvas layer, below the title bar's z-[50000] — mirrors
-      // BrowserPane's stacking so the view switcher stays reachable. Left
-      // edge starts past the shared app sidebar (200px expanded outside chat —
-      // see geometry.sidebarExpanded in design/tokens.ts; ChatPane uses the
-      // 240px chat width) so the view content never floats underneath its
-      // workspace controls.
+
+
+
+
       className={`absolute inset-y-0 right-0 ${sidebarCollapsed ? 'left-[56px]' : 'left-[200px]'} z-[40000] flex flex-row pt-10 ${
         active ? '' : 'pointer-events-none invisible'
       }`}
@@ -674,10 +672,10 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
           </button>
         </div>
 
-        {/* One grid for every layout — see placementOf() on why the featured
-            arrangement is coordinates rather than a second container. Cards
-            keep a 220px minimum and a 180px row floor; overflow scrolls instead
-            of squeezing 7+ sessions unreadable. */}
+        {
+
+
+}
         <div
           className="relative grid min-h-0 flex-1 gap-1 overflow-auto bg-bg-raise p-1"
             style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gridAutoRows: 'minmax(180px, 1fr)' }}

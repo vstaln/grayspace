@@ -70,7 +70,7 @@ export function registerPlannerCommands({ core, planner }: CommandDeps): void {
     }
   })
 
-  /** Dedicated check/uncheck — same store field as plan.update done, clearer for agents. */
+
   flow.registerDefinition<{ done?: boolean }, PlanItem>({
     type: 'plan.toggle',
     description: 'Check or uncheck a planner line. Omit `done` to flip the current value.',

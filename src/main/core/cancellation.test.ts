@@ -20,7 +20,7 @@ describe('In-Flight Command Cancellation (bus.cancel)', () => {
       ignoreVersion: true,
       requiresLock: false,
       apply: async ({ signal }) => {
-        return new Promise((resolve, reject) => {
+        return new Promise((_resolve, reject) => {
           signal?.addEventListener('abort', () => {
             wasAborted = true
             reject(new Error('aborted by signal'))
@@ -37,7 +37,7 @@ describe('In-Flight Command Cancellation (bus.cancel)', () => {
       payload: {}
     })
 
-    // Cancel in-flight
+
     await new Promise((r) => setTimeout(r, 10))
     const cancelled = bus.cancel('cmd-to-cancel', 'User clicked stop')
     assert.equal(cancelled, true)

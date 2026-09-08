@@ -22,8 +22,8 @@ function readLinks(widgetId: string): LinkItem[] {
         typeof item.id === 'string' &&
         typeof item.title === 'string' &&
         typeof item.url === 'string' &&
-        // Re-validate on read: entries stored before the sanitizer (or
-        // hand-edited in devtools) must not render a javascript: href.
+
+
         isSafeUrl(item.url)
     )
   } catch {
@@ -46,8 +46,8 @@ export default function LinksWidget({ widgetId }: { widgetId: string }): React.J
   const [url, setUrl] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  // Cleared on unmount so a closed widget cannot flip state later; without it
-  // every "copied" flash schedules one more post-unmount setState.
+
+
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const aliveRef = useRef(true)
 
@@ -55,16 +55,16 @@ export default function LinksWidget({ widgetId }: { widgetId: string }): React.J
     try {
       localStorage.setItem(`${STORAGE_PREFIX}${widgetId}`, JSON.stringify(links))
     } catch {
-      // Private mode or a full quota should not crash the whole widget.
+
     }
   }, [links, widgetId])
 
-  // Only the timer is cleaned up here. Purging this widget's saved links used
-  // to happen on unmount too, on the assumption that an unmount always meant
-  // "closed for good" — it did not, and the widget lost every link the moment
-  // the user maximized it (see WIDGET-maximize in App.tsx). The purge now
-  // lives in `useCanvas.removeWidget`, which is the one place that actually
-  // knows a widget was closed rather than re-parented.
+
+
+
+
+
+
   useEffect(() => {
     aliveRef.current = true
     return () => {
@@ -81,7 +81,7 @@ export default function LinksWidget({ widgetId }: { widgetId: string }): React.J
       setError('Enter a link')
       return
     }
-    // Block javascript: and other dangerous protocols via the shared sanitizer
+
     if (!isSafeUrl(value)) {
       setError('Blocked: unsafe URL (javascript:, data: etc. not allowed)')
       return
@@ -94,7 +94,7 @@ export default function LinksWidget({ widgetId }: { widgetId: string }): React.J
     try {
       defaultTitle = new URL(value).hostname || value
     } catch {
-      // Non-HTTP values are valid too: local paths, localhost and deep links.
+
     }
     setLinks((current) => [
       ...current,

@@ -1,6 +1,6 @@
 import React from 'react'
 
-/** Official OpenCode device mark (anomalyco/opencode). */
+
 export default function OpenCodeIcon({ size = 13 }: { size?: number }): React.JSX.Element {
   return (
     <svg

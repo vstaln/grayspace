@@ -43,9 +43,9 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
   const [tabNotice, setTabNotice] = useState<string | null>(null)
   const tabNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const confirm = useConfirm()
-  // Only the active tab plus the 3 most recently active ones keep a live
-  // webview mounted — older background tabs keep their metadata but render
-  // nothing until reactivated, instead of every tab holding a process.
+
+
+
   const [recentIds, setRecentIds] = useState<string[]>(() => [tabs[0]?.id ?? ''])
   const liveIds = useMemo(() => new Set(recentIds), [recentIds])
   useEffect(() => {
@@ -85,7 +85,7 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
     (url: string): void => {
       const current = tabsRef.current
       if (current.length >= MAX_TABS) {
-        // Never silently evict the oldest tab — block and say why.
+
         showTabNotice('Tab limit reached — close one to open another.')
         return
       }
@@ -112,7 +112,7 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
       views.current.delete(id)
       setEditing(false)
 
-      // Pure computation on the render-synced list — no setter-in-updater.
+
       const current = tabsRef.current
       const index = current.findIndex((t: Tab) => t.id === id)
       if (index === -1) return
@@ -139,9 +139,9 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
       const url = toNavigationUrl(input)
       const view = views.current.get(activeId)
       if (!url || !view) return
-      // Optimistically retain the requested URL. If DNS/TLS/navigation fails,
-      // `did-navigate` never arrives and the old effect used to restore the
-      // previous address, making retry/editing needlessly difficult.
+
+
+
       patchTab(activeId, { url, loading: true, error: null })
       setAddress(url)
       setEditing(false)
@@ -165,7 +165,7 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
 
   const handleClearDataAndReset = useCallback(async (): Promise<void> => {
     if (resetting) return
-    // One click destroys every tab — confirm first.
+
     const ok = await confirm('Reset the browser and clear all browsing data? All tabs will be closed.', {
       danger: true,
       title: 'Reset browser',
@@ -194,16 +194,14 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
 
   return (
     <div
-      // Shared full-pane left offset: the pane is only visible when the app
-      // sidebar is expanded (200px outside chat — see geometry.sidebarExpanded
-      // in design/tokens.ts; ChatPane uses the 240px chat width). Matches
-      // CodeView so Browser/Chat/Code edges agree.
+
+
       className={`absolute inset-y-0 right-0 left-[200px] z-[40000] flex flex-col browser-surface pt-10 ${
         active ? '' : 'pointer-events-none invisible'
       }`}
       aria-hidden={!active}
     >
-      {/* Header bar: Tabs and Address Bar */}
+      {}
       <div className="browser-chrome flex flex-col">
         <div
           role="tablist"
@@ -304,7 +302,7 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
           </button>
         </div>
 
-        {/* Address & Controls Bar */}
+        {}
         <div className="flex h-8 flex-none items-center gap-1.5 px-2.5">
           <button
             type="button"
@@ -409,8 +407,8 @@ export default function BrowserPane({ active }: Props): React.JSX.Element {
 
       <div className="browser-surface relative flex-1">
         {tabs.map((tab) =>
-          // Suspend background tabs beyond the active + last 3: tab metadata
-          // stays in state, but no webview mounts until reactivated.
+
+
           liveIds.has(tab.id) ? (
             <TabFrame
               key={tab.id}
@@ -461,8 +459,8 @@ function TabFrame({ tab, visible, onPatch, onRegister }: TabFrameProps): React.J
       onPatch(id, { loading: false })
       syncHistory()
     }
-    // DOM readiness is not navigation completion; leave the loading state to
-    // did-stop-loading so slow resources keep the progress indicator honest.
+
+
     const onDomReady = (): void => {
       syncHistory()
     }

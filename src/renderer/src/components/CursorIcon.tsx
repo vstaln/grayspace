@@ -1,6 +1,6 @@
 import React from 'react'
 
-/** Cursor's official cube mark, adapted from the public brand favicon. */
+
 export default function CursorIcon({ size = 13 }: { size?: number }): React.JSX.Element {
   return (
     <svg

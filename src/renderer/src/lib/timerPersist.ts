@@ -10,12 +10,12 @@ export interface TimerPersist {
   customSeconds: string
 }
 
-// Timers survive a React re-parent (maximize/restore), but are explicitly
-// removed when their canvas widget is closed. localStorage keeps them alive
-// across a maximize-triggered remount without surviving an app restart — the
-// honest answer to "how much time passed while the app was shut?" is still
-// "reset", and a deadline recomputed as `deadline - Date.now()` on rehydrate
-// preserves the running countdown without pretending the gap never happened.
+
+
+
+
+
+
 const LS_PREFIX = 'orcspace-timer:'
 
 export const timerPersist = {
@@ -25,8 +25,8 @@ export const timerPersist = {
       if (!raw) return null
       const parsed = JSON.parse(raw) as Partial<TimerPersist>
       if (typeof parsed !== 'object' || !parsed) return null
-      // Rehydrate a running timer as `deadline - Date.now()` so the countdown
-      // keeps ticking against the real clock instead of a stale remaining.
+
+
       if (parsed.running && typeof parsed.deadline === 'number') {
         const remaining = Math.max(0, parsed.deadline - Date.now())
         return {
@@ -60,14 +60,14 @@ export const timerPersist = {
     try {
       localStorage.setItem(`${LS_PREFIX}${id}`, JSON.stringify(value))
     } catch {
-      // Private mode or quota blow-up must not take the widget down.
+
     }
   },
   delete(id: string): void {
     try {
       localStorage.removeItem(`${LS_PREFIX}${id}`)
     } catch {
-      /* ignore */
+
     }
   }
 }

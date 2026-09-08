@@ -5,6 +5,11 @@ import { getAgentUsageStats } from '../agentUsage.ts'
 import type { IpcDeps } from './types.ts'
 
 export function registerSystemIpc(deps: IpcDeps): void {
+  ipcMain.handle('system:release-locks', () => {
+    deps.core.locks.releaseAll()
+    return { ok: true }
+  })
+
   ipcMain.handle('system:stats', async () => {
     try {
       const totalMem = os.totalmem()

@@ -4,7 +4,7 @@ import type { OrcDispatch, OrcMessage, OrcSnapshot, OrcTask, OrcTaskStatus } fro
 
 const EMPTY: OrcSnapshot = { runs: [], tasks: [], dispatches: [], messages: [], gates: [] }
 
-/** Column accents mirror the task lifecycle rather than inventing a new one. */
+
 const STATUS_STYLE: Record<OrcTaskStatus, { label: string; className: string }> = {
   pending: { label: 'waiting', className: 'text-text-faint' },
   ready: { label: 'ready', className: 'text-accent' },
@@ -14,32 +14,32 @@ const STATUS_STYLE: Record<OrcTaskStatus, { label: string; className: string }> 
   blocked: { label: 'blocked', className: 'text-orange-400' }
 }
 
-/**
- * The fleet, live.
- *
- * Agents drive every bit of this through the `orc` CLI — the window does not
- * dispatch work and does not report completions. What it does own is the half
- * of the contract that needs a human: answering a worker that asked a blocking
- * question, resolving a decision gate, and accounting for a worker that
- * finished. Those are the only three controls here, and they are deliberately
- * the only ones: a button that raced an agent's own command would be a way to
- * corrupt a run, not a convenience.
- */
+
+
+
+
+
+
+
+
+
+
+
 export default function OrchestrationWidget(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<OrcSnapshot>(EMPTY)
   const [draft, setDraft] = useState<Record<string, string>>({})
-  // One key per in-flight action: concurrent actions on different buttons must
-  // not overwrite each other the way a single `busy: string | null` did.
+
+
   const [busyKeys, setBusyKeys] = useState<string[]>([])
   const [actionError, setActionError] = useState<string | null>(null)
-  // True until the first snapshot() returns — without this the EMPTY default
-  // flashes a false "No run yet" on every mount.
+
+
   const [loading, setLoading] = useState(true)
   const firstLoadRef = useRef(true)
   const alive = useRef(true)
   const refreshSeqRef = useRef(0)
-  // Per-action keys: a slow IPC on one button must not silently swallow clicks
-  // on every other button for its whole duration.
+
+
   const busyKeysRef = useRef<Set<string>>(new Set())
 
   const refresh = useCallback(async () => {
@@ -48,7 +48,7 @@ export default function OrchestrationWidget(): React.JSX.Element {
       const next = await window.api.orchestration.snapshot()
       if (alive.current && seq === refreshSeqRef.current) setSnapshot(next ?? EMPTY)
     } catch {
-      // The next change notification or user action will retry the snapshot.
+
     } finally {
       if (firstLoadRef.current) {
         firstLoadRef.current = false
@@ -60,9 +60,9 @@ export default function OrchestrationWidget(): React.JSX.Element {
   useEffect(() => {
     alive.current = true
     void refresh()
-    // The main process pushes a bare signal per change; re-reading here keeps
-    // several of these widgets consistent without shipping a snapshot per
-    // message during a burst of dispatch traffic.
+
+
+
     const off = window.api.orchestration.onChange(() => void refresh())
     return () => {
       alive.current = false
@@ -85,7 +85,7 @@ export default function OrchestrationWidget(): React.JSX.Element {
     [snapshot.gates, run]
   )
 
-  /** Questions still waiting on an answer — a worker is blocked on each one. */
+
   const pendingAsks = useMemo(() => {
     const answered = new Set(snapshot.messages.filter((m) => m.type === 'reply').map((m) => m.replyTo))
     return snapshot.messages.filter((m) => m.type === 'ask' && !answered.has(m.id))
@@ -177,7 +177,7 @@ export default function OrchestrationWidget(): React.JSX.Element {
       )}
 
       <div className="flex-1 overflow-y-auto px-3 py-2">
-        {/* Things that need a person come first — everything else is agents' work. */}
+        {}
         {pendingPermissions.length > 0 && (
           <Section icon={<ShieldAlert size={12} />} title="Permission required">
             {pendingPermissions.map((permission) => (
@@ -368,7 +368,7 @@ function AskCard({
               className="rounded-[6px] border border-line bg-bg-raise px-2 py-0.5 text-[11px] text-text hover:bg-bg-hover disabled:opacity-50"
               onClick={() => {
                 onChange(option)
-                // Picking an option is answering it — one click, not two.
+
                 onSend(option)
               }}
             >

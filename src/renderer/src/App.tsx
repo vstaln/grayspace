@@ -4,9 +4,8 @@ import WidgetFrame from './components/WidgetFrame'
 import ContextMenu from './components/ContextMenu'
 import TitleBar from './components/TitleBar'
 import type { WorkView } from './components/TitleBar'
-import { useCanvas, MAX_WIDGETS } from './hooks/useCanvas'
-import { useCoordination } from './hooks/useCoordination'
-import { Camera, MIN_H, MIN_W, NON_MAXIMIZABLE, Point, ResizeDir, Stroke, Widget, WidgetKind, WIDGET_DEFAULTS, WIDGET_H, WIDGET_W } from './types'
+import { useCanvas } from './hooks/useCanvas'
+import { Camera, MIN_H, MIN_W, NON_MAXIMIZABLE, Point, ResizeDir, Widget, WidgetKind, WIDGET_DEFAULTS, WIDGET_H, WIDGET_W } from './types'
 import ErrorBoundary from './components/ErrorBoundary'
 import StrokesLayer from './components/StrokesLayer'
 import ConnectionsLayer from './components/ConnectionsLayer'
@@ -17,20 +16,15 @@ import { DRAW_CLICK_THRESHOLD_PX } from './lib/canvasMetrics'
 import { ToastContainer, usePersistErrorToasts, useToasts } from './components/Toast'
 import Toolbar from './components/Toolbar'
 
-// Heavy surfaces behind a first-use gate are also code-split: their modules
-// (board UI and the chat/code panes) no
-// longer parse and compile at startup — only when the user first opens them
-// (PERF-lazy-surfaces). TerminalWidget stays eager on purpose: the canvas is
-// the app's primary surface and terminals are its core widget.
-const KanbanBoard = lazy(() => import('./components/KanbanBoard'))
-const ChatPane = lazy(() => import('./components/ChatPane'))
+
+
 const CodeView = lazy(() => import('./components/CodeView'))
 
-/** Per-session counter so local widget ids never collide (CANV-12). */
+
 let localCounter = 0
 
-// The frameless title bar is a 40px overlay at the top of the window. Canvas
-// widgets must never be allowed to move or resize into that reserved area.
+
+
 const TITLE_BAR_HEIGHT = 40
 
 function titleBarWorldY(cameraY: number, zoom: number): number {
@@ -38,22 +32,21 @@ function titleBarWorldY(cameraY: number, zoom: number): number {
 }
 
 export default function App(): React.JSX.Element {
-  // Which surface the title bar's switcher is showing. All three stay
-  // mounted once started: the canvas owns live terminals, the browser owns
-  // loaded pages, and Code owns its own terminal sessions — none of them
-  // should be torn down just because another is on screen.
+
+
+
+
   const [activeView, setActiveView] = useState<WorkView>('canvas')
   const [codeSidebarCollapsed, setCodeSidebarCollapsed] = useState(false)
-  // The browser view is built on first use, so a session that never opens
-  // it pays nothing for the guest process. Same for the Code view.
-  const [chatStarted, setChatStarted] = useState(false)
+
+
   const [codeStarted, setCodeStarted] = useState(false)
   const codeWorkspaceIdRef = useRef('code-default')
   const workspaceViewLoadRef = useRef(0)
 
-  // Restore Code sessions + last active view per workspace — so closing the
-  // app with Code terminals running brings them back instead of starting empty
-  // (user request: "сохранение на вкладку code после закрытия приложения").
+
+
+
   useEffect(() => {
     let mounted = true
     const restoreWorkspaceView = (workspaceId: string): void => {
@@ -61,14 +54,14 @@ export default function App(): React.JSX.Element {
       void window.api.code.load().then((snap) => {
         if (!mounted || request !== workspaceViewLoadRef.current || codeWorkspaceIdRef.current !== workspaceId) return
         if ((snap?.sessions ?? []).length > 0) setCodeStarted(true)
-        const av = (snap as unknown as { activeView?: WorkView } | null | undefined)?.activeView ?? null
-        // Keep the last surface selected independently for every workspace.
+        const av = (snap as unknown as { activeView?: string } | null | undefined)?.activeView ?? null
+
         if (av === 'code') {
           setCodeStarted(true)
           setActiveView('code')
-        } else if (av === 'chat' || av === ('browser' as unknown as WorkView)) {
-          setChatStarted(true)
-          setActiveView('chat')
+        } else if (av === 'browser') {
+
+          setActiveView('canvas')
         } else if (av === 'canvas') {
           setActiveView('canvas')
         }
@@ -95,19 +88,17 @@ export default function App(): React.JSX.Element {
   }, [])
 
   const showView = useCallback((view: WorkView): void => {
-    if (view === 'chat') setChatStarted(true)
     if (view === 'code') setCodeStarted(true)
     setActiveView(view)
-    // Main validates the active workspace itself. Omitting the optional stamp
-    // avoids dropping a click made before the initial getDir() reply arrives.
+
+
     void window.api.code.save({ activeView: view, codeWorkspaceId: codeWorkspaceIdRef.current }).catch(() => {})
   }, [])
 
   useEffect(() => {
     const onMissionView = (event: Event): void => {
       const view = (event as CustomEvent<{ view?: WorkView }>).detail?.view
-      if (view !== 'canvas' && view !== 'chat') return
-      if (view === 'chat') setChatStarted(true)
+      if (view !== 'canvas') return
       setActiveView(view)
       void window.api.code.save({ activeView: view, codeWorkspaceId: codeWorkspaceIdRef.current }).catch(() => {})
     }
@@ -135,13 +126,6 @@ export default function App(): React.JSX.Element {
                 />
               </ErrorBoundary>
             </div>
-            {chatStarted && (
-              <ErrorBoundary>
-                <Suspense fallback={<div role="status" className="grid h-full place-items-center text-text-dim">Loading…</div>}>
-                  <ChatPane active={activeView === 'chat'} />
-                </Suspense>
-              </ErrorBoundary>
-            )}
             {codeStarted && (
               <ErrorBoundary>
                 <Suspense fallback={<div role="status" className="grid h-full place-items-center text-text-dim">Loading…</div>}>
@@ -157,11 +141,11 @@ export default function App(): React.JSX.Element {
   )
 }
 
-/**
- * The user's photo, shown behind the whole window in the `photo` theme.
- * Validation lives in theme.tsx (`wallpaperBackgroundImage`) and is shared
- * with the Sidebar preview.
- */
+
+
+
+
+
 function Wallpaper(): React.JSX.Element | null {
   const { theme, background, backgroundLoaded, dim, blur, pickBackground } = useTheme()
   if (theme !== 'photo') return null
@@ -176,8 +160,8 @@ function Wallpaper(): React.JSX.Element | null {
           className="wallpaper-image"
           style={{
             backgroundImage: bgImg,
-            // Keep the selected artwork in its original colour; only the
-            // user-controlled blur is applied behind the monochrome chrome.
+
+
             filter: blurPx > 0 ? `blur(${blurPx}px)` : 'none'
           }}
         />
@@ -231,11 +215,10 @@ function OrcSpaceCanvas({
     connectWidgets,
     disconnectWidgets
   } = canvas
-  const coordination = useCoordination()
   const confirm = useConfirm()
   const mainRef = useRef<HTMLElement>(null)
-  // Track the canvas size so the minimap can draw the viewport rect and the
-  // HUD can center zoom/fit on real dimensions (CANV-16).
+
+
   const mainOffsetRef = useRef({ left: 0, top: 0 })
   const [mainSize, setMainSize] = useState({ w: 0, h: 0 })
   useEffect(() => {
@@ -256,18 +239,25 @@ function OrcSpaceCanvas({
     }
   }, [])
 
-  // Stable refs so the drag/wheel handlers and the memoized widget layer can
-  // keep stable identities (and thus skip re-renders) while still reading the
-  // latest camera/widget state.
+
+
+
   const cameraRef = useRef(camera)
   cameraRef.current = camera
   const widgetsRef = useRef(widgets)
   widgetsRef.current = widgets
 
-  // `screenToWorld` treats (0,0) as the canvas's own top-left, but `clientX/Y`
-  // are relative to the whole window — and `<main>` sits offset from that by
-  // the sidebar's width and the title bar's height. Using cached offset avoids
-  // forced layout reflows during pointer moves.
+
+
+
+  useEffect(() => {
+    window.dispatchEvent(new Event('orcspace:camera-move'))
+  }, [camera.x, camera.y, camera.zoom])
+
+
+
+
+
   const toWorld = useCallback(
     (clientX: number, clientY: number): Point => {
       return screenToWorld(clientX - mainOffsetRef.current.left, clientY - mainOffsetRef.current.top)
@@ -279,7 +269,6 @@ function OrcSpaceCanvas({
   const [editingId, setEditingId] = useState<string | null>(null)
   const editingRef = useRef<string | null>(null)
   editingRef.current = editingId
-  const [boardOpen, setBoardOpen] = useState(false)
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null)
   const [isPanning, setIsPanning] = useState(false)
   const [canvasNotice, setCanvasNotice] = useState<string | null>(null)
@@ -305,50 +294,41 @@ function OrcSpaceCanvas({
     return () => window.clearTimeout(timer)
   }, [canvasNotice])
 
-  // P2-205: one Escape closes the frontmost transient layer — a widget-title
-  // edit first, then the context menu, board, chat. Text fields keep
-  // the key to themselves so the chat input isn't yanked away.
+
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
       if (editingRef.current) return setEditingId(null)
       const target = e.target as HTMLElement | null
-      // Check for open menus/contextmenus first
+
       if (document.querySelector('[role="menu"]:not([aria-hidden="true"]), [role="contextmenu"]:not([aria-hidden="true"]), [data-menu-open="true"]')) {
         return
       }
-      // Text fields and terminal keep the key to themselves first: an Escape meant to cancel
-      // an autocomplete or clear an input or dismiss a CLI modal (/btw) must not also dismiss the panel. This
-      // must run before the board branch or the picker's search box would be
-      // yanked out from under the user.
+
+
+
       if (target?.closest?.('input,textarea,select,.xterm,.term-shell,.is-terminal')) return
       if (menu) return setMenu(null)
-      if (boardOpen) return setBoardOpen(false)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [menu, boardOpen])
-
-  useEffect(() => {
-    const onOpenBoard = (): void => setBoardOpen(true)
-    window.addEventListener('orcspace:open-board', onOpenBoard)
-    return () => window.removeEventListener('orcspace:open-board', onOpenBoard)
-  }, [])
+  }, [menu])
 
   const closeWidget = useCallback(
     (id: string): void => {
-      // removeWidget disposes terminal shells when the kind is terminal.
+
       canvas.removeWidget(id)
       setEditingId((cur) => (cur === id ? null : cur))
-      // Drop the cached bound handlers: a session that opens and closes many
-      // widgets must not accumulate one stale entry per id ever created.
+
+
       handlerCacheRef.current.delete(id)
     },
     [canvas.removeWidget]
   )
 
-  // Clamp a spawn point so the new widget lands inside the currently visible
-  // world rect with at least a 32px screen margin on every side.
+
+
   const clampToVisibleWorld = useCallback(
     (point: Point, w: number, h: number): Point => {
       const zoom = camera.zoom || 1
@@ -368,15 +348,15 @@ function OrcSpaceCanvas({
   )
 
   const spawnTerminalAtCenter = useCallback((): void => {
-    // Center on the real canvas viewport (mainSize), offset by the true
-    // half-size of a default terminal (WIDGET_W/H = 680/420 → 340/210).
+
+
     const cx = mainSize.w > 0 ? mainSize.w / 2 : window.innerWidth / 2
     const cy = mainSize.h > 0 ? mainSize.h / 2 : window.innerHeight / 2
     const halfW = WIDGET_W / 2
     const halfH = WIDGET_H / 2
-    // Convert the viewport center first, then subtract world-space half-size.
-    // Subtracting screen pixels before `toWorld` shifts the widget whenever
-    // zoom is not 1:1.
+
+
+
     const center = toWorld(cx, cy)
     const world = { x: center.x - halfW, y: center.y - halfH }
     const clamped = clampToVisibleWorld(world, WIDGET_W, WIDGET_H)
@@ -397,8 +377,8 @@ function OrcSpaceCanvas({
       const w = defaults.w
       const h = defaults.h
       const id = requestedId || `${kind}-${Date.now()}-${++localCounter}`
-      // Mission retries are idempotent: an already-mounted Planner is reused,
-      // never opened a second time for the same mission.
+
+
       if (requestedId && widgetsRef.current.some((widget) => widget.id === requestedId)) return requestedId
       if (!canvas.addWidget(clampToVisibleWorld(point, w, h), id, title, kind)) {
         setCanvasNotice('Canvas is full — close a widget before adding another.')
@@ -412,10 +392,10 @@ function OrcSpaceCanvas({
   const missionLinksRef = useRef(new Map<string, { plannerId: string; terminalId: string; positioned: boolean }>())
   const missionPlannerByPlanRef = useRef(new Map<string, string>())
 
-  // Mission mode always uses one stable Planner widget and one selected worker
-  // per run. The terminal itself is reserved by main's dispatch pipeline and
-  // arrives through control:add-widget, so this effect also handles either
-  // event arriving first without creating a duplicate Planner.
+
+
+
+
   useEffect(() => {
     const ensurePlanner = (planId: string | undefined, missionId: string | undefined, title: string | undefined, anchorTerminalId?: string): string => {
       const existingForPlan = planId ? missionPlannerByPlanRef.current.get(planId) : undefined
@@ -512,27 +492,27 @@ function OrcSpaceCanvas({
     }
   }, [connectWidgets, disconnectWidgets])
 
-  /* Notes/Second Brain were removed; canvas widgets are self-contained. */
 
-  // Stable rail callbacks — see the note above the drag handlers (PERF-rail-memo).
-  const onToggleBoard = useCallback((): void => setBoardOpen((v) => !v), [])
+
+
   const onPickDir = useCallback((): void => {
-    // The result arrives via workspace:onDirChange; a rejected dialog is not
-    // actionable here, but it must not surface as an unhandled rejection.
+
+
     void window.api.workspace.pickDir().catch((err) => console.warn('workspace:pickDir failed', err))
   }, [])
 
-  // ---- dragging & resizing (screen deltas are divided by zoom) ------------
-  // Handlers take the widget id as an argument instead of closing over it, so
-  // they keep a stable identity across renders and React.memo on the widget
-  // layer can actually skip re-renders while another widget drags.
-  //
-  // The rail's callbacks below follow the same rule: the canvas re-renders on
-  // every camera frame, and fresh arrow-function props would drag the memoized
-  // Sidebar along with every one of those frames (PERF-rail-memo).
+
+
+
+
+
+
+
+
   const onHeaderPointerDown = useCallback(
     (e: React.PointerEvent, id: string): void => {
-      if (editingRef.current === id || (e.target as HTMLElement).closest('button,input')) return
+      if (e.button !== 0 || !e.currentTarget.contains(e.target as Node) || editingRef.current === id ||
+        (e.target as Element).closest('button, input, [role="menu"], [data-canvas-interactive]')) return
       e.preventDefault()
       canvas.bringToFront(id)
       const widget = widgetsRef.current.find((w) => w.id === id)
@@ -583,7 +563,7 @@ function OrcSpaceCanvas({
           h = Math.max(MIN_H, oh - dy)
           y = oy + oh - h
         }
-        // Non-maximizable widgets must never be stretched to fullscreen — cap to useful sizes
+
         const kind = widget.kind as string
         if (kind === 'timer') { w = Math.min(w, 360); h = Math.min(h, 320) }
         else if (kind === 'links') { w = Math.min(w, 560); h = Math.min(h, 520) }
@@ -617,8 +597,8 @@ function OrcSpaceCanvas({
         return
       }
       canvas.updateWidget(id, { title })
-      // The title rides the debounced canvas save — no second writer exists,
-      // so there is nothing to race with here.
+
+
       setEditingId((cur) => (cur === id ? null : cur))
     },
     [canvas.updateWidget]
@@ -631,11 +611,11 @@ function OrcSpaceCanvas({
     (id: string): void => {
       const widget = widgetsRef.current.find((w) => w.id === id)
       if (!widget) return
-      // Non-maximizable kinds (NON_MAXIMIZABLE) must never enter fullscreen —
-      // filling the canvas is just empty space (user: "не просто кнопку").
+
+
       if (NON_MAXIMIZABLE.has((widget.kind ?? 'terminal') as WidgetKind)) return
       const next = !widget.maximized
-      // One maximized frame at a time — stacked 9000 z-indexes had no switcher.
+
       for (const other of widgetsRef.current) {
         if (other.id !== id && other.maximized) canvas.updateWidget(other.id, { maximized: false })
       }
@@ -645,8 +625,8 @@ function OrcSpaceCanvas({
     [canvas.updateWidget, canvas.bringToFront]
   )
 
-  // If a widget that is now non-maximizable was persisted as maximized
-  // (before the fix), restore it. Timer also gets its dimensions clamped.
+
+
   useEffect(() => {
     for (const w of widgets) {
       if (NON_MAXIMIZABLE.has((w.kind ?? 'terminal') as WidgetKind) && w.maximized) {
@@ -656,7 +636,7 @@ function OrcSpaceCanvas({
         canvas.updateWidget(w.id, { w: Math.min(w.w, 360), h: Math.min(w.h, 320) })
       }
     }
-    // only react to list changes, not to every camera move
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [widgets.length])
 
@@ -679,9 +659,9 @@ function OrcSpaceCanvas({
     [closeWidget, confirm]
   )
 
-  // P3-219: keyboard alternative for widget move/resize/remove. Fires only when
-  // the widget frame itself has focus (not an inner input), reads the latest
-  // position through widgetsRef so the bound handler can stay cached/stable.
+
+
+
   const onFrameKey = useCallback(
     (e: React.KeyboardEvent, id: string): void => {
       if (e.target !== e.currentTarget) return
@@ -693,8 +673,8 @@ function OrcSpaceCanvas({
       }
       const dir = dirs[e.key]
       if (!dir) {
-        // Escape on a terminal widget forwards the Escape byte to the shell
-        // (to close modals like /btw, fzf, etc.) and focuses xterm.
+
+
         if (e.key === 'Escape') {
           const widget = widgetsRef.current.find((w) => w.id === id)
           const isTerminal = !widget?.kind || widget.kind === 'terminal'
@@ -718,7 +698,7 @@ function OrcSpaceCanvas({
           onWidgetClose(id)
           return
         }
-        // When typing regular keys into a focused terminal frame, ensure focus transfers to xterm
+
         const widget = widgetsRef.current.find((w) => w.id === id)
         const isTerminal = !widget?.kind || widget.kind === 'terminal'
         if (isTerminal && !e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
@@ -735,8 +715,8 @@ function OrcSpaceCanvas({
       if (!widget || widget.maximized) return
       const [dx, dy] = dir
       if (e.altKey) {
-        // Alt+arrow resizes toward the pressed edge, keeping the opposite one
-        // pinned (mirrors the mouse resize handles, clamped to MIN_W/MIN_H).
+
+
         let { x, y, w: width, h: height } = widget
         if (dx > 0) width = Math.max(MIN_W, width + dx * step)
         else if (dx < 0) {
@@ -773,23 +753,23 @@ function OrcSpaceCanvas({
     [canvas]
   )
 
-  // P3-219: keyboard pan — arrows move the view while the canvas itself has
-  // focus; Shift+arrows make fine 10px steps.
+
+
   const onCanvasKey = (e: React.KeyboardEvent<HTMLElement>): void => {
     if (e.target !== e.currentTarget) return
     handleCanvasShortcut(e)
   }
 
-  // Canvas shortcuts should also work after focus lands on the app shell (for
-  // example after using the sidebar). Inputs, terminals, and widgets retain
-  // their own keyboard contracts.
+
+
+
   const handleCanvasShortcut = (e: KeyboardEvent | React.KeyboardEvent<HTMLElement>): void => {
     const target = e.target as HTMLElement | null
     if (
       target &&
       target !== mainRef.current &&
       target.closest(
-        'input,textarea,select,button,[role="button"],[contenteditable="true"],.widget,.xterm,.term-shell,.rail,.board,.board-shell,[role="dialog"],[role="menu"]'
+        'input,textarea,select,button,[role="button"],[contenteditable="true"],.widget,.xterm,.term-shell,.rail,[role="dialog"],[role="menu"]'
       )
     ) return
     const dirs: Record<string, [number, number]> = {
@@ -800,7 +780,7 @@ function OrcSpaceCanvas({
     }
     const dir = dirs[e.key]
     if (!dir) {
-      // +/- / = / 0 zoom controls
+
       if (e.key === '+' || e.key === '=') {
         e.preventDefault()
         setCamera((c) => ({ ...c, zoom: Math.min(4, c.zoom * 1.2) }))
@@ -816,7 +796,7 @@ function OrcSpaceCanvas({
         setCamera({ x: 0, y: 0, zoom: 1 })
         return
       }
-      // Home key resets to 0,0
+
       if (e.key === 'Home') {
         e.preventDefault()
         setCamera({ x: 0, y: 0, zoom: 1 })
@@ -840,10 +820,15 @@ function OrcSpaceCanvas({
   }, [active, camera.zoom])
 
   const onCanvasPointerDown = (e: React.PointerEvent): void => {
-    // Portalled controls are not DOM descendants of the canvas widget that
-    // opened them. Guard them here as well as in the menu itself: otherwise a
-    // click on an agent item can start a canvas pan/draw underneath the menu.
-    if ((e.target as HTMLElement).closest('.widget, .board, .board-shell, .rail, [role="menu"], [data-canvas-scroll-lock]')) return
+    if (e.defaultPrevented || !e.currentTarget.contains(e.target as Node)) return
+
+
+
+    if (
+      (e.target as HTMLElement).closest(
+        '.widget, .rail, [role="menu"], [data-canvas-scroll-lock], [data-canvas-interactive]'
+      )
+    ) return
 
     if (tool === 'draw' && e.button === 0) {
       e.preventDefault()
@@ -861,8 +846,8 @@ function OrcSpaceCanvas({
           if (strokeId) canvas.extendStroke(strokeId, toWorld(ev.clientX, ev.clientY))
         },
         () => {
-          // A plain click never moved past the threshold — drop the stroke so
-          // it doesn't leave a stray dot on the canvas (CANV-dot).
+
+
           if (!moved && strokeId) canvas.discardStroke(strokeId)
         }
       )
@@ -876,8 +861,8 @@ function OrcSpaceCanvas({
       return
     }
 
-    // The hand tool pans on a plain drag; otherwise panning stays a deliberate
-    // gesture (middle-click, or shift so a plain drag can still select/draw).
+
+
     const wantsPan = tool === 'pan' ? e.button === 0 : e.button === 1 || (e.button === 0 && e.shiftKey)
     if (!wantsPan) return
     e.preventDefault()
@@ -885,12 +870,12 @@ function OrcSpaceCanvas({
     const startY = e.clientY
     const origin = camera
     setIsPanning(true)
-    // Pointer moves arrive far faster than frames (a fast mouse or trackpad
-    // easily exceeds 60/s); committing a fresh camera to React state on every
-    // one of them re-renders the whole canvas more often than the screen can
-    // show. Batch into one commit per animation frame instead — mirrors the
-    // wheel-pan/zoom path below (PERF-002) — and flush whatever is pending on
-    // pointerup so the final position is never dropped.
+
+
+
+
+
+
     trackDrag(
       (ev) => {
         panPendingRef.current = { ...origin, x: origin.x + ev.clientX - startX, y: origin.y + ev.clientY - startY }
@@ -918,12 +903,12 @@ function OrcSpaceCanvas({
     )
   }
 
-  // Wheel events arrive faster than frames; the steps are accumulated and the
-  // camera state is flushed once per animation frame instead of re-rendering
-  // the whole canvas on every wheel tick (PERF-002). Zoom keeps the world point
-  // under the cursor pinned — the anchor must be measured relative to the
-  // canvas itself, not the window, or every step drifts by the canvas offset
-  // (P2-203).
+
+
+
+
+
+
   const wheelStepsRef = useRef<Array<{ kind: 'pan'; dx: number; dy: number } | { kind: 'zoom'; sx: number; sy: number; deltaY: number }>>([])
   const wheelRafRef = useRef<number | null>(null)
 
@@ -952,19 +937,19 @@ function OrcSpaceCanvas({
     })
   }, [setCamera])
 
-  // A native listener, not a React onWheel prop: React delegates wheel as a
-  // PASSIVE root listener, so preventDefault() inside the prop is a no-op and
-  // Ctrl+wheel / trackpad pinch would page-zoom the whole Electron window on
-  // top of the camera zoom while spamming console warnings every tick.
+
+
+
+
   useEffect(() => {
     const el = mainRef.current
     if (!el) return
     const handleWheel = (e: WheelEvent): void => {
-      // Scroll events bubble from widgets and inner panels. Don't touch the
-      // camera when the user was scrolling inside any widget, panel, or menu.
+
+
       if (
         (e.target as HTMLElement).closest(
-          '.widget, .widget-shell, .widget-body, [data-canvas-scroll-lock], .board-shell, .rail, [role="dialog"], [role="alertdialog"], [role="menu"], input, textarea, select, .xterm, .term-shell, .term'
+          '.widget, .widget-shell, .widget-body, [data-canvas-scroll-lock], .rail, [role="dialog"], [role="alertdialog"], [role="menu"], input, textarea, select, .xterm, .term-shell, .term'
         )
       ) {
         return
@@ -1016,7 +1001,7 @@ function OrcSpaceCanvas({
 
   const onContextMenu = (e: React.MouseEvent): void => {
     e.preventDefault()
-    if ((e.target as HTMLElement).closest('.widget, .board, .board-shell, .rail, [data-canvas-scroll-lock]')) return
+    if ((e.target as HTMLElement).closest('.widget, .rail, [data-canvas-scroll-lock]')) return
     setMenu({ x: e.clientX, y: e.clientY })
   }
 
@@ -1028,28 +1013,28 @@ function OrcSpaceCanvas({
     e.preventDefault()
     if (!e.dataTransfer || !e.dataTransfer.files.length) return
 
-    // Process dropped files
+
     const files = Array.from(e.dataTransfer.files)
     for (const file of files) {
-      // Check if it's an image file
+
       if (file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|tiff?)$/i.test(file.name)) {
         try {
           const arrayBuffer = await file.arrayBuffer()
           const bytes = new Uint8Array(arrayBuffer)
           const ext = file.name.includes('.') ? file.name.split('.').pop()! : file.type.split('/')[1] || 'png'
-          
-          // Save to media store
+
+
           const saved = await window.api.media.saveBytes(bytes, ext)
           if (saved && 'error' in saved) {
             setCanvasNotice(`Failed to save image: ${saved.error}`)
             continue
           }
           if (saved && 'path' in saved) {
-            // Get world coordinates from drop point
+
             const point = toWorld(e.clientX, e.clientY)
-            // Display the dropped image in a browser widget. BrowserWidget
-            // reads it through the media bridge as a data URL; this avoids an
-            // empty terminal placeholder and makes the saved file useful.
+
+
+
             const widgetId = placeWidget('browser', point)
             if (widgetId) {
               window.setTimeout(() => {
@@ -1067,26 +1052,22 @@ function OrcSpaceCanvas({
     }
   }
 
-  const openTasks = (coordination.snapshot?.tasks ?? []).filter(
-    (t) => t.state !== 'done' && t.state !== 'cancelled'
-  ).length
 
-  // Viewport culling (PERF-cull): far off-screen widgets don't get a
-  // WidgetFrame at all — the DOM tree they'd otherwise cost is never built.
-  // Padded by one extra viewport on each side so a normal pan/zoom gesture
-  // doesn't mount/unmount a widget mid-drag.
-  //
-  // Restricted to terminal widgets only. Unmounting one is proven safe —
-  // TerminalWidget's cleanup "parks" the pty instead of killing it, and a
-  // remount reconnects and repaints the live scrollback (see
-  // `terminal.detach`/`terminal.create` in TerminalWidget.tsx) — so this only
-  // costs an IPC round-trip, not state. Every other kind is unmount-unsafe in
-  // ways that are silent, not crashes: a `browser` widget's `<webview>` has no
-  // such reconnect path and would come back at HOME_URL, losing wherever the
-  // user had navigated to. Culling those too
-  // would trade a DOM-cost saving for state loss the user would only notice
-  // later, far from the pan that caused it — not worth it for widget kinds
-  // that are typically far fewer and lighter than terminals anyway.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   const renderableWidgets = useMemo(() => {
     if (!mainSize.w || !mainSize.h) return widgets
     const zoom = camera.zoom || 1
@@ -1101,12 +1082,12 @@ function OrcSpaceCanvas({
     })
   }, [widgets, camera.x, camera.y, camera.zoom, mainSize.w, mainSize.h])
 
-  /** Camera as one transform for the whole world layer. Widgets position
-   *  themselves at raw world coordinates inside it, so a pan/zoom writes a
-   *  single style instead of fresh left/top/scale into every WidgetFrame —
-   *  the frames' props stay identical and their React.memo skips the frame
-   *  entirely (PERF-layer-transform). Permanent transform promotion prevents
-   *  GPU layer churn during high-frequency wheel pan/zoom. */
+
+
+
+
+
+
   const worldTransform = useMemo(
     () => ({
       transform: `translate3d(${camera.x}px, ${camera.y}px, 0px) scale(${camera.zoom})`,
@@ -1115,10 +1096,10 @@ function OrcSpaceCanvas({
     [camera.x, camera.y, camera.zoom]
   )
 
-  /** In-canvas widgets sit in world coordinates inside the scaled layer; a
-   *  maximized widget floats above everything and fills the canvas area.
-   *  A fresh object per call is fine: WidgetFrame's memo comparator compares
-   *  the style fields individually, so identity churn does not defeat it. */
+
+
+
+
   const widgetStyle = (w: Widget): React.CSSProperties => ({
     left: w.x,
     top: w.y,
@@ -1127,16 +1108,16 @@ function OrcSpaceCanvas({
     zIndex: w.z
   })
 
-  // Maximized frames render outside the world layer (they must not inherit its
-  // scale). One maximized widget at a time is an App invariant, but filtering
-  // keeps this correct even if that ever changes.
+
+
+
   const maximizedWidgets = useMemo(() => widgets.filter((w) => w.maximized), [widgets])
   const inWorldWidgets = useMemo(() => renderableWidgets.filter((w) => !w.maximized), [renderableWidgets])
 
-  /** WidgetFrame takes id-less callbacks; bind the widget id here so the
-   *  handlers above keep stable identities for React.memo. The bound objects
-   *  are cached per id — every backing callback below is itself stable, so
-   *  re-instantiating this map on every frame would defeat the frame memo. */
+
+
+
+
   const handlerCacheRef = useRef<Map<string, {
     onHeaderPointerDown: (e: React.PointerEvent) => void
     onResizeStart: (e: React.PointerEvent, dir: ResizeDir) => void
@@ -1170,11 +1151,11 @@ function OrcSpaceCanvas({
     return handlers
   }
 
-  // Bound-handler cache GC. closeWidget() deletes its own entry, but widgets
-  // removed by agents (control:remove-widget → canvas.onChange) bypass it —
-  // without this sweep a long session that spawns and closes many agent
-  // terminals accumulates one dead 11-closure bundle per id forever
-  // (PERF-handler-gc).
+
+
+
+
+
   useEffect(() => {
     const cache = handlerCacheRef.current
     if (cache.size === 0) return
@@ -1188,11 +1169,7 @@ function OrcSpaceCanvas({
     <div className="relative flex flex-1 overflow-hidden">
       <Sidebar
         workspaceDir={workspaceDir}
-        managerId={coordination.snapshot.managerId}
         activeView={activeView}
-        boardOpen={boardOpen}
-        taskCount={openTasks}
-        onToggleBoard={onToggleBoard}
         onPickDir={onPickDir}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={onToggleSidebar}
@@ -1209,9 +1186,9 @@ function OrcSpaceCanvas({
           onDragOver={onCanvasDragOver}
           onDrop={onCanvasDrop}
           style={{
-            // Without touch-action:none a touch drag on the canvas scrolls the
-            // OS page instead of drawing/panning; the widget chrome below sets
-            // its own touch-action so inner scrolling still works (CANV-15).
+
+
+
             touchAction: 'none',
             contain: 'layout style',
             cursor: isPanning
@@ -1227,9 +1204,9 @@ function OrcSpaceCanvas({
           className="absolute inset-0 h-px w-px origin-top-left"
           style={worldTransform}
         >
-          {/* Full `widgets`, not the culled/maximize-filtered list: an arc
-              anchored to a maximized widget must still draw to its stored
-              position instead of vanishing with its endpoint. */}
+          {
+
+}
           <ConnectionsLayer connections={connections} widgets={widgets} />
         </div>
         <StrokesLayer strokes={strokes} camera={camera} width={mainSize.w} height={mainSize.h} />
@@ -1271,8 +1248,8 @@ function OrcSpaceCanvas({
             </div>
           </div>
         )}
-        {/* World layer for widget frames — same transform as the connections
-            layer above. Painting order stays connections → ink → widgets. */}
+        {
+}
         <div className="absolute inset-0 h-px w-px origin-top-left" style={worldTransform}>
           {inWorldWidgets.map((w) => (
             <WidgetFrame
@@ -1286,8 +1263,8 @@ function OrcSpaceCanvas({
             />
           ))}
         </div>
-        {/* Maximized frames float above the world layer unscaled; the stable
-            module-level style keeps their memo comparison trivially equal. */}
+        {
+}
         {maximizedWidgets.map((w) => (
           <WidgetFrame
             key={w.id}
@@ -1308,9 +1285,7 @@ function OrcSpaceCanvas({
           <ContextMenu
             at={menu}
             onPickTerminal={() => {
-              if (!canvas.addWidget(toWorld(menu.x, menu.y))) {
-                setCanvasNotice('Canvas is full — close a widget before adding another.')
-              }
+              placeWidget('terminal', toWorld(menu.x, menu.y))
               setMenu(null)
             }}
             onPickFiles={() => { placeWidget('files', toWorld(menu.x, menu.y)); setMenu(null) }}
@@ -1318,7 +1293,6 @@ function OrcSpaceCanvas({
             onPickTimer={() => { placeWidget('timer', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickPlanner={() => { placeWidget('planner', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickMission={() => { placeWidget('mission', toWorld(menu.x, menu.y)); setMenu(null) }}
-            onPickBoard={() => { placeWidget('board', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickOrchestration={() => { placeWidget('orchestration', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickBrowser={() => { placeWidget('browser', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickLinks={() => { placeWidget('links', toWorld(menu.x, menu.y)); setMenu(null) }}
@@ -1329,25 +1303,6 @@ function OrcSpaceCanvas({
         )}
       </main>
 
-      {boardOpen && (
-        <Suspense fallback={<div role="status" className="grid h-full place-items-center text-text-dim">Loading…</div>}>
-          <KanbanBoard
-            snapshot={coordination.snapshot}
-            onCreate={(title, brief) => coordination.createTask(title, brief)}
-            onMove={(id, state) => coordination.moveTask(id, state)}
-            onDelete={(id) => coordination.deleteTask(id)}
-            onResetManager={async () => {
-              const ok = await confirm('Reset lead role? Any agent will be able to claim it again.')
-              return ok ? coordination.resetManager() : { ok: true }
-            }}
-            onReleaseLocks={async () => {
-              const ok = await confirm('Release all file locks?')
-              return ok ? coordination.releaseLocks() : { ok: true }
-            }}
-            onClose={() => setBoardOpen(false)}
-          />
-        </Suspense>
-      )}
       <Toolbar
         tool={tool}
         onToolChange={setTool}
@@ -1365,12 +1320,12 @@ function OrcSpaceCanvas({
   )
 }
 
-/**
- * Runs `onMove` for the duration of a pointer drag, then cleans itself up.
- * Pointer events unify mouse, touch and pen into one code path (CANV-15); the
- * callbacks only read clientX/clientY, which PointerEvent inherits from
- * MouseEvent, so existing mouse-typed handlers keep working unchanged.
- */
+
+
+
+
+
+
 function trackDrag(onMove: (e: PointerEvent) => void, onEnd?: () => void): void {
   let released = false
   document.body.classList.add('is-dragging')
@@ -1378,17 +1333,22 @@ function trackDrag(onMove: (e: PointerEvent) => void, onEnd?: () => void): void 
     if (released) return
     released = true
     document.body.classList.remove('is-dragging')
-    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', release)
     window.removeEventListener('blur', release)
     window.removeEventListener('pointercancel', release)
     onEnd?.()
   }
-  window.addEventListener('pointermove', onMove)
+  const move = (event: PointerEvent): void => {
+
+    if (event.buttons === 0) { release(); return }
+    onMove(event)
+  }
+  window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', release)
-  // The window can lose focus while the button is still down (alt-tab, click
-  // on another window); without these the drag stays stuck until the next
-  // click ever lands on the window (P2-208).
+
+
+
   window.addEventListener('blur', release)
   window.addEventListener('pointercancel', release)
 }
@@ -1397,11 +1357,11 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
 }
 
-/** A maximized frame fills the canvas area below the title bar. Rendered
- *  outside the world layer, so no scale/transform applies; top: 0 here because
- *  the canvas column already carries pt-10, which keeps the frame clear of the
- *  transparent TitleBar. One stable identity for every maximized frame keeps
- *  the memo comparison all-equal. */
-// The frameless title bar is an absolute 40px overlay above the canvas. Keep
-// maximized widgets below it so their Restore/Close controls remain clickable.
+
+
+
+
+
+
+
 const MAXIMIZED_STYLE: React.CSSProperties = { left: 0, top: TITLE_BAR_HEIGHT, right: 0, bottom: 0, zIndex: 200 }

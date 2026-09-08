@@ -1,6 +1,6 @@
 import React from 'react'
 
-/** Google Antigravity official rainbow-blob arch mark. */
+
 export default function AntigravityIcon({
   size = 13,
   monochrome = false

@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Clipboard, Cpu, FolderOpen, Globe, Kanban, ListTodo, Music2, Network, Terminal, Timer, Workflow } from 'lucide-react'
+import { Clipboard, Cpu, FolderOpen, Globe, ListTodo, Music2, Network, Terminal, Timer, Workflow } from 'lucide-react'
 import { Point } from '../types'
 
 interface Props {
@@ -11,7 +11,6 @@ interface Props {
   onPickTimer: () => void
   onPickPlanner: () => void
   onPickMission: () => void
-  onPickBoard: () => void
   onPickBrowser: () => void
   onPickLinks: () => void
   onPickMusicPlayer: () => void
@@ -21,13 +20,13 @@ interface Props {
 }
 
 interface Item {
-  /** Stable slug used for the data-testid (E2E locators must not key off localized labels). */
+
   id: string
   label: string
   hint: string
   icon: React.ReactNode
   onSelect: () => void
-  /** `panel` items open over the canvas rather than placing a widget on it. */
+
   group?: 'widget' | 'panel'
 }
 
@@ -39,7 +38,6 @@ export default function ContextMenu({
   onPickTimer,
   onPickPlanner,
   onPickMission,
-  onPickBoard,
   onPickBrowser,
   onPickLinks,
   onPickMusicPlayer,
@@ -55,8 +53,8 @@ export default function ContextMenu({
   const [pos, setPos] = useState<Point>(() => clampInitial(at))
   const [selectedIndex, setSelectedIndex] = useState(0)
 
-  // Widgets that land on the canvas first, then the panels that open over it —
-  // the divider between the two groups is what keeps the menu scannable.
+
+
   const items: Item[] = useMemo(
     () => [
       {
@@ -102,13 +100,6 @@ export default function ContextMenu({
         onSelect: onPickMission
       },
       {
-        id: 'board',
-        label: 'Kanban Board',
-        hint: 'Interactive task board for agents and todos',
-        icon: <Kanban size={15} className="text-accent" />,
-        onSelect: onPickBoard
-      },
-      {
         id: 'browser',
         label: 'Browser',
         hint: 'Embedded web page pinned to the canvas',
@@ -144,7 +135,6 @@ export default function ContextMenu({
       onPickTimer,
       onPickPlanner,
       onPickMission,
-      onPickBoard,
       onPickBrowser,
       onPickLinks,
       onPickMusicPlayer,
@@ -153,7 +143,7 @@ export default function ContextMenu({
     ]
   )
 
-  // Nudge the menu back on-screen once its real size is known.
+
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
@@ -176,7 +166,7 @@ export default function ContextMenu({
     return () => window.removeEventListener('mousedown', onDown)
   }, [onClose])
 
-  // Focus the menu immediately so arrow keys work without an extra click.
+
   useLayoutEffect(() => {
     ref.current?.focus()
   }, [])
@@ -191,14 +181,14 @@ export default function ContextMenu({
       className="fixed z-[10000] w-[260px] max-w-[calc(100vw-16px)] rounded-[12px] border border-line bg-bg-panel p-2 shadow-2xl glass:bg-bg-panel/90 glass:backdrop-blur-2xl glass:backdrop-saturate-150 select-none"
       style={{ left: pos.x, top: pos.y }}
       onPointerDown={(e) => {
-        // React portals bubble through the component tree: without this,
-        // pointerdown reaches <main> and draw/erase/pan gestures fire from
-        // clicks inside the menu (mousedown alone cannot stop it — it fires
-        // after pointerdown).
+
+
+
+
         e.stopPropagation()
       }}
       onMouseDown={(e) => {
-        // Prevent pan / stroke triggers on canvas below
+
         e.stopPropagation()
       }}
       onKeyDown={(e) => {
@@ -222,7 +212,7 @@ export default function ContextMenu({
         Add to Canvas
       </div>
 
-      {/* Items List */}
+      {}
       <div className="max-h-[360px] space-y-0.5 overflow-y-auto">
         {items.length === 0 && <div className="px-2.5 py-3 text-[11px] text-text-faint">No favorites match</div>}
         {items.map((item, i) => {

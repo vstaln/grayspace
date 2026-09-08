@@ -1,13 +1,13 @@
 import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
 
-/**
- * Tests for hardening helpers added during the backend reliability audit.
- * The helpers themselves are non-exported inside the modules they live in,
- * so these tests exercise the public surfaces that depend on them: the
- * control server's safe decode/runId validation, secretsEqual's length
- * bound, and safeJson's deep-walk safety.
- */
+
+
+
+
+
+
+
 import { secretsEqual, isLoopbackHost, isLoopbackUrl } from './netGuard.ts'
 import { safeParseJson, sanitizeParsed } from './safeJson.ts'
 
@@ -15,7 +15,7 @@ describe('netGuard - secretsEqual length bound', () => {
   test('rejects oversized headers before hashing', () => {
     const token = 'correct-horse-battery-staple'
     const huge = 'a'.repeat(2000)
-    // Both over 1024 bytes: short-circuits to false without burning CPU.
+
     assert.strictEqual(secretsEqual(huge, token), false)
     assert.strictEqual(secretsEqual(token, huge), false)
   })
@@ -61,7 +61,7 @@ describe('safeJson - depth and prototype defenses', () => {
     const parsed = safeParseJson<Record<string, unknown>>('{"__proto__":{"polluted":true},"a":1}')
     assert.ok(parsed)
     assert.strictEqual((parsed as Record<string, unknown>).a, 1)
-    // (Object.prototype as any).polluted must not be set.
+
     assert.strictEqual((Object.prototype as unknown as Record<string, unknown>).polluted, undefined)
   })
 
@@ -74,11 +74,11 @@ describe('safeJson - depth and prototype defenses', () => {
   test('caps recursion depth so a hostile payload cannot RangeError the loader', () => {
     const depth = 5_000
     const nested = '['.repeat(depth) + '1' + ']'.repeat(depth)
-    // The walker catches the depth error internally and returns the input,
-    // so a hostile payload degrades to the raw value instead of crashing the
-    // caller's store load path. A depth that crashes JSON.parse would also
-    // satisfy the "did not throw" check here — that is acceptable: a parse
-    // failure is still a graceful no-result for the loader.
+
+
+
+
+
     const parsed = safeParseJson(nested)
     assert.ok(parsed === null || typeof parsed === 'object')
   })
@@ -93,11 +93,11 @@ describe('safeJson - depth and prototype defenses', () => {
   })
 })
 
-/**
- * Mirrors the runId regex used by controlServer's `runTarget`. It rejects
- * any value the JSON body could supply to escape the `run:` resource target
- * and become a different scheme (e.g. `terminal:foo` or `file:bar`).
- */
+
+
+
+
+
 const RUN_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
 
 describe('controlServer - runId shape guard', () => {

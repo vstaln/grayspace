@@ -18,7 +18,7 @@ export interface CodeSession {
   status?: 'active' | 'finished'
 }
 
-export type WorkView = 'canvas' | 'code' | 'chat'
+export type WorkView = 'canvas' | 'code'
 
 export interface CodeSnapshot {
   schemaVersion: number
@@ -54,9 +54,7 @@ function sanitizeSession(raw: unknown): CodeSession | null {
 }
 
 function isWorkView(v: unknown): v is WorkView {
-  // 'browser' kept for backward compat with old persisted saves — normalize to 'chat'
-  if (v === 'browser') return true
-  return v === 'canvas' || v === 'code' || v === 'chat'
+  return v === 'canvas' || v === 'code'
 }
 
 function sanitizeSnapshot(raw: Record<string, unknown>): CodeSnapshot {
@@ -71,7 +69,6 @@ function sanitizeSnapshot(raw: Record<string, unknown>): CodeSnapshot {
     ? raw.maximizedId
     : null
   let activeView: WorkView | null = isWorkView(raw.activeView) ? (raw.activeView as WorkView) : null
-  if (activeView === ('browser' as unknown as WorkView)) activeView = 'chat'
   return {
     schemaVersion: CODE_SCHEMA_VERSION,
     sessions,
@@ -82,10 +79,10 @@ function sanitizeSnapshot(raw: Record<string, unknown>): CodeSnapshot {
   }
 }
 
-/**
- * Persisted Code tab state — sessions + layout.
- * Per-workspace file like CanvasStore (workspace-code-{slot}.json).
- */
+
+
+
+
 export class CodeStore extends EventEmitter {
   private sessions = new Map<string, CodeSession>()
   private featuredId: string | null = null
@@ -97,8 +94,8 @@ export class CodeStore extends EventEmitter {
   private writeChain: Promise<void> = Promise.resolve()
   private writeSeq = 0
   private syncFlushSeq = 0
-  /** Code workspaces are logical containers and are intentionally independent
-   * from the filesystem folder used by Canvas. */
+
+
   private workspaceScope = 'code-default'
   private legacyFolder: string | undefined
 
@@ -138,7 +135,7 @@ export class CodeStore extends EventEmitter {
   private ensure(): void {
     if (this.loaded) return
     const raw = readStoreJson<Record<string, unknown>>(this.file, {})
-    // Also try legacy global file if per-workspace empty and global exists
+
     let source: Record<string, unknown> = raw
     if (Object.keys(raw).length === 0) {
       if (this.legacyFolder) {
@@ -149,14 +146,14 @@ export class CodeStore extends EventEmitter {
       const legacyGlobal = join(getUserDataDir(), 'workspace-code.json')
       try {
         if (Object.keys(source).length === 0 && fs.existsSync(legacyGlobal) && this.workspaceScope !== 'code-default') {
-          // For initial migration from global, copy over if slot file empty
+
           const globalRaw = readStoreJson<Record<string, unknown>>(legacyGlobal, {})
           if (Object.keys(globalRaw).length > 0) {
             source = globalRaw
           }
         }
       } catch {
-        /* ignore */
+
       }
     }
     this.loaded = true
@@ -185,10 +182,10 @@ export class CodeStore extends EventEmitter {
     }
   }
 
-  /**
-   * Replaces stored state with the renderer's current view.
-   * Merge not versioned per session — last writer wins, like canvas import without version check.
-   */
+
+
+
+
   save(input: { sessions?: unknown; featuredId?: unknown; maximizedId?: unknown; activeView?: unknown }): CodeSnapshot {
     this.ensure()
     let changed = false
@@ -227,7 +224,6 @@ export class CodeStore extends EventEmitter {
     }
     if ('activeView' in input) {
       let sanitized: WorkView | null = isWorkView(input.activeView) ? (input.activeView as WorkView) : null
-      if (sanitized === ('browser' as unknown as WorkView)) sanitized = 'chat'
       if (sanitized !== this.activeView) {
         this.activeView = sanitized
         changed = true
@@ -280,10 +276,10 @@ export class CodeStore extends EventEmitter {
     this.writeSeq += 1
     const seq = this.writeSeq
     const snapshot = this.snapshotForPersist()
-    // Capture the workspace-specific destination now, not when the serialized
-    // write reaches the tail of `writeChain`. A workspace switch can happen
-    // while an earlier save is queued and must never redirect that old state
-    // into the newly selected workspace file.
+
+
+
+
     const file = this.file
     this.writeChain = this.writeChain
       .catch(() => {})
@@ -294,9 +290,9 @@ export class CodeStore extends EventEmitter {
       })
       .then((wrote) => {
         if (!wrote) return
-        // Do not copy the current workspace's in-memory state back into an
-        // older workspace's file when a switch happened while this write was
-        // in flight. The old synchronous flush already repaired that file.
+
+
+
         if (this.syncFlushSeq >= seq && file === this.file) {
           try {
             writeJsonAtomic(file, this.snapshotForPersist())

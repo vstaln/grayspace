@@ -137,7 +137,7 @@ describe('file.* commands on the bus', () => {
     assert.equal(fs.existsSync(src), false)
     assert.equal(fs.readFileSync(dst, 'utf8'), 'data')
 
-    // An existing destination must not be clobbered.
+
     const blocker = join(dir, 'blocked.txt')
     fs.writeFileSync(blocker, 'keep')
     const refused = await core.flow.submit({
@@ -192,7 +192,7 @@ describe('file.* commands on the bus', () => {
     assert.ok(catalog.includes('file.write'))
     assert.ok(catalog.includes('file.rename'))
 
-    // Schema validation fires before the handler: missing content → invalid.
+
     const badPayload = await core.flow.submit({
       actorId: 'user',
       type: 'file.write',
@@ -206,7 +206,7 @@ describe('file.* commands on the bus', () => {
     const { core } = harness()
     const startedAt = new Map<string, number>()
     const finished: string[] = []
-    // Two slow writes on distinct paths must overlap instead of queueing.
+
     const paths = [join(dir, 'p1.txt'), join(dir, 'p2.txt')]
     const t0 = Date.now()
     await Promise.all(

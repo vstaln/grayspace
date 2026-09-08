@@ -7,26 +7,26 @@ import type { IpcDeps } from './types.ts'
 
 const MAX_FS_READ_BYTES = 5 * 1024 * 1024
 
-/**
- * Collapses `..`/`.` segments via path.resolve so a mutating fs handler
- * never acts on a path that differs from what the renderer displayed.
- */
+
+
+
+
 const resolveTarget = (input: unknown): string | null => {
   if (typeof input !== 'string' || !input.trim()) return null
   const target = resolve(input.trim())
-  // Same UNC/NTLM rule as media:data-url — a renderer-supplied \\host\share
-  // must not make the main process open an SMB session.
+
+
   if (!media.isLocalPath(target)) return null
   return target
 }
 
-/**
- * Mutating fs operations go through the bus as `file.*` commands, exactly
- * like every other write: they take the normalized file lock (an agent
- * holding the path keeps the user out), land in the journal, and serialize
- * per-path on the queue instead of racing the agents' own tools. Reads stay
- * direct — they contend for nothing.
- */
+
+
+
+
+
+
+
 async function sendFileCommand(
   send: ReturnType<typeof makeSend>,
   type: string,
@@ -55,14 +55,14 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
         return { error: 'Target path is not a directory' }
       }
       const dirEntries = await fs.promises.readdir(targetDir, { withFileTypes: true })
-      // Stat every entry concurrently, not one `await` per row: a folder with
-      // hundreds of entries paid N sequential disk round-trips (each easily
-      // 1ms+ on Windows) before the listing could render. Promise.all keeps
-      // the output order identical to readdir's, and each entry keeps its own
-      // zero-size fallback when its stat fails (PERF-fs-list).
+
+
+
+
+
       const visible = dirEntries.filter((entry) => options?.showHidden || !entry.name.startsWith('.'))
-      // A huge directory (node_modules, build output) must not OOM the main
-      // process with one stat per entry: cap the listing and say so.
+
+
       const MAX_LIST_ENTRIES = 2_000
       const truncated = visible.length > MAX_LIST_ENTRIES
       const items = await Promise.all(
@@ -99,8 +99,8 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
         truncated
       }
     } catch {
-      // Raw fs errors carry absolute paths/errno; log them main-side and hand
-      // the renderer a generic message instead.
+
+
       return { error: 'Unable to list this folder' }
     }
   })
@@ -115,9 +115,9 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
       const ext = extname(target).toLowerCase()
       const isImg = media.hasImageExtension(target)
       if (isImg) {
-        // Read the bytes directly: media.dataUrl() only serves the app's own
-        // userData dir (SEC-006), so routing a workspace preview through it
-        // always came back null and broke image previews in Files.
+
+
+
         if (stat.size > media.MAX_MEDIA_BYTES) {
           return { error: `File is too large to preview (${(stat.size / (1024 * 1024)).toFixed(1)} MB).` }
         }
@@ -137,9 +137,9 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
           error: `File is too large to preview (${(stat.size / (1024 * 1024)).toFixed(1)} MB). Limit is ${(cap / (1024 * 1024)).toFixed(0)} MB.`
         }
       }
-      // Read through an fd capped at cap+1 bytes instead of stat-then-readFile:
-      // a file that grows between the two calls (log being written, TOCTOU)
-      // could otherwise blow past the preview budget into an OOM.
+
+
+
       const handle = await fs.promises.open(target, 'r')
       let buffer: Buffer
       try {
@@ -213,7 +213,7 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
     }
   })
 
-  /** Extensions that execute code when opened with the default handler. */
+
   const EXECUTABLE_EXTENSIONS = new Set([
     '.exe', '.bat', '.cmd', '.com', '.scr', '.msi', '.ps1', '.vbs', '.vbe',
     '.js', '.jse', '.wsf', '.wsh', '.jar', '.sh', '.bash', '.lnk', '.reg'
@@ -223,8 +223,8 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
     try {
       const target = resolveTarget(targetPath)
       if (!target) return { error: 'Invalid path' }
-      // shell.openPath executes the default handler: opening an .exe/.bat
-      // from a click (or from renderer XSS) runs code with the user's rights.
+
+
       if (EXECUTABLE_EXTENSIONS.has(extname(target).toLowerCase())) {
         return { error: 'Executable files cannot be opened from here' }
       }

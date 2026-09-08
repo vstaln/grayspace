@@ -1,4 +1,4 @@
-import { CANVAS_TARGET_ID, type CanvasCamera, type CanvasStroke, type CanvasWidget, type WidgetKind } from '../canvasState.ts'
+import { CANVAS_TARGET_ID, type CanvasCamera, type CanvasWidget, type WidgetKind } from '../canvasState.ts'
 import { CommandError, parseResource, resourceId } from '../core/index.ts'
 import { widgetType } from '../widgets/registry.ts'
 import type { CommandDeps } from './index.ts'
@@ -18,7 +18,7 @@ interface WidgetCreatePayload {
 
 type WidgetPatchPayload = Partial<Omit<CanvasWidget, 'id' | 'version' | 'updatedAt'>>
 
-/** The id part of a `widget:…` or `terminal:…` target (same bare id on canvas). */
+
 function widgetIdOf(target: string): string {
   const parsed = parseResource(target)
   if (!parsed || (parsed.scheme !== 'widget' && parsed.scheme !== 'terminal')) {
@@ -44,7 +44,7 @@ export function registerCanvasCommands({
 
   flow.registerDefinition<WidgetCreatePayload, CanvasWidget>({
     type: 'widget.create',
-    description: 'Create a canvas widget (terminal, timer, board, …).',
+    description: 'Create a canvas widget (terminal, timer, planner, …).',
     targetScheme: 'widget',
     ignoreVersion: true,
     payloadSchema: {
@@ -80,8 +80,8 @@ export function registerCanvasCommands({
             h: Number(p.h) || defaults?.h || 360,
             z: Number(p.z) || 1
           })
-          // External canvas creates have no renderer-side mount yet. Notify
-          // the open window immediately instead of waiting for a restart.
+
+
           requestWidget({
             id: widget.id,
             title: widget.title,
@@ -116,15 +116,15 @@ export function registerCanvasCommands({
     handler: {
       apply: ({ command }) => {
         let id = widgetIdOf(command.target)
-        // Models often say widget:new / terminal:new after opening a shell.
-        // Only that sentinel retargets — a typo must not rename the focused pane.
+
+
         if (!canvas.widget(id) && id === 'new' && typeof command.payload?.title === 'string') {
           const preferred = terminals.resolveWriteTarget('')
           if (preferred && canvas.widget(preferred)) id = preferred
         }
         if (!canvas.widget(id)) throw new CommandError('not_found', `widget ${id} not found`)
         const updated = canvas.patchWidget(id, command.payload ?? {})
-        // Keep the shell list label in the assistant's context and renderer in sync.
+
         if (typeof command.payload?.title === 'string') {
           if (updated.kind === 'terminal' || !updated.kind) {
             terminals.setTitle(id, command.payload.title)

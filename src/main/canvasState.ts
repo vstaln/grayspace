@@ -15,13 +15,13 @@ import {
   type ResourceId
 } from './core/index.ts'
 
-/** Bumped when the on-disk canvas shape gains fields (widgets, version, …). */
+
 export const CANVAS_SCHEMA_VERSION = 3
 
-/** Snapshot cache interval for event sourcing. */
+
 export const CANVAS_SNAPSHOT_INTERVAL = 50
 
-export type WidgetKind = 'terminal' | 'timer' | 'board' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration' | 'mission'
+export type WidgetKind = 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration' | 'mission'
 
 export interface CanvasWidget {
   id: string
@@ -33,7 +33,7 @@ export interface CanvasWidget {
   h: number
   z: number
   maximized?: boolean
-  /** Optimistic-concurrency version, owned by the Command Bus. */
+
   version: number
   updatedAt: number
 }
@@ -61,7 +61,7 @@ export interface CanvasSnapshot {
   widgets: CanvasWidget[]
   camera: CanvasCamera
   strokes: CanvasStroke[]
-  /** Version of the canvas itself (camera + strokes), not of any widget. */
+
   version: number
 }
 
@@ -75,14 +75,14 @@ export interface CanvasDataState {
 const MAX_STROKE_POINTS = 200_000
 const MAX_WIDGETS = 200
 
-/** The single canvas object camera and stroke commands address. */
+
 export const CANVAS_TARGET_ID = 'main'
 
 const EMPTY_WORKSPACE_SLOT = '__no-workspace__'
 type WorkspaceChangeListener = (dir: string | undefined) => void
 const workspaceChangeListeners = new Set<WorkspaceChangeListener>()
 
-/** AppState uses this bridge so changing the active folder also changes the canvas. */
+
 export function registerCanvasWorkspaceListener(listener: WorkspaceChangeListener): void {
   workspaceChangeListeners.add(listener)
 }
@@ -93,26 +93,26 @@ export function notifyCanvasWorkspaceChanged(dir: string | undefined): void {
 
 const isNum = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 
-/**
- * There is deliberately no native bridge here anymore.
- *
- * `canvas-core`'s Rust `sanitizeStrokes` took the stroke array as a
- * `serde_json::Value`, which means napi rebuilt every single `{x, y}` point as
- * a `serde_json::Map` (two heap-allocated key strings apiece) on the JS thread
- * before any Rust code ran. Measured on a canvas at the sanitizer's own
- * 200,000-point ceiling: **~324 ms** for the native path against **~3.7 ms**
- * for `sanitizeStrokesJs` below — the "acceleration" was ~90x slower than the
- * TypeScript it was meant to replace, and it ran on every canvas save, import
- * and journal replay while the user was drawing.
- *
- * The cost is the object-by-object napi bridge, not the Rust, so a faster Rust
- * body cannot fix it: flattening the points into a typed array in JS first
- * costs about as much as simply doing the whole sanitize in JS. Rust still
- * earns its place where the bridge is cheap and the work is not — see
- * `storage-core`'s off-thread writer (one string) and `sanitizeScrollback`.
- */
 
-const WIDGET_KINDS = new Set<string>(['terminal', 'timer', 'board', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'orchestration', 'mission'])
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+const WIDGET_KINDS = new Set<string>(['terminal', 'timer', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'orchestration', 'mission'])
 
 export function sanitizeWidget(value: unknown): CanvasWidget | null {
   const w = value as Record<string, unknown>
@@ -145,13 +145,13 @@ export function sanitizeStrokesJs(value: unknown): CanvasStroke[] {
     for (const p of s.points) {
       const point = p as Record<string, unknown>
       if (point && isNum(point.x) && isNum(point.y)) {
-        // `+ 0` folds -0 to +0. The native path (canvas-core's Rust sanitizer)
-        // can never tell the two apart: napi-rs converts an incoming JS number
-        // to serde_json::Number through an integer fast path first, and
-        // `-0.0 as u32` is 0 — the sign is gone before our Rust code ever sees
-        // the point. Matching that here isn't working around a bug so much as
-        // keeping both sanitizers' *output* the one thing they've always
-        // promised to agree on; -0 and +0 draw the same pixel either way.
+
+
+
+
+
+
+
         pts.push({ x: point.x + 0, y: point.y + 0 })
         if (pts.length >= 10_000) break
       }
@@ -165,7 +165,7 @@ export function sanitizeStrokesJs(value: unknown): CanvasStroke[] {
 }
 
 function sanitizeStrokes(value: unknown): CanvasStroke[] {
-  // Fresh/legacy canvas snapshots may omit `strokes`.
+
   return sanitizeStrokesJs(value ?? [])
 }
 
@@ -185,11 +185,11 @@ function sanitizeCamera(value: unknown): CanvasCamera {
   return { x: c.x, y: c.y, zoom: Math.min(4, Math.max(0.2, c.zoom)) }
 }
 
-/**
- * Canvas layout (widgets, camera, strokes).
- *
- * Event sourced: state = fold(events), JSON file acts as snapshot cache.
- */
+
+
+
+
+
 export class CanvasStore extends EventEmitter {
   private widgets = new Map<string, CanvasWidget>()
   private camera: CanvasCamera = { x: 0, y: 0, zoom: 1 }
@@ -239,10 +239,10 @@ export class CanvasStore extends EventEmitter {
   private switchWorkspace(dir: string | undefined): void {
     if (this.workspaceDir === dir && this.loaded) return
     if (this.loaded) {
-      // A pending debounce belongs to the old workspace. Cancel it before
-      // queuing that workspace's snapshot; otherwise its callback can fire
-      // after the switch and save the new workspace state under the old
-      // change's timing.
+
+
+
+
       if (this.saveTimer !== null) {
         clearTimeout(this.saveTimer)
         this.saveTimer = null
@@ -265,26 +265,26 @@ export class CanvasStore extends EventEmitter {
     this.emit('change', snapshot)
   }
 
-  // ---- Event sourcing: Reducer --------------------------------------------
 
-  /**
-   * Pure state reduction: state = reduce(state, event).
-   */
+
+
+
+
   static reduce(state: CanvasDataState, event: JournalEntry): CanvasDataState {
     if (event.phase !== 'commit') return state
-    // Copy-on-write, not copy-always. Every journal event used to clone the
-    // whole widget map *and* the whole stroke array up front, even a
-    // `canvas.camera` event that touches neither — so replaying a session's
-    // journal, or any single camera nudge from an agent, copied the entire
-    // canvas. `fold` chains this call per event, so the cost was quadratic in
-    // the tail length. The clone now happens only in the branch that writes.
+
+
+
+
+
+
     let nextWidgets = state.widgets
     let nextCamera = state.camera
     let nextStrokes = state.strokes
     let nextVersion = state.version
     const payload = (event.payload ?? {}) as Record<string, unknown>
     const targetId = event.target.startsWith('widget:') ? event.target.slice('widget:'.length) : event.target
-    // The reducer must stay pure: the caller's map is never written through.
+
     const mutableWidgets = (): Map<string, CanvasWidget> => {
       if (nextWidgets === state.widgets) nextWidgets = new Map(state.widgets)
       return nextWidgets
@@ -338,9 +338,9 @@ export class CanvasStore extends EventEmitter {
     }
   }
 
-  /**
-   * Applies an event to this store instance using the reducer.
-   */
+
+
+
   applyEvent(event: JournalEntry): void {
     if (event.phase !== 'commit') return
     const current: CanvasDataState = {
@@ -350,9 +350,9 @@ export class CanvasStore extends EventEmitter {
       version: this.canvasVersions.current(CANVAS_TARGET_ID)
     }
     const nextState = CanvasStore.reduce(current, event)
-    // Assign, never clear-and-refill: `reduce` returns the *same* Map when the
-    // event touched no widget, and clearing it would then empty the source it
-    // was about to be refilled from.
+
+
+
     this.widgets = nextState.widgets
     this.camera = nextState.camera
     this.strokes = nextState.strokes
@@ -371,9 +371,9 @@ export class CanvasStore extends EventEmitter {
     }
     this.eventsSinceSnapshot += 1
     if (this.eventsSinceSnapshot >= CANVAS_SNAPSHOT_INTERVAL) {
-      // Off-thread: this is the journal-replay path, and a sync fsync every
-      // 50 events stalls startup (and drag bursts) for a multi-MB canvas.
-      // Ordering is still safe — flushAsync is chained and seq-guarded.
+
+
+
       this.flushAsync()
     }
   }
@@ -388,15 +388,15 @@ export class CanvasStore extends EventEmitter {
     return fold(events, CanvasStore.reduce, start)
   }
 
-  // ---- Loading & Snapshot Cache -------------------------------------------
+
 
   private ensure(tailEvents?: JournalEntry[]): void {
     if (this.loaded) return
     const workspaceDir = this.workspaceDir ?? this.readActiveWorkspaceDir()
     this.workspaceDir = workspaceDir
-    // Only mark as loaded once the read succeeded: a transient EBUSY/EACCES
-    // (antivirus, backup tool) must not leave the store looking "empty"
-    // for the rest of the session. readStoreJson throws in that case.
+
+
+
     const raw = readStoreJson<Record<string, unknown>>(this.file, {})
     const legacyFile = join(getUserDataDir(), 'workspace-canvas.json')
     const alreadyMigrated = (() => {
@@ -406,9 +406,9 @@ export class CanvasStore extends EventEmitter {
         return false
       }
     })()
-    // Both reads happen before the loaded flag flips: a transient EBUSY on the
-    // legacy file must not leave an "empty" canvas whose next flush() would
-    // overwrite the real snapshot.
+
+
+
     const legacy = Object.keys(raw).length === 0 && !alreadyMigrated
       ? readStoreJson<Record<string, unknown>>(legacyFile, {})
       : {}
@@ -430,7 +430,7 @@ export class CanvasStore extends EventEmitter {
     const persisted = isNum(data.version) && data.version > 0 ? data.version : 1
     this.canvasVersions.seed([{ id: CANVAS_TARGET_ID, version: persisted }])
 
-    // Replay NDJSON journal tail if provided
+
     if (tailEvents && tailEvents.length > 0) {
       const tailToApply = tailEvents.filter((e) => e.seq > this.snapshotSeq && e.phase === 'commit')
       if (tailToApply.length > 0) {
@@ -449,8 +449,8 @@ export class CanvasStore extends EventEmitter {
       }
     }
 
-    // Persist the cleaned snapshot so deleted canvas note widgets do not remain
-    // as inert data on disk after the first load.
+
+
     if (removedNoteWidget) this.flush()
 
     if (Object.keys(legacy).length > 0) {
@@ -469,7 +469,7 @@ export class CanvasStore extends EventEmitter {
     this.ensure(tailEvents)
   }
 
-  // ---- Event Sourcing Free Features: rewind, blame, replay, fork -----------
+
 
   rewind(targetSeq: number, events: Iterable<JournalEntry> = []): CanvasSnapshot {
     this.ensure()
@@ -533,7 +533,7 @@ export class CanvasStore extends EventEmitter {
     }
   }
 
-  // ---- reads --------------------------------------------------------------
+
 
   load(): CanvasSnapshot {
     this.ensure()
@@ -575,7 +575,7 @@ export class CanvasStore extends EventEmitter {
     return rawWidgets
   }
 
-  // ---- writes (command handlers only) -------------------------------------
+
 
   putWidget(input: Omit<CanvasWidget, 'version' | 'updatedAt'>, overlayId?: string): CanvasWidget {
     this.ensure()
@@ -667,7 +667,7 @@ export class CanvasStore extends EventEmitter {
 
     const incoming = Array.isArray(input.widgets) ? input.widgets : null
     const seen = new Set<string>()
-    // COR-5: when over limit, drop oldest by updatedAt instead of truncating tail (which drops newest).
+
     const slicedIncoming = (() => {
       if (!incoming || incoming.length <= MAX_WIDGETS) return incoming ?? []
       const scored = incoming
@@ -734,7 +734,7 @@ export class CanvasStore extends EventEmitter {
     return { applied, skipped, removed, removedWidgets }
   }
 
-  // ---- persistence --------------------------------------------------------
+
 
   private changed(): void {
     if (this.changeTimer === null) {
@@ -778,8 +778,8 @@ export class CanvasStore extends EventEmitter {
     if (!this.loaded) return
     try {
       writeJsonAtomic(this.file, this.snapshotForPersist())
-      // A synchronous write is the newest state; queued async writes captured
-      // before it are now redundant and must not rename over it.
+
+
       this.syncFlushSeq = this.writeSeq
       this.eventsSinceSnapshot = 0
     } catch (err) {
@@ -792,22 +792,22 @@ export class CanvasStore extends EventEmitter {
     this.writeSeq += 1
     const seq = this.writeSeq
     const snapshot = this.snapshotForPersist()
-    // Capture the destination together with the snapshot. `this.file` is
-    // workspace-dependent; resolving it inside the promise chain lets a
-    // queued old-workspace write land in whichever workspace is active when
-    // the disk queue eventually reaches it.
+
+
+
+
     const file = this.file
-    // Serialize async writes to the same file: two atomic writes left in
-    // flight can rename in the wrong order and leave an OLDER snapshot on
-    // disk, losing the newest change (two saves close together, e.g. while
-    // dragging a widget and immediately closing a window).
+
+
+
+
     this.writeChain = this.writeChain
       .catch(() => {
-        // A failed write must not strand the chain.
+
       })
       .then(async (): Promise<boolean> => {
-        // A sync flush (workspace switch, shutdown) already wrote a newer
-        // snapshot — this queued copy is redundant, skip it.
+
+
         if (seq <= this.syncFlushSeq) return false
         await writeJsonAtomicAsync(file, snapshot)
         this.eventsSinceSnapshot = 0
@@ -815,13 +815,13 @@ export class CanvasStore extends EventEmitter {
       })
       .then((wrote) => {
         if (!wrote) return
-        // An in-flight rename cannot be aborted: if a sync flush landed while
-        // this write was running, the older snapshot may have won the race.
-        // Memory still holds the newest state — put it back on disk.
-        // A synchronous flush can race an async write during shutdown. Only
-        // repair the same workspace file; after a workspace switch the sync
-        // flush already wrote the old snapshot and the current in-memory
-        // state belongs to a different destination.
+
+
+
+
+
+
+
         if (this.syncFlushSeq >= seq && file === this.file) {
           try {
             writeJsonAtomic(file, this.snapshotForPersist())
@@ -834,9 +834,9 @@ export class CanvasStore extends EventEmitter {
       .catch((err: unknown) => {
         notifyPersistError('canvas', err)
       })
-    // Don't zero eagerly — the async write hasn't landed yet. The chain's
-    // success path resets the interval; eager zero hid a crash-window where
-    // 50 new events could accumulate without triggering the next snapshot.
+
+
+
   }
 
   dispose(): void {

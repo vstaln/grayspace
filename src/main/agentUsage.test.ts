@@ -31,12 +31,12 @@ describe('agentUsage - getAgentUsageStats', () => {
     assert.ok(cld)
     assert.ok(opn)
 
-    // Verify open detection from mock terminals
+
     assert.equal(agy.isOpen, true)
     assert.equal(cdx.isOpen, true)
     assert.equal(opn.isOpen, true)
 
-    // Verify 5h, weekly, and monthly structures
+
     assert.ok(typeof agy.fiveHour.percent === 'number')
     assert.ok(typeof agy.fiveHour.requests === 'number')
     assert.ok(typeof agy.weekly.percent === 'number')

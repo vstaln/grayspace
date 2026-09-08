@@ -3,7 +3,7 @@ import { test, describe } from 'node:test'
 import { LockManager, DEFAULT_LOCK_TTL_MS } from './locks.ts'
 import { CommandError } from './types.ts'
 
-/** A hand-cranked clock: TTL behaviour must be tested without real waiting. */
+
 function fakeClock(start = 1_000_000): { now: () => number; advance: (ms: number) => void } {
   let t = start
   return { now: () => t, advance: (ms: number) => void (t += ms) }
@@ -40,8 +40,8 @@ describe('LockManager — two actors at once', () => {
 
   test('the same file reached through two spellings is one lock', () => {
     const { locks } = setup()
-    // The bus normalises paths through fileResource(); this asserts the manager
-    // itself treats a normalised id as a single key rather than by luck.
+
+
     locks.acquire({ resource: 'file:C:/src/a.ts', actorId: 'agent-a' })
     assert.throws(() => locks.acquire({ resource: 'file:C:/src/a.ts', actorId: 'agent-b' }))
   })
@@ -108,7 +108,7 @@ describe('LockManager — TTL and heartbeat', () => {
     const { locks, clock } = setup()
     locks.acquire({ resource: 'file:a.ts', actorId: 'agent-a', ttlMs: 30_000 })
     clock.advance(30_001)
-    // Whoever picked the resource up in the meantime must keep it.
+
     locks.acquire({ resource: 'file:a.ts', actorId: 'agent-b', ttlMs: 30_000 })
     assert.equal(locks.heartbeat('agent-a', 30_000), 0)
     assert.equal(locks.holder('file:a.ts')?.actorId, 'agent-b')
@@ -159,8 +159,8 @@ describe('LockManager — actor lifecycle', () => {
 
   test('locks are in-memory only — there is no persistence entry point', () => {
     const { locks } = setup()
-    // Guards the rule from the spec: nothing may ever write locks to disk,
-    // because every holder is dead after a restart.
+
+
     assert.equal((locks as unknown as { save?: unknown }).save, undefined)
     assert.equal((locks as unknown as { load?: unknown }).load, undefined)
   })

@@ -11,11 +11,11 @@ import {
   type OrcSpaceFixture
 } from '../helpers/app'
 
-/**
- * Journey 2 — the terminal life cycle: rail → widget → shell → typed command →
- * echoed output → close (process dies).
- * Journey 5 — the launch-agent button writes the CLI command into the shell.
- */
+
+
+
+
+
 let ctx: OrcSpaceFixture
 
 test.beforeAll(async () => {
@@ -28,8 +28,33 @@ test.afterAll(async () => {
 })
 
 async function openTerminalFromCanvas(): Promise<void> {
-  await ctx.page.getByTestId('canvas').click({ button: 'right', position: { x: 420, y: 260 } })
+  const canvas = ctx.page.getByTestId('canvas')
+  const point = await canvas.evaluate((el) => {
+    const canvasRect = el.getBoundingClientRect()
+    const widgets = Array.from(el.querySelectorAll<HTMLElement>('.widget')).map((widget) => widget.getBoundingClientRect())
+    const candidates = [
+      { x: 48, y: 72 },
+      { x: canvasRect.width - 48, y: 72 },
+      { x: 48, y: canvasRect.height - 72 },
+      { x: canvasRect.width - 48, y: canvasRect.height - 72 }
+    ]
+    return candidates.find(({ x, y }) =>
+      x >= 0 && y >= 0 && x < canvasRect.width && y < canvasRect.height &&
+      !widgets.some((rect) => {
+        const px = canvasRect.left + x
+        const py = canvasRect.top + y
+        return px >= rect.left && px <= rect.right && py >= rect.top && py <= rect.bottom
+      })
+    ) ?? candidates[0]
+  })
+  await canvas.click({ button: 'right', position: point })
   await ctx.page.getByTestId('cm-terminal').click()
+}
+
+async function closeTerminal(page: OrcSpaceFixture['page']): Promise<void> {
+  await terminalFrame(page).getByTestId('widget-close').click()
+  await page.getByTestId('confirm-accept').click()
+  await expect(terminalFrame(page)).toHaveCount(0)
 }
 
 test('a terminal spawns from the canvas menu, runs a command, and closes for real', async () => {
@@ -39,20 +64,20 @@ test('a terminal spawns from the canvas menu, runs a command, and closes for rea
   await openTerminalFromCanvas()
   const id = await waitForTerminalShell(ctx, page)
 
-  // Type into the mounted xterm and let the shell echo it back.
+
   const frame = terminalFrame(page)
   await frame.getByTestId('terminal-xterm').click()
   await frame.locator('textarea').focus()
   await page.keyboard.type(`echo ${tag}`)
   await page.keyboard.press('Enter')
 
-  // The pty buffer — not the canvas-rendered DOM — proves the keystrokes made
-  // it into the real shell and the output came back.
+
+
   await waitForTerminalOutput(ctx, id, (output) => output.includes(tag))
 
-  // Closing the widget disposes the shell: the terminal leaves the canvas and
-  // disappears from the app's live terminal list.
-  // Closing a terminal asks first — the running process is about to be killed.
+
+
+
   await frame.getByTestId('widget-close').click()
   await page.getByTestId('confirm-accept').click()
   await expect(terminalFrame(page)).toHaveCount(0)
@@ -70,9 +95,73 @@ test('the agent-launch button types the CLI command into the shell', async () =>
   const frame = terminalFrame(page)
   await frame.getByTestId('widget-launch-agent').click()
 
-  // The default agent is Antigravity; the contract is that its real CLI command
-  // reaches the shell without substituting a different provider.
+
+
   await waitForTerminalOutput(ctx, id, (output) => output.includes('agy'))
+  await closeTerminal(page)
+})
+
+test('choosing an agent from the portal menu does not pan the canvas', async () => {
+  const { page } = ctx
+
+  await openTerminalFromCanvas()
+  await waitForTerminalShell(ctx, page)
+  await page.getByTestId('tool-pan').click()
+
+  const world = page.getByTestId('canvas').locator(':scope > div').first()
+  const readCamera = () => world.evaluate((el) => (el as HTMLElement).style.transform)
+
+  const before = await readCamera()
+  const frame = terminalFrame(page)
+  const frameBefore = await frame.boundingBox()
+  await frame.getByTestId('widget-agent-menu').click()
+  const menu = page.getByRole('menu', { name: 'Agent' })
+  await expect(menu).toBeVisible()
+
+
+
+  const item = menu.getByRole('menuitem', { name: 'Claude' })
+  const box = await item.boundingBox()
+  if (!box) throw new Error('agent menu item is not laid out')
+  const startX = box.x + box.width / 2
+  const startY = box.y + box.height / 2
+  await page.mouse.move(startX, startY)
+  await page.mouse.down()
+  await page.mouse.move(startX + 120, startY + 80)
+  await expect(menu).toBeVisible()
+  await expect(page.locator('body')).not.toHaveClass(/is-dragging/)
+  await page.mouse.up()
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  expect(await readCamera()).toEqual(before)
+  expect(await frame.boundingBox()).toEqual(frameBefore)
+  await item.click()
+  await expect(frame.getByTestId('widget-launch-agent')).toHaveAttribute('aria-label', 'Launch Claude')
+  await expect(menu).toHaveCount(0)
+  await page.mouse.move(startX + 180, startY + 100)
+  expect(await readCamera()).toEqual(before)
+
+
+  const title = frame.getByTestId('widget-title')
+  const titleBox = await title.boundingBox()
+  if (!titleBox) throw new Error('widget title is not laid out')
+  const dragStartX = titleBox.x + titleBox.width / 2
+  const dragStartY = titleBox.y + titleBox.height / 2
+  await title.dispatchEvent('pointerdown', {
+    button: 0, buttons: 1, clientX: dragStartX, clientY: dragStartY
+  })
+  await expect(page.locator('body')).toHaveClass(/is-dragging/)
+  await page.mouse.move(dragStartX + 200, dragStartY + 120)
+  await expect(page.locator('body')).not.toHaveClass(/is-dragging/)
+  expect(await frame.boundingBox()).toEqual(frameBefore)
+
+
+
+  await frame.getByTestId('widget-agent-menu').click()
+  await expect(menu).toBeVisible()
+  await page.getByTestId('canvas').evaluate((el) => (el as HTMLElement).focus())
+  await page.keyboard.press('ArrowRight')
+  await expect(menu).toHaveCount(0)
+  await closeTerminal(page)
 })
 
 test('Code paste is delivered only to the focused terminal', async () => {

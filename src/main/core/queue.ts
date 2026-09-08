@@ -6,9 +6,9 @@ export interface TokenBucketOptions {
   now?: () => number
 }
 
-/**
- * Token Bucket Rate Limiter per actor to prevent loop runaway.
- */
+
+
+
 export class ActorRateLimiter {
   private readonly buckets = new Map<string, { tokens: number; lastRefill: number }>()
   private readonly capacity: number
@@ -16,8 +16,8 @@ export class ActorRateLimiter {
   private readonly now: () => number
 
   constructor(options: TokenBucketOptions = {}) {
-    this.capacity = options.capacity ?? 30 // Burst max 30 commands
-    this.refillPerSec = options.refillPerSec ?? 20 // 20 commands / sec
+    this.capacity = options.capacity ?? 30
+    this.refillPerSec = options.refillPerSec ?? 20
     this.now = options.now ?? Date.now
   }
 
@@ -50,54 +50,54 @@ export interface QueuedTask<T = unknown> {
   id: string
   priority: CommandPriority
   actorId: string
-  /**
-   * Resource lanes this task contends for (normalized target ids). Tasks on
-   * disjoint lanes run concurrently; tasks sharing any lane run one at a
-   * time. Empty or omitted means "contends for nothing" — always runnable.
-   */
+
+
+
+
+
   lanes?: string[]
   run: (unblock: () => void) => Promise<T>
   resolve: (value: T | PromiseLike<T>) => void
   reject: (reason?: unknown) => void
-  /** Set by the queue at enqueue time; drives starvation-aging. */
+
   enqueuedAt?: number
 }
 
 const RANK: Record<CommandPriority, number> = { high: 0, normal: 1, low: 2 }
 
-/**
- * Lane assigned to tasks submitted without one. Direct users of the queue
- * (tests, tools) get the historical behaviour — one global lane, nothing ever
- * overlaps — while callers that declare lanes, like the CommandFlow, opt into
- * per-resource concurrency explicitly.
- */
+
+
+
+
+
+
 const GLOBAL_LANE = '\u0000global'
 
-/**
- * Lane-aware priority queue with backpressure, user preemption and aging.
- *
- * The old design serialized *every* write through a single lane: correct for
- * shared state, but it parked a keystroke behind an unrelated agent's paced
- * terminal write, which is why `transient`/`bypassQueue` escape hatches had to
- * exist. Lanes fix the actual granularity: writes serialize **per resource**
- * (the thing the lock gate protects anyway), not globally.
- *
- * Selection rule: among tasks whose lanes are all free, the most senior
- * (effective priority, then age) wins. A task whose lane is busy is skipped —
- * it could not run anyway, and holding the whole queue behind it would rebuild
- * the single-lane stall through the back door. Same-lane tasks never run
- * concurrently because starting a task marks its lanes busy until it settles
- * or hands them on via `unblock()`.
- *
- * Transactions claim all their lanes up front, all-or-nothing: a transaction
- * waits in the queue rather than holding some lanes while waiting for others,
- * so circular wait — and therefore deadlock — cannot arise regardless of the
- * order targets appear in.
- *
- * Aging promotes a waiting task one priority level after `agePromoteMs`, so a
- * sustained stream of user commands delays `low` background work by seconds,
- * not forever.
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 export class PriorityCommandQueue {
   private readonly high: QueuedTask[] = []
   private readonly normal: QueuedTask[] = []
@@ -117,7 +117,7 @@ export class PriorityCommandQueue {
     return this.high.length + this.normal.length + this.low.length
   }
 
-  /** Lanes currently held by running tasks — exposed for metrics/debugging. */
+
   get busyLaneCount(): number {
     return this.busyLanes.size
   }
@@ -154,20 +154,20 @@ export class PriorityCommandQueue {
     })
   }
 
-  /** Effective priority rank after aging: lower runs first (0 = high). */
+
   private rankOf(item: QueuedTask): number {
     const rank = RANK[item.priority]
     const waited = this.now() - (item.enqueuedAt ?? this.now())
     return waited >= this.agePromoteMs ? Math.max(0, rank - 1) : rank
   }
 
-  /**
-   * Most senior task whose lanes are all free, or undefined. Seniority is
-   * (effective rank, then oldest enqueue) so aged work is not starved by a
-   * fresh stream of higher-priority-but-equal-rank arrivals. Tasks whose lanes
-   * are busy are skipped entirely: they cannot run, and stalling every freer
-   * lane behind them would rebuild the single-lane queue through the back door.
-   */
+
+
+
+
+
+
+
   private pickNext(): QueuedTask | undefined {
     let best: QueuedTask | undefined
     let bestBucket: QueuedTask[] | undefined
@@ -193,8 +193,8 @@ export class PriorityCommandQueue {
   }
 
   private pump(): void {
-    // Start every runnable task, not just one: disjoint lanes mean several
-    // handlers may legitimately be in flight at once.
+
+
     for (;;) {
       const next = this.pickNext()
       if (!next) return
@@ -219,7 +219,7 @@ export class PriorityCommandQueue {
     try {
       pending = Promise.resolve(item.run(unblock))
     } catch (err) {
-      // A synchronously throwing run() must not leave lanes stuck busy.
+
       release()
       item.reject(err)
       return

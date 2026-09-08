@@ -33,10 +33,10 @@ export interface ActivityDigest {
   recentCommits: JournalEntry[]
 }
 
-/**
- * Real-time materialized projections updated synchronously on each journal event.
- * Eliminates NDJSON scans for timelines, activity feeds and actor status.
- */
+
+
+
+
 export class ProjectionManager {
   private readonly resourceMap = new Map<ResourceId, ResourceSummary>()
   private readonly actorMap = new Map<string, ActorSummary>()
@@ -50,22 +50,22 @@ export class ProjectionManager {
     options: { maxRollingEntries?: number; windowMs?: number; now?: () => number } = {}
   ) {
     this.maxRollingEntries = options.maxRollingEntries ?? 1_000
-    this.windowMs = options.windowMs ?? 60 * 60_000 // 1 hour window
+    this.windowMs = options.windowMs ?? 60 * 60_000
     this.now = options.now ?? Date.now
 
-    // Seed from existing journal entries
+
     for (const entry of journal.all()) {
       this.handleEntry(entry)
     }
 
-    // Subscribe to new journal entries
+
     journal.on('entry', (entry: JournalEntry) => this.handleEntry(entry))
   }
 
   private handleEntry(entry: JournalEntry): void {
     if (entry.phase !== 'commit') return
 
-    // 1. Update Resource History Projection
+
     const parsed = parseResource(entry.target)
     const scheme = parsed ? parsed.scheme : ('system' as ResourceScheme)
     let res = this.resourceMap.get(entry.target)
@@ -92,7 +92,7 @@ export class ProjectionManager {
       if (res.commits.length > 200) res.commits.splice(0, res.commits.length - 200)
     }
 
-    // 2. Update Actor Activity Projection
+
     let act = this.actorMap.get(entry.actorId)
     if (!act) {
       act = {
@@ -112,23 +112,23 @@ export class ProjectionManager {
       act.touchedResources.add(entry.target)
     }
 
-    // 3. Update Rolling Recent Activity
+
     this.rollingCommits.push(entry)
     if (this.rollingCommits.length > this.maxRollingEntries) {
       this.rollingCommits.splice(0, this.rollingCommits.length - this.maxRollingEntries)
     }
   }
 
-  /**
-   * Returns complete history and summary for a single resource in O(1).
-   */
+
+
+
   resourceHistory(target: ResourceId): ResourceSummary | undefined {
     return this.resourceMap.get(target)
   }
 
-  /**
-   * Returns real-time activity status for an actor in O(1).
-   */
+
+
+
   actorStatus(actorId: string): (Omit<ActorSummary, 'touchedResources'> & { touchedResources: string[] }) | undefined {
     const act = this.actorMap.get(actorId)
     if (!act) return undefined
@@ -138,9 +138,9 @@ export class ProjectionManager {
     }
   }
 
-  /**
-   * Returns aggregated activity digest over the rolling time window (e.g. past hour).
-   */
+
+
+
   recentDigest(customWindowMs?: number): ActivityDigest {
     const window = customWindowMs ?? this.windowMs
     const now = this.now()

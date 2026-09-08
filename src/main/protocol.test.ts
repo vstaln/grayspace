@@ -43,7 +43,7 @@ describe('protocol - setupMediaHeaders', () => {
     assert.ok(headersReceivedFilter)
     assert.ok(headersReceivedListener)
 
-    // Test onBeforeSendHeaders sets Referer
+
     let interceptedHeaders: Record<string, string> | undefined
     const beforeSend = beforeSendListener as BeforeSendListener
     beforeSend(
@@ -55,7 +55,7 @@ describe('protocol - setupMediaHeaders', () => {
     assert.strictEqual(interceptedHeaders?.['Referer'], 'https://orcspace.app/')
     assert.strictEqual(interceptedHeaders?.['User-Agent'], 'Test')
 
-    // Test onHeadersReceived strips x-frame-options and frame-ancestors
+
     let interceptedResponse: Record<string, string | string[]> | undefined
     const headersReceived = headersReceivedListener as HeadersReceivedListener
     headersReceived(

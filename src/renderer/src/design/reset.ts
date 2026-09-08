@@ -1,12 +1,12 @@
 import type { Sheet } from './css'
 
-/*
- * Element-level reset, ported 1:1 from the Tailwind v4 preflight the app shipped
- * with. UnoCSS does not ship a preflight, so this keeps form controls, media
- * elements and heading/list defaults behaving exactly as before the switch.
- * Injected first by `installStyles`, so every later rule (utilities and the app
- * stylesheet) wins ties against it, same as `@layer base` did under Tailwind.
- */
+
+
+
+
+
+
+
 export const resetSheet: Sheet = {
   '*, :after, :before, ::backdrop': {
     boxSizing: 'border-box',

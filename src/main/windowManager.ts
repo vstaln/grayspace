@@ -9,10 +9,10 @@ import type { AppState } from './appState.ts'
 
 let mainWindow: BrowserWindow | null = null
 
-// Browser guests are untrusted content. Only capabilities that do not expose
-// device data or network surfaces are allowed without an explicit product flow.
-// Electron's permission API is allow-by-callback, so unknown/new permissions
-// must remain denied by default rather than being silently granted.
+
+
+
+
 const ALLOWED_WEBVIEW_PERMISSIONS = new Set(['fullscreen', 'pointerLock'])
 
 export function getMainWindow(): BrowserWindow | null {
@@ -29,8 +29,8 @@ export function send(channel: string, ...args: unknown[]): void {
       mainWindow.webContents.send(channel, ...args)
     }
   } catch (err) {
-    // A renderer crash between the isDestroyed check and send must not take
-    // down the main process (terminal batch flushes call this per frame).
+
+
     console.warn(`failed to send ${channel}`, err)
   }
 }
@@ -81,7 +81,7 @@ export function createWindow(): BrowserWindow {
     win.focus()
   })
 
-  // Failsafe: guarantee window visibility even if Vite dev compilation delays initial paint
+
   const showTimer = setTimeout(() => {
     if (!win.isDestroyed() && !win.isVisible()) {
       win.show()
@@ -90,8 +90,8 @@ export function createWindow(): BrowserWindow {
   }, 1200)
   win.once('show', () => clearTimeout(showTimer))
 
-  // Forward renderer errors only (level 3 === error).
-  // Supports both legacy (event, level, message, line, sourceId) and modern (event, details) signatures.
+
+
   win.webContents.on('console-message', (_event, ...args: unknown[]) => {
     let level = 0
     let message = ''
@@ -122,10 +122,10 @@ export function createWindow(): BrowserWindow {
   })
 
   win.webContents.on('will-navigate', (e, url) => {
-    // Only the app's own entry points may navigate the privileged window:
-    // the dev server, the packaged control-server origin, or the exact
-    // packaged index file. A suffix match lets any local .../index.html
-    // (including a downloaded one) load with preload/IPC attached.
+
+
+
+
     const devUrl = process.env['ELECTRON_RENDERER_URL']
     const controlOrigin = `http://127.0.0.1:${CONTROL_PORT}/`
     let isAppUrl =
@@ -162,8 +162,8 @@ export function createWindow(): BrowserWindow {
   if (process.env['ELECTRON_RENDERER_URL']) {
     win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    // Portless loading: orc://app provides a secure, valid origin for media providers
-    // without requiring any local HTTP server or open TCP ports.
+
+
     win.loadURL('orc://app/index.html')
   }
 
@@ -191,22 +191,22 @@ export function handleSecondInstanceArgs(
       deps.send('workspace:onDirChange', dir)
       return
     } catch {
-      /* try next arg */
+
     }
   }
 }
 
 export function setupWebContentsHandlers(sendFn: (channel: string, ...args: unknown[]) => void): void {
   app.on('web-contents-created', (_event, contents) => {
-    // Harden every <webview> guest at attach time (fires on the embedder):
-    // strip any renderer-supplied preload and force a locked-down sandbox.
+
+
     contents.on('will-attach-webview', (e, webPreferences, params) => {
       delete (params as Record<string, unknown>).preload
       delete (params as Record<string, unknown>).preloadURL
       ;(webPreferences as Record<string, unknown>).nodeIntegration = false
       ;(webPreferences as Record<string, unknown>).contextIsolation = true
       ;(webPreferences as Record<string, unknown>).sandbox = true
-      // webviewTag inside a guest would allow nesting untrusted guests.
+
       ;(webPreferences as Record<string, unknown>).webviewTag = false
       void e
     })
@@ -225,9 +225,9 @@ export function setupWebContentsHandlers(sendFn: (channel: string, ...args: unkn
       event.preventDefault()
     })
 
-    // Guest top-level navigation guard: only http(s) may navigate the guest
-    // (plus the blank initial document). javascript:/data:/file:/blob: and
-    // anything else non-http(s) is denied — the embedder allowlists nothing.
+
+
+
     contents.on('will-navigate', (e, url) => {
       if (url === 'about:blank') return
       let ok = false
@@ -240,14 +240,14 @@ export function setupWebContentsHandlers(sendFn: (channel: string, ...args: unkn
       if (!ok) e.preventDefault()
     })
 
-    // Browser guests get no privileged capabilities. Keep this deny-by-default
-    // because Electron may add permission names in future releases.
+
+
     try {
       contents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
         callback(ALLOWED_WEBVIEW_PERMISSIONS.has(permission))
       })
     } catch {
-      /* session may be torn down during shutdown */
+
     }
 
     contents.setWindowOpenHandler(({ url }) => {
@@ -263,7 +263,7 @@ export function setupWebContentsHandlers(sendFn: (channel: string, ...args: unkn
           }
         }
       } catch {
-        /* ignore */
+
       }
       return { action: 'deny' }
     })

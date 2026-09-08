@@ -65,18 +65,6 @@ function renderAgentIcon(id: string, size = 13): React.JSX.Element {
   }
 }
 
-function getPercentColor(percent: number): string {
-  if (percent > 80) return 'text-[#f87171]'
-  if (percent > 50) return 'text-[#e6c07b]'
-  return 'text-[#38bdf8]'
-}
-
-function getProgressBg(percent: number): string {
-  if (percent > 80) return 'bg-[#f87171]'
-  if (percent > 50) return 'bg-[#e6c07b]'
-  return 'bg-[#38bdf8]'
-}
-
 function getRemainingColor(rem: number): string {
   if (rem < 20) return 'text-[#f87171]'
   if (rem < 50) return 'text-[#e6c07b]'
@@ -106,10 +94,10 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const intervalMenuRef = useRef<HTMLDivElement>(null)
   const [intervalMenuOpen, setIntervalMenuOpen] = useState(false)
-  // Visibility gate for the polling loop below: a minimized widget's body is
-  // display:none, which nulls offsetParent down the whole subtree. Polling
-  // system stats nothing can see used to cost an IPC round-trip every 1–2s
-  // per minimized monitor on the canvas (PERF-sysmon-gate).
+
+
+
+
   const rootRef = useRef<HTMLDivElement>(null)
   const statsSeqRef = useRef(0)
   const confirm = useConfirm()
@@ -151,8 +139,8 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
     void fetchStats()
     if (paused) return
     const interval = setInterval(() => {
-      // Skip the round-trip while nothing can show the result: hidden tab, or
-      // a widget whose body is minimized away. The next visible tick catches up.
+
+
       if (!document.hidden && rootRef.current?.offsetParent) void fetchStats()
     }, refreshInterval)
     const onVisible = (): void => {
@@ -187,7 +175,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
     })
     if (!ok) return
     try {
-      const result = await window.api.coordination.releaseLocks()
+      const result = await window.api.system.releaseLocks()
       if (result && typeof result === 'object' && 'error' in result && result.error) {
         showNotice(`Failed to release locks: ${String(result.error)}`)
         return
@@ -228,7 +216,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
       data-canvas-scroll-lock="true"
       onWheel={(e) => e.stopPropagation()}
     >
-      {/* Top Toolbar */}
+      {}
       <div className="flex flex-none items-center justify-between border-b border-line-soft px-3 py-2 text-xs">
         <div className="flex items-center gap-1.5 font-medium text-text">
           <Activity size={14} className="text-accent" />
@@ -305,9 +293,9 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
         </div>
       )}
 
-      {/* Main Body */}
+      {}
       <div className="min-h-0 flex-1 overflow-y-auto p-3 space-y-3.5">
-        {/* Active AI Sessions Section */}
+        {}
         {stats?.agents && stats.agents.length > 0 && (
           <div className="rounded-[10px] border border-line-soft bg-bg-hover/20 p-2.5 space-y-2.5">
             <div className="flex items-center justify-between text-xs font-semibold text-text">
@@ -320,9 +308,9 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
               </span>
             </div>
 
-            {/* Widget-width grid, not viewport breakpoints: an md: split inside a
-                narrow widget squeezed every card. auto-fit keeps one column
-                when narrow and fills the row when wide. */}
+            {
+
+}
             <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-2">
               {stats.agents
                 .filter((a) => a.isOpen || a.fiveHour.requests > 0 || a.weekly.requests > 0)
@@ -373,7 +361,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
                         )}
                       </div>
 
-                      {/* 5-Hour Limit Remaining */}
+                      {}
                       <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft">
                         <div className="flex items-center justify-between text-[10px]">
                           <span className="flex items-center gap-1 text-text font-medium">
@@ -395,7 +383,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
                         </div>
                       </div>
 
-                      {/* Weekly Limit Remaining */}
+                      {}
                       <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft">
                         <div className="flex items-center justify-between text-[10px]">
                           <span className="flex items-center gap-1 text-text font-medium">
@@ -417,7 +405,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
                         </div>
                       </div>
 
-                      {/* Monthly Limit Remaining */}
+                      {}
                       {ag.monthly && remMo !== null && (
                         <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft">
                           <div className="flex items-center justify-between text-[10px]">
@@ -447,9 +435,9 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
           </div>
         )}
 
-        {/* Real-time Gauges Grid */}
+        {}
         <div className="grid grid-cols-2 gap-2.5">
-          {/* CPU Card */}
+          {}
           <div className="rounded-[10px] border border-line-soft bg-bg-hover/20 p-2.5">
             <div className="mb-1.5 flex items-center justify-between text-xs">
               <span className="flex items-center gap-1 text-text-dim">
@@ -458,7 +446,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
               <span className="font-semibold tabular-nums text-text">{cpuPercent}%</span>
             </div>
 
-            {/* Progress bar */}
+            {}
             <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-line-soft">
               <div
                 className={`h-full transition-all duration-300 ${
@@ -468,7 +456,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
               />
             </div>
 
-            {/* Sparkline chart */}
+            {}
             <div className="flex h-9 items-end gap-[2px] rounded bg-bg-hover px-1 py-0.5">
               {cpuHistory.map((val, i) => (
                 <div
@@ -487,7 +475,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
             </div>
           </div>
 
-          {/* Memory Card */}
+          {}
           <div className="rounded-[10px] border border-line-soft bg-bg-hover/20 p-2.5">
             <div className="mb-1.5 flex items-center justify-between text-xs">
               <span className="flex items-center gap-1 text-text-dim">
@@ -496,7 +484,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
               <span className="font-semibold tabular-nums text-text">{memPercent}%</span>
             </div>
 
-            {/* Progress bar */}
+            {}
             <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-line-soft">
               <div
                 className={`h-full transition-all duration-300 ${
@@ -529,7 +517,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
           </div>
         </div>
 
-        {/* System & Host Information */}
+        {}
         <div className="rounded-[10px] border border-line-soft bg-bg-hover/20 p-2.5">
           <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-text">
             <Server size={13} className="text-accent" /> Host & Runtime
@@ -562,7 +550,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
           </div>
         </div>
 
-        {/* Command Bus write-path metrics */}
+        {}
         {stats?.flow && (
           <div className="rounded-[10px] border border-line-soft bg-bg-hover/20 p-2.5">
             <div className="mb-2 flex items-center justify-between text-xs font-semibold text-text">
@@ -619,7 +607,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
           </div>
         )}
 
-        {/* Active Canvas Terminals & Processes */}
+        {}
         <div className="rounded-[10px] border border-line-soft bg-bg-hover/20 p-2.5">
           <div className="mb-2 flex items-center justify-between text-xs font-semibold text-text">
             <span className="flex items-center gap-1.5">
@@ -665,7 +653,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
           )}
         </div>
 
-        {/* Quick Management & Actions */}
+        {}
         <div className="flex items-center gap-2 pt-1">
           <button
             className="flex flex-1 items-center justify-center gap-1.5 rounded-[8px] border border-line bg-bg-hover/30 px-2.5 py-1.5 text-xs text-text-dim transition-colors hover:bg-bg-hover hover:text-text"

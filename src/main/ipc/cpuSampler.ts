@@ -15,7 +15,7 @@ let cachedCpuMeta: { count: number; model: string } | null = null
 
 export function sampleCpuUsage(): void {
   const now = Date.now()
-  // os.cpus() walks the whole table; more than ~2 Hz is wasted on Windows.
+
   if (now - lastCpuSampleAt < 400 && prevCpuTimes.length > 0) return
   lastCpuSampleAt = now
   try {
@@ -65,7 +65,7 @@ export function sampleCpuUsage(): void {
     }
     currentCorePercents = perCore
   } catch {
-    // ignore
+
   }
 }
 

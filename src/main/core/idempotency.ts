@@ -9,12 +9,12 @@ export interface IdempotencyRecord<T = unknown> {
   inFlight?: Promise<CommandResult<T> | TransactionResult<T>>
 }
 
-/**
- * Cache of recently applied commands indexed by Idempotency-Key.
- *
- * Protects external agents from accidentally creating duplicate resources
- * when retrying after network / client timeouts.
- */
+
+
+
+
+
+
 export class IdempotencyCache {
   private readonly entries = new Map<string, IdempotencyRecord<any>>()
   private readonly maxEntries: number
@@ -23,7 +23,7 @@ export class IdempotencyCache {
 
   constructor(options: { maxEntries?: number; ttlMs?: number; now?: () => number } = {}) {
     this.maxEntries = options.maxEntries ?? 2_000
-    this.ttlMs = options.ttlMs ?? 10 * 60_000 // 10 minutes
+    this.ttlMs = options.ttlMs ?? 10 * 60_000
     this.now = options.now ?? Date.now
   }
 
@@ -57,7 +57,7 @@ export class IdempotencyCache {
         }
       },
       () => {
-        // If the command rejected abruptly before producing a result, remove key so retry is possible
+
         this.entries.delete(key)
       }
     )
@@ -86,16 +86,16 @@ export class IdempotencyCache {
 
   private prune(): void {
     const now = this.now()
-    // 1) always evict expired entries, even when under capacity, to avoid unbounded growth of stale inFlight
+
     for (const [k, v] of this.entries.entries()) {
       if (now - v.at > this.ttlMs) this.entries.delete(k)
     }
     if (this.entries.size < this.maxEntries) return
-    // 2) at capacity: evict oldest completed entries first. In-flight entries
-    // are NEVER evicted: dropping one means a late completion finds no record
-    // and the client's retry executes the command a second time. If only
-    // in-flight entries remain, the map grows by one instead — bounded in
-    // practice by the bus queue depth, unlike a retry-duplicated side effect.
+
+
+
+
+
     for (const [k, v] of this.entries.entries()) {
       if (v.inFlight !== undefined) continue
       this.entries.delete(k)

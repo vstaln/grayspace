@@ -6,7 +6,7 @@ import { after, describe, test, beforeEach, afterEach } from 'node:test'
 const userData = fs.mkdtempSync(join(os.tmpdir(), 'orcspace-planner-test-'))
 process.env.ORCSPACE_TEST_USER_DATA = userData
 
-// Import only the store classes (public APIs)
+
 import { PlannerStore } from './plannerStore.ts'
 import { TerminalSnapshots } from './terminalSnapshots.ts'
 
@@ -15,7 +15,7 @@ after(() => {
   fs.rmSync(userData, { recursive: true, force: true })
 })
 
-// ---- PlannerStore tests ----
+
 describe('PlannerStore - public API', () => {
   let savedUserData: string
   let store: PlannerStore
@@ -105,7 +105,7 @@ describe('PlannerStore - public API', () => {
     store.createItem({ title: 'Mon Morning', day: '2026-01-01', createdBy: 'user' })
     store.createItem({ title: 'Fri Afternoon', day: '2026-01-05', createdBy: 'user' })
     store.createItem({ title: 'Tue Lunch', day: '2026-01-02', createdBy: 'user' })
-    
+
     const items = store.list()
     assert.equal(items[0].title, 'Mon Morning')
     assert.equal(items[1].title, 'Tue Lunch')
@@ -115,9 +115,9 @@ describe('PlannerStore - public API', () => {
   test('list items without day come after day items', () => {
     store.createItem({ title: 'No Day 1', createdBy: 'user' })
     store.createItem({ title: 'With Day', day: '2026-01-01', createdBy: 'user' })
-    
+
     const items = store.list()
-    // Items with a day should come first
+
     assert.ok(items[0].day === '2026-01-01', 'day items should come first')
   })
 
@@ -130,7 +130,7 @@ describe('PlannerStore - public API', () => {
   })
 })
 
-// ---- TerminalSnapshots tests ----
+
 describe('TerminalSnapshots - public API', () => {
   let savedUserData: string
   let snapshots: TerminalSnapshots
@@ -158,24 +158,36 @@ describe('TerminalSnapshots - public API', () => {
     assert.ok(retrieved.startsWith('Build log line 1'))
   })
 
+  test('Code and Canvas scrollback keep ANSI colours for replay', () => {
+    for (const id of ['code-1', 'term-1']) {
+      snapshots.save({
+        id,
+        title: id.startsWith('code-') ? 'Code' : 'Canvas',
+        cwd: '/',
+        scrollback: '\x1b[31mred\x1b[0m plain\x1b]52;c;secret\x07\n'
+      })
+      assert.equal(snapshots.scrollback(id), '\x1b[31mred\x1b[0m plain\n')
+    }
+  })
+
   test('scrollback returns empty for non-existent terminal', () => {
     const result = snapshots.scrollback('nonexistent')
     assert.equal(result, '')
   })
 
   test('save truncates scrollback to MAX_SCROLLBACK_BYTES', () => {
-    const largeText = 'x'.repeat(200 * 1024) // 200KB
+    const largeText = 'x'.repeat(200 * 1024)
     snapshots.save({ id: 'term-big', title: 'Big Terminal', cwd: '/', scrollback: largeText })
     const sb = snapshots.scrollback('term-big')
-    // Should be bounded by MAX_SCROLLBACK_BYTES (64KB)
+
     assert.ok(Buffer.byteLength(sb) <= 64 * 1024, 'scrollback should be bounded')
-    // Should keep the end (tail behavior)
+
     assert.ok(sb.startsWith('x'), 'should keep end of text')
   })
 
   test('the byte budget holds for non-ASCII output, not just ASCII', () => {
-    // Cyrillic is two bytes per character in UTF-8, so a character-counted cut
-    // would keep roughly twice the budget here.
+
+
     const russian = 'Сборка завершена успешно\n'.repeat(8_000)
     snapshots.save({ id: 'term-ru', title: 'RU', cwd: '/', scrollback: russian })
     const sb = snapshots.scrollback('term-ru')

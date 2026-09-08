@@ -2,47 +2,47 @@ import { CommandError } from '../core/index.ts'
 import type { TerminalManager } from '../terminals.ts'
 import type { OrchestrationStore } from './store.ts'
 
-/** Group handles the store resolves itself; they are never worker names. */
+
 export const GROUP_HANDLES = new Set(['@all', '@idle', '@coordinator'])
 
 export interface WorkerInfo {
-  /** The terminal id — the worker's actor id everywhere else in the system. */
+
   id: string
-  /** Its visible title on the canvas, which is also how agents address it. */
+
   name: string
-  /** The CLI running in it, when a dispatch says so. */
+
   agent?: string
-  /** The dispatch it is currently serving, if any. */
+
   dispatchId?: string
   taskId?: string
-  /** Human title of the dispatched task, when there is one. */
+
   taskTitle?: string
   busy: boolean
-  /** True for the terminal asking — so an agent can tell itself apart. */
+
   self: boolean
-  /** Shell working directory, so agents can tell checkouts apart. */
+
   cwd?: string
-  /** False when the shell process is gone but the widget is still listed. */
+
   alive?: boolean
-  /**
-   * What is running inside: the dispatch agent when there is one,
-   * otherwise a best-effort guess from the title and recent output
-   * (`~antigravity` — the `~` marks a guess, not a fact).
-   */
+
+
+
+
+
   running?: string
-  /** When the shell last printed anything, unix ms (0/undefined = never). */
+
   lastActiveAt?: number
 }
 
-/**
- * Who else is on the canvas.
- *
- * This is what makes "tell the other Claude to do X" work at all: an agent
- * cannot address a sibling it has no name for, and terminal ids (`term-7`) are
- * not names a model will use correctly or a human will recognise. The visible
- * widget title is the handle, which means renaming a worker on the canvas and
- * renaming it from an agent are the same act with the same result.
- */
+
+
+
+
+
+
+
+
+
 export function listWorkers(
   deps: { terminals: TerminalManager; orchestration: OrchestrationStore },
   callerId?: string
@@ -57,7 +57,7 @@ export function listWorkers(
   try {
     for (const task of deps.orchestration.listTasks()) titles.set(task.id, task.title)
   } catch {
-    /* a store that cannot list tasks simply yields no titles */
+
   }
   const terminals = deps.terminals as unknown as {
     list(): { id: string; title?: string; cwd?: string; alive?: boolean }[]
@@ -71,9 +71,9 @@ export function listWorkers(
     const taskTitle = live ? titles.get(live.taskId) : undefined
     let tail: string | null = null
     try {
-      // Prefer the ring-buffer tail (no full join); fall back to a sliced
-      // `fullOutput` so a fake/stub that only implements the wider getter
-      // still feeds the detector.
+
+
+
       const tailed = terminals.tailOutput?.(terminal.id, 4_000)
       if (typeof tailed === 'string' && tailed.length > 0) {
         tail = tailed
@@ -106,13 +106,13 @@ export function listWorkers(
   })
 }
 
-/**
- * Best-effort guess at which CLI owns a terminal nobody dispatched.
- *
- * A dispatched worker's agent is a fact recorded at dispatch time; anything
- * else is read off the title (`claude: …`) or the recent scrollback and
- * returned with a `~` prefix so callers can show it as uncertain.
- */
+
+
+
+
+
+
+
 export function detectRunning(title: string, tail: string | null): string | undefined {
   const fromTitle = /^\s*([A-Za-z][A-Za-z0-9_+-]*)\s*:/.exec(title ?? '')
   if (fromTitle && KNOWN_TOOLS.has(fromTitle[1].toLowerCase())) return `~${fromTitle[1].toLowerCase()}`
@@ -127,7 +127,7 @@ export function detectRunning(title: string, tail: string | null): string | unde
   return undefined
 }
 
-/** CLI names worth recognising inside a shell. Order = match priority. */
+
 const KNOWN_TOOLS_IN_ORDER = [
   'antigravity',
   'claude',
@@ -142,28 +142,28 @@ const KNOWN_TOOLS_IN_ORDER = [
 ]
 const KNOWN_TOOLS = new Set(KNOWN_TOOLS_IN_ORDER)
 
-/**
- * Scrollback matching is deliberately narrower than title matching: a title
- * like `cursor: …` is a strong signal, but the bare words "cursor" ("cursor
- * position") or "cline" ("decline") appear in ordinary prose. So the tail
- * scan only looks for distinctive names, on word boundaries.
- */
+
+
+
+
+
+
 const TAIL_TOOLS = ['antigravity', 'claude', 'codex', 'gemini', 'opencode', 'windsurf', 'copilot', 'aider'].map(
   (name) => ({ name, pattern: new RegExp(`(^|[^a-z0-9_])${name}([^a-z0-9_]|$)`) })
 )
 
-/**
- * Turns whatever an agent typed into a terminal id.
- *
- * Accepts the id itself, the exact name, a case-insensitive name, a `@name`
- * handle, or an unambiguous prefix — because a model that was told a worker is
- * called "backend" will write `backend`, `@backend`, and `Backend` on
- * different turns, and all three mean the same terminal.
- *
- * Ambiguity is an error rather than a guess: silently picking one of two
- * workers called "claude" would send work to the wrong agent, and that failure
- * surfaces minutes later as a confusing diff rather than as a message here.
- */
+
+
+
+
+
+
+
+
+
+
+
+
 export function resolveWorker(
   deps: { terminals: TerminalManager; orchestration: OrchestrationStore },
   raw: string,
@@ -220,23 +220,23 @@ export function resolveWorker(
   throw new CommandError('not_found', `no worker called "${raw}" — open workers: ${known}`)
 }
 
-/**
- * Resolves a message recipient.
- *
- * Group handles pass through untouched. A name is resolved against the open
- * workers so a typo fails at send time rather than becoming mail nobody is
- * addressed by. But resolution is not the *only* way to be a valid recipient:
- * an actor the core already knows is addressable even with no terminal behind
- * it — a coordinator that is not a shell, or a worker whose terminal has since
- * been closed. Requiring a live terminal there meant a worker that asked a
- * question and then lost its pane could never be answered, and its `ask`
- * blocked until the timeout with no way to rescue it.
- */
+
+
+
+
+
+
+
+
+
+
+
+
 export function resolveRecipient(
   deps: {
     terminals: TerminalManager
     orchestration: OrchestrationStore
-    /** True for an actor the core has seen, terminal or not. */
+
     knownActor?(id: string): boolean
   },
   to: string | undefined,
@@ -245,9 +245,9 @@ export function resolveRecipient(
   const wanted = String(to ?? '').trim()
   if (!wanted) return '@coordinator'
   if (GROUP_HANDLES.has(wanted)) return wanted
-  // `@claude` / `@codex` address every worker running that CLI — a real group,
-  // and deliberately checked before names so a worker *named* "claude" cannot
-  // shadow it.
+
+
+
   if (wanted.startsWith('@') && isAgentHandle(deps, wanted.slice(1))) return wanted
   try {
     return resolveWorker(deps, wanted, callerId).id

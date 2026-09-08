@@ -197,9 +197,9 @@ describe('OrchestrationStore', () => {
   })
 
   describe('persistence', () => {
-    // Owns its directory rather than the suite's: sibling suites run
-    // concurrently, so a shared `dir` would let their writes land in the file
-    // this test then reopens.
+
+
+
     test('state survives a restart, and ids do not collide afterwards', () => {
       const own = mkdtempSync(join(tmpdir(), 'orc-persist-'))
       const file = join(own, 'orchestration.json')
@@ -213,7 +213,7 @@ describe('OrchestrationStore', () => {
       try {
         assert.equal(reopened.requireTask(task.id).spec, 'survive me')
         assert.equal(reopened.listMessages().length, 1)
-        // A fresh id must not reuse one already on disk.
+
         const next = reopened.createTask({ runId, spec: 'after restart', createdBy: 'coord' })
         assert.notEqual(next.id, task.id)
       } finally {

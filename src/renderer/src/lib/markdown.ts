@@ -1,7 +1,7 @@
-/**
- * Minimal markdown utilities for notes and previews.
- * Sanitizes URLs against javascript: and other dangerous protocols.
- */
+
+
+
+
 
 import { sanitizeUrl, linkTargetFor } from './sanitizeUrl.ts'
 
@@ -16,8 +16,8 @@ function escapeHtml(str: string): string {
 
 function encodeAutolink(raw: string): string {
   const trimmed = raw.trim()
-  // `<url>` may contain raw spaces during typing/streaming — encode them so
-  // the href stays valid without breaking already-encoded sequences.
+
+
   try {
     return encodeURI(trimmed).replace(/%20/g, '%20')
   } catch {
@@ -25,16 +25,16 @@ function encodeAutolink(raw: string): string {
   }
 }
 
-/**
- * Renders markdown links and images with sanitized URLs.
- * Unsafe URLs are rendered as plain text (links) or alt text only (images).
- */
+
+
+
+
 export function renderMarkdownInlineLinks(markdown: string): string {
   if (!markdown) return ''
-  // Autolinks `<https://…>` / `<mailto:…>` first (may contain spaces → encode).
-  // Use placeholders so the main link pass doesn't double-process them.
+
+
   const autolinks: string[] = []
-  const withAutolinks = markdown.replace(/<((https?:\/\/|mailto:|tel:)[^<>]*)>/g, (full, raw: string) => {
+  const withAutolinks = markdown.replace(/<((https?:\/\/|mailto:|tel:)[^<>]*)>/g, (_full, raw: string) => {
     const encoded = encodeAutolink(raw)
     const safe = sanitizeUrl(encoded, null)
     let html: string
@@ -50,8 +50,8 @@ export function renderMarkdownInlineLinks(markdown: string): string {
     return `\u0000AUTOLINK${autolinks.length - 1}\u0000`
   })
 
-  // We'll walk the string and replace links/images with sanitized HTML,
-  // escaping all other text.
+
+
   let result = ''
   let lastIndex = 0
   const combined = /!\[([^\]]*)\]\(((?:[^\s()]|\([^\s()]*\))+)\)|\[([^\]]+)\]\(((?:[^\s()]|\([^\s()]*\))+)\)/g
@@ -60,7 +60,7 @@ export function renderMarkdownInlineLinks(markdown: string): string {
     const textBefore = withAutolinks.slice(lastIndex, m.index)
     result += escapeHtml(textBefore)
     if (m[1] !== undefined) {
-      // Image: ![alt](url)
+
       const alt = m[1]
       const url = m[2].trim()
       const safe = sanitizeUrl(url, null)
@@ -70,8 +70,8 @@ export function renderMarkdownInlineLinks(markdown: string): string {
         result += `<img src="${escapeHtml(safe)}" alt="${escapeHtml(alt)}" loading="lazy" style="max-width:100%" />`
       }
     } else {
-      // Link: [text](url) — same decode-aware gate as images so encoded
-      // payloads (javascript%3A…) get identical treatment in both branches.
+
+
       const text = m[3]
       const url = m[4].trim()
       const safe = sanitizeUrl(url, null)
@@ -86,16 +86,16 @@ export function renderMarkdownInlineLinks(markdown: string): string {
     lastIndex = m.index + m[0].length
   }
   result += escapeHtml(withAutolinks.slice(lastIndex))
-  // Restore autolink placeholders (already-HTML, must not be escaped).
+
   result = result.replace(/\u0000AUTOLINK(\d+)\u0000/g, (_, idx: string) => autolinks[Number(idx)] ?? '')
   return result
 }
 
-/** Extract fenced ``` blocks (incl. unclosed trailing fence during streaming). */
+
 function extractFenced(markdown: string): { text: string; blocks: string[] } {
   const blocks: string[] = []
-  // ```lang?\n … ```  OR  ```lang?\n … (EOF, unclosed)
-  const text = markdown.replace(/```(\w*)\n?([\s\S]*?)(?:```|$)/g, (full, lang: string, code: string) => {
+
+  const text = markdown.replace(/```(\w*)\n?([\s\S]*?)(?:```|$)/g, (_full, lang: string, code: string) => {
     const idx = blocks.length
     const safeLang = escapeHtml((lang || '').trim())
     const label = safeLang ? ` data-lang="${safeLang}"` : ''
@@ -111,7 +111,7 @@ function restoreFenced(html: string, blocks: string[]): string {
   return html.replace(/\u0000FENCED(\d+)\u0000/g, (_, idx: string) => blocks[Number(idx)] ?? '')
 }
 
-/** True when a line is a markdown table delimiter (`| --- | --- |`). */
+
 function isDelimiterRow(line: string): boolean {
   const cells = line.trim().replace(/^\||\|$/g, '').split('|')
   if (cells.length === 0) return false
@@ -122,10 +122,10 @@ function containsPipe(line: string): boolean {
   return line.includes('|')
 }
 
-/**
- * Renders pipe tables as <table> inside a horizontal-scroll wrapper so wide
- * tables never blow out the preview pane.
- */
+
+
+
+
 function renderTables(markdown: string): { text: string; tables: string[] } {
   const tables: string[] = []
   const lines = markdown.split('\n')
@@ -167,20 +167,20 @@ function restoreTables(html: string, tables: string[]): string {
   return html.replace(/\u0000TABLE(\d+)\u0000/g, (_, idx: string) => tables[Number(idx)] ?? '')
 }
 
-/**
- * Full markdown safe render for preview panes.
- * Handles bold, italic, code, links, images with URL sanitization.
- * Keeps output limited to safe tags only: <strong>, <em>, <code>, <a>, <img>, <br>
- */
+
+
+
+
+
 export function renderMarkdownSafe(markdown: string): string {
   if (!markdown) return ''
-  // Fenced blocks first so their contents never hit link/bold parsing.
+
   const { text: withoutFenced, blocks } = extractFenced(markdown)
   const { text: withoutTables, tables } = renderTables(withoutFenced)
-  // First, handle inline links/images with sanitization
+
   let html = renderMarkdownInlineLinks(withoutTables)
 
-  // Handle code spans first so bold/italic inside `code` is not parsed.
+
   const outer = html.split(/(<a[^>]*>.*?<\/a>|<img[^>]*\/?>|\u0000FENCED\d+\u0000|\u0000TABLE\d+\u0000)/g)
   const out: string[] = []
   for (const chunk of outer) {
@@ -199,16 +199,10 @@ export function renderMarkdownSafe(markdown: string): string {
   let joined = parts.join('').replace(/\n/g, '<br />')
   joined = restoreTables(joined, tables)
   joined = restoreFenced(joined, blocks)
-  // Placeholders were HTML-escaped when they sat inside text chunks — unescape them.
-  joined = joined.replace(/\u0000AUTOLINK(\d+)\u0000/g, (_, idx: string) => {
-    // Autolinks were already restored inside renderMarkdownInlineLinks; this
-    // is only a safety net for paths that re-escaped them.
-    return _
-  })
   return joined
 }
 
-/** Extracts sanitized hrefs for testing */
+
 export function extractSafeLinks(markdown: string): string[] {
   const urls: string[] = []
   const linkRe = /\[([^\]]+)\]\(((?:[^\s()]|\([^\s()]*\))+)\)/g
@@ -218,7 +212,7 @@ export function extractSafeLinks(markdown: string): string[] {
     const safe = sanitizeUrl(url, null)
     if (safe) urls.push(safe)
   }
-  // Include `<url>` autolinks (encode spaces first, like the renderer).
+
   const autoRe = /<((https?:\/\/|mailto:|tel:)[^<>]*)>/g
   while ((m = autoRe.exec(markdown)) !== null) {
     const safe = sanitizeUrl(encodeAutolink(m[1]), null)

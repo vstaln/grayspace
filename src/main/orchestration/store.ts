@@ -19,17 +19,17 @@ import {
   type Run
 } from './types.ts'
 
-/** Bumped whenever the persisted shape changes. */
+
 export const ORCHESTRATION_SCHEMA_VERSION = 1
 
-/**
- * Inbox mail is retained per run so a coordinator that restarts can still read
- * what its workers said. Old, acked mail past this count is dropped oldest
- * first — an unbounded inbox turns a long-running fleet into a memory leak.
- */
+
+
+
+
+
 const MAX_MESSAGES = 2_000
 
-/** Coalescing window for persistence, matching the planner and the canvas. */
+
 const PERSIST_DEBOUNCE_MS = 250
 
 interface PersistedShape {
@@ -41,13 +41,13 @@ interface PersistedShape {
   gates: Gate[]
 }
 
-/**
- * A *fresh* empty shape per call, never a shared constant.
- *
- * `readStoreJson` hands the fallback straight back when the file is missing,
- * and `load()` then adopts its arrays by reference — so a module-level literal
- * would make every store instance push into the same message array.
- */
+
+
+
+
+
+
+
 function emptyShape(): PersistedShape {
   return {
     schemaVersion: ORCHESTRATION_SCHEMA_VERSION,
@@ -59,20 +59,20 @@ function emptyShape(): PersistedShape {
   }
 }
 
-/**
- * The coordination layer agents drive through the `orc` CLI.
- *
- * Everything here exists so one agent can hand work to another and find out
- * how it went *without a protocol between them*: the coordinator files tasks,
- * dispatches them onto worker terminals, and blocks on `check --wait`; the
- * worker reads its preamble, does the work, and reports `worker_done` exactly
- * once. Both sides speak plain shell commands, which is the one tool every CLI
- * agent already has.
- *
- * The store owns no transport and no process. It is mutated only through
- * commands on the bus, which is what makes every dispatch and every reply show
- * up in the journal next to the file writes it caused.
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 export class OrchestrationStore extends EventEmitter {
   readonly runVersions = new VersionRegistry('run')
   readonly taskVersions = new VersionRegistry('orctask')
@@ -102,7 +102,7 @@ export class OrchestrationStore extends EventEmitter {
     this.load()
   }
 
-  // ---- persistence -------------------------------------------------------
+
 
   private load(): void {
     const data = readStoreJson<PersistedShape>(this.file, emptyShape())
@@ -123,7 +123,7 @@ export class OrchestrationStore extends EventEmitter {
     this.taskVersions.seed(this.tasks.values())
     this.dispatchVersions.seed(this.dispatches.values())
     this.gateVersions.seed(this.gates.values())
-    // Ids must not collide with anything already on disk after a restart.
+
     const ids = [
       ...this.runs.keys(),
       ...this.tasks.keys(),
@@ -148,20 +148,20 @@ export class OrchestrationStore extends EventEmitter {
     }
   }
 
-  /**
-   * Coalesced, off-thread persistence.
-   *
-   * This was a synchronous write per mutation, which is fine for a dispatch
-   * (rare) and ruinous for a heartbeat (every worker, every few minutes, and
-   * every one of them a blocking fsync on the main process). A fleet of eight
-   * chatty workers was enough to make the whole window stutter, because the
-   * event loop that serialises this JSON is the same one that paints the
-   * canvas and pumps every pty.
-   *
-   * 250 ms of coalescing matches the planner and the canvas. The exposure is
-   * a quarter-second of orchestration state on a hard kill; `flush()` closes
-   * the normal shutdown path, and the journal has the commands regardless.
-   */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   private save(): void {
     if (this.persistTimer !== null) clearTimeout(this.persistTimer)
     this.persistTimer = setTimeout(() => {
@@ -171,17 +171,17 @@ export class OrchestrationStore extends EventEmitter {
     this.persistTimer.unref?.()
   }
 
-  /**
-   * Chained + seq-guarded async write, matching the planner/canvas stores: an
-   * older async copy can never rename over the newer durable shutdown write.
-   */
+
+
+
+
   private flushAsync(): void {
     this.writeSeq += 1
     const seq = this.writeSeq
     const snapshot = this.payload()
     this.writeChain = this.writeChain
       .catch(() => {
-        /* a failed write must not strand the chain */
+
       })
       .then(async () => {
         if (seq <= this.syncFlushedSeq) return
@@ -194,7 +194,7 @@ export class OrchestrationStore extends EventEmitter {
       .catch((err) => console.error('orchestration flushAsync chain broke', err))
   }
 
-  /** Durable, blocking write. Shutdown only. */
+
   flush(): void {
     if (this.persistTimer !== null) {
       clearTimeout(this.persistTimer)
@@ -213,7 +213,7 @@ export class OrchestrationStore extends EventEmitter {
     return `${prefix}-${this.counter}`
   }
 
-  // ---- runs --------------------------------------------------------------
+
 
   createRun(input: { objective: string; coordinator: string }): Run {
     const objective = String(input.objective ?? '').trim()
@@ -247,25 +247,25 @@ export class OrchestrationStore extends EventEmitter {
     return run
   }
 
-  /**
-   * Newest first, tie-broken by id.
-   *
-   * Timestamps alone are not an ordering here: two runs opened in the same
-   * millisecond — a script, or an agent issuing back-to-back commands — tie,
-   * and the sort then decides "newest" arbitrarily. Since `activeRun()` is
-   * what every bare `orc task-create` files into, a coin flip there quietly
-   * puts the work in the wrong run.
-   */
+
+
+
+
+
+
+
+
+
   listRuns(): Run[] {
     return [...this.runs.values()].sort((a, b) => b.createdAt - a.createdAt || sequenceOf(b.id) - sequenceOf(a.id))
   }
 
-  /** The run a bare command belongs to: the newest one still open. */
+
   activeRun(): Run | undefined {
     return this.listRuns().find((r) => !r.closedAt)
   }
 
-  // ---- tasks -------------------------------------------------------------
+
 
   createTask(input: {
     runId: string
@@ -285,7 +285,7 @@ export class OrchestrationStore extends EventEmitter {
     const task: OrcTask = {
       id,
       runId: run.id,
-      // A title is a convenience for the UI; the spec is what the worker reads.
+
       title: String(input.title ?? '').trim() || firstLine(spec),
       spec,
       deps,
@@ -315,7 +315,7 @@ export class OrchestrationStore extends EventEmitter {
     return all.sort((a, b) => a.createdAt - b.createdAt)
   }
 
-  /** Every dependency settled successfully and nobody is on it yet. */
+
   private isReady(task: OrcTask): boolean {
     if (task.status !== 'pending' && task.status !== 'ready') return false
     return task.deps.every((dep) => this.tasks.get(dep)?.status === 'completed')
@@ -338,11 +338,11 @@ export class OrchestrationStore extends EventEmitter {
     return task
   }
 
-  /**
-   * Promotes every `pending` task whose dependencies just completed. Called
-   * after a task settles, so a coordinator polling `task-list --ready` sees the
-   * next wave without having to compute the DAG itself.
-   */
+
+
+
+
+
   private promoteReady(): string[] {
     const promoted: string[] = []
     for (const task of this.tasks.values()) {
@@ -356,7 +356,7 @@ export class OrchestrationStore extends EventEmitter {
     return promoted
   }
 
-  // ---- dispatches --------------------------------------------------------
+
 
   createDispatch(input: {
     taskId: string
@@ -407,15 +407,15 @@ export class OrchestrationStore extends EventEmitter {
     return all.sort((a, b) => a.startedAt - b.startedAt)
   }
 
-  /** The running dispatch a worker terminal is currently serving, if any. */
+
   dispatchForTerminal(terminalId: string): Dispatch | undefined {
     return this.listDispatches({ terminalId }).find((d) => d.state === 'running')
   }
 
-  /**
-   * Settles a dispatch and its task in one step, so a `worker_done` can never
-   * leave a task marked `dispatched` with nothing running behind it.
-   */
+
+
+
+
   settleDispatch(id: string, outcome: Outcome, filesModified?: string[]): { dispatch: Dispatch; task: OrcTask; promoted: string[] } {
     const dispatch = this.requireDispatch(id)
     if (dispatch.state !== 'running') {
@@ -452,16 +452,16 @@ export class OrchestrationStore extends EventEmitter {
     return dispatch
   }
 
-  /**
-   * Settled dispatches the coordinator has not yet accounted for. The whole
-   * point of the retain/release split is that a worker terminal never quietly
-   * leaks: this is the list a coordinator must drain.
-   */
+
+
+
+
+
   unaccountedDispatches(runId?: string): Dispatch[] {
     return this.listDispatches(runId ? { runId } : {}).filter((d) => d.state === 'settled')
   }
 
-  // ---- mail --------------------------------------------------------------
+
 
   send(input: {
     runId: string
@@ -486,8 +486,8 @@ export class OrchestrationStore extends EventEmitter {
       runId: run.id,
       type: input.type,
       from: input.from,
-      // Unaddressed mail goes to whoever opened the run — a worker reporting
-      // completion should not have to know the coordinator's actor id.
+
+
       to: String(input.to || '@coordinator'),
       subject: String(input.subject ?? '').trim() || defaultSubject(input.type, input.taskId),
       body: String(input.body ?? ''),
@@ -506,7 +506,7 @@ export class OrchestrationStore extends EventEmitter {
       this.repliesByAskId.set(message.replyTo, message)
     }
     if (this.messages.length > MAX_MESSAGES) {
-      // Drop the oldest mail nobody is waiting on; never evict unread mail.
+
       const keep = this.messages.filter((m) => m.ackedBy.length === 0)
       const spare = MAX_MESSAGES - keep.length
       this.messages =
@@ -530,15 +530,15 @@ export class OrchestrationStore extends EventEmitter {
     return message
   }
 
-  /**
-   * Per-run answers to the group-handle questions, computed once.
-   *
-   * `@idle` and `@<agent>` both depend on the *current* dispatch table, not on
-   * anything stored in the message. Asking that question per message meant a
-   * full scan of every dispatch for every message in the inbox — quadratic,
-   * and it ran on every wake of every parked `check --wait`. With a busy fleet
-   * that is the single hottest path in the whole layer, so it is hoisted.
-   */
+
+
+
+
+
+
+
+
+
   private addressingContext(actorId: string): Map<string, { idle: boolean; agents: Set<string> }> {
     const byRun = new Map<string, { idle: boolean; agents: Set<string> }>()
     for (const run of this.runs.keys()) byRun.set(run, { idle: true, agents: new Set() })
@@ -546,14 +546,14 @@ export class OrchestrationStore extends EventEmitter {
       const entry = byRun.get(dispatch.runId)
       if (!entry || dispatch.state !== 'running') continue
       entry.idle = false
-      // `@claude` reaches this caller only if the caller *is* one of the
-      // terminals currently running that CLI.
+
+
       if (dispatch.terminalId === actorId) entry.agents.add(dispatch.agent)
     }
     return byRun
   }
 
-  /** True when `actorId` is a recipient of `message`. */
+
   private addresses(
     message: Message,
     actorId: string,
@@ -567,15 +567,15 @@ export class OrchestrationStore extends EventEmitter {
     if (to === '@coordinator') return run?.coordinator === actorId
     const entry = context.get(message.runId)
     if (to === '@idle') return entry?.idle ?? true
-    // `@claude`, `@codex`, … — every worker currently running that CLI.
+
     return entry?.agents.has(to.slice(1)) ?? false
   }
 
-  /**
-   * The caller's mail, oldest first. Reading is not consuming: `check` peeks,
-   * and only an explicit ack removes a message from the queue — so a
-   * coordinator that crashes mid-handling still finds the message next time.
-   */
+
+
+
+
+
   inbox(
     actorId: string,
     filter: { runId?: string; types?: MessageType[]; includeAcked?: boolean; limit?: number } = {}
@@ -584,16 +584,16 @@ export class OrchestrationStore extends EventEmitter {
     const context = this.addressingContext(actorId)
     const types = filter.types?.length ? new Set(filter.types) : null
     const found: Message[] = []
-    // A manual loop rather than filter().slice(): the cap is what bounds the
-    // work, and a full scan of a 2 000-message backlog to then keep 50 is the
-    // kind of waste that only shows up once a run has been going all day.
+
+
+
     for (const message of this.messages) {
       if (found.length >= limit) break
       if (filter.runId && message.runId !== filter.runId) continue
       if (types && !types.has(message.type)) continue
       if (!filter.includeAcked && message.ackedBy.includes(actorId)) continue
-      // Your own directed mail is not your mail. A broadcast is, so that an
-      // agent sending to @all still sees the thread it started.
+
+
       if (message.from === actorId && !isHandle(message.to)) continue
       if (this.addresses(message, actorId, this.runs.get(message.runId), context)) found.push(message)
     }
@@ -611,7 +611,7 @@ export class OrchestrationStore extends EventEmitter {
     return message
   }
 
-  /** The reply to an `ask`, once someone has sent one. */
+
   replyTo(askId: string): Message | undefined {
     return this.repliesByAskId.get(askId) ?? this.messages.find((m) => m.type === 'reply' && m.replyTo === askId)
   }
@@ -625,7 +625,7 @@ export class OrchestrationStore extends EventEmitter {
     return all.slice(-(filter.limit ?? 200))
   }
 
-  // ---- decision gates ----------------------------------------------------
+
 
   createGate(input: {
     runId: string
@@ -649,7 +649,7 @@ export class OrchestrationStore extends EventEmitter {
       version: this.gateVersions.bump(id)
     }
     this.gates.set(id, gate)
-    // A gate blocks its task by definition — mark it so the DAG stops advancing.
+
     if (input.taskId) {
       const task = this.tasks.get(input.taskId)
       if (task) {
@@ -680,8 +680,8 @@ export class OrchestrationStore extends EventEmitter {
     gate.version = this.gateVersions.bump(id)
     if (gate.taskId) {
       const task = this.tasks.get(gate.taskId)
-      // Only unblock what this gate blocked; a task failed for another reason
-      // must not be resurrected by an unrelated decision.
+
+
       if (task && task.status === 'blocked') {
         task.status = this.isReady({ ...task, status: 'pending' }) ? 'ready' : 'pending'
         task.updatedAt = this.now()
@@ -700,7 +700,7 @@ export class OrchestrationStore extends EventEmitter {
     return all.sort((a, b) => a.createdAt - b.createdAt)
   }
 
-  // ---- reset / snapshot --------------------------------------------------
+
 
   snapshot(runId?: string): OrchestrationSnapshot {
     return {
@@ -734,7 +734,7 @@ export class OrchestrationStore extends EventEmitter {
   }
 }
 
-/** The counter suffix of a generated id (`run-12` → 12); 0 when absent. */
+
 function sequenceOf(id: string): number {
   const n = Number(id.slice(id.lastIndexOf('-') + 1))
   return Number.isFinite(n) ? n : 0

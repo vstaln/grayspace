@@ -42,9 +42,9 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
       setLoading(false)
       syncHistory()
     }
-    // `dom-ready` only means the document exists. Images and scripts can
-    // still be loading, so clearing the progress state here made the bar
-    // disappear long before navigation actually finished.
+
+
+
     const onDomReady = (): void => {
       syncHistory()
     }
@@ -57,8 +57,8 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
     }
     const onNavigate = (event: Event): void => {
       const navUrl = (event as Event & { url?: string }).url
-      // Dropped images are loaded as data URLs. Keep the omnibox readable
-      // instead of replacing it with a multi-megabyte base64 string.
+
+
       if (navUrl && !navUrl.startsWith('data:')) setUrl(navUrl)
       syncHistory()
     }
@@ -100,10 +100,10 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
     }
   }, [viewEl])
 
-  // The canvas accepts dropped images and routes them to a browser widget.
-  // Use the media bridge rather than a file:// URL (which is blocked by the
-  // renderer origin), and scope the event so multiple browser widgets do not
-  // all display the same dropped image.
+
+
+
+
   useEffect(() => {
     const onDroppedImage = (event: Event): void => {
       const detail = (event as CustomEvent<{ widgetId?: string; path?: string; name?: string }>).detail
@@ -128,25 +128,6 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
     return () => window.removeEventListener('orcspace:open-image', onDroppedImage)
   }, [widgetId])
 
-  const navigate = useCallback((input: string): void => {
-    const target = toNavigationUrl(input)
-    const view = viewRef.current
-    if (!target || !view) {
-      if (!target) setLoadError('URL must start with http:// or https://')
-      return
-    }
-    // Keep the attempted URL visible when the navigation fails. Waiting for
-    // `did-navigate` leaves the old URL in the bar, and resetting `editing`
-    // immediately then hides the URL the user needs to fix or retry.
-    setUrl(target)
-    setAddress(target)
-    setImageSrc(null)
-    setLoading(true)
-    setLoadError(null)
-    setEditing(false)
-    void view.loadURL(target).catch(() => {})
-  }, [])
-
 const host = hostOf(url)
     const isHttps = url.startsWith('https://')
     const navError = !url && address.trim() && (
@@ -155,7 +136,7 @@ const host = hostOf(url)
 
     return (
       <div className="browser-surface flex h-full min-h-0 flex-col">
-        {/* Flat dark header */}
+        {}
         <div className="browser-chrome flex h-8 flex-none items-center gap-1 px-2">
           <button
             type="button"

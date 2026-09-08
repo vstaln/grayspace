@@ -1,11 +1,10 @@
 #!/usr/bin/env node
-/**
- * Drops the manager role and (optionally) all file locks in a running Workspace
- * app, for when an agent crashed while holding them. The same actions are
- * available from the left rail and the task board inside the app.
- *
- * Usage: node scripts/reset.mjs [--locks] [--all]
- */
+
+
+
+
+
+
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -21,7 +20,7 @@ const BASE = `http://localhost:${PORT}`
 const TOKEN_HEADER = 'x-orcspace-token'
 
 const args = process.argv.slice(2)
-const wantLocks = args.includes('--locks') || args.includes('--all')
+const wantLocks = args.length === 0 || args.includes('--locks')
 
 function controlToken() {
   const env = (process.env.ORCSPACE_CONTROL_TOKEN || '').trim()
@@ -31,12 +30,12 @@ function controlToken() {
       const raw = fs.readFileSync(process.env.ORCSPACE_CONTROL_TOKEN_FILE, 'utf8').trim()
       if (raw.length >= 32) return raw
     } catch {
-      /* fall through to candidate probing */
+
     }
   }
-  // Same candidate directories as cli/orc.mjs: the profile folder name varies
-  // (OrcSpace/Orcspace/orcspace/com.orcspace.app) and probing only one casing
-  // misses the token on case-sensitive filesystems (macOS/Linux).
+
+
+
   const candidates = [
     process.env.APPDATA ? path.join(process.env.APPDATA, 'OrcSpace', 'control-token') : null,
     process.env.APPDATA ? path.join(process.env.APPDATA, 'Orcspace', 'control-token') : null,
@@ -60,7 +59,7 @@ function controlToken() {
       const raw = fs.readFileSync(file, 'utf8').trim()
       if (raw.length >= 32) return raw
     } catch {
-      /* try next candidate */
+
     }
   }
   return ''
@@ -77,35 +76,6 @@ async function api(pathname, init) {
 }
 
 async function main() {
-  // An HTML error page or a 500 must not surface as "Unexpected token < in JSON".
-  const statusRes = await api('/coordination/status')
-  if (!statusRes.ok) {
-    console.error(`Could not read the coordination status: HTTP ${statusRes.status}: ${(await statusRes.text()).slice(0, 200)}`)
-    process.exit(1)
-  }
-  let status
-  try {
-    status = await statusRes.json()
-  } catch {
-    console.error('The control server returned a non-JSON response for /coordination/status.')
-    process.exit(1)
-  }
-
-  if (!status.managerId) {
-    console.log('No manager is assigned.')
-  } else {
-    // The manager itself is the only agent the API lets release the role, so we
-    // release it *as* that agent — this script stands in for the human operator.
-    const res = await api('/coordination/manager', {
-      method: 'DELETE',
-      body: JSON.stringify({ agentId: status.managerId })
-    })
-    if (!res.ok) {
-      console.error('Could not release the manager role:', await res.text())
-      process.exit(1)
-    }
-    console.log(`Manager role released from "${status.managerId}".`)
-  }
 
   if (wantLocks) {
     let locks = []

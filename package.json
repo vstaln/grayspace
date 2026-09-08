@@ -12,13 +12,19 @@
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "postinstall": "node scripts/patch-pty.mjs",
-    "predev": "npm run build:native",
+    "predev": "node scripts/ensure-native-engine.mjs",
     "dev": "npm run build:native && electron-vite dev",
-    "prebuild": "npm run build:native",
+    "dev:native": "npm run native:run",
     "build:native": "node native/build.mjs",
+    "native:check": "node scripts/native-cargo.mjs check --manifest-path native/Cargo.toml",
+    "native:run": "node scripts/native-cargo.mjs run --bin orcspace --manifest-path native/orcspace-app/Cargo.toml",
+    "native:build": "node scripts/native-cargo.mjs build --release --bins --manifest-path native/orcspace-app/Cargo.toml",
+    "native:start": "node scripts/native-cargo.mjs run --release --bin orcspace --manifest-path native/orcspace-app/Cargo.toml",
+    "prebuild": "node scripts/ensure-native-engine.mjs",
     "build": "npm run build:native && electron-vite build",
-    "prestart": "npm run build:native",
+    "build:electron": "npm run build",
     "start": "electron-vite preview",
+    "start:native": "npm run native:start",
     "reset": "node scripts/reset.mjs",
     "test": "node --test --test-concurrency=1 \"src/main/**/*.test.ts\"",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
@@ -26,11 +32,13 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "typecheck:e2e": "tsc --noEmit -p e2e/tsconfig.json",
     "dist": "npm run build && electron-builder --win --publish never",
+    "dist:native": "npm run native:build",
+    "dist:electron": "npm run dist",
     "installer:win": "node scripts/build-installer.mjs",
-    "dist:mac": "npm run build && electron-builder --mac --publish never",
-    "dist:mac:arm": "npm run build && electron-builder --mac dmg zip --arm64 --publish never",
-    "dist:mac:intel": "npm run build && electron-builder --mac dmg zip --x64 --publish never",
-    "dist:mac:dmg": "npm run build && electron-builder --mac dmg --publish never",
+    "dist:mac": "npm run build:electron && electron-builder --mac --publish never",
+    "dist:mac:arm": "npm run build:electron && electron-builder --mac dmg zip --arm64 --publish never",
+    "dist:mac:intel": "npm run build:electron && electron-builder --mac dmg zip --x64 --publish never",
+    "dist:mac:dmg": "npm run build:electron && electron-builder --mac dmg --publish never",
     "pack:archive": "node scripts/pack-archive.mjs",
     "smoke": "node scripts/smoke.mjs",
     "pretest:e2e": "npm run build",
@@ -93,6 +101,12 @@
     },
     "win": {
       "icon": "assets/icons/orc-logo.ico",
+      "extraResources": [
+        {
+          "from": "native/target/release/orcspace.exe",
+          "to": "native/orcspace-engine.exe"
+        }
+      ],
       "target": [
         {
           "target": "nsis",

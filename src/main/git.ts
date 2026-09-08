@@ -3,16 +3,16 @@ import { promisify } from 'util'
 
 const run = promisify(execFile)
 
-/**
- * A git child must always finish: a frozen `.git/index.lock`, a stuck hook, or
- * a network mount that stops answering would otherwise hang the promise — and
- * with it the single-flight bus (readGitStatus / commitAll run inside bus
- * commands) — forever. Reads get a shorter leash than the commit path, which
- * can legitimately grind through a huge working tree.
- */
+
+
+
+
+
+
+
 const GIT_READ_TIMEOUT_MS = 30_000
 const GIT_WRITE_TIMEOUT_MS = 120_000
-/** Large monorepos can emit several megabytes of porcelain (e.g. 50k untracked paths). */
+
 const GIT_MAX_BUFFER_BYTES = 12 * 1024 * 1024
 
 async function git(
@@ -26,8 +26,8 @@ async function git(
     ;(err as NodeJS.ErrnoException).code = 'ABORT_ERR'
     throw err
   }
-  // The git binary directly, never a shell: no quoting rules to get wrong on a
-  // path with spaces, and nothing in a branch name can be interpreted.
+
+
   const { stdout } = await run('git', args, {
     cwd,
     windowsHide: true,
@@ -43,7 +43,7 @@ export interface GitStatus {
   repo: boolean
   root?: string
   branch?: string
-  /** Tracking branch, when the current branch has one. */
+
   upstream?: string
   ahead: number
   behind: number
@@ -78,20 +78,20 @@ function isTimeoutError(err: unknown): boolean {
   return /timed out/i.test(msg) || (err as { killed?: boolean })?.killed === true
 }
 
-/**
- * Repository status for the project folder.
- *
- * Read by running git, not by parsing what a terminal happens to have printed:
- * a PTY's scrollback is a rendering of a human-facing command, wrapped, paged
- * and coloured, and treating it as an API breaks the first time the user runs
- * something else in that shell.
- */
-/**
- * In-flight status reads keyed by cwd: the poller fires faster than `git`
- * answers on big repos, and without this every tick spawned its own pair of
- * children. Concurrent callers share one promise; an abort signal opts out
- * (it must not cancel the shared read for everyone else).
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 const inflightStatus = new Map<string, Promise<GitStatus>>()
 
 export async function readGitStatus(cwd: string | undefined, signal?: AbortSignal): Promise<GitStatus> {
@@ -113,10 +113,10 @@ async function readGitStatusInner(cwd: string, signal?: AbortSignal): Promise<Gi
     const root = (await git(cwd, ['rev-parse', '--show-toplevel'], GIT_READ_TIMEOUT_MS, signal)).trim()
     if (!root) return EMPTY()
 
-    // -b gives the branch header; -z avoids quoting surprises in filenames
-    // (spaces, newlines, quotes would otherwise be escaped and need unquoting).
-    // Parallelize status + log: the log does not depend on status, and on a
-    // large repo each `git` spawn costs ~30-80ms; overlapping saves one spawn.
+
+
+
+
     const statusArgs = ['status', '--porcelain=v1', '-b', '-z', '--untracked-files=normal'] as const
     const logArgs = ['log', '-1', '--format=%H%x1f%s%x1f%ct'] as const
 
@@ -125,9 +125,9 @@ async function readGitStatusInner(cwd: string, signal?: AbortSignal): Promise<Gi
 
     const [porcelain, logRaw] = await Promise.all([porcelainPromise, logPromise])
 
-    // Normalise line endings: git outputs LF even on Windows, but a CRLF
-    // workspace or a future `core.autocrlf` interaction must not leave a stray
-    // `\r` in the header/entries (PERF-line-ending).
+
+
+
     const normalized = porcelain.replace(/\r\0/g, '\0').replace(/\r\n/g, '\n')
     const entries = normalized.split('\0').filter(Boolean)
     const header = entries[0]?.startsWith('##') ? entries[0].replace(/\r$/, '') : ''
@@ -141,14 +141,14 @@ async function readGitStatusInner(cwd: string, signal?: AbortSignal): Promise<Gi
       if (code === '??') status.untracked += 1
       else if (code.includes('U') || code === 'AA' || code === 'DD') status.conflicted += 1
       else {
-        // `?` cannot appear outside `??` with `--untracked-files=normal`,
-        // kept as guard for future `--untracked-files=all` or ignored `!!`.
+
+
         if (code[0] !== ' ' && code[0] !== '?') status.staged += 1
         if (code[1] !== ' ' && code[1] !== '?') status.modified += 1
       }
-      // Porcelain -z emits the old path as a second NUL-delimited item for
-      // renames/copies. It belongs to the same change and must not be counted
-      // as a separate modified file.
+
+
+
       if (code[0] === 'R' || code[0] === 'C') i += 1
     }
 
@@ -163,9 +163,9 @@ async function readGitStatusInner(cwd: string, signal?: AbortSignal): Promise<Gi
   } catch (err) {
     if (isAbortError(err)) throw err
     const raw = String((err as { stderr?: string }).stderr || (err as Error).message)
-    // "not a git repository" is an ordinary answer, not a failure to report.
+
     if (/not a git repository/i.test(raw)) return EMPTY()
-    // maxBuffer exceeded: tell the caller it was a size limit, not a corrupt repo.
+
     if (/maxBuffer/i.test(raw) || /ENOBUFS/i.test(raw)) {
       return EMPTY({ error: 'git status output too large for buffer (large untracked tree)' })
     }
@@ -176,10 +176,10 @@ async function readGitStatusInner(cwd: string, signal?: AbortSignal): Promise<Gi
   }
 }
 
-/** `## main...origin/main [ahead 2, behind 1]` */
+
 export function parseHeader(header: string): Partial<GitStatus> {
   if (!header) return {}
-  // Strip stray CR from Windows line endings before parsing.
+
   const cleaned = header.replace(/\r/g, '')
   const body = cleaned.slice(2).trim()
   const [branches, tracking] = body.split(/\s+\[/)
@@ -194,7 +194,7 @@ export function parseHeader(header: string): Partial<GitStatus> {
   }
 }
 
-/** Stages everything and commits. Callers must hold `git:repo` first. */
+
 export async function commitAll(cwd: string, message: string, signal?: AbortSignal): Promise<{ hash: string }> {
   if (signal?.aborted) throw Object.assign(new Error('aborted'), { code: 'ABORT_ERR', name: 'AbortError' })
   await git(cwd, ['add', '-A'], GIT_WRITE_TIMEOUT_MS, signal)
@@ -204,20 +204,20 @@ export async function commitAll(cwd: string, message: string, signal?: AbortSign
   return { hash }
 }
 
-// ---- large-repo diff helpers ------------------------------------------------
-// The spec mentions DiffViewer/CommitGraph that do not exist yet as widgets.
-// These helpers are the fast path those future viewers should call: first get
-// a cheap `--numstat` (no hunks) to render the file list, then fetch a single
-// file's hunk on demand with a size cap. Fetching `git diff` for a 2 GB
-// working tree at once would otherwise re-create the maxBuffer problem that
-// `readGitStatus` just fixed.
+
+
+
+
+
+
+
 
 export interface GitDiffStat {
   path: string
   oldPath?: string
   additions: number
   deletions: number
-  status: string // e.g. 'M', 'A', 'R', 'D', 'U'
+  status: string
 }
 
 export interface GitDiffResult {
@@ -226,10 +226,10 @@ export interface GitDiffResult {
   error?: string
 }
 
-/**
- * Cheap summary for a large working tree: one line per changed path, no hunks.
- * Uses `-z` so renames/copies with spaces are split unambiguously.
- */
+
+
+
+
 export async function readGitDiffStat(cwd: string, staged = false, signal?: AbortSignal): Promise<GitDiffResult> {
   if (!cwd) return { stat: [], truncated: false, error: 'no cwd' }
   if (signal?.aborted) throw Object.assign(new Error('aborted'), { code: 'ABORT_ERR', name: 'AbortError' })
@@ -275,12 +275,12 @@ export async function readGitDiffStat(cwd: string, staged = false, signal?: Abor
   }
 }
 
-/**
- * Per-file unified diff, capped so a single 50 MB generated file does not
- * freeze the renderer. Normalises CRLF→LF before returning so the viewer
- * does not show a phantom "`^M`" on every line when `core.autocrlf` is on
- * (line-ending diffing).
- */
+
+
+
+
+
+
 export async function readGitDiff(
   cwd: string,
   filePath: string,
@@ -288,7 +288,7 @@ export async function readGitDiff(
 ): Promise<{ diff: string; truncated: boolean; error?: string }> {
   if (!cwd || !filePath) return { diff: '', truncated: false, error: 'missing path' }
   if (opts.signal?.aborted) throw Object.assign(new Error('aborted'), { code: 'ABORT_ERR', name: 'AbortError' })
-  const maxBytes = opts.maxBytes ?? 512 * 1024 // 512 KB per file is enough for the viewport
+  const maxBytes = opts.maxBytes ?? 512 * 1024
   try {
     const args = [
       'diff',
