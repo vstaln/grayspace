@@ -1,12 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Code2, FolderOpen, FolderPlus, Palette, Pencil, Pin, Plus, Settings, UserRound, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { Code2, FolderOpen, FolderPlus, Palette, Pencil, Pin, Plus, Settings, Trash2, UserRound, X, PanelLeftOpen } from 'lucide-react'
 import type { CodeWorkspaceState, RecentDir } from '../../../preload/index.d'
 import type { WorkView } from './TitleBar'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { THEMES, useTheme, wallpaperBackgroundImage } from '../theme'
 import { useSettings } from '../hooks/useSettings'
 import { VerifiedBadge } from './VerifiedBadge'
+import { useConfirm } from './ConfirmDialog'
 
 interface Props {
   workspaceDir: string | null
@@ -14,12 +15,6 @@ interface Props {
   onPickDir(): void
   sidebarCollapsed?: boolean
   onToggleSidebar?(): void
-}
-
-interface CodeSessionSummary {
-  id: string
-  title: string
-  status: 'active' | 'finished'
 }
 
 function IconButton({
@@ -75,8 +70,8 @@ function IconButton({
 }
 
 const SETTINGS_TABS = [
-  { id: 'appearance' as const, label: 'Appearance', Icon: Palette },
-  { id: 'account' as const, label: 'Account', Icon: UserRound }
+  { id: 'account' as const, label: 'Account', Icon: UserRound },
+  { id: 'appearance' as const, label: 'Appearance', Icon: Palette }
 ]
 
 const FAVORITE_WIDGETS = [
@@ -85,7 +80,6 @@ const FAVORITE_WIDGETS = [
   ['sys-monitor', 'System Monitor', 'CPU, RAM and processes'],
   ['timer', 'Timer', 'Countdown or stopwatch'],
   ['planner', 'Planner', 'Daily agenda and checklist'],
-  ['mission', 'Mission Controller', 'Connect an AI terminal to a guided Planner workflow'],
   ['orchestration', 'Orchestration', 'The agent fleet: tasks, workers and their questions'],
   ['browser', 'Browser', 'Embedded web page'],
   ['links', 'Links', 'Saved links'],
@@ -194,14 +188,16 @@ function Slider({
 }
 
 
-function SettingsModal({
-  workspaceDir
+export function SettingsModal({
+  workspaceDir,
+  listenForToolbar = false
 }: {
   workspaceDir?: string | null
+  listenForToolbar?: boolean
 }): React.JSX.Element {
   const { theme, setTheme, background, dim, setDim, blur, setBlur, pickBackground, clearBackground, error } = useTheme()
   const { settings, update, error: settingsError } = useSettings()
-  const [tab, setTab] = useState<'appearance' | 'account'>('appearance')
+  const [tab, setTab] = useState<'appearance' | 'account'>('account')
   const [userName, setUserName] = useState('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -249,6 +245,18 @@ function SettingsModal({
     }
   }, [])
 
+  useEffect(() => {
+    if (!listenForToolbar) return
+    const openSettings = (): void => {
+      setTab('account')
+      setOpen(true)
+    }
+    window.addEventListener('orcspace:open-settings', openSettings)
+    return () => {
+      window.removeEventListener('orcspace:open-settings', openSettings)
+    }
+  }, [listenForToolbar])
+
   const saveAccount = async (): Promise<void> => {
     setBusy(true)
     try {
@@ -270,7 +278,7 @@ function SettingsModal({
 
     createPortal(
       <div
-        className="fixed inset-0 z-[50000] flex items-center justify-center bg-bg/80 p-6 backdrop-blur-[2px]"
+        className="fixed inset-x-0 top-10 bottom-0 z-[50000] flex items-center justify-center bg-bg/80 p-6 backdrop-blur-[2px]"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         role="presentation"
         onMouseDown={(event) => {
@@ -283,10 +291,10 @@ function SettingsModal({
           aria-modal="true"
           aria-label="Settings"
           data-testid="settings-modal"
-          className="pop-in flex max-h-[min(720px,calc(100vh-80px))] w-[min(820px,calc(100vw-48px))] flex-col overflow-hidden rounded-[14px] border border-line-soft bg-bg-panel sm:flex-row"
+          className="pop-in flex max-h-[min(720px,calc(100vh-80px))] w-[min(820px,calc(100vw-48px))] flex-col overflow-hidden rounded-[12px] border border-line bg-bg-panel shadow-[0_24px_80px_rgba(0,0,0,0.36)] sm:flex-row"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
-          <nav className="flex flex-none gap-1 overflow-x-auto border-b border-line-soft p-2.5 sm:w-[172px] sm:flex-col sm:border-r sm:border-b-0 sm:p-3">
+          <nav className="flex flex-none gap-1 overflow-x-auto border-b border-line bg-bg-raise p-2.5 sm:w-[172px] sm:flex-col sm:border-r sm:border-b-0 sm:p-3">
             <div className={`${CAPTION} hidden px-2.5 pt-1 pb-3.5 sm:block`}>Settings</div>
             {SETTINGS_TABS.map(({ id, label, Icon }) => (
               <button
@@ -294,7 +302,7 @@ function SettingsModal({
                 data-testid={`settings-tab-${id}`}
                 aria-current={tab === id ? 'true' : undefined}
                 className={`flex flex-none items-center gap-2.5 rounded-[8px] px-2.5 py-1.5 text-left text-xs transition-colors duration-150 sm:w-full ${
-                  tab === id ? 'bg-bg-hover text-text' : 'text-text-dim hover:text-text'
+                  tab === id ? 'border border-line bg-bg-hover text-text' : 'border border-transparent text-text-dim hover:bg-bg-hover hover:text-text'
                 }`}
                 onClick={() => setTab(id)}
               >
@@ -303,7 +311,7 @@ function SettingsModal({
               </button>
             ))}
           </nav>
-          <main className="flex min-w-0 flex-1 flex-col gap-7 overflow-auto px-7 py-6 min-h-0">
+          <main className="flex min-w-0 flex-1 flex-col gap-7 overflow-auto bg-bg-panel px-7 py-6 min-h-0">
             <header className="flex flex-none items-center justify-between">
               <h2 className="text-[15px] font-medium text-text">
                 {tab === 'appearance' ? 'Appearance' : 'Account'}
@@ -356,27 +364,6 @@ function SettingsModal({
                       onClick={() => void update({ windowsShell: 'powershell' })}
                     />
                   </div>
-                </Section>
-
-                <Section
-                  title="Mission mode"
-                  hint="Mission Controller sends the workflow to the connected AI coordinator, which creates Planner and starts the selected worker."
-                >
-                  <label className="flex cursor-pointer items-center justify-between gap-3 rounded-[10px] border border-line-soft px-3.5 py-3 text-xs text-text-dim transition-colors duration-150 hover:border-line hover:bg-bg-hover">
-                    <span className="min-w-0">
-                      <span className="block text-text">Planner → selected agent → report</span>
-                      <span className="mt-1 block text-[10px] leading-relaxed text-text-faint">
-                        Planner opens once per mission and is checked only after the worker reports completion.
-                      </span>
-                    </span>
-                    <input
-                      data-testid="mission-mode-toggle"
-                      type="checkbox"
-                      checked={settings.missionMode}
-                      onChange={(event) => void update({ missionMode: event.target.checked })}
-                      className="h-4 w-4 flex-none accent-white"
-                    />
-                  </label>
                 </Section>
 
                 <Section title="Right-click menu" hint="Which widgets appear when you right-click the canvas.">
@@ -540,18 +527,14 @@ export default React.memo(function Sidebar({
   onToggleSidebar
 }: Props): React.JSX.Element {
   const { settings } = useSettings()
+  const confirm = useConfirm()
   const [recent, setRecent] = useState<RecentDir[]>([])
   const [codeWorkspaceState, setCodeWorkspaceState] = useState<CodeWorkspaceState>({ workspaces: [], activeId: 'code-default', folder: null })
-  const [codeSessions, setCodeSessions] = useState<CodeSessionSummary[]>([])
   const [foldersOpen, setFoldersOpen] = useState(false)
   const [foldersError, setFoldersError] = useState<string | null>(null)
-  const [createOpen, setCreateOpen] = useState(false)
-  const [workspaceName, setWorkspaceName] = useState('')
   const [creatingWorkspace, setCreatingWorkspace] = useState(false)
   const foldersRef = useRef<HTMLDivElement>(null)
   const foldersMenuRef = useRef<HTMLDivElement>(null)
-  const createDialogRef = useRef<HTMLFormElement>(null)
-  useFocusTrap(createDialogRef, createOpen)
   const dirName = workspaceDir ? workspaceDir.split(/[\\/]/).filter(Boolean).pop() : null
   const avatarName = settings.userName?.trim() || 'you'
   const avatarInitials = avatarName.slice(0, 2).toUpperCase()
@@ -569,29 +552,6 @@ export default React.memo(function Sidebar({
   useEffect(() => {
     void window.api.workspace.codeWorkspaces().then(setCodeWorkspaceState).catch(() => {})
     return window.api.workspace.onCodeWorkspaceChange(setCodeWorkspaceState)
-  }, [])
-
-  useEffect(() => {
-    const applySnapshot = (snapshot: { sessions?: Array<{ id: string; title?: string; label: string; status?: 'active' | 'finished' }> }): void => {
-      if (!Array.isArray(snapshot.sessions)) return
-      setCodeSessions(snapshot.sessions.map((session) => ({
-        id: session.id,
-        title: session.title?.trim() || session.label,
-        status: session.status === 'finished' ? 'finished' : 'active'
-      })))
-    }
-    void window.api.code.load().then(applySnapshot).catch(() => {})
-    const offCode = window.api.code.onChange(applySnapshot)
-    const onLocalSessions = (event: Event): void => {
-      const detail = (event as CustomEvent<CodeSessionSummary[]>).detail
-      if (!Array.isArray(detail)) return
-      setCodeSessions(detail.filter((session) => session && typeof session.id === 'string'))
-    }
-    window.addEventListener('orcspace:code-sessions', onLocalSessions)
-    return () => {
-      offCode()
-      window.removeEventListener('orcspace:code-sessions', onLocalSessions)
-    }
   }, [])
 
   useEffect(() => {
@@ -663,23 +623,20 @@ export default React.memo(function Sidebar({
   const openCreateWorkspace = (): void => {
     setFoldersOpen(false)
     setFoldersError(null)
-    setWorkspaceName('')
-    setCreateOpen(true)
+    void createWorkspace()
   }
 
   const createWorkspace = async (): Promise<void> => {
-    const name = workspaceName.trim()
+    if (creatingWorkspace) return
     setCreatingWorkspace(true)
     try {
       window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
-      const result = await window.api.workspace.createCodeWorkspace(name || undefined)
+      const result = await window.api.workspace.createCodeWorkspace()
       if (result && typeof result === 'object' && 'error' in result) {
         setFoldersError(result.error)
         return
       }
       if (result && typeof result === 'object' && 'id' in result) {
-        setCreateOpen(false)
-        setWorkspaceName('')
         setFoldersError(null)
       }
     } catch (err) {
@@ -735,6 +692,22 @@ export default React.memo(function Sidebar({
     openRename('code', id, currentName)
   }
 
+  const deleteCodeWorkspace = async (id: string, name: string): Promise<void> => {
+    const ok = await confirm(`Delete workspace “${name}”? Its saved sessions will no longer be available.`, {
+      title: 'Delete workspace',
+      danger: true,
+      confirmLabel: 'Delete'
+    })
+    if (!ok) return
+    if (id === codeWorkspaceState.activeId) window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
+    try {
+      const result = await window.api.workspace.deleteCodeWorkspace(id)
+      if ('error' in result) setFoldersError(result.error)
+    } catch (err) {
+      setFoldersError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   const selectCodeWorkspace = async (id: string): Promise<void> => {
     if (id === codeWorkspaceState.activeId) return
     window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
@@ -745,15 +718,6 @@ export default React.memo(function Sidebar({
       setFoldersError(err instanceof Error ? err.message : String(err))
     }
   }
-
-  useEffect(() => {
-    if (!createOpen) return
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setCreateOpen(false)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [createOpen])
 
   const RAIL_ITEM_IDS = ['folders'] as const
   type RailItemId = (typeof RAIL_ITEM_IDS)[number]
@@ -889,28 +853,16 @@ export default React.memo(function Sidebar({
   }
 
   const renderExpanded = (): React.JSX.Element => {
-    const contextLabel = 'Code sessions'
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex h-8 flex-none items-center justify-between border-b border-line-soft px-2.5">
           <span className="text-[10px] font-semibold tracking-[0.08em] text-text-faint uppercase">Workspace</span>
-            {activeView === 'code' && onToggleSidebar && (
-              <button
-                type="button"
-                aria-label="Collapse sidebar"
-                title="Collapse sidebar"
-                onClick={onToggleSidebar}
-                className="grid h-6 w-6 place-items-center rounded text-text-faint transition hover:bg-bg-hover hover:text-text"
-              >
-                <PanelLeftClose size={13} />
-              </button>
-            )}
-            <button
-              type="button"
-              aria-label="Create workspace"
-              title="Create workspace"
-              data-testid="workspace-create"
-              onClick={openCreateWorkspace}
+          <button
+            type="button"
+            aria-label="Create workspace"
+            title="Create workspace"
+            data-testid="workspace-create"
+            onClick={openCreateWorkspace}
             className="grid h-6 w-6 place-items-center rounded text-text-faint transition hover:bg-bg-hover hover:text-text"
           >
             <Plus size={13} />
@@ -941,6 +893,15 @@ export default React.memo(function Sidebar({
                   >
                     <Pencil size={10} />
                   </button>
+                  <button
+                    type="button"
+                    aria-label={`Delete ${workspace.name}`}
+                    title="Delete workspace"
+                    className="mr-1 grid h-6 w-6 flex-none place-items-center rounded-md text-text-faint/70 opacity-0 transition duration-150 group-hover:opacity-100 hover:bg-danger/10 hover:text-danger active:scale-95 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-danger/40"
+                    onClick={() => void deleteCodeWorkspace(workspace.id, workspace.name)}
+                  >
+                    <Trash2 size={11} strokeWidth={1.8} />
+                  </button>
                 </div>
               )
             })}
@@ -949,38 +910,6 @@ export default React.memo(function Sidebar({
           {workspaceDir && <div className="mb-2 px-2 text-[10px] text-text-faint" title={workspaceDir}>Project folder: {dirName}</div>}
           {foldersError && <div className="px-2 pt-3 text-[10px] leading-snug text-danger">{foldersError}</div>}
 
-          <div className="mt-3 border-t border-line-soft pt-2">
-            <div className="mb-0.5 px-2 text-[9px] font-semibold tracking-[0.1em] text-text-faint uppercase">{contextLabel}</div>
-            <div className="mb-1.5 px-2 text-[10px] text-text-faint">Terminals inside this Workspace</div>
-            {activeView === 'code' && codeSessions.length > 0 && (
-              <div className="mb-1.5 ml-2 flex flex-col gap-0.5 border-l border-line-soft pl-1.5">
-                {codeSessions.map((session) => (
-                  <button
-                    key={session.id}
-                    type="button"
-                    className="flex min-w-0 items-center gap-2 rounded-[7px] px-1.5 py-1 text-left text-[11px] text-text-dim transition hover:bg-bg-hover hover:text-text"
-                    title={`${session.title} · ${session.status === 'active' ? 'active' : 'finished'}`}
-                    onClick={() => window.dispatchEvent(new CustomEvent('orcspace:focus-code-session', { detail: session.id }))}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={`h-1.5 w-1.5 flex-none rounded-full ${session.status === 'active' ? 'animate-pulse bg-ok' : 'bg-text-faint'}`}
-                    />
-                    <span className="min-w-0 flex-1 truncate">{session.title}</span>
-                    <span className="flex-none text-[9px] text-text-faint">{session.status === 'active' ? 'active' : 'done'}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            <button
-              type="button"
-              className="flex w-full items-center gap-1.5 rounded-[7px] px-1.5 py-1 text-[11px] text-text-dim transition hover:bg-bg-hover hover:text-text"
-              onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-code-launcher'))}
-            >
-              <Code2 size={13} />
-              Launch session
-            </button>
-          </div>
         </div>
         <button
           type="button"
@@ -996,67 +925,9 @@ export default React.memo(function Sidebar({
     )
   }
 
-  const createDialog = createOpen ? createPortal(
-    <div
-      className="fixed inset-0 z-[60000] flex items-center justify-center bg-bg/80 p-6 backdrop-blur-[2px]"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) setCreateOpen(false)
-      }}
-    >
-      <form
-        ref={createDialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Create workspace"
-        data-testid="create-workspace-dialog"
-        tabIndex={-1}
-        className="pop-in flex w-[min(380px,calc(100vw-32px))] flex-col gap-4 rounded-[14px] border border-line-soft bg-bg-panel p-5 shadow-2xl"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void createWorkspace()
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') {
-            e.stopPropagation()
-            e.preventDefault()
-            setCreateOpen(false)
-          }
-        }}
-      >
-        <div>
-          <h2 className="text-[15px] font-medium text-text">New Workspace</h2>
-          <p className="mt-1 text-[11px] leading-relaxed text-text-faint">
-            One workspace contains the whole Code screen; terminals are sessions inside it. Canvas stays unchanged.
-          </p>
-        </div>
-        <label className="flex flex-col gap-1.5 text-[10px] font-medium tracking-[0.09em] text-text-faint uppercase">
-          Workspace name
-          <input
-            autoFocus
-            data-testid="create-workspace-name"
-            value={workspaceName}
-            onChange={(event) => setWorkspaceName(event.target.value)}
-            maxLength={80}
-            placeholder="WorkSpace 1"
-            className="rounded-[8px] border border-line-soft bg-bg-raise px-3 py-2.5 text-xs font-normal tracking-normal text-text outline-none focus:border-line"
-          />
-        </label>
-        {foldersError && <p className="text-[11px] leading-snug text-danger">{foldersError}</p>}
-        <div className="flex justify-end gap-2">
-          <button type="button" className={BTN_QUIET} onClick={() => setCreateOpen(false)}>Cancel</button>
-          <button type="submit" className={BTN_PRIMARY} disabled={creatingWorkspace}>
-            {creatingWorkspace ? 'Creating…' : 'Create workspace'}
-          </button>
-        </div>
-      </form>
-    </div>,
-    document.body
-  ) : null
-
   const renameDialog = renameTarget ? createPortal(
     <div
-      className="fixed inset-0 z-[60000] flex items-center justify-center bg-bg/80 p-6 backdrop-blur-[2px]"
+      className="fixed inset-0 z-[60000] flex items-center justify-center bg-[#121212]/80 p-6 backdrop-blur-[2px]"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) setRenameTarget(null)
@@ -1114,11 +985,10 @@ export default React.memo(function Sidebar({
 
   return (
     <>
-    {createDialog}
     {renameDialog}
     <aside
-      className={`rail-shell rail relative z-[45000] flex flex-none flex-col gap-1 border-r border-line pt-10 pb-2 glass:border-line-soft select-none ${expanded ? 'is-expanded w-[200px] items-stretch' : 'w-rail items-center'}`}
-      style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+      className={`rail-shell rail relative z-[45000] flex flex-none flex-col gap-1 border-r border-line pt-10 pb-2 select-none bg-[#121212] ${expanded ? 'is-expanded w-[200px] items-stretch' : 'w-rail items-center'}`}
+      style={{ WebkitAppRegion: 'drag', backgroundColor: '#121212' } as React.CSSProperties}
     >
       <button
         type="button"

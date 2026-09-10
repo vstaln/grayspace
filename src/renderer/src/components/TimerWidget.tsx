@@ -65,6 +65,26 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
       customMinutes,
       customSeconds
     })
+  // NOTE: `remaining` intentionally omitted — while running it is derived from
+  // `deadline` (see timerPersist.get), so persisting every tick is wasted sync I/O.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [widgetId, persistKey, totalMs, running, isCustom, customHours, customMinutes, customSeconds])
+
+  useEffect(() => {
+    return () => {
+      if (!widgetId) return
+      timerPersist.set(persistKey, {
+        totalMs,
+        remaining: deadline.current ? deadline.current - Date.now() : remaining,
+        running,
+        deadline: deadline.current,
+        rang: rang.current,
+        isCustom,
+        customHours,
+        customMinutes,
+        customSeconds
+      })
+    }
   }, [widgetId, persistKey, totalMs, remaining, running, isCustom, customHours, customMinutes, customSeconds])
 
   useEffect(() => {
@@ -72,11 +92,12 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
     const tick = (): void => {
 
 
-
       const visible = rootRef.current?.offsetParent != null
       const left = deadline.current - Date.now()
-      if (visible) setRemaining(left)
-      else if (left > 0) return
+      if (visible) {
+        const shown = Math.max(0, Math.ceil(left / 1000))
+        setRemaining((prev) => (Math.max(0, Math.ceil(prev / 1000)) === shown ? prev : left))
+      } else if (left > 0) return
 
 
       if (left <= 0 && !rang.current) {
@@ -120,7 +141,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
       }
     }
     tick()
-    const timer = setInterval(tick, 200)
+    const timer = setInterval(tick, 1000)
     return () => clearInterval(timer)
   }, [running, widgetId, persistKey, totalMs, isCustom, customHours, customMinutes, customSeconds])
 
@@ -229,12 +250,24 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
         </span>
       </button>
 
-      <div className="h-2 w-full overflow-hidden rounded-[9999px] bg-bg-hover" aria-hidden>
+      <div
+        className="h-2 w-full overflow-hidden rounded-[9999px] bg-bg-hover"
+        role="progressbar"
+        aria-label="Timer progress"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(progress * 100)}
+      >
         <div
           className={`h-full rounded-[9999px] transition-[width] duration-200 ease-out ${over ? 'bg-danger' : 'bg-accent/70'}`}
           style={{ width: `${progress * 100}%` }}
         />
       </div>
+      {over && (
+        <div role="status" aria-live="polite" className="sr-only">
+          Timer finished
+        </div>
+      )}
 
       <div className="flex items-center gap-1.5">
         <button

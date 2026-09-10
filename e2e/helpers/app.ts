@@ -198,11 +198,23 @@ export function terminalFrame(page: Page): ReturnType<Page['locator']> {
 }
 
 
-export async function waitForTerminalShell(fixture: OrcSpaceFixture, page: Page): Promise<string> {
+export function terminalFrameById(page: Page, id: string): ReturnType<Page['locator']> {
+  return page.locator(`[data-testid="widget-terminal-${id}"]`)
+}
+
+export async function waitForTerminalShell(fixture: OrcSpaceFixture, page: Page, knownIds: string[] = []): Promise<string> {
   await terminalFrame(page).waitFor({ state: 'visible' })
-  const terminals = await listTerminals(fixture)
+  const known = new Set(knownIds)
+  const deadline = Date.now() + 30_000
+  let terminals = await listTerminals(fixture)
+  let fresh = terminals.map((t) => t.id).filter((id) => !known.has(id))
+  while (fresh.length === 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    terminals = await listTerminals(fixture)
+    fresh = terminals.map((t) => t.id).filter((id) => !known.has(id))
+  }
   expect(terminals.length).toBeGreaterThan(0)
-  const id = terminals[terminals.length - 1].id
+  const id = fresh[fresh.length - 1] ?? terminals[terminals.length - 1].id
   await waitForTerminalOutput(fixture, id, (output) => output.trim().length > 0)
   return id
 }

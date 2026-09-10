@@ -74,7 +74,15 @@ export function requestInstanceLock(): boolean {
 
 
 
-  if (!app.isPackaged) return true
+  if (!app.isPackaged && !process.env.ORCSPACE_DEV_USER_DATA) {
+    try {
+      const pathMod = require('path') as typeof import('path')
+      const osMod = require('os') as typeof import('os')
+      app.setPath('userData', pathMod.join(osMod.tmpdir(), `orcspace-dev-${process.pid}`))
+    } catch {
+
+    }
+  }
   const hasLock = app.requestSingleInstanceLock()
   if (!hasLock) {
     console.warn('Another OrcSpace instance is already running — handing off and exiting.')

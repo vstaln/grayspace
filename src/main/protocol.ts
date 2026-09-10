@@ -2,6 +2,7 @@ import * as electron from 'electron'
 import { join, resolve, normalize, sep } from 'path'
 import * as fs from 'fs'
 import { pathToFileURL } from 'url'
+import { mediaDir } from './media.ts'
 
 const electronAny = electron as unknown as Record<string, any>
 const protocol = electronAny.protocol
@@ -15,11 +16,53 @@ const session = electronAny.session
 export function setupOrcProtocol(rendererDir = join(__dirname, '../renderer')): void {
   if (!protocol || typeof protocol.handle !== 'function') return
 
-  protocol.handle('orc', (request: { url: string }) => {
+  protocol.handle('orc', async (request: { url: string }) => {
     try {
       const url = new URL(request.url)
       let pathname = decodeURIComponent(url.pathname)
       if (pathname.startsWith('/')) pathname = pathname.slice(1)
+
+      const isMedia = url.hostname === 'media' || pathname.startsWith('media/')
+      if (isMedia) {
+        const mediaFileName = url.hostname === 'media' ? pathname : pathname.slice(6)
+        if (mediaFileName.includes('\0') || mediaFileName.startsWith('.') || mediaFileName.includes('../') || mediaFileName.includes('..\\')) {
+          return new Response('Forbidden', { status: 403 })
+        }
+        const dir = normalize(mediaDir())
+        const baseWithSep = dir.endsWith(sep) ? dir : dir + sep
+        const mediaFilePath = resolve(dir, mediaFileName)
+        let real: string
+        try {
+          real = fs.realpathSync(mediaFilePath)
+        } catch {
+          return new Response('Not Found', { status: 404 })
+        }
+        if (!real.startsWith(baseWithSep)) return new Response('Forbidden', { status: 403 })
+        let stat: fs.Stats
+        try {
+          stat = fs.statSync(real)
+        } catch {
+          return new Response('Not Found', { status: 404 })
+        }
+        if (!stat.isFile()) return new Response('Not Found', { status: 404 })
+        const ext = real.split('.').pop()?.toLowerCase() ?? ''
+        const ACTIVE_EXTS = new Set(['html', 'htm', 'svg', 'js', 'jsx', 'ts', 'tsx', 'xml', 'xhtml'])
+        const isActive = ACTIVE_EXTS.has(ext)
+        const fetched = await net.fetch(pathToFileURL(real).toString())
+        const body = await fetched.arrayBuffer()
+        const headers = new Headers()
+        headers.set('X-Content-Type-Options', 'nosniff')
+        headers.set('Content-Security-Policy', "default-src 'none'; sandbox")
+        headers.set('Content-Length', String(body.byteLength))
+        if (isActive) {
+          headers.set('Content-Type', 'text/plain; charset=utf-8')
+          headers.set('Content-Disposition', 'attachment')
+        } else {
+          const ct = fetched.headers.get('content-type')
+          if (ct) headers.set('Content-Type', ct)
+        }
+        return new Response(body, { status: 200, headers })
+      }
       if (!pathname || pathname === 'index.html') {
         pathname = 'index.html'
       }

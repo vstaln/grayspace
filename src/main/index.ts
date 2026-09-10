@@ -38,7 +38,8 @@ if (process.env.ORCSPACE_DEV_USER_DATA) {
 }
 const hasInstanceLock = requestInstanceLock()
 if (!hasInstanceLock) {
-
+  app.quit()
+  throw new Error('Another OrcSpace instance is already running')
 }
 
 

@@ -279,9 +279,14 @@ export class OrchestrationStore extends EventEmitter {
     if (!spec) throw new CommandError('invalid', 'a task needs a spec')
     const deps = (input.deps ?? []).map(String)
     for (const dep of deps) {
-      if (!this.tasks.has(dep)) throw new CommandError('not_found', `dependency "${dep}" is not a task`)
+      const depTask = this.tasks.get(dep)
+      if (!depTask) throw new CommandError('not_found', `dependency "${dep}" is not a task`)
+      if (depTask.runId !== run.id) {
+        throw new CommandError('invalid', `dependency "${dep}" belongs to a different run`)
+      }
     }
     const id = this.id('otask')
+    const satisfied = deps.every((dep) => this.tasks.get(dep)?.status === 'completed')
     const task: OrcTask = {
       id,
       runId: run.id,
@@ -289,7 +294,7 @@ export class OrchestrationStore extends EventEmitter {
       title: String(input.title ?? '').trim() || firstLine(spec),
       spec,
       deps,
-      status: deps.length === 0 ? 'ready' : 'pending',
+      status: satisfied ? 'ready' : 'pending',
       createdBy: input.createdBy,
       createdAt: this.now(),
       updatedAt: this.now(),
@@ -333,6 +338,7 @@ export class OrchestrationStore extends EventEmitter {
     if (patch.spec !== undefined) task.spec = String(patch.spec)
     task.updatedAt = this.now()
     task.version = this.taskVersions.bump(id)
+    this.promoteReady()
     this.save()
     this.emit('changed', { kind: 'task', id })
     return task
@@ -365,12 +371,19 @@ export class OrchestrationStore extends EventEmitter {
     preamble: string
   }): Dispatch {
     const task = this.requireTask(input.taskId)
+    if (task.status === 'completed') {
+      throw new CommandError('conflict', `task "${task.id}" is already completed`)
+    }
     const open = this.listDispatches({ taskId: task.id }).find((d) => d.state === 'running')
     if (open) {
       throw new CommandError('conflict', `task "${task.id}" already has a running dispatch`, {
         dispatchId: open.id,
         terminalId: open.terminalId
       })
+    }
+    const busyTerminal = this.dispatchForTerminal(input.terminalId)
+    if (busyTerminal) {
+      throw new CommandError('conflict', `terminal "${input.terminalId}" is already running dispatch ${busyTerminal.id}`)
     }
     const id = this.id('disp')
     const dispatch: Dispatch = {
@@ -479,6 +492,9 @@ export class OrchestrationStore extends EventEmitter {
   }): Message {
     if (!MESSAGE_TYPES.includes(input.type)) {
       throw new CommandError('invalid', `type must be one of ${MESSAGE_TYPES.join(', ')}`)
+    }
+    if (input.replyTo && !this.messageById(input.replyTo)) {
+      throw new CommandError('not_found', `no message "${input.replyTo}" to reply to`)
     }
     const run = this.requireRun(input.runId)
     const message: Message = {
@@ -652,11 +668,10 @@ export class OrchestrationStore extends EventEmitter {
 
     if (input.taskId) {
       const task = this.tasks.get(input.taskId)
-      if (task) {
-        task.status = 'blocked'
-        task.updatedAt = this.now()
-        task.version = this.taskVersions.bump(task.id)
-      }
+      if (!task) throw new CommandError('not_found', `no task "${input.taskId}" — call task-list first`)
+      task.status = 'blocked'
+      task.updatedAt = this.now()
+      task.version = this.taskVersions.bump(task.id)
     }
     this.save()
     this.emit('changed', { kind: 'gate', id })

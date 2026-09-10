@@ -88,7 +88,6 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     delete process.env.ORCSPACE_TEST_USER_DATA
     fs.rmSync(userData, { recursive: true, force: true })
   })
-
   function runOrc(args: string[], envOverrides: Record<string, string> = {}): Promise<{ status: number; stdout: string; stderr: string; json: unknown }> {
     const env: Record<string, string | undefined> = {
       ...process.env,
@@ -97,8 +96,10 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
       ORCSPACE_AGENT_ID: agentId,
       ...envOverrides
     }
+    delete env.ORCSPACE_SOCKET_PATH
     for (const [k, v] of Object.entries(envOverrides)) {
       if (v === '') delete env[k]
+      else env[k] = v
     }
     return new Promise((resolve) => {
       execFile(
@@ -198,7 +199,7 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     assert.equal(updateRes.status, 0)
 
 
-    const closeRes = await runOrc(['run-close', runData.id])
+    const closeRes = await runOrc(['run-close', runData.id, '--yes'])
     assert.equal(closeRes.status, 0)
   })
 
@@ -271,7 +272,7 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     const toggleRes = await runOrc(['plan', 'toggle', created.id, '--done'])
     assert.equal(toggleRes.status, 0)
 
-    const deleteRes = await runOrc(['plan', 'delete', created.id])
+    const deleteRes = await runOrc(['plan', 'delete', created.id, '--yes'])
     assert.equal(deleteRes.status, 0)
   })
 

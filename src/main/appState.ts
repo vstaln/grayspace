@@ -1,7 +1,9 @@
 import * as electron from 'electron'
 import { EventEmitter } from 'events'
-import { basename, join } from 'path'
-import { readStoreJson, writeJsonAtomic } from './storage.ts'
+import * as fs from 'fs'
+import { basename, dirname, join } from 'path'
+import { readStoreJson, sweepTempFiles, writeJsonAtomic } from './storage.ts'
+import { normalizeTerminalNameList } from './terminalNames.ts'
 import { getUserDataDir } from './userData.ts'
 import { notifyCanvasWorkspaceChanged } from './canvasState.ts'
 
@@ -12,6 +14,7 @@ export type LinkSyntax = 'wiki' | 'dollar' | 'both'
 
 
 export type WindowsShell = 'cmd' | 'powershell'
+export type CommandPrefix = '/' | '.' | '@' | 'any'
 
 export interface RecentDir {
   path: string
@@ -35,9 +38,9 @@ export interface CodeWorkspaceState {
 
 export interface AppSettings {
 
-  missionMode: boolean
   linkSyntax: LinkSyntax
   windowsShell: WindowsShell
+  commandPrefix: CommandPrefix
 
   userName: string
 
@@ -47,7 +50,7 @@ export interface AppSettings {
 
   backgroundBlur: number
 
-  targetTerminalId?: string
+  targetTerminalId?: string | null
 
 
 
@@ -61,6 +64,8 @@ export interface AppSettings {
   localModel: LocalModelSettings
 
   favoriteWidgets?: string[]
+
+  favoriteTerminalNames?: string[]
 }
 
 export interface LocalModelSettings {
@@ -86,6 +91,7 @@ export type SettingsPatch = Partial<
   Omit<
     AppSettings,
     | 'backgroundImage'
+    | 'commandPrefix'
     | 'targetTerminalId'
     | 'openRouterApiKey'
     | 'localModel'
@@ -93,6 +99,7 @@ export type SettingsPatch = Partial<
 > & {
   backgroundImage?: string | null
   targetTerminalId?: string | null
+  commandPrefix?: CommandPrefix
   openRouterApiKey?: string | null
   localModel?: Partial<LocalModelSettings>
 }
@@ -102,13 +109,14 @@ export interface AppStateShape {
   recent: RecentDir[]
   codeWorkspaceGroups: Record<string, CodeWorkspace[]>
   activeCodeWorkspaceIds: Record<string, string>
+  lastActiveView?: 'canvas' | 'code'
   settings: AppSettings
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
-  missionMode: false,
   linkSyntax: 'both',
   windowsShell: 'cmd',
+  commandPrefix: 'any',
   userName: 'you',
   backgroundDim: 45,
   backgroundBlur: 40,
@@ -125,7 +133,8 @@ const DEFAULT_SETTINGS: AppSettings = {
     idleTimeoutMs: 5 * 60_000,
     offloadVision: false
   },
-  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'mission', 'orchestration', 'browser', 'links', 'music-player']
+  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player'],
+  favoriteTerminalNames: []
 }
 
 const MAX_RECENT = 12
@@ -179,8 +188,21 @@ export class AppState extends EventEmitter {
       recent: this.sortedRecent(),
       codeWorkspaceGroups: { ...this.state.codeWorkspaceGroups },
       activeCodeWorkspaceIds: { ...this.state.activeCodeWorkspaceIds },
+      lastActiveView: this.state.lastActiveView,
       settings
     }
+  }
+
+  get lastActiveView(): 'canvas' | 'code' | undefined {
+    this.ensure()
+    return this.state.lastActiveView
+  }
+
+  setLastActiveView(view: 'canvas' | 'code'): void {
+    this.ensure()
+    if (this.state.lastActiveView === view) return
+    this.state.lastActiveView = view
+    this.commit()
   }
 
   codeWorkspaceState(folder = this.workspaceDir): CodeWorkspaceState {
@@ -189,7 +211,7 @@ export class AppState extends EventEmitter {
     const previousGroup = this.state.codeWorkspaceGroups[key]
     const previousActive = this.state.activeCodeWorkspaceIds[key]
     const workspaces = this.ensureCodeWorkspaceGroup(key)
-    if (previousGroup !== workspaces || previousActive !== this.state.activeCodeWorkspaceIds[key]) this.commit()
+    if (previousGroup !== workspaces || previousActive !== this.state.activeCodeWorkspaceIds[key]) this.commitSoon()
     return { workspaces: workspaces.slice(), activeId: this.state.activeCodeWorkspaceIds[key], folder: folder ?? null }
   }
 
@@ -227,6 +249,21 @@ export class AppState extends EventEmitter {
       return { error: 'A workspace with this name already exists.' }
     }
     workspace.name = name
+    this.commit()
+    return this.codeWorkspaceState(folder)
+  }
+
+  deleteCodeWorkspace(folder: string | undefined, id: string): CodeWorkspaceState | { error: string } {
+    this.ensure()
+    const key = codeFolderKey(folder)
+    const workspaces = this.ensureCodeWorkspaceGroup(key)
+    if (workspaces.length <= 1) return { error: 'A project must keep at least one workspace.' }
+    const index = workspaces.findIndex((item) => item.id === id)
+    if (index === -1) return { error: 'Workspace not found.' }
+    workspaces.splice(index, 1)
+    if (!workspaces.some((item) => item.id === this.state.activeCodeWorkspaceIds[key])) {
+      this.state.activeCodeWorkspaceIds[key] = workspaces[Math.max(0, index - 1)].id
+    }
     this.commit()
     return this.codeWorkspaceState(folder)
   }
@@ -313,9 +350,11 @@ export class AppState extends EventEmitter {
 
   patchSettings(patch: SettingsPatch): AppSettings {
     this.ensure()
-    if (typeof patch.missionMode === 'boolean') this.state.settings.missionMode = patch.missionMode
     if (patch.windowsShell && ['cmd', 'powershell'].includes(patch.windowsShell)) {
       this.state.settings.windowsShell = patch.windowsShell
+    }
+    if (patch.commandPrefix && ['/', '.', '@', 'any'].includes(patch.commandPrefix)) {
+      this.state.settings.commandPrefix = patch.commandPrefix
     }
     if (patch.linkSyntax && ['wiki', 'dollar', 'both'].includes(patch.linkSyntax))
       this.state.settings.linkSyntax = patch.linkSyntax
@@ -363,8 +402,11 @@ export class AppState extends EventEmitter {
       this.state.settings.localModel = merged
     }
     if (Array.isArray(patch.favoriteWidgets)) {
-      const allowed = new Set(['terminal', 'timer', 'planner', 'mission', 'orchestration', 'files', 'sys-monitor', 'browser', 'links', 'music-player'])
+      const allowed = new Set(['terminal', 'timer', 'planner', 'orchestration', 'files', 'sys-monitor', 'browser', 'links', 'music-player'])
       this.state.settings.favoriteWidgets = [...new Set(patch.favoriteWidgets.filter((kind): kind is string => typeof kind === 'string' && allowed.has(kind)))].slice(0, 32)
+    }
+    if (Array.isArray(patch.favoriteTerminalNames)) {
+      this.state.settings.favoriteTerminalNames = normalizeTerminalNameList(patch.favoriteTerminalNames)
     }
     this.commit()
     return this.publicSettings()
@@ -380,6 +422,7 @@ export class AppState extends EventEmitter {
     if (!value) {
       delete this.state.settings[plainKey]
       delete this.state.settings[encKey]
+      this.deleteSecretBackups()
       return
     }
 
@@ -392,6 +435,31 @@ export class AppState extends EventEmitter {
 
       this.state.settings[plainKey] = value
       delete this.state.settings[encKey]
+    }
+    this.deleteSecretBackups()
+  }
+
+  private deleteSecretBackups(): void {
+    try {
+      fs.unlinkSync(`${this.file}.bak`)
+    } catch {
+
+    }
+    let names: string[] = []
+    try {
+      names = fs.readdirSync(dirname(this.file))
+    } catch {
+      return
+    }
+    const base = basename(this.file)
+    for (const name of names) {
+      if (name.startsWith(`${base}.corrupt-`)) {
+        try {
+          fs.unlinkSync(join(dirname(this.file), name))
+        } catch {
+
+        }
+      }
     }
   }
 
@@ -409,12 +477,22 @@ export class AppState extends EventEmitter {
     this.state.recent = this.state.recent.filter(r => r.pinned || keep.has(r.path))
   }
 
+  flush(): void {
+    this.ensure()
+    this.commit()
+  }
+
   private ensure(): void {
     if (this.loaded) return
 
 
 
 
+    try {
+      sweepTempFiles(dirname(this.file))
+    } catch {
+
+    }
     const raw = readStoreJson<Partial<AppStateShape> & { codeWorkspaces?: unknown; activeCodeWorkspaceId?: unknown }>(this.file, {})
     const persistedSettings = { ...(raw.settings || {}) } as Record<string, unknown>
     delete persistedSettings.role
@@ -449,14 +527,15 @@ export class AppState extends EventEmitter {
     this.state.settings.localModel = { ...DEFAULT_SETTINGS.localModel, ...(raw.settings?.localModel || {}) }
     if (!['cmd', 'powershell'].includes(this.state.settings.windowsShell))
       this.state.settings.windowsShell = DEFAULT_SETTINGS.windowsShell
-    if (typeof this.state.settings.missionMode !== 'boolean')
-      this.state.settings.missionMode = DEFAULT_SETTINGS.missionMode
+    if (!['/', '.', '@', 'any'].includes(this.state.settings.commandPrefix))
+      this.state.settings.commandPrefix = DEFAULT_SETTINGS.commandPrefix
 
 
     if (!Number.isFinite(this.state.settings.backgroundDim))
       this.state.settings.backgroundDim = DEFAULT_SETTINGS.backgroundDim
     if (!Number.isFinite(this.state.settings.backgroundBlur))
       this.state.settings.backgroundBlur = DEFAULT_SETTINGS.backgroundBlur
+    this.state.settings.favoriteTerminalNames = normalizeTerminalNameList(this.state.settings.favoriteTerminalNames)
 
 
     this.decryptOrMigrate('openRouterApiKey', 'openRouterApiKeyEnc')
@@ -478,7 +557,13 @@ export class AppState extends EventEmitter {
     }
   }
 
+  private commitTimer: ReturnType<typeof setTimeout> | null = null
+
   private commit(): void {
+    if (this.commitTimer !== null) {
+      clearTimeout(this.commitTimer)
+      this.commitTimer = null
+    }
     try {
       writeJsonAtomic(this.file, { ...this.state, settings: this.settingsForDisk() })
     } catch (err) {
@@ -487,6 +572,16 @@ export class AppState extends EventEmitter {
 
       console.error('failed to persist workspace state', err)
     }
+    this.emit('change', this.get())
+  }
+
+  private commitSoon(): void {
+    if (this.commitTimer !== null) return
+    this.commitTimer = setTimeout(() => {
+      this.commitTimer = null
+      this.commit()
+    }, 400)
+    this.commitTimer.unref?.()
     this.emit('change', this.get())
   }
 
@@ -510,13 +605,13 @@ export class AppState extends EventEmitter {
     const names = new Set(workspaces.map((workspace) => workspace.name.toLowerCase()))
     let index = 1
     while (names.has(`workspace ${index}`)) index += 1
-    return `WorkSpace ${index}`
+    return `Workspace ${index}`
   }
 
   private ensureCodeWorkspaceGroup(key: string): CodeWorkspace[] {
     let workspaces = this.state.codeWorkspaceGroups[key]
     if (!Array.isArray(workspaces) || !workspaces.length) {
-      workspaces = [{ id: `code-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, name: 'WorkSpace 1', createdAt: Date.now() }]
+      workspaces = [{ id: `code-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, name: 'Workspace 1', createdAt: Date.now() }]
       this.state.codeWorkspaceGroups[key] = workspaces
     }
     const active = this.state.activeCodeWorkspaceIds[key]
@@ -538,7 +633,9 @@ function normalizeCodeWorkspaces(raw: unknown): CodeWorkspace[] {
     .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
     .map((item) => ({
       id: typeof item.id === 'string' ? item.id.trim().slice(0, 128) : '',
-      name: typeof item.name === 'string' ? item.name.trim().slice(0, 80) : '',
+      name: typeof item.name === 'string'
+        ? item.name.trim().replace(/^WorkSpace (\d+)$/, 'Workspace $1').slice(0, 80)
+        : '',
       createdAt: Number(item.createdAt) || Date.now()
     }))
     .filter((item) => Boolean(item.id) && Boolean(item.name))

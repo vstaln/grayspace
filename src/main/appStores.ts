@@ -38,6 +38,7 @@ export function createAppStores(): AppStores {
   const state = new AppState()
   const terminals = new TerminalManager({
     getWindowsShell: () => state.settings.windowsShell,
+    getFavoriteNames: () => state.settings.favoriteTerminalNames ?? [],
     rustPty: createRustPtySidecar()
   })
   const terminalBatcher = new TerminalStreamBatcher()

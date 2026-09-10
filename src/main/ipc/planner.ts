@@ -9,8 +9,32 @@ export function registerPlannerIpc(deps: IpcDeps): void {
   ipcMain.handle('planner:list', () => deps.planner.list())
   ipcMain.handle(
     'planner:create',
-    async (_e, input: { title: string; note?: string; day?: string; time?: string; project?: string; attachments?: string[] }) =>
-      unwrap(await send('plan.create', NEW.plan, input))
+    async (_e, input: { title: string; note?: string; day?: string; time?: string; project?: string; attachments?: string[] }) => {
+      const title = typeof input?.title === 'string' ? input.title.trim() : ''
+      if (!title) return { ok: false, error: 'title is required' }
+      if (title.length > 500) return { ok: false, error: 'title is too long' }
+      if (typeof input?.note === 'string' && input.note.length > 10000) return { ok: false, error: 'note is too long' }
+      if (input?.attachments !== undefined && (!Array.isArray(input.attachments) || input.attachments.length > 20)) {
+        return { ok: false, error: 'too many attachments' }
+      }
+      const { note, day, time, project, attachments } = input as {
+        note?: string
+        day?: string
+        time?: string
+        project?: string
+        attachments?: string[]
+      }
+      return unwrap(
+        await send('plan.create', NEW.plan, {
+          title,
+          ...(typeof note === 'string' ? { note } : {}),
+          ...(typeof day === 'string' ? { day } : {}),
+          ...(typeof time === 'string' ? { time } : {}),
+          ...(typeof project === 'string' ? { project } : {}),
+          ...(attachments !== undefined ? { attachments } : {})
+        })
+      )
+    }
   )
   ipcMain.handle(
     'planner:update',

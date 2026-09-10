@@ -17,6 +17,10 @@ import type { IpcDeps } from './types.ts'
 export function registerTerminalIpc(deps: IpcDeps): void {
   const send = makeSend(deps.core)
 
+  ipcMain.handle('terminal:list', () =>
+    deps.terminals.list().map((terminal) => ({ id: terminal.id, title: terminal.title, cwd: terminal.cwd }))
+  )
+
   ipcMain.handle('terminal:create', async (_e, id: string, cols?: number, rows?: number) => {
 
 
@@ -35,7 +39,7 @@ export function registerTerminalIpc(deps: IpcDeps): void {
       return result
     } catch (err) {
       unmarkTerminalMounted(id)
-      throw err
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
   ipcMain.on('terminal:detach', (_e, id: string) => {

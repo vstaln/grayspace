@@ -12,11 +12,12 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener},
     sync::{mpsc, Arc, Mutex},
     thread,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 const MAX_SCROLLBACK: usize = 1_000_000;
 const TOKEN_HEADER: &str = "x-orcspace-token";
+const TERMINAL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug)]
 pub struct TerminalManager {
@@ -272,7 +273,7 @@ impl TerminalManager {
         let _guard = handle.input_guard.lock().expect("terminal input mutex");
         let bytes = encode_terminal_input(text, press_enter)?;
         let count = bytes.len();
-        self.send_input(&handle, bytes)?;
+        self.send_input(id, &handle, bytes)?;
         Ok(DeliveryReceipt {
             id: format!("delivery-{}", uuid::Uuid::new_v4().simple()),
             terminal_id: id.to_owned(),
@@ -294,9 +295,11 @@ impl TerminalManager {
                 response: response_tx,
             })
             .map_err(|_| format!("terminal {id} actor stopped"))?;
-        response_rx
-            .recv()
-            .map_err(|_| format!("terminal {id} actor stopped"))?
+        let result = recv_terminal_response(response_rx, id, "resize", TERMINAL_RESPONSE_TIMEOUT);
+        if result.is_err() {
+            mark_terminal_dead(&handle.state);
+        }
+        result
     }
 
     pub fn snapshot(&self, id: &str) -> Result<TerminalSnapshot, String> {
@@ -346,10 +349,10 @@ impl TerminalManager {
     fn write_serialized(&self, id: &str, data: &[u8]) -> Result<(), String> {
         let handle = self.handle(id)?;
         let _guard = handle.input_guard.lock().expect("terminal input mutex");
-        self.send_input(&handle, data.to_vec())
+        self.send_input(id, &handle, data.to_vec())
     }
 
-    fn send_input(&self, handle: &TerminalHandle, data: Vec<u8>) -> Result<(), String> {
+    fn send_input(&self, id: &str, handle: &TerminalHandle, data: Vec<u8>) -> Result<(), String> {
         let (response_tx, response_rx) = mpsc::channel();
         handle
             .tx
@@ -357,10 +360,36 @@ impl TerminalManager {
                 data,
                 response: response_tx,
             })
-            .map_err(|_| "terminal actor stopped".to_owned())?;
-        response_rx
-            .recv()
-            .map_err(|_| "terminal actor stopped".to_owned())?
+            .map_err(|_| format!("terminal {id} actor stopped"))?;
+        let result = recv_terminal_response(response_rx, id, "input", TERMINAL_RESPONSE_TIMEOUT);
+        if result.is_err() {
+            mark_terminal_dead(&handle.state);
+        }
+        result
+    }
+}
+
+fn mark_terminal_dead(state: &Arc<Mutex<TerminalState>>) {
+    if let Ok(mut current) = state.lock() {
+        current.alive = false;
+    }
+}
+
+fn recv_terminal_response(
+    response_rx: mpsc::Receiver<Result<(), String>>,
+    id: &str,
+    operation: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    match response_rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "terminal {id} {operation} timed out after {} ms",
+            timeout.as_millis()
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(format!("terminal {id} actor stopped during {operation}"))
+        }
     }
 }
 
@@ -669,8 +698,12 @@ fn bad_request(error: String) -> (StatusCode, String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_terminal_input, WriteRequest};
+    use super::{encode_terminal_input, recv_terminal_response, WriteRequest};
     use serde_json::json;
+    use std::{
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
 
     #[test]
     fn line_normalization_rejects_space_only_messages() {
@@ -686,5 +719,16 @@ mod tests {
         let raw: WriteRequest =
             serde_json::from_value(json!({"text": "run", "pressEnter": false})).unwrap();
         assert!(!raw.press_enter);
+    }
+
+    #[test]
+    fn stalled_terminal_response_times_out() {
+        let (_sender, receiver) = mpsc::channel();
+        let started = Instant::now();
+        let error = recv_terminal_response(receiver, "term-1", "input", Duration::from_millis(20))
+            .unwrap_err();
+
+        assert!(error.contains("term-1 input timed out"));
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

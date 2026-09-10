@@ -94,14 +94,16 @@ test('keyboard zoom: Ctrl++ zooms in, Ctrl+- zooms out, Ctrl+0 resets', async ()
 
 test('minimum window size: no horizontal overflow at 800x560', async () => {
   const minCtx = await launchOrcSpace({ viewport: { width: 800, height: 560 } })
-  await waitForCanvas(minCtx.page)
+  try {
+    await waitForCanvas(minCtx.page)
 
 
-  const canvasWidth = await minCtx.page.getByTestId('canvas').evaluate((el) => el.scrollWidth)
-  const viewportWidth = await minCtx.page.evaluate(() => window.innerWidth)
-  await expect(canvasWidth).toBeLessThanOrEqual(viewportWidth)
-
-  await closeOrcSpace(minCtx)
+    const canvasWidth = await minCtx.page.getByTestId('canvas').evaluate((el) => el.scrollWidth)
+    const viewportWidth = await minCtx.page.evaluate(() => window.innerWidth)
+    await expect(canvasWidth).toBeLessThanOrEqual(viewportWidth)
+  } finally {
+    await closeOrcSpace(minCtx)
+  }
 })
 
 test('2x HiDPI ink: canvas renders at 2x device scale (skip if no canvas)', async () => {

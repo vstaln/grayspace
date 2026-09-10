@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const dist = join(root, 'dist')
 const skipTests = process.argv.includes('--skip-tests')
+const skipCi = process.argv.includes('--skip-ci')
 const nodeMajor = Number.parseInt(process.versions.node.split('.')[0], 10)
 
 
@@ -97,7 +98,7 @@ function verifyUnpackedRelease(packageJson) {
   const asar = readFileSync(join(resources, 'app.asar'))
 
 
-  for (const marker of ['music-player', 'youtube.com/iframe_api', 'Mission Controller']) {
+  for (const marker of ['music-player', 'youtube.com/iframe_api', 'Orchestration']) {
     if (!asar.includes(marker)) throw new Error(`Renderer bundle is missing required feature marker: ${marker}`)
   }
 
@@ -131,7 +132,11 @@ try {
   if (!packageJson.version || !packageJson.name) throw new Error('package.json has no valid name/version.')
   if (!existsSync(join(root, 'package-lock.json'))) throw new Error('package-lock.json is required for a reproducible build.')
 
-  runNpm(['ci', '--no-fund', '--no-audit'])
+  if (!skipCi) {
+    runNpm(['ci', '--no-fund', '--no-audit'])
+  } else if (!process.argv.includes('--dirty')) {
+    throw new Error('--skip-ci requires --dirty: building on unpinned node_modules is not reproducible.')
+  }
   runNpm(['run', 'typecheck'])
   if (!skipTests) runNpm(['test'])
   runNpm(['run', 'dist'])
@@ -146,11 +151,14 @@ try {
     }
   }
 
+  const dirty = skipCi || process.argv.includes('--dirty')
   const manifest = {
     product: 'OrcSpace',
     version: packageJson.version,
     platform: 'win32',
     arch: 'x64',
+    dirty,
+    packageLockSha256: sha256(join(root, 'package-lock.json')),
     installer: { file: installer.split(/[/\\]/).pop(), sha256: sha256(installer), bytes: statSync(installer).size },
     portable: { file: portable.split(/[/\\]/).pop(), sha256: sha256(portable), bytes: statSync(portable).size },
     generatedAt: new Date().toISOString(),

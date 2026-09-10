@@ -107,11 +107,28 @@ fn run_engine(manager: TerminalManager) -> Result<()> {
         .spawn(move || {
             let stdin = io::stdin();
             for line in stdin.lock().lines() {
-                let command = line
-                    .ok()
-                    .and_then(|line| serde_json::from_str::<EngineCommand>(&line).ok());
-                if commands_tx.send(command).is_err() {
-                    break;
+                let line = match line {
+                    Ok(line) => line,
+                    Err(error) => {
+                        eprintln!("engine stdin read failed: {error}");
+                        break;
+                    }
+                };
+                if line.trim().is_empty() {
+                    continue;
+                }
+                match parse_engine_command(&line) {
+                    Ok(None) => continue,
+                    Ok(command) => {
+                        if commands_tx.send(command).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        // A malformed command must not be confused with EOF:
+                        // dropping one bad packet should not kill every PTY.
+                        eprintln!("ignored malformed engine command: {error}");
+                    }
                 }
             }
             let _ = commands_tx.send(None);
@@ -143,6 +160,13 @@ fn run_engine(manager: TerminalManager) -> Result<()> {
         }
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn parse_engine_command(line: &str) -> Result<Option<EngineCommand>, serde_json::Error> {
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(line).map(Some)
 }
 
 fn handle_engine_command(
@@ -226,4 +250,15 @@ fn emit(output: &mut BufWriter<impl Write>, event: &EngineEvent) -> Result<()> {
     output.write_all(b"\n")?;
     output.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_engine_command;
+
+    #[test]
+    fn malformed_engine_command_is_rejected_without_being_eof() {
+        assert!(parse_engine_command("not-json").is_err());
+        assert!(parse_engine_command("   ").unwrap().is_none());
+    }
 }

@@ -46,11 +46,23 @@ interface StrokeBounds {
 const strokeBoundsCache = new Map<string, StrokeBounds>()
 const MAX_BOUNDS_CACHE_ENTRIES = 5000
 
+export function invalidateStrokeBounds(strokeId?: string): void {
+  if (strokeId === undefined) {
+    strokeBoundsCache.clear()
+    return
+  }
+  for (const key of Array.from(strokeBoundsCache.keys())) {
+    if (key === strokeId || key.startsWith(`${strokeId}:`)) strokeBoundsCache.delete(key)
+  }
+}
+
 function strokeBounds(stroke: Stroke): StrokeBounds {
-  const cacheKey = `${stroke.id}:${stroke.points.length}`
+  const pts = stroke.points
+  const first = pts[0]
+  const last = pts[pts.length - 1]
+  const cacheKey = `${stroke.id}:${pts.length}:${first ? `${first.x},${first.y}` : ''}:${last ? `${last.x},${last.y}` : ''}`
   const cached = strokeBoundsCache.get(cacheKey)
   if (cached) return cached
-  const pts = stroke.points
   let minX = Infinity
   let minY = Infinity
   let maxX = -Infinity
@@ -246,6 +258,7 @@ export function useCanvas() {
     return () => {
       mounted = false
       workspaceSyncSeqRef.current += 1
+      hydrationRunRef.current += 1
       unbindDir()
       if (retryTimerRef.current !== null) {
         clearTimeout(retryTimerRef.current)
@@ -338,17 +351,15 @@ export function useCanvas() {
       if (!snapshot || !Array.isArray(snapshot.widgets)) return
       canvasChangeSeqRef.current += 1
       skipNextSaveRef.current = true
+      const pending = new Set(pendingDeletesRef.current)
+      const incomingIds = new Set(snapshot.widgets.map((w) => w.id))
+      for (const id of pending) {
+        if (!incomingIds.has(id)) pendingDeletesRef.current.delete(id)
+      }
+      const list = pending.size > 0 ? snapshot.widgets.filter((w) => !pending.has(w.id)) : snapshot.widgets
       setWidgets((prev) => {
-        const pending = pendingDeletesRef.current
         const prevById = new Map(prev.map((w) => [w.id, w]))
-        const incomingIds = new Set(snapshot.widgets.map((w) => w.id))
-
-
-        for (const id of pending) {
-          if (!incomingIds.has(id)) pending.delete(id)
-        }
-        if (pending.size > 0) snapshot.widgets = snapshot.widgets.filter((w) => !pending.has(w.id))
-        const merged = snapshot.widgets.map((incoming) => {
+        const merged = list.map((incoming) => {
           const local = prevById.get(incoming.id)
 
 
@@ -371,14 +382,15 @@ export function useCanvas() {
 
 
 
-        for (const id of pendingCreatesRef.current) {
-          if (incomingIds.has(id)) pendingCreatesRef.current.delete(id)
-        }
+        const created = new Set(pendingCreatesRef.current)
         for (const local of prev) {
-          if (!incomingIds.has(local.id) && pendingCreatesRef.current.has(local.id)) merged.push(local)
+          if (!incomingIds.has(local.id) && created.has(local.id)) merged.push(local)
         }
         return merged
       })
+      for (const id of pendingCreatesRef.current) {
+        if (incomingIds.has(id)) pendingCreatesRef.current.delete(id)
+      }
       if (snapshot.camera && !cameraDirtyRef.current) setCamera(snapshot.camera)
       if (Array.isArray(snapshot.strokes) && !strokesDirtyRef.current) setStrokes(snapshot.strokes)
     })
@@ -414,15 +426,15 @@ export function useCanvas() {
 
 
       const z = nextZ()
-      let added = true
+      const current = widgetsRef.current
+      if (current.length >= MAX_WIDGETS || current.some((widget) => widget.id === id)) {
+        pendingCreatesRef.current.delete(id)
+        return false
+      }
+      widgetsDirtyRef.current = true
+      const widgetTitle = title || (kind === 'terminal' ? `Terminal ${nextTerminalNumber(current)}` : defaults.title)
       setWidgets((prev) => {
-        if (prev.length >= MAX_WIDGETS || prev.some((widget) => widget.id === id)) {
-
-          pendingCreatesRef.current.delete(id)
-          added = false
-          return prev
-        }
-        widgetsDirtyRef.current = true
+        if (prev.some((widget) => widget.id === id)) return prev
         return [
           ...prev,
           {
@@ -431,7 +443,7 @@ export function useCanvas() {
 
 
 
-            title: title || (kind === 'terminal' ? `Terminal ${nextTerminalNumber(prev)}` : defaults.title),
+            title: widgetTitle,
             kind,
             x: point.x - 16,
             y: point.y - 16,
@@ -442,7 +454,7 @@ export function useCanvas() {
           }
         ]
       })
-      return added
+      return true
     },
     [nextZ]
   )

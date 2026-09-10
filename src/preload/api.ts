@@ -5,6 +5,7 @@
 
 
 export interface TerminalApi {
+  list(): Promise<Array<{ id: string; title: string; cwd: string }>>
   create(
     id: string,
     cols?: number,
@@ -61,6 +62,7 @@ export interface WorkspaceApi {
   codeWorkspaces(): Promise<CodeWorkspaceState>
   createCodeWorkspace(name?: string): Promise<CodeWorkspace | { error: string }>
   renameCodeWorkspace(id: string, name: string): Promise<CodeWorkspaceState | { error: string }>
+  deleteCodeWorkspace(id: string): Promise<CodeWorkspaceState | { error: string }>
   selectCodeWorkspace(id: string): Promise<CodeWorkspaceState | { error: string }>
   onCodeWorkspaceChange(cb: (state: CodeWorkspaceState) => void): () => void
   onDirChange(cb: (dir: string | null) => void): () => void
@@ -72,6 +74,7 @@ export interface WorkspaceApi {
 }
 
 export type LinkSyntax = 'wiki' | 'dollar' | 'both'
+export type CommandPrefix = '/' | '.' | '@' | 'any'
 export interface LocalModelSettings {
   enabled: boolean
   serverBin: string
@@ -84,9 +87,10 @@ export interface LocalModelSettings {
 }
 
 export interface AppSettings {
-  missionMode: boolean
   linkSyntax: LinkSyntax
   windowsShell: 'cmd' | 'powershell'
+  commandPrefix: CommandPrefix
+  targetTerminalId?: string | null
   userName: string
   backgroundImage?: string
 
@@ -100,6 +104,7 @@ export interface AppSettings {
   openRouterModel?: string
   localModel: LocalModelSettings
   favoriteWidgets?: string[]
+  favoriteTerminalNames?: string[]
 }
 
 export interface SettingsApi {
@@ -109,10 +114,14 @@ export interface SettingsApi {
       Omit<
         AppSettings,
         | 'backgroundImage'
+        | 'commandPrefix'
+        | 'targetTerminalId'
         | 'localModel'
       >
     > & {
       backgroundImage?: string | null
+      commandPrefix?: CommandPrefix
+      targetTerminalId?: string | null
       openRouterApiKey?: string | null
       localModel?: Partial<LocalModelSettings>
     }
@@ -130,11 +139,13 @@ export interface MediaFile { name: string; path: string }
 export interface MediaApi {
 
   saveClipboard(): Promise<MediaFile | null>
+  readClipboardText(): Promise<string>
 
 
 
 
   saveClipboardScratch(): Promise<MediaFile | null>
+  stageClipboardImage(bytes: Uint8Array): Promise<{ ok: true } | { error: string }>
   saveBytes(bytes: Uint8Array, ext: string): Promise<MediaFile | { error: string } | null>
 
   saveBytesScratch(bytes: Uint8Array, ext: string): Promise<MediaFile | { error: string } | null>
@@ -260,22 +271,6 @@ export interface OrchestrationApi {
   onChange(cb: () => void): () => void
 }
 
-export interface MissionApi {
-  start(input: {
-    objective: string
-    title: string
-    spec: string
-    planId: string
-    agent?: string
-    terminalId?: string
-  }): Promise<{
-    runId: string
-    taskId: string
-    dispatchId: string
-    terminalId: string
-    agent: string
-  } | { error: string }>
-}
 
 
 
@@ -336,7 +331,7 @@ export interface PlannerApi {
 export interface CanvasWidget {
   id: string
   title: string
-  kind?: 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration' | 'mission'
+  kind?: 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration'
   x: number
   y: number
   w: number
@@ -373,7 +368,7 @@ export interface CanvasApi {
 
 
   save(snapshot: { widgets: CanvasWidget[]; camera: { x: number; y: number; zoom: number }; strokes: CanvasStroke[] }): Promise<
-    { applied: number; skipped: number; removed: number } | { error: string }
+    { applied: number; skipped: number; removed: number } | { ok: true; discarded: true } | { error: string }
   >
 }
 
@@ -399,7 +394,8 @@ export interface CodeSnapshot {
 
 export interface CodeApi {
   load(): Promise<CodeSnapshot>
-  save(snapshot: { sessions?: CodeSession[]; featuredId?: string | null; maximizedId?: string | null; activeView?: WorkView | null; workspaceDir?: string | null; codeWorkspaceId?: string }): Promise<{ ok: boolean } | { error: string }>
+  save(snapshot: { sessions?: CodeSession[]; featuredId?: string | null; maximizedId?: string | null; activeView?: WorkView | null; workspaceDir?: string | null; codeWorkspaceId?: string }): Promise<{ ok: boolean; snapshot?: CodeSnapshot; discarded?: boolean } | { error: string }>
+  saveSync?(snapshot: { sessions?: CodeSession[]; featuredId?: string | null; maximizedId?: string | null; activeView?: WorkView | null; workspaceDir?: string | null; codeWorkspaceId?: string }): { ok: boolean } | { error: string }
   onChange(cb: (snapshot: CodeSnapshot) => void): () => void
 }
 

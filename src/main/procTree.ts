@@ -51,11 +51,22 @@ const SWEEP_COOLDOWN_MS = 4_000
 
 
 
-const MAX_ROOTS_PER_SWEEP = 256
+const MAX_ROOTS_PER_SWEEP = 1024
+
+const MAX_CONSECUTIVE_SWEEP_FAILURES = 5
+let consecutiveSweepFailures = 0
 
 export function killProcessTree(rootPid: number | undefined, settleMs = SWEEP_DEBOUNCE_MS): void {
-  if (process.platform !== 'win32' || !rootPid || !Number.isInteger(rootPid) || rootPid <= 0) return
+  if (!rootPid || !Number.isInteger(rootPid) || rootPid <= 0) return
 
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(rootPid, 'SIGKILL')
+    } catch {
+
+    }
+    return
+  }
   try {
     execFile('taskkill', ['/PID', String(rootPid), '/T', '/F'], { windowsHide: true }, () => {})
   } catch {
@@ -90,7 +101,7 @@ function runSweep(): void {
   sweepInFlight = true
   const generation = sweepGeneration
 
-  const finish = (): void => {
+  const finish = (error?: Error | null): void => {
 
 
     if (generation !== sweepGeneration) {
@@ -102,6 +113,16 @@ function runSweep(): void {
     sweepProcess = null
     lastSweepEndedAt = Date.now()
 
+    if (error) {
+      consecutiveSweepFailures += 1
+      if (consecutiveSweepFailures < MAX_CONSECUTIVE_SWEEP_FAILURES) {
+        for (const r of roots) pendingRoots.set(r.pid, r.requestedAt)
+      } else {
+        consecutiveSweepFailures = 0
+      }
+    } else {
+      consecutiveSweepFailures = 0
+    }
     if (pendingRoots.size > 0) scheduleSweep(SWEEP_DEBOUNCE_MS)
   }
 

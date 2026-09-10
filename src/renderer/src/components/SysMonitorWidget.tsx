@@ -23,6 +23,7 @@ import ClaudeIcon from './ClaudeIcon'
 import GrokIcon from './GrokIcon'
 import OpenCodeIcon from './OpenCodeIcon'
 import CursorIcon from './CursorIcon'
+import KimiIcon from './KimiIcon'
 import type { SystemStats } from '../../../preload/index.d'
 import { useConfirm } from './ConfirmDialog'
 
@@ -58,6 +59,8 @@ function renderAgentIcon(id: string, size = 13): React.JSX.Element {
       return <GrokIcon size={size} />
     case 'opencode':
       return <OpenCodeIcon size={size} />
+    case 'kimi':
+      return <KimiIcon size={size} />
     case 'cursor':
       return <CursorIcon size={size} />
     default:

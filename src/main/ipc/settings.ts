@@ -10,7 +10,8 @@ export function registerSettingsIpc(deps: IpcDeps): void {
 
   ipcMain.handle('settings:get', () => state.publicSettings())
   ipcMain.handle('settings:set', (_e, patch: SettingsPatch) => {
-    const next = state.patchSettings(patch ?? {})
+    if (!patch || typeof patch !== 'object') return state.publicSettings()
+    const next = state.patchSettings(patch)
     return next
   })
 
@@ -51,7 +52,7 @@ export function registerSettingsIpc(deps: IpcDeps): void {
 
 
       if ((await fs.promises.stat(source)).size > media.MAX_MEDIA_BYTES)
-        return { error: 'File exceeds 24 MB — please select a smaller image.' }
+        return { error: 'File exceeds 256 MB — please select a smaller image.' }
 
       const dir = backgroundDir()
       await fs.promises.mkdir(dir, { recursive: true })

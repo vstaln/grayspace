@@ -153,7 +153,7 @@ test('maximizing a widget keeps the state it holds', async () => {
     await expect(timer.getByRole('button', { name: 'Pause' })).toBeVisible()
 
     await expect(readout).not.toHaveText('25:00')
-    await expect.poll(() => readout.textContent()).not.toBe(running)
+    await expect.poll(() => readout.textContent(), { timeout: 5000, intervals: [250, 500] }).not.toBe(running)
   } finally {
     await closeOrcSpace(own)
   }

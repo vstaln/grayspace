@@ -14,14 +14,21 @@ export function registerCanvasIpc(deps: IpcDeps): void {
 
 
   ipcMain.handle('canvas:save', async (_e, snapshot) => {
-    const stamped =
-      snapshot && typeof snapshot === 'object' ? (snapshot as { workspaceDir?: string | null }).workspaceDir : undefined
-    const current = deps.getWorkspaceDir() ?? null
-    const intended = stamped === undefined ? current : stamped ?? null
-    if (intended !== current) {
-      console.warn(`canvas:save discarded — workspace changed ${String(intended)} → ${String(current)}`)
-      return { ok: true, discarded: true }
+    try {
+      const stamped =
+        snapshot && typeof snapshot === 'object' ? (snapshot as { workspaceDir?: string | null }).workspaceDir : undefined
+      const current = deps.getWorkspaceDir() ?? null
+      const intended = stamped === undefined ? current : stamped ?? null
+      if (intended !== current) {
+        console.warn(`canvas:save discarded — workspace changed ${String(intended)} → ${String(current)}`)
+        return { ok: true, discarded: true }
+      }
+      if (snapshot && typeof snapshot === 'object' && 'widgets' in snapshot && !Array.isArray((snapshot as { widgets?: unknown }).widgets)) {
+        return { error: 'invalid canvas snapshot' }
+      }
+      return unwrap(await send('canvas.import', CANVAS_TARGET, snapshot ?? {}))
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) }
     }
-    return unwrap(await send('canvas.import', CANVAS_TARGET, snapshot ?? {}))
   })
 }

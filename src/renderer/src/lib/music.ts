@@ -10,6 +10,9 @@ export function provider(url: string): Provider | null {
   try {
     const trimmed = url.trim()
     if (!trimmed) return null
+    if (trimmed.startsWith('orc://media/') || trimmed.startsWith('data:audio/') || trimmed.startsWith('blob:')) {
+      return 'audio'
+    }
     const u = new URL(trimmed.startsWith('http://') || trimmed.startsWith('https://') ? trimmed : `https://${trimmed}`)
     const host = u.hostname.replace(/^www\./, '').toLowerCase()
     if (host === 'youtube.com' || host === 'youtu.be' || host === 'm.youtube.com' || host === 'music.youtube.com') return 'youtube'
@@ -23,6 +26,8 @@ export function provider(url: string): Provider | null {
 
 export function isSupportedAudioUrl(url: string): boolean {
   try {
+    const trimmed = url.trim()
+    if (trimmed.startsWith('orc://media/') || trimmed.startsWith('data:audio/') || trimmed.startsWith('blob:')) return true
     const u = new URL(url)
     const ext = u.pathname.split('.').pop()?.split('?')[0]?.toLowerCase() ?? ''
     return SUPPORTED_AUDIO_EXTS.has(ext)
@@ -31,21 +36,23 @@ export function isSupportedAudioUrl(url: string): boolean {
   }
 }
 
-
-
-
-
-const DATA_URL_CAP = 2000
+const DATA_URL_CAP = 2 * 1024 * 1024
 
 export function sanitizeAudioSrc(url: string): string | null {
   if (!url) return null
   const trimmed = url.trim()
   if (!trimmed) return null
+  if (trimmed.startsWith('orc://media/')) {
+    return trimmed
+  }
+  if (trimmed.startsWith('orc://')) {
+    return null
+  }
   if (trimmed.startsWith('blob:')) {
     try {
       const inner = trimmed.slice(5)
       const u = new URL(inner)
-      if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+      if (u.protocol !== 'http:' && u.protocol !== 'https:' && u.protocol !== 'orc:') return null
     } catch { return null }
     return trimmed
   }
@@ -59,7 +66,7 @@ export function sanitizeAudioSrc(url: string): string | null {
   if (!sanitized || !isSafeUrl(sanitized)) return null
   try {
     const u = new URL(sanitized)
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+    if (u.protocol !== 'http:' && u.protocol !== 'https:' && u.protocol !== 'orc:') return null
   } catch {
     return null
   }
@@ -90,6 +97,8 @@ export function videoId(url: string): string | null {
 export function yandexEmbed(url: string): string | null {
   try {
     const u = new URL(url)
+    const host = u.hostname.replace(/^www\./, '').toLowerCase()
+    if (host !== 'music.yandex.ru' && host !== 'music.yandex.com') return null
     const withAlbum = u.pathname.match(/\/album\/(\d+)\/track\/(\d+)/)
     if (withAlbum) return `https://music.yandex.ru/iframe/#track/${withAlbum[2]}/${withAlbum[1]}`
     const trackOnly = u.pathname.match(/\/track\/(\d+)/)
@@ -102,6 +111,8 @@ export function yandexEmbed(url: string): string | null {
 export function spotifyEmbed(url: string): string | null {
   try {
     const u = new URL(url)
+    const host = u.hostname.replace(/^www\./, '').toLowerCase()
+    if (host !== 'open.spotify.com' && host !== 'spotify.com') return null
     const m = u.pathname.match(/\/(track|album|playlist|episode)\/([A-Za-z0-9]+)/)
     if (m) return `https://open.spotify.com/embed/${m[1]}/${m[2]}`
   } catch {}

@@ -2,6 +2,7 @@ import { CANVAS_TARGET_ID, type CanvasCamera, type CanvasWidget, type WidgetKind
 import { CommandError, parseResource, resourceId } from '../core/index.ts'
 import { widgetType } from '../widgets/registry.ts'
 import type { CommandDeps } from './index.ts'
+import { failTerminalDispatches } from './orchestration.ts'
 
 export const CANVAS_TARGET = resourceId('canvas', CANVAS_TARGET_ID)
 
@@ -32,6 +33,7 @@ export function registerCanvasCommands({
   canvas,
   terminals,
   snapshots,
+  orchestration,
   forgetOrigin,
   requestWidget,
   requestWidgetRename,
@@ -123,13 +125,18 @@ export function registerCanvasCommands({
           if (preferred && canvas.widget(preferred)) id = preferred
         }
         if (!canvas.widget(id)) throw new CommandError('not_found', `widget ${id} not found`)
-        const updated = canvas.patchWidget(id, command.payload ?? {})
+        const rawTitle = command.payload?.title
+        const cleanTitle = typeof rawTitle === 'string' ? rawTitle.trim().slice(0, 200) : undefined
+        const payload = { ...(command.payload ?? {}) }
+        if (cleanTitle) payload.title = cleanTitle
+        else delete payload.title
+        const updated = canvas.patchWidget(id, payload)
 
-        if (typeof command.payload?.title === 'string') {
+        if (cleanTitle) {
           if (updated.kind === 'terminal' || !updated.kind) {
-            terminals.setTitle(id, command.payload.title)
+            terminals.setTitle(id, cleanTitle)
           }
-          requestWidgetRename?.(id, command.payload.title)
+          requestWidgetRename?.(id, cleanTitle)
         }
         return updated
       }
@@ -153,6 +160,7 @@ export function registerCanvasCommands({
         if (terminals.has(id)) {
           terminals.dispose(id)
         }
+        failTerminalDispatches({ orchestration }, id)
         return { id }
       }
     }

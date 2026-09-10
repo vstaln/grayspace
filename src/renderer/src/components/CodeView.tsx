@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Maximize2, Minimize2, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
 import TerminalWidget, { forgetTerminalViewport } from './TerminalWidget'
 import BrowserWidget from './BrowserWidget'
@@ -15,6 +15,9 @@ interface Session {
 
 let sessionCounter = 0
 const MAX_CODE_SESSIONS = 32
+const INLINE_AGENTS = CODE_AGENTS.filter((agent) => agent.id !== 'browser' && agent.id !== 'custom')
+const LAUNCH_COUNTS = [1, 2, 4, 6, 8, 10, 12]
+
 function makeSessionId(): string {
   sessionCounter += 1
   return `code-${Date.now()}-${sessionCounter}`
@@ -37,6 +40,42 @@ function extractCounter(id: string): number | null {
   return m ? Number(m[1]) : null
 }
 
+function denseRowCounts(count: number): number[] {
+  const rows = count <= 8 || count === 10 ? 2 : count <= 15 ? 3 : 4
+  if (count === 9) return [3, 3, 3]
+  const perRow = Math.floor(count / rows)
+  const remainder = count % rows
+  return Array.from({ length: rows }, (_, row) => perRow + (row < remainder ? 1 : 0))
+}
+
+function placementForIndex(count: number, index: number): React.CSSProperties {
+  if (count === 3) {
+    if (index < 2) return { gridColumn: '1', gridRow: `${index + 1}` }
+    return { gridColumn: '2', gridRow: '1 / span 2' }
+  }
+  if (count === 5) {
+    if (index < 4) return { gridColumn: `${index % 2 + 1}`, gridRow: `${Math.floor(index / 2) + 1}` }
+    return { gridColumn: '3', gridRow: '1 / span 2' }
+  }
+  if (count >= 6 && count <= 20) {
+    let rowStart = 0
+    for (const [row, terminalsInRow] of denseRowCounts(count).entries()) {
+      if (index < rowStart + terminalsInRow) {
+        const span = 60 / terminalsInRow
+        return { gridColumn: `${(index - rowStart) * span + 1} / span ${span}`, gridRow: `${row + 1}` }
+      }
+      rowStart += terminalsInRow
+    }
+  }
+  return {}
+}
+
+function clampSplit(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(80, Math.max(20, value))
+    : fallback
+}
+
 interface Props {
 
 
@@ -50,6 +89,7 @@ const SessionCard = React.memo(function SessionCard({
   onProcessExit,
   onFocus,
   onRename,
+  onOpenLauncher,
   onSwap,
   onDragStart,
   onDragOver,
@@ -66,6 +106,7 @@ const SessionCard = React.memo(function SessionCard({
   onProcessExit(): void
   onFocus?(): void
   onRename?(title: string): void
+  onOpenLauncher(anchor: HTMLElement): void
   onSwap(sourceId: string, targetId: string): void
   onDragStart(id: string): void
   onDragOver(id: string): void
@@ -195,6 +236,18 @@ const SessionCard = React.memo(function SessionCard({
           )}
           <button
             type="button"
+            aria-label="Open another CLI or browser"
+            title="Open browser or another CLI"
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenLauncher(e.currentTarget)
+            }}
+            className="grid h-[18px] w-[18px] place-items-center rounded-[4px] text-text-faint transition-colors hover:bg-accent/15 hover:text-text"
+          >
+            <Plus size={12} strokeWidth={2.5} />
+          </button>
+          <button
+            type="button"
             aria-label={maximized ? 'Restore session' : 'Expand session'}
             title={maximized ? 'Restore session' : 'Expand session'}
             onClick={(e) => {
@@ -219,8 +272,8 @@ const SessionCard = React.memo(function SessionCard({
           </button>
         </div>
       </div>
-      <div className="min-h-0 flex-1">
-        {isBrowserSession(session) ? <BrowserWidget /> : <TerminalWidget id={session.id} surface="code" onProcessExit={onProcessExit} />}
+      <div className="min-h-0 flex-1 bg-[#080808]">
+        {isBrowserSession(session) ? <BrowserWidget /> : <TerminalWidget id={session.id} surface="code" attachmentMode agentId={session.agent.id} onProcessExit={onProcessExit} />}
       </div>
     </div>
   )
@@ -231,7 +284,91 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
   const sessionsRef = useRef<Session[]>(sessions)
   sessionsRef.current = sessions
   const [launcherOpen, setLauncherOpen] = useState(false)
+  const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([])
+  const [activeAgentId, setActiveAgentId] = useState<string | null>(null)
+  const [agentCounts, setAgentCounts] = useState<Record<string, number>>({})
+  const hadSessionsRef = useRef(false)
+  const openLauncher = useCallback(() => setLauncherOpen(true), [])
 
+  useEffect(() => {
+    if (activeAgentId && selectedAgentIds.includes(activeAgentId)) return
+    setActiveAgentId(selectedAgentIds[0] ?? null)
+  }, [activeAgentId, selectedAgentIds])
+
+  useEffect(() => {
+    if (sessions.length > 0) {
+      hadSessionsRef.current = true
+      return
+    }
+    if (!hadSessionsRef.current) return
+    hadSessionsRef.current = false
+    setSelectedAgentIds([])
+    setActiveAgentId(null)
+    setAgentCounts({})
+  }, [sessions.length])
+
+  const [threeWaySplit, setThreeWaySplit] = useState<{ col: number; row: number }>(() => {
+    try {
+      const saved = localStorage.getItem('orcspace:code-three-way-split')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (typeof parsed?.col === 'number' && typeof parsed?.row === 'number') {
+          return {
+            col: clampSplit(parsed.col, 50),
+            row: clampSplit(parsed.row, 50)
+          }
+        }
+      }
+    } catch {}
+    return { col: 50, row: 50 }
+  })
+  const threeWayContainerRef = useRef<HTMLDivElement>(null)
+
+  const handleStartColumnResize = (e: React.MouseEvent): void => {
+    e.preventDefault()
+    const container = threeWayContainerRef.current
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    const onMove = (moveEv: MouseEvent): void => {
+      if (rect.width <= 0) return
+      const colPx = moveEv.clientX - rect.left
+      const col = Math.min(80, Math.max(20, (colPx / rect.width) * 100))
+      setThreeWaySplit((prev) => {
+        const next = { ...prev, col }
+        try { localStorage.setItem('orcspace:code-three-way-split', JSON.stringify(next)) } catch {}
+        return next
+      })
+    }
+    const onUp = (): void => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  const handleStartRowResize = (e: React.MouseEvent): void => {
+    e.preventDefault()
+    const container = threeWayContainerRef.current
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    const onMove = (moveEv: MouseEvent): void => {
+      if (rect.height <= 0) return
+      const rowPx = moveEv.clientY - rect.top
+      const row = Math.min(80, Math.max(20, (rowPx / rect.height) * 100))
+      setThreeWaySplit((prev) => {
+        const next = { ...prev, row }
+        try { localStorage.setItem('orcspace:code-three-way-split', JSON.stringify(next)) } catch {}
+        return next
+      })
+    }
+    const onUp = (): void => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   const [featuredId, setFeaturedId] = useState<string | null>(null)
   const [maximizedId, setMaximizedId] = useState<string | null>(null)
@@ -245,15 +382,11 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
 
 
 
-  const wasActiveRef = useRef(false)
-
   useEffect(() => {
-    const openLauncher = (): void => setLauncherOpen(true)
-    window.addEventListener('orcspace:open-code-launcher', openLauncher)
-    return () => window.removeEventListener('orcspace:open-code-launcher', openLauncher)
+    const handleOpenLauncher = (): void => setLauncherOpen(true)
+    window.addEventListener('orcspace:open-code-launcher', handleOpenLauncher)
+    return () => window.removeEventListener('orcspace:open-code-launcher', handleOpenLauncher)
   }, [])
-
-
   const hydratedRef = useRef(false)
   const skipNextSaveRef = useRef(false)
   const hydrationRunRef = useRef(0)
@@ -455,14 +588,6 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
   }, [])
 
   useEffect(() => {
-    if (!hydratedRef.current) return
-    if (active && !wasActiveRef.current && sessions.length === 0) setLauncherOpen(true)
-    wasActiveRef.current = active
-  }, [active, sessions.length])
-
-
-
-  useEffect(() => {
     window.dispatchEvent(new CustomEvent('orcspace:code-sessions', {
       detail: sessions.map((session) => ({
         id: session.id,
@@ -516,6 +641,18 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
       return [...current, ...created.slice(0, room)]
     })
   }, [markLocalChange])
+
+  const launchWorkspace = useCallback((): void => {
+    let remaining = Math.max(0, MAX_CODE_SESSIONS - sessionsRef.current.length)
+    for (const agentId of selectedAgentIds) {
+      if (remaining <= 0) break
+      const agent = INLINE_AGENTS.find((candidate) => candidate.id === agentId)
+      if (!agent) continue
+      const count = Math.min(agentCounts[agentId] ?? 1, remaining)
+      launch(agent, count)
+      remaining -= count
+    }
+  }, [agentCounts, launch, selectedAgentIds])
 
   const renameSession = useCallback((id: string, title: string): void => {
     markLocalChange()
@@ -626,7 +763,14 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
 
 
 
-  const columns = sessions.length <= 1 ? 1 : sessions.length === 2 ? 2 : sessions.length <= 4 ? 2 : sessions.length === 5 ? 6 : sessions.length <= 6 ? 3 : 4
+  const columns = sessions.length >= 6 && sessions.length <= 20
+    ? 60
+    : sessions.length === 3 || sessions.length === 5
+      ? sessions.length === 3 ? 2 : 3
+    : sessions.length <= 1 ? 1 : sessions.length === 2 ? 2 : sessions.length <= 4 ? 2 : sessions.length <= 6 ? 3 : sessions.length === 10 ? 5 : 4
+  const gridTemplateColumns = sessions.length === 5
+    ? '3fr 3fr 4fr'
+    : `repeat(${columns}, minmax(0, 1fr))`
 
 
 
@@ -635,80 +779,256 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
 
 
 
-  const placementOf = (sessionId: string): React.CSSProperties => {
-    if (sessions.length !== 5) return {}
-    const index = sessions.findIndex((session) => session.id === sessionId)
+  const sessionPlacements = useMemo(() => {
+    const placements = new Map<string, React.CSSProperties>()
+    if (sessions.length === 3) return placements
+    sessions.forEach((session, index) => {
+      const style = placementForIndex(sessions.length, index)
+      if (Object.keys(style).length > 0) placements.set(session.id, style)
+    })
+    return placements
+  }, [sessions])
 
-
-
-    return { gridColumn: `${index < 3 ? index * 2 + 1 : index === 3 ? 2 : 4} / span 2` }
-  }
+  const availableSessionSlots = Math.max(0, MAX_CODE_SESSIONS - sessions.length)
+  const selectedSessionCount = Math.min(
+    availableSessionSlots,
+    Math.max(0, selectedAgentIds.reduce((total, id) => total + (agentCounts[id] ?? 1), 0))
+  )
 
   return (
     <div
-
-
-
-
-      className={`absolute inset-y-0 right-0 ${sidebarCollapsed ? 'left-[56px]' : 'left-[200px]'} z-[40000] flex flex-row pt-10 ${
+      className={`absolute inset-y-0 right-0 ${sidebarCollapsed ? 'left-[56px]' : 'left-[200px]'} z-[40000] flex flex-row pt-10 bg-[#121212] ${
         active ? '' : 'pointer-events-none invisible'
       }`}
       data-testid="code-view"
       aria-hidden={!active}
     >
-      <div className="flex min-w-0 min-h-0 flex-1 flex-col">
-        <div className="flex h-9 flex-none items-center justify-between gap-2 border-b border-line-soft bg-bg-panel px-2.5">
-          <p className="text-[11px] text-text-faint">
-            {sessions.length === 0
-              ? 'No code sessions running'
-              : `${sessions.length} session${sessions.length > 1 ? 's' : ''}`}
-          </p>
+      <div className="flex min-w-0 min-h-0 flex-1 flex-col bg-[#121212]">
+        {sessions.length > 0 && <div className="flex h-9 flex-none items-center justify-between border-b border-line bg-bg-panel px-3">
+          <div className="flex items-center gap-2 text-xs text-text-dim">
+            <span className="font-semibold text-text">{sessions.length}</span>
+            <span>{sessions.length === 1 ? 'session' : 'sessions'}</span>
+          </div>
           <button
             type="button"
-            onClick={() => setLauncherOpen(true)}
-            className="flex items-center gap-1.5 rounded-[8px] border border-line-soft bg-bg-hover px-2.5 py-1 text-[12px] text-text transition-colors hover:bg-bg-hover"
+            className="flex min-h-[28px] items-center gap-1.5 rounded-[8px] bg-accent px-3 py-1 text-xs font-semibold text-bg transition hover:opacity-90 disabled:opacity-35"
+            onClick={openLauncher}
+            disabled={sessions.length >= MAX_CODE_SESSIONS}
           >
-            <Plus size={13} strokeWidth={2.2} /> Launch
+            <Plus size={13} strokeWidth={2.5} /> Launch
           </button>
-        </div>
+        </div>}
 
-        {
-
-
-}
-        <div
-          className="relative grid min-h-0 flex-1 gap-1 overflow-auto bg-bg-raise p-1"
-            style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gridAutoRows: 'minmax(180px, 1fr)' }}
-        >
-          {sessions.map((session) => {
-            const handlers = getSessionHandlers(session.id)
-            return (
-              <SessionCard
-                key={session.id}
-                session={session}
-                style={placementOf(session.id)}
-                onClose={handlers.onClose}
-                onProcessExit={handlers.onProcessExit}
-                onFocus={handlers.onFocus}
-                onRename={handlers.onRename}
-                onSwap={swapSessions}
-                onDragStart={handleDragStart}
-                onDragOver={handleDragOver}
-                onDragEnd={handleDragEnd}
-                dragging={draggedSessionId === session.id}
-                dropTarget={dropTargetId === session.id && draggedSessionId !== session.id}
-                promotable={false}
-                maximized={maximizedId === session.id}
-                onToggleMaximize={handlers.onToggleMaximize}
-              />
-            )
-          })}
-          {sessions.length === 0 && (
-            <div className="grid place-items-center p-6 text-center text-[12px] text-text-faint">
-              No code sessions yet — press Launch to start one.
+        {sessions.length === 3 ? (
+          <div
+            ref={threeWayContainerRef}
+            className="relative flex min-h-0 flex-1 overflow-hidden p-1 gap-1 bg-[#121212]"
+          >
+            <div style={{ width: `${threeWaySplit.col}%` }} className="min-w-0 h-full">
+              {(() => {
+                const s = sessions[0]
+                const handlers = getSessionHandlers(s.id)
+                return (
+                  <SessionCard
+                    key={s.id}
+                    session={s}
+                    onClose={handlers.onClose}
+                    onProcessExit={handlers.onProcessExit}
+                    onFocus={handlers.onFocus}
+                    onRename={handlers.onRename}
+                    onOpenLauncher={openLauncher}
+                    onSwap={swapSessions}
+                    onDragStart={handleDragStart}
+                    onDragOver={handleDragOver}
+                    onDragEnd={handleDragEnd}
+                    dragging={draggedSessionId === s.id}
+                    dropTarget={dropTargetId === s.id && draggedSessionId !== s.id}
+                    promotable={false}
+                    maximized={maximizedId === s.id}
+                    onToggleMaximize={handlers.onToggleMaximize}
+                  />
+                )
+              })()}
             </div>
-          )}
-        </div>
+
+            <div
+              data-testid="code-resize-columns"
+              onMouseDown={handleStartColumnResize}
+              className="relative z-10 w-2.5 flex-none cursor-col-resize hover:bg-accent/40 active:bg-accent/60 transition-colors"
+              role="separator"
+              aria-label="Resize columns"
+            />
+
+            <div
+              style={{ width: `calc(${100 - threeWaySplit.col}% - 10px)` }}
+              className="min-w-0 h-full flex flex-col gap-1"
+            >
+              <div style={{ height: `${threeWaySplit.row}%` }} className="min-h-0 w-full">
+                {(() => {
+                  const s = sessions[1]
+                  const handlers = getSessionHandlers(s.id)
+                  return (
+                    <SessionCard
+                      key={s.id}
+                      session={s}
+                      onClose={handlers.onClose}
+                      onProcessExit={handlers.onProcessExit}
+                      onFocus={handlers.onFocus}
+                      onRename={handlers.onRename}
+                      onOpenLauncher={openLauncher}
+                      onSwap={swapSessions}
+                      onDragStart={handleDragStart}
+                      onDragOver={handleDragOver}
+                      onDragEnd={handleDragEnd}
+                      dragging={draggedSessionId === s.id}
+                      dropTarget={dropTargetId === s.id && draggedSessionId !== s.id}
+                      promotable={false}
+                      maximized={maximizedId === s.id}
+                      onToggleMaximize={handlers.onToggleMaximize}
+                    />
+                  )
+                })()}
+              </div>
+
+              <div
+                data-testid="code-resize-rows"
+                onMouseDown={handleStartRowResize}
+                className="relative z-10 h-2.5 flex-none cursor-row-resize hover:bg-accent/40 active:bg-accent/60 transition-colors"
+                role="separator"
+                aria-label="Resize rows"
+              />
+
+              <div style={{ height: `calc(${100 - threeWaySplit.row}% - 10px)` }} className="min-h-0 w-full">
+                {(() => {
+                  const s = sessions[2]
+                  const handlers = getSessionHandlers(s.id)
+                  return (
+                    <SessionCard
+                      key={s.id}
+                      session={s}
+                      onClose={handlers.onClose}
+                      onProcessExit={handlers.onProcessExit}
+                      onFocus={handlers.onFocus}
+                      onRename={handlers.onRename}
+                      onOpenLauncher={openLauncher}
+                      onSwap={swapSessions}
+                      onDragStart={handleDragStart}
+                      onDragOver={handleDragOver}
+                      onDragEnd={handleDragEnd}
+                      dragging={draggedSessionId === s.id}
+                      dropTarget={dropTargetId === s.id && draggedSessionId !== s.id}
+                      promotable={false}
+                      maximized={maximizedId === s.id}
+                      onToggleMaximize={handlers.onToggleMaximize}
+                    />
+                  )
+                })()}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div
+            className="relative grid min-h-0 flex-1 gap-1 overflow-auto bg-[#121212] p-1"
+            style={{ gridTemplateColumns, gridAutoRows: 'minmax(180px, 1fr)' }}
+          >
+            {sessions.map((session) => {
+              const handlers = getSessionHandlers(session.id)
+              return (
+                <SessionCard
+                  key={session.id}
+                  session={session}
+                  style={sessionPlacements.get(session.id)}
+                  onClose={handlers.onClose}
+                  onProcessExit={handlers.onProcessExit}
+                  onFocus={handlers.onFocus}
+                  onRename={handlers.onRename}
+                  onOpenLauncher={openLauncher}
+                  onSwap={swapSessions}
+                  onDragStart={handleDragStart}
+                  onDragOver={handleDragOver}
+                  onDragEnd={handleDragEnd}
+                  dragging={draggedSessionId === session.id}
+                  dropTarget={dropTargetId === session.id && draggedSessionId !== session.id}
+                  promotable={false}
+                  maximized={maximizedId === session.id}
+                  onToggleMaximize={handlers.onToggleMaximize}
+                />
+              )
+            })}
+            {sessions.length === 0 && (
+              <div className="flex min-h-full flex-1 justify-center overflow-auto bg-[#121212] px-6 pb-10">
+                <div className="w-full max-w-[760px] translate-y-4 pt-[78px]">
+                  <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-text">Launch your workspace</h1>
+                  <p className="mt-1.5 text-[13px] text-text-faint">Choose the CLIs you want to run together.</p>
+
+                  <div className="mb-1.5 mt-8 text-[10px] font-semibold tracking-[0.12em] text-text-faint uppercase">CLI</div>
+                  <div className="mb-5 grid grid-cols-3 gap-1.5">
+                    {INLINE_AGENTS.map((agent) => {
+                      const selected = selectedAgentIds.includes(agent.id)
+                      const Icon = agent.Icon
+                      return (
+                        <button
+                          key={agent.id}
+                          type="button"
+                          aria-pressed={selected}
+                          title={agent.label}
+                          onClick={() => {
+                            setSelectedAgentIds((current) => selected
+                              ? current.filter((id) => id !== agent.id)
+                              : [...current, agent.id])
+                            if (!selected) setActiveAgentId(agent.id)
+                            setAgentCounts((current) => ({ ...current, [agent.id]: current[agent.id] ?? 1 }))
+                          }}
+                          className={`flex h-[52px] items-center gap-3 rounded-[8px] border px-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 hover:border-line hover:bg-bg-hover hover:text-text ${selected ? 'border-accent bg-bg-raise text-text' : 'border-line-soft bg-bg-panel text-text-dim'}`}
+                        >
+                          <span className="grid h-8 w-8 flex-none place-items-center rounded-[6px] bg-[#111] text-text">
+                            <Icon size={16} />
+                          </span>
+                          <span className="truncate text-[12px] font-medium">{agent.label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {selectedAgentIds.length > 0 ? (
+                    <>
+                      <div className="mb-1 flex items-center justify-between">
+                        <div className="text-[10px] font-semibold tracking-[0.12em] text-text-faint uppercase">
+                          How many for {INLINE_AGENTS.find((agent) => agent.id === activeAgentId)?.label ?? 'CLI'}
+                        </div>
+                        <span className="text-[11px] text-text-faint">{selectedSessionCount} sessions</span>
+                      </div>
+                      <div className="mb-5 flex flex-wrap gap-1.5">
+                        {LAUNCH_COUNTS.map((count) => (
+                          <button
+                            key={count}
+                            type="button"
+                            aria-pressed={(agentCounts[activeAgentId ?? ''] ?? 1) === count}
+                            onClick={() => activeAgentId && setAgentCounts((current) => ({ ...current, [activeAgentId]: count }))}
+                            className={`grid h-10 w-11 place-items-center rounded-[7px] border text-[13px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${(agentCounts[activeAgentId ?? ''] ?? 1) === count ? 'border-accent bg-bg-raise text-text' : 'border-line-soft bg-bg-panel text-text-dim hover:border-line hover:text-text'}`}
+                          >
+                            {count}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="mb-5 rounded-[7px] border border-line-soft bg-bg-panel px-3 py-3 text-[12px] text-text-faint">Choose a CLI first.</div>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={selectedAgentIds.length === 0 || selectedSessionCount === 0}
+                    onClick={launchWorkspace}
+                    className="flex h-12 w-full items-center justify-center gap-1.5 rounded-[9px] bg-white text-[14px] font-medium text-black transition hover:bg-white/90 active:scale-[.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:cursor-not-allowed disabled:bg-[#666] disabled:text-black/80"
+                  >
+                    <Plus size={15} /> Launch {selectedSessionCount} sessions
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {launcherOpen && (

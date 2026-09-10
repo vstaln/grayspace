@@ -21,7 +21,7 @@ export const CANVAS_SCHEMA_VERSION = 3
 
 export const CANVAS_SNAPSHOT_INTERVAL = 50
 
-export type WidgetKind = 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration' | 'mission'
+export type WidgetKind = 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration'
 
 export interface CanvasWidget {
   id: string
@@ -112,7 +112,7 @@ const isNum = (value: unknown): value is number => typeof value === 'number' && 
 
 
 
-const WIDGET_KINDS = new Set<string>(['terminal', 'timer', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'orchestration', 'mission'])
+const WIDGET_KINDS = new Set<string>(['terminal', 'timer', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'orchestration'])
 
 export function sanitizeWidget(value: unknown): CanvasWidget | null {
   const w = value as Record<string, unknown>
@@ -251,7 +251,11 @@ export class CanvasStore extends EventEmitter {
         clearTimeout(this.changeTimer)
         this.changeTimer = null
       }
-      this.flushAsync()
+      try {
+        this.flush()
+      } catch {
+        this.flushAsync()
+      }
     }
     this.workspaceDir = dir
     this.loaded = false
@@ -639,7 +643,11 @@ export class CanvasStore extends EventEmitter {
 
   setCamera(camera: unknown, overlayId?: string): CanvasCamera {
     this.ensure()
-    this.camera = sanitizeCamera(camera)
+    const next = sanitizeCamera(camera)
+    if (next.x === this.camera.x && next.y === this.camera.y && next.zoom === this.camera.zoom) {
+      return { ...this.camera }
+    }
+    this.camera = next
     this.canvasVersions.bump(CANVAS_TARGET_ID, overlayId)
     this.eventsSinceSnapshot += 1
     this.changed()
@@ -648,7 +656,11 @@ export class CanvasStore extends EventEmitter {
 
   setStrokes(strokes: unknown, overlayId?: string): CanvasStroke[] {
     this.ensure()
-    this.strokes = sanitizeStrokes(strokes)
+    const next = sanitizeStrokes(strokes)
+    if (next.length === this.strokes.length && next.every((s, i) => s === this.strokes[i])) {
+      return this.strokes
+    }
+    this.strokes = next
     this.canvasVersions.bump(CANVAS_TARGET_ID, overlayId)
     this.eventsSinceSnapshot += 1
     this.changed()

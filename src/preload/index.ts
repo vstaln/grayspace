@@ -23,7 +23,6 @@ import type {
   OrcSnapshot,
   MediaApi,
   MediaFile,
-  MissionApi,
   PlanItem,
   PlannerApi,
   RecentDir,
@@ -110,6 +109,7 @@ const browser: BrowserApi = {
 }
 
 const terminal: TerminalApi = {
+  list: (): Promise<Array<{ id: string; title: string; cwd: string }>> => ipcRenderer.invoke('terminal:list'),
   create: (
     id: string,
     cols?: number,
@@ -136,8 +136,11 @@ const terminal: TerminalApi = {
 const media: MediaApi = {
   saveClipboard: (): Promise<MediaFile | null> =>
     ipcRenderer.invoke('media:save-clipboard'),
+  readClipboardText: (): Promise<string> => ipcRenderer.invoke('media:read-clipboard-text'),
   saveClipboardScratch: (): Promise<MediaFile | null> =>
     ipcRenderer.invoke('media:save-clipboard-scratch'),
+  stageClipboardImage: (bytes: Uint8Array): Promise<{ ok: true } | { error: string }> =>
+    ipcRenderer.invoke('media:stage-clipboard-image', bytes),
   saveBytes: (bytes: Uint8Array, ext: string): Promise<MediaFile | { error: string } | null> =>
     ipcRenderer.invoke('media:save-bytes', bytes, ext),
   saveBytesScratch: (bytes: Uint8Array, ext: string): Promise<MediaFile | { error: string } | null> =>
@@ -147,8 +150,9 @@ const media: MediaApi = {
 }
 
 const control: ControlApi = {
-  onAddWidget: (cb: (payload: { id: string; title: string; from?: string | null }) => void): (() => void) =>
-    onBroadcast('control:add-widget', cb),
+  onAddWidget: (
+    cb: (payload: { id: string; title: string; kind?: string; x?: number; y?: number; from?: string | null }) => void
+  ): (() => void) => onBroadcast('control:add-widget', cb),
   onRemoveWidget: (cb: (id: string) => void): (() => void) => onBroadcast('control:remove-widget', cb),
   onRenameWidget: (cb: (payload: { id: string; title: string }) => void): (() => void) =>
     onBroadcast('control:rename-widget', cb)
@@ -162,6 +166,7 @@ const workspace: WorkspaceApi = {
   codeWorkspaces: () => ipcRenderer.invoke('workspace:code-workspaces'),
   createCodeWorkspace: (name?: string) => ipcRenderer.invoke('workspace:create-code', name),
   renameCodeWorkspace: (id: string, name: string) => ipcRenderer.invoke('workspace:rename-code', id, name),
+  deleteCodeWorkspace: (id: string) => ipcRenderer.invoke('workspace:delete-code', id),
   selectCodeWorkspace: (id: string) => ipcRenderer.invoke('workspace:select-code', id),
   onCodeWorkspaceChange: (cb) => onBroadcast('workspace:onCodeWorkspaceChange', cb),
   onDirChange: (cb: (dir: string | null) => void): (() => void) =>
@@ -198,14 +203,6 @@ const orchestration: OrchestrationApi = {
   closeRun: (runId: string): Promise<unknown> => ipcRenderer.invoke('orchestration:close-run', runId),
   onChange: (cb: () => void): (() => void) => onBroadcast('orchestration:onChange', cb)
 }
-
-const mission: MissionApi = {
-  start: (input) => ipcRenderer.invoke('mission:start', input)
-}
-
-
-
-
 
 const planner: PlannerApi = {
   list: (): Promise<PlanItem[]> => ipcRenderer.invoke('planner:list'),
@@ -255,6 +252,8 @@ const code: CodeApi = {
   load: (): Promise<CodeSnapshot> => ipcRenderer.invoke('code:load'),
   save: (snapshot: unknown): Promise<{ ok: boolean } | { error: string }> =>
     ipcRenderer.invoke('code:save', snapshot),
+  saveSync: (snapshot: unknown): { ok: boolean } | { error: string } =>
+    ipcRenderer.sendSync('code:save-sync', snapshot),
   onChange: (cb: (snapshot: CodeSnapshot) => void): (() => void) => onBroadcast('code:onChange', cb)
 }
 
@@ -293,7 +292,6 @@ contextBridge.exposeInMainWorld('api', {
   settings,
   media,
   orchestration,
-  mission,
   planner,
   canvas,
   code,

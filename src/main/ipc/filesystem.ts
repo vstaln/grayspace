@@ -65,25 +65,30 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
 
       const MAX_LIST_ENTRIES = 2_000
       const truncated = visible.length > MAX_LIST_ENTRIES
-      const items = await Promise.all(
-        visible.slice(0, MAX_LIST_ENTRIES).map(async (entry) => {
-          const fullPath = join(targetDir, entry.name)
-          const base = {
-            name: entry.name,
-            path: fullPath,
-            isDirectory: entry.isDirectory(),
-            isFile: entry.isFile(),
-            isSymbolicLink: entry.isSymbolicLink(),
-            ext: entry.isFile() ? extname(entry.name).toLowerCase() : ''
-          }
-          try {
-            const itemStat = await fs.promises.stat(fullPath)
-            return { ...base, size: itemStat.size, mtime: itemStat.mtimeMs }
-          } catch {
-            return { ...base, size: 0, mtime: 0 }
-          }
-        })
-      )
+      const slice = visible.slice(0, MAX_LIST_ENTRIES)
+      const items: Array<{ name: string; path: string; isDirectory: boolean; isFile: boolean; isSymbolicLink: boolean; ext: string; size: number; mtime: number }> = []
+      for (let i = 0; i < slice.length; i += 100) {
+        const batch = await Promise.all(
+          slice.slice(i, i + 100).map(async (entry) => {
+            const fullPath = join(targetDir, entry.name)
+            const base = {
+              name: entry.name,
+              path: fullPath,
+              isDirectory: entry.isDirectory(),
+              isFile: entry.isFile(),
+              isSymbolicLink: entry.isSymbolicLink(),
+              ext: entry.isFile() ? extname(entry.name).toLowerCase() : ''
+            }
+            try {
+              const itemStat = await fs.promises.stat(fullPath)
+              return { ...base, size: itemStat.size, mtime: itemStat.mtimeMs }
+            } catch {
+              return { ...base, size: 0, mtime: 0 }
+            }
+          })
+        )
+        items.push(...batch)
+      }
       items.sort((a, b) => {
         if (a.isDirectory === b.isDirectory) {
           return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
@@ -118,7 +123,7 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
 
 
 
-        if (stat.size > media.MAX_MEDIA_BYTES) {
+        if (stat.size > media.MAX_DATA_URL_BYTES) {
           return { error: `File is too large to preview (${(stat.size / (1024 * 1024)).toFixed(1)} MB).` }
         }
         const buffer = await fs.promises.readFile(target)
@@ -178,9 +183,11 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
     }
   })
 
-  ipcMain.handle('fs:write-file', async (_e, filePath: string, content: string) =>
-    sendFileCommand(send, 'file.write', filePath, { content: String(content ?? '') })
-  )
+  ipcMain.handle('fs:write-file', async (_e, filePath: string, content: string) => {
+    const text = String(content ?? '')
+    if (Buffer.byteLength(text, 'utf8') > 50 * 1024 * 1024) return { error: 'content exceeds 50 MB' }
+    return sendFileCommand(send, 'file.write', filePath, { content: text })
+  })
 
   ipcMain.handle('fs:create-file', async (_e, filePath: string) => sendFileCommand(send, 'file.create', filePath, {}))
 
@@ -216,7 +223,8 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
 
   const EXECUTABLE_EXTENSIONS = new Set([
     '.exe', '.bat', '.cmd', '.com', '.scr', '.msi', '.ps1', '.vbs', '.vbe',
-    '.js', '.jse', '.wsf', '.wsh', '.jar', '.sh', '.bash', '.lnk', '.reg'
+    '.js', '.jse', '.wsf', '.wsh', '.jar', '.sh', '.bash', '.lnk', '.reg',
+    '.hta', '.msc', '.cpl', '.url', '.inf', '.pif', '.appref-ms', '.wsb', '.mof', '.gadget'
   ])
 
   ipcMain.handle('fs:open-path', async (_e, targetPath: string) => {
@@ -224,9 +232,16 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
       const target = resolveTarget(targetPath)
       if (!target) return { error: 'Invalid path' }
 
+      const candidates = new Set([target, target.replace(/[. ]+$/, '')])
+      try {
+        candidates.add(fs.realpathSync(target))
+      } catch {
 
-      if (EXECUTABLE_EXTENSIONS.has(extname(target).toLowerCase())) {
-        return { error: 'Executable files cannot be opened from here' }
+      }
+      for (const candidate of candidates) {
+        if (EXECUTABLE_EXTENSIONS.has(extname(candidate).toLowerCase())) {
+          return { error: 'Executable files cannot be opened from here' }
+        }
       }
       const err = await shell.openPath(target)
       if (err) return { error: 'Unable to open this path' }

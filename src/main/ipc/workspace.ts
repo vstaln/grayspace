@@ -59,6 +59,18 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     if (!('error' in result)) deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', result)
     return result
   })
+  ipcMain.handle('workspace:delete-code', (_e, rawId: unknown) => {
+    if (typeof rawId !== 'string') return { error: 'Invalid workspace.' }
+    const folder = deps.getWorkspaceDir()
+    const result = deps.state.deleteCodeWorkspace(folder, rawId)
+    if ('error' in result) return result
+    deps.code.setWorkspaceScope(
+      deps.state.activeCodeWorkspaceScope(folder),
+      result.activeId === result.workspaces[0]?.id ? folder : undefined
+    )
+    deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', result)
+    return result
+  })
   ipcMain.handle('workspace:select-code', (_e, rawId: unknown) => {
     if (typeof rawId !== 'string') return { error: 'Invalid workspace.' }
     const folder = deps.getWorkspaceDir()
@@ -96,10 +108,12 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     return path
   })
   ipcMain.handle('workspace:pin-recent', (_e, path: string) => {
+    if (typeof path !== 'string' || !isLocalPath(path)) return { error: 'Invalid path' }
     deps.state.togglePin(path)
     return deps.state.get().recent
   })
   ipcMain.handle('workspace:forget-recent', (_e, path: string) => {
+    if (typeof path !== 'string' || !isLocalPath(path)) return { error: 'Invalid path' }
     deps.state.removeRecent(path)
     return deps.state.get().recent
   })

@@ -1,4 +1,5 @@
 import { strict as assert } from 'node:assert'
+import { EventEmitter } from 'node:events'
 import { describe, test } from 'node:test'
 import * as fs from 'node:fs'
 import { TerminalManager, normalizeDeliveryText } from './terminals.ts'
@@ -18,12 +19,61 @@ describe('TerminalManager', () => {
     assert.equal(agent1.title, 'Custom Agent')
 
     const agent2 = manager.reserve({ prefix: 'agent' })
-    assert.equal(agent2.title, 'Agent Terminal 1')
+    assert.match(agent2.title, /^[a-z]+-[a-z]+$/)
 
 
     manager.dispose(agent1.id)
     const agent3 = manager.reserve({ prefix: 'agent' })
-    assert.equal(agent3.title, 'Agent Terminal 2')
+    assert.match(agent3.title, /^[a-z]+-[a-z]+$/)
+    assert.notEqual(agent3.title, agent2.title)
+
+    manager.disposeAll()
+  })
+
+  test('reserve assigns favorite names first and replaces placeholder titles', () => {
+    const manager = new TerminalManager({ getFavoriteNames: () => ['backend', 'frontend'] })
+
+    const first = manager.reserve({})
+    assert.equal(first.title, 'backend')
+
+    const second = manager.reserve({ prefix: 'agent' })
+    assert.equal(second.title, 'frontend')
+
+    const third = manager.reserve({})
+    assert.match(third.title, /^[a-z]+-[a-z]+$/)
+
+    const placeholder = manager.reserve({ title: 'Terminal 9' })
+    assert.notEqual(placeholder.title, 'Terminal 9')
+
+    manager.disposeAll()
+  })
+
+  test('reserve suffixes duplicate explicit titles', () => {
+    const manager = new TerminalManager()
+
+    const first = manager.reserve({ title: 'backend' })
+    assert.equal(first.title, 'backend')
+
+    const second = manager.reserve({ title: 'Backend' })
+    assert.equal(second.title, 'Backend-2')
+
+    manager.disposeAll()
+  })
+
+  test('setTitle maps placeholders to auto names and emits title', () => {
+    const manager = new TerminalManager({ getFavoriteNames: () => ['backend'] })
+    const term = manager.reserve({ title: 'backend' })
+
+    const seen: Array<{ id: string; title: string }> = []
+    manager.on('title', (id: string, title: string) => seen.push({ id, title }))
+
+    manager.setTitle(term.id, 'Terminal 3')
+    const renamed = manager.list().find((t) => t.id === term.id)?.title ?? ''
+    assert.notEqual(renamed, 'Terminal 3')
+    assert.deepEqual(seen, [{ id: term.id, title: renamed }])
+
+    manager.setTitle(term.id, '   ')
+    assert.equal(manager.list().find((t) => t.id === term.id)?.title, renamed)
 
     manager.disposeAll()
   })
@@ -108,6 +158,23 @@ describe('TerminalManager', () => {
     manager.disposeAll()
   })
 
+  test('write reports an error when the pty write throws', () => {
+    const manager = new TerminalManager()
+    const term = manager.reserve()
+    const record = (
+      manager as unknown as { terminals: Map<string, { pty: { write(data: string): void } | null }> }
+    ).terminals.get(term.id)
+    assert.ok(record)
+    record.pty = {
+      write: () => {
+        throw new Error('EIO')
+      }
+    }
+    const result = manager.write(term.id, 'ls\n')
+    assert.equal(result.ok, false)
+    manager.disposeAll()
+  })
+
   test('deliverLine only succeeds after the target terminal echoes the message', async () => {
     const manager = new TerminalManager()
     const term = manager.reserve()
@@ -118,16 +185,19 @@ describe('TerminalManager', () => {
     assert.ok(record)
     record.pty = { write: (data: string) => writes.push(data) }
 
-    const delivery = manager.deliverLine(term.id, 'hello world', { timeoutMs: 500 })
-    setTimeout(() => {
-      manager.appendOutput(term.id, '\x1b[2Khello world\r\n')
-      manager.emit('data', term.id, '\x1b[2Khello world\r\n')
-    }, 50)
-    const result = await delivery
+    try {
+      const delivery = manager.deliverLine(term.id, 'hello world', { timeoutMs: 2000 })
+      setTimeout(() => {
+        manager.appendOutput(term.id, '\x1b[2Khello world\r\n')
+        manager.emit('data', term.id, '\x1b[2Khello world\r\n')
+      }, 50)
+      const result = await delivery
 
-    assert.equal(result.ok, true)
-    assert.deepEqual(writes, ['hello world', '\r'])
-    manager.disposeAll()
+      assert.equal(result.ok, true)
+      assert.deepEqual(writes, ['hello world', '\r'])
+    } finally {
+      manager.disposeAll()
+    }
   })
 
   test('raw input waits for an in-flight delivery on the same terminal', async () => {
@@ -140,17 +210,20 @@ describe('TerminalManager', () => {
     assert.ok(record)
     record.pty = { write: (data: string) => writes.push(data) }
 
-    const delivery = manager.deliverLine(term.id, 'serialized message', { timeoutMs: 500 })
-    const rawInput = manager.writeInput(term.id, ' ')
-    setTimeout(() => {
-      manager.appendOutput(term.id, 'serialized message\r\n')
-      manager.emit('data', term.id, 'serialized message\r\n')
-    }, 50)
+    try {
+      const delivery = manager.deliverLine(term.id, 'serialized message', { timeoutMs: 2000 })
+      const rawInput = manager.writeInput(term.id, ' ')
+      setTimeout(() => {
+        manager.appendOutput(term.id, 'serialized message\r\n')
+        manager.emit('data', term.id, 'serialized message\r\n')
+      }, 50)
 
-    assert.equal((await delivery).ok, true)
-    assert.equal((await rawInput).ok, true)
-    assert.deepEqual(writes, ['serialized message', '\r', ' '])
-    manager.disposeAll()
+      assert.equal((await delivery).ok, true)
+      assert.equal((await rawInput).ok, true)
+      assert.deepEqual(writes, ['serialized message', '\r', ' '])
+    } finally {
+      manager.disposeAll()
+    }
   })
 
   test('deliverLine reports not sent when only Enter is observed', async () => {
@@ -162,16 +235,19 @@ describe('TerminalManager', () => {
     assert.ok(record)
     record.pty = { write: () => {} }
 
-    const delivery = manager.deliverLine(term.id, 'must arrive', { timeoutMs: 250 })
-    setTimeout(() => {
-      manager.appendOutput(term.id, '\r\n> ')
-      manager.emit('data', term.id, '\r\n> ')
-    }, 50)
-    const result = await delivery
+    try {
+      const delivery = manager.deliverLine(term.id, 'must arrive', { timeoutMs: 2000 })
+      setTimeout(() => {
+        manager.appendOutput(term.id, '\r\n> ')
+        manager.emit('data', term.id, '\r\n> ')
+      }, 50)
+      const result = await delivery
 
-    assert.equal(result.ok, false)
-    assert.match((result as { error: string }).error, /not sent/)
-    manager.disposeAll()
+      assert.equal(result.ok, false)
+      assert.match((result as { error: string }).error, /not sent/)
+    } finally {
+      manager.disposeAll()
+    }
   })
 
   test('delivery matching ignores ANSI paint and wrapped whitespace', () => {
@@ -189,6 +265,37 @@ describe('TerminalManager', () => {
     assert.equal(spawnResult.ok, false)
     assert.match(spawnResult.error || '', /terminal was closed/)
 
+    manager.disposeAll()
+  })
+
+  test('a Rust PTY request error does not leave a zombie terminal', () => {
+    class FakeRustPty extends EventEmitter {
+      spawnCalls = 0
+      spawn(): { ok: true } { this.spawnCalls += 1; return { ok: true } }
+      write(): { ok: true } { return { ok: true } }
+      resize(): { ok: true } { return { ok: true } }
+      dispose(): { ok: true } { return { ok: true } }
+      close(): void {}
+    }
+
+    const sidecar = new FakeRustPty()
+    const manager = new TerminalManager({ rustPty: sidecar as never })
+    const term = manager.reserve()
+    const record = (
+      manager as unknown as { terminals: Map<string, { nativeAlive: boolean }> }
+    ).terminals.get(term.id)
+    assert.ok(record)
+    record.nativeAlive = true
+    const exits: Array<{ id: string; code: number }> = []
+    manager.on('exit', (id: string, code: number) => exits.push({ id, code }))
+
+    assert.equal(manager.isRunning(term.id), true)
+    sidecar.emit('request-error', term.id, new Error('input timed out'))
+
+    assert.equal(sidecar.spawnCalls, 1)
+    assert.equal(manager.isRunning(term.id), true)
+    assert.deepEqual(exits, [])
+    assert.equal(manager.write(term.id, 'x').ok, true)
     manager.disposeAll()
   })
 

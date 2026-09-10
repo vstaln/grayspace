@@ -7,6 +7,7 @@ import { OUTPUT_BUFFER_LIMIT, MAX_TERMINAL_WRITE_BYTES, defaultShell } from './c
 import { killProcessTree } from './procTree.ts'
 import { orcTerminalEnv } from './orcCli.ts'
 import { TerminalRingBuffer } from './terminalBuffer.ts'
+import { isDefaultTerminalTitle, makeUniqueTitle, pickTerminalName } from './terminalNames.ts'
 import type { RustPtySpawnOptions, RustPtySidecar } from './rustPtySidecar.ts'
 
 
@@ -48,6 +49,23 @@ function codeTerminalColorEnv(id: string): Record<string, string> {
     CLICOLOR_FORCE: '1',
     ANSICON: '1',
     ConEmuANSI: 'ON'
+  }
+}
+
+function safeOrcTerminalEnv(id: string): Record<string, string> {
+  try {
+    return orcTerminalEnv(id)
+  } catch {
+    // The terminal must remain usable even while the Electron control
+    // channel is unavailable (for example during startup or recovery).
+    // The shell can still run normally; OrcSpace integration will be
+    // restored on the next spawn once the control channel is ready.
+    const path = process.env.PATH ?? process.env.Path ?? ''
+    return {
+      ...(path ? { PATH: path } : {}),
+      ORCSPACE_AGENT_ID: id,
+      ORCSPACE_NODE: process.execPath
+    }
   }
 }
 
@@ -135,6 +153,7 @@ interface TerminalRecord {
 
 export class TerminalManager extends EventEmitter {
   private readonly getWindowsShell: () => 'cmd' | 'powershell'
+  private readonly getFavoriteNames: () => string[]
   private readonly rustPty: RustPtySidecar | null
   private readonly terminals = new Map<string, TerminalRecord>()
 
@@ -161,9 +180,16 @@ export class TerminalManager extends EventEmitter {
 
   private readonly inputTails = new Map<string, Promise<void>>()
 
-  constructor(options: { getWindowsShell?: () => 'cmd' | 'powershell'; rustPty?: RustPtySidecar | null } = {}) {
+  constructor(
+    options: {
+      getWindowsShell?: () => 'cmd' | 'powershell'
+      getFavoriteNames?: () => string[]
+      rustPty?: RustPtySidecar | null
+    } = {}
+  ) {
     super()
     this.getWindowsShell = options.getWindowsShell ?? (() => 'cmd')
+    this.getFavoriteNames = options.getFavoriteNames ?? (() => [])
     this.rustPty = options.rustPty ?? null
     this.rustPty?.on('data', (id: string, chunk: string) => this.handleRustOutput(id, chunk))
     this.rustPty?.on('exit', (id: string, code: number) => this.handleRustExit(id, code))
@@ -178,31 +204,39 @@ export class TerminalManager extends EventEmitter {
 
 
 
-  private nextAgentNumber(): number {
-    const taken = new Set<number>()
-    for (const record of this.terminals.values()) {
-      const match = /^Agent Terminal (\d+)$/.exec(record.title)
-      if (match) taken.add(Number(match[1]))
-    }
-    let n = 1
-    while (taken.has(n)) n += 1
-    return n
-  }
-
   private nextId(prefix: string): string {
     this.counter += 1
     return `${prefix}-${Date.now()}-${this.counter}`
   }
 
+  private takenTitles(exceptId?: string): Set<string> {
+    const taken = new Set<string>()
+    for (const [id, record] of this.terminals) {
+      if (id !== exceptId) taken.add(record.title.toLowerCase())
+    }
+    return taken
+  }
+
+  private assignAutoName(exceptId?: string): string {
+    let favorites: string[] = []
+    try {
+      favorites = this.getFavoriteNames() ?? []
+    } catch {
+      favorites = []
+    }
+    return pickTerminalName({ favorites, taken: this.takenTitles(exceptId) })
+  }
 
   reserve(options: { title?: string; cwd?: string; prefix?: string } = {}): TerminalInfo {
     const prefix = options.prefix || 'term'
     const id = this.nextId(prefix)
 
-
-
-
-    const title = options.title?.trim() || (prefix === 'agent' ? `Agent Terminal ${this.nextAgentNumber()}` : id)
+    const explicit = options.title?.trim()
+    const taken = this.takenTitles()
+    const title =
+      explicit && !isDefaultTerminalTitle(explicit)
+        ? makeUniqueTitle(explicit, taken)
+        : this.assignAutoName()
     const record: TerminalRecord = {
       pty: null,
       nativeAlive: false,
@@ -294,6 +328,8 @@ export class TerminalManager extends EventEmitter {
         lastDataAt: 0
       }
       this.terminals.set(id, record)
+      record.title = this.assignAutoName(id)
+      this.emit('title', id, record.title)
     } else if (cwd && !record.pty && !record.nativeAlive) {
 
       const resolved = this.resolveCwd(cwd)
@@ -319,7 +355,7 @@ export class TerminalManager extends EventEmitter {
         cwd: record.cwd,
         env: {
           ...terminalBaseEnv(process.env as Record<string, string>),
-          ...orcTerminalEnv(id),
+          ...safeOrcTerminalEnv(id),
           ORCSPACE: '1',
           ORCSPACE_TERMINAL_ID: id,
           TERM: 'xterm-256color',
@@ -365,7 +401,7 @@ export class TerminalManager extends EventEmitter {
   ): RustPtySpawnOptions {
     const env = {
       ...terminalBaseEnv(process.env as Record<string, string>),
-      ...orcTerminalEnv(id),
+      ...safeOrcTerminalEnv(id),
       ORCSPACE: '1',
       ORCSPACE_TERMINAL_ID: id,
       TERM: 'xterm-256color',
@@ -409,7 +445,11 @@ export class TerminalManager extends EventEmitter {
       if (!record.nativeAlive) continue
       record.nativeAlive = false
       record.exited = true
-      this.emit('exit', id, exitCode)
+      // Keep the canvas/code widget usable when the native sidecar dies.
+      // `spawn` will use node-pty as a local fallback if the sidecar cannot
+      // be started again, so the user does not need to close the widget.
+      const restarted = this.tryRestart(id)
+      if (!restarted.ok) this.emit('exit', id, exitCode)
     }
   }
 
@@ -417,10 +457,27 @@ export class TerminalManager extends EventEmitter {
     if (!id) return
     const current = this.terminals.get(id)
     if (!current || !current.nativeAlive) return
+    // The sidecar has already rejected an operation for this PTY. Keeping it
+    // marked alive creates a zombie terminal: future writes appear successful
+    // because they only reach the sidecar pipe, while the PTY actor is gone or
+    // blocked. Surface the failure as an exit so the widget can recover.
     current.nativeAlive = false
     current.exited = true
     this.emit('backend-error', error)
-    this.emit('exit', id, 1)
+    // A timed-out native request can leave one PTY actor blocked. Marking the
+    // record dead lets spawn_with_options replace that actor; if the sidecar
+    // itself is unavailable, spawn() falls back to node-pty.
+    const restarted = this.tryRestart(id)
+    if (!restarted.ok) this.emit('exit', id, 1)
+  }
+
+  private tryRestart(id: string): SpawnResult {
+    try {
+      return this.spawn(id)
+    } catch (error) {
+      console.warn(`[terminal] failed to recover ${id}`, error)
+      return { ok: false, error: String((error as Error)?.message ?? error) }
+    }
   }
 
 
@@ -504,14 +561,6 @@ export class TerminalManager extends EventEmitter {
     text: string,
     options: { pressEnter?: boolean; timeoutMs?: number; signal?: AbortSignal } = {}
   ): Promise<TerminalDeliveryResult> {
-    return this.serializeInput(id, () => this.deliverLineUnlocked(id, text, options))
-  }
-
-  private async deliverLineUnlocked(
-    id: string,
-    text: string,
-    options: { pressEnter?: boolean; timeoutMs?: number; signal?: AbortSignal } = {}
-  ): Promise<TerminalDeliveryResult> {
     this.deliveryCounter += 1
     const receiptId = `delivery-${Date.now()}-${this.deliveryCounter}`
     const fail = (error: string): TerminalDeliveryFailure => ({
@@ -520,27 +569,12 @@ export class TerminalManager extends EventEmitter {
       terminalId: id,
       error
     })
-    if (typeof text !== 'string' || !text.trim()) return fail('message is empty')
-    const record = this.terminals.get(id)
-    if (!record || !this.isRunning(id)) return fail(`terminal ${id} is not running`)
-
-    const singleLine = text.replace(/\r\n|\r|\n/g, ' ')
-    const expected = normalizeDeliveryText(singleLine)
-    if (!expected) return fail('message has no visible text')
-    const offset = record.output.globalOffset
-
-    const typed = this.write(id, singleLine)
-    if (!typed.ok) return fail(typed.error)
-    if (options.pressEnter !== false) {
-      if (!(await deliveryDelay(30, options.signal))) return fail('delivery cancelled')
-      const submitted = this.write(id, '\r')
-      if (!submitted.ok) return fail(submitted.error)
-    }
-
+    const staged = await this.serializeInput(id, () => this.stageDelivery(id, text, options))
+    if (!staged.ok) return fail(staged.error)
     const confirmed = await this.waitForDeliveryEcho(
       id,
-      offset,
-      expected,
+      staged.offset,
+      staged.expected,
       options.timeoutMs ?? 4_000,
       options.signal
     )
@@ -554,6 +588,30 @@ export class TerminalManager extends EventEmitter {
     }
   }
 
+  private async stageDelivery(
+    id: string,
+    text: string,
+    options: { pressEnter?: boolean; signal?: AbortSignal }
+  ): Promise<{ ok: true; offset: number; expected: string } | { ok: false; error: string }> {
+    if (typeof text !== 'string' || !text.trim()) return { ok: false, error: 'message is empty' }
+    const record = this.terminals.get(id)
+    if (!record || !this.isRunning(id)) return { ok: false, error: `terminal ${id} is not running` }
+
+    const singleLine = text.replace(/\r\n|\r|\n/g, ' ')
+    const expected = normalizeDeliveryText(singleLine)
+    if (!expected) return { ok: false, error: 'message has no visible text' }
+    const offset = record.output.globalOffset
+
+    const typed = this.write(id, singleLine)
+    if (!typed.ok) return { ok: false, error: typed.error }
+    if (options.pressEnter !== false) {
+      if (!(await deliveryDelay(30, options.signal))) return { ok: false, error: 'delivery cancelled' }
+      const submitted = this.write(id, '\r')
+      if (!submitted.ok) return { ok: false, error: submitted.error }
+    }
+    return { ok: true, offset, expected }
+  }
+
   private waitForDeliveryEcho(
     id: string,
     offset: number,
@@ -565,7 +623,7 @@ export class TerminalManager extends EventEmitter {
       const record = this.terminals.get(id)
       if (!record || !this.isRunning(id)) return false
       const from = Math.max(offset, record.output.startOffset)
-      const output = record.output.read(from, MAX_TERMINAL_WRITE_BYTES).data
+      const output = record.output.read(from, OUTPUT_BUFFER_LIMIT).data
       return normalizeDeliveryText(output).includes(expected)
     }
     if (matches()) return Promise.resolve(true)
@@ -579,6 +637,7 @@ export class TerminalManager extends EventEmitter {
         clearTimeout(timer)
         this.off('data', onData)
         this.off('exit', onExit)
+        this.off('release', onRelease)
         signal?.removeEventListener('abort', onAbort)
         resolve(value)
       }
@@ -588,11 +647,15 @@ export class TerminalManager extends EventEmitter {
       const onExit = (terminalId: string): void => {
         if (terminalId === id) finish(false)
       }
+      const onRelease = (info: { id: string }): void => {
+        if (info?.id === id) finish(false)
+      }
       const onAbort = (): void => finish(false)
       const timer = setTimeout(() => finish(matches()), Math.min(15_000, Math.max(250, timeoutMs)))
       timer.unref?.()
       this.on('data', onData)
       this.on('exit', onExit)
+      this.on('release', onRelease)
       signal?.addEventListener('abort', onAbort, { once: true })
       if (matches()) finish(true)
     })
@@ -604,11 +667,19 @@ export class TerminalManager extends EventEmitter {
   }
 
 
-  setTitle(id: string, title: string): void {
+  setTitle(id: string, title: string, opts: { unique?: boolean } = {}): void {
     const record = this.terminals.get(id)
     if (!record) return
-    const next = title.trim()
-    if (next) record.title = next
+    const next = title.trim().slice(0, 200)
+    if (!next) return
+    if (isDefaultTerminalTitle(next)) {
+      record.title = this.assignAutoName(id)
+    } else if (opts.unique) {
+      record.title = makeUniqueTitle(next, this.takenTitles(id))
+    } else {
+      record.title = next
+    }
+    this.emit('title', id, record.title)
   }
 
 
@@ -705,27 +776,22 @@ export class TerminalManager extends EventEmitter {
   handlePtyExit(id: string, child: IPty, exitCode: number): void {
     const current = this.terminals.get(id)
     if (!current || current.pty !== child) return
+    const rootPid = current.rootPid
+    const disposers = current.ptyDisposers ?? []
     current.pty = null
-    current.exited = true
-    this.emit('exit', id, exitCode)
-
-
-
-    killProcessTree(current.rootPid)
-
-
     current.rootPid = undefined
+    current.ptyDisposers = []
+    current.exited = true
 
-
-
-    for (const d of current.ptyDisposers ?? []) {
+    killProcessTree(rootPid)
+    for (const d of disposers) {
       try {
         d.dispose()
       } catch {
 
       }
     }
-    current.ptyDisposers = []
+    this.emit('exit', id, exitCode)
   }
 
   dispose(id: string): void {
@@ -783,7 +849,7 @@ export class TerminalManager extends EventEmitter {
 
 
 
-    if (wasRunning && record.pty && options.killDescendants !== false) killProcessTree(record.rootPid)
+    if (wasRunning && options.killDescendants !== false) killProcessTree(record.rootPid)
     const info = { id, title: record.title, cwd: record.cwd, scrollback }
     this.emit('release', info)
     return info
@@ -828,6 +894,7 @@ export class TerminalManager extends EventEmitter {
         if (timer !== null) clearTimeout(timer)
         this.off('spawn', onSpawn)
         this.off('banned', onBanned)
+        this.off('release', onRelease)
         signal?.removeEventListener('abort', onAbort)
       }
       const onSpawn = (spawnedId: string): void => {
@@ -837,6 +904,11 @@ export class TerminalManager extends EventEmitter {
       }
       const onBanned = (bannedId: string): void => {
         if (bannedId !== id) return
+        cleanup()
+        resolve(false)
+      }
+      const onRelease = (info: { id: string }): void => {
+        if (info.id !== id) return
         cleanup()
         resolve(false)
       }
@@ -851,6 +923,7 @@ export class TerminalManager extends EventEmitter {
       timer.unref?.()
       this.on('spawn', onSpawn)
       this.on('banned', onBanned)
+      this.on('release', onRelease)
       signal?.addEventListener('abort', onAbort, { once: true })
       if (signal?.aborted) {
         cleanup()

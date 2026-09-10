@@ -9,6 +9,7 @@ import {
   HardDrive,
   Layers,
   Minus,
+  PanelLeft,
   RefreshCw,
   Sparkles,
   Square,
@@ -20,6 +21,7 @@ import ClaudeIcon from './ClaudeIcon'
 import GrokIcon from './GrokIcon'
 import OpenCodeIcon from './OpenCodeIcon'
 import CursorIcon from './CursorIcon'
+import KimiIcon from './KimiIcon'
 import type { GitStatus, SystemStats } from '../../../preload/index.d'
 import { IS_MAC } from '../lib/platform'
 
@@ -55,6 +57,8 @@ function renderAgentIcon(id: string, size = 13): React.JSX.Element {
       return <GrokIcon size={size} />
     case 'opencode':
       return <OpenCodeIcon size={size} />
+    case 'kimi':
+      return <KimiIcon size={size} />
     case 'cursor':
       return <CursorIcon size={size} />
     default:
@@ -72,6 +76,8 @@ function shortAgentName(id: string, name: string): string {
       return 'CLD'
     case 'opencode':
       return 'OpenCode'
+    case 'kimi':
+      return 'Kimi Code'
     case 'grok':
       return 'Grok'
     default:
@@ -107,27 +113,39 @@ export type WorkView = 'canvas' | 'code'
 
 
 const ISLAND =
-  'flex h-[34px] items-center gap-[3px] rounded-full border border-[#2a2a2e] bg-[#1c1c1f] p-[3px]'
+  'flex h-10 items-center gap-1 border-0 bg-transparent p-0'
+
+const VIEW_SWITCH =
+  'flex h-[30px] items-center gap-0 rounded-full border border-[#121212] bg-[#080808] p-[3px]'
+
+const VIEW_TAB =
+  'flex h-[24px] flex-none items-center rounded-full px-[11px] text-[12px] font-medium transition-colors duration-150 cursor-pointer select-none'
+
+const VIEW_TAB_ACTIVE = 'bg-[#1F1F1F] text-white font-semibold'
+const VIEW_TAB_INACTIVE = 'bg-[#080808] text-white/60 hover:text-white hover:bg-[#2A2A2E]'
 
 
 const PILL =
-  'flex h-[28px] flex-none items-center gap-1.5 rounded-full border border-transparent px-3 text-[13px] font-medium transition-colors duration-150 cursor-pointer select-none outline-none'
+  'flex h-10 flex-none items-center gap-1.5 rounded-none border-0 px-2 text-[13px] font-medium transition-colors duration-150 cursor-pointer select-none'
 
 const ICON =
-  'grid h-[28px] w-[32px] flex-none place-items-center rounded-full border border-transparent transition-colors duration-150 cursor-pointer outline-none'
-const QUIET = 'text-[#8a8a90] hover:bg-[#232326] hover:text-[#ececec]'
-const ON = 'bg-[#2a2a2e] text-[#ececec] border-transparent'
+  'grid h-10 w-[46px] flex-none place-items-center rounded-none border-0 transition-colors duration-150 cursor-pointer'
+const QUIET = 'text-text-faint hover:bg-bg-hover hover:text-text'
+const ON = 'bg-bg-hover text-text border-transparent'
 
 interface Props {
-
   activeView: WorkView
   onViewChange: (view: WorkView) => void
+  sidebarCollapsed?: boolean
+  onToggleSidebar?: () => void
 }
 
-
-
-
-export default React.memo(function TitleBar({ activeView, onViewChange }: Props): React.JSX.Element {
+export default React.memo(function TitleBar({
+  activeView,
+  onViewChange,
+  sidebarCollapsed = false,
+  onToggleSidebar
+}: Props): React.JSX.Element {
   const [maximized, setMaximized] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null)
@@ -249,6 +267,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
 
 
   useEffect(() => {
+    if (!usageOpen) return
     void refreshUsage()
     const timer = setInterval(() => {
       if (!document.hidden) void refreshUsage()
@@ -267,7 +286,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onFocus)
     }
-  }, [refreshUsage])
+  }, [refreshUsage, usageOpen])
 
   useEffect(() => {
     let timer: number | null = null
@@ -292,20 +311,30 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
     ? (gitStatus.modified ?? 0) + (gitStatus.untracked ?? 0) + (gitStatus.staged ?? 0) + (gitStatus.conflicted ?? 0)
     : 0
 
+
+
   const openAgents = (usageStats?.agents || []).filter((a) => a.isOpen)
 
   const noDrag = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
 
+  const sidebarOpen = activeView === 'code' && !sidebarCollapsed
 
-
-
-
-
-
+  const handleToggleSidebar = useCallback((): void => {
+    if (activeView !== 'code') {
+      onViewChange('code')
+      if (sidebarCollapsed && onToggleSidebar) {
+        onToggleSidebar()
+      }
+    } else if (onToggleSidebar) {
+      onToggleSidebar()
+    } else {
+      window.dispatchEvent(new CustomEvent('orcspace:toggle-left-panel'))
+    }
+  }, [activeView, onViewChange, sidebarCollapsed, onToggleSidebar])
 
   return (
     <div
-      className="pointer-events-auto absolute inset-x-0 top-0 z-[50000] flex h-10 items-center px-2 bg-transparent select-none"
+      className="title-bar-shell pointer-events-auto fixed inset-x-0 top-0 z-[50000] flex h-10 w-full min-w-full items-center pl-2 pr-0 select-none"
       style={
         {
           WebkitAppRegion: 'drag',
@@ -317,7 +346,19 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
       }
     >
       {}
-      <div className="flex h-10 min-w-0 max-w-[340px] flex-none items-center gap-1.5" style={noDrag}>
+      <div className="flex h-10 min-w-0 max-w-[340px] flex-none items-center gap-3" style={noDrag}>
+        <div className={`${VIEW_SWITCH} title-bar-left-switch`}>
+          <button
+            type="button"
+            className={`${VIEW_TAB} title-bar-left-btn gap-1.5 ${sidebarOpen ? VIEW_TAB_ACTIVE : VIEW_TAB_INACTIVE}`}
+            title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+            aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+            aria-pressed={sidebarOpen}
+            onClick={handleToggleSidebar}
+          >
+            <PanelLeft size={14} className="flex-none" />
+          </button>
+        </div>
         {flash && (
           <div role="status" className={`${ISLAND} min-w-0 px-3`}>
             <span className="truncate text-[13px] font-medium text-text">{flash}</span>
@@ -328,7 +369,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
       {}
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
         <div
-          className={`${ISLAND} pointer-events-auto`}
+          className={`${VIEW_SWITCH} title-bar-view-switch pointer-events-auto`}
           style={noDrag}
           role="tablist"
           aria-label="Workspace View"
@@ -351,7 +392,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
             role="tab"
             onClick={() => onViewChange('canvas')}
             aria-selected={activeView === 'canvas'}
-            className={`${PILL} ${activeView === 'canvas' ? ON : QUIET}`}
+            className={`${VIEW_TAB} title-bar-view-tab ${activeView === 'canvas' ? VIEW_TAB_ACTIVE : VIEW_TAB_INACTIVE}`}
             title="Canvas"
           >
             <span>Canvas</span>
@@ -361,7 +402,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
             role="tab"
             onClick={() => onViewChange('code')}
             aria-selected={activeView === 'code'}
-            className={`${PILL} ${activeView === 'code' ? ON : QUIET}`}
+            className={`${VIEW_TAB} title-bar-view-tab ${activeView === 'code' ? VIEW_TAB_ACTIVE : VIEW_TAB_INACTIVE}`}
             title="Code"
           >
             <span>Code</span>
@@ -373,13 +414,13 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
 
       {}
       <div className="flex h-10 flex-none items-center" style={noDrag}>
-        <div ref={rightIslandRef} className={`${ISLAND} relative`}>
+        <div ref={rightIslandRef} className={`${ISLAND} relative gap-0`}>
           {}
           <button
             type="button"
             aria-haspopup="dialog"
             aria-expanded={usageOpen}
-            className={`${PILL} ${usageOpen ? ON : QUIET} max-w-[340px]`}
+            className={`${PILL} ${usageOpen ? ON : QUIET} hidden max-w-[340px]`}
             onClick={() => {
               setUsageOpen((open) => !open)
               setGitOpen(false)
@@ -448,7 +489,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
           </button>
 
           {usageOpen && (
-            <div className="absolute right-2 top-[38px] z-[60000] w-[370px] max-h-[82vh] overflow-y-auto rounded-[12px] border border-line-soft bg-bg-panel p-3 text-left shadow-2xl">
+            <div className="hidden absolute right-2 top-[38px] z-[60000] w-[370px] max-h-[82vh] overflow-y-auto rounded-[12px] border border-line-soft bg-bg-panel p-3 text-left shadow-2xl">
               <div className="mb-2.5 flex items-center justify-between gap-3 border-b border-line-soft pb-2">
                 <div className="flex items-center gap-1.5">
                   <span className="text-[12px] font-semibold text-text">AI & Resource Usage</span>
@@ -783,11 +824,12 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
           )}
 
           {}
+          <div className={`${VIEW_SWITCH} title-bar-git-switch`}>
           <button
             type="button"
             aria-haspopup="dialog"
             aria-expanded={gitOpen}
-            className={`${PILL} ${gitOpen ? ON : QUIET}`}
+            className={`${VIEW_TAB} title-bar-git gap-1.5 ${gitOpen ? VIEW_TAB_ACTIVE : VIEW_TAB_INACTIVE}`}
             onClick={() => {
               setGitOpen((open) => !open)
               setUsageOpen(false)
@@ -811,6 +853,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
             </span>
             {dirtyCount > 0 && <span className="h-1.5 w-1.5 flex-none rounded-full bg-accent" />}
           </button>
+          </div>
 
           {gitOpen && (
             <div className="absolute right-2 top-[38px] z-[60000] w-[310px] rounded-[12px] border border-line-soft bg-bg-panel p-3 text-left shadow-2xl">
@@ -859,10 +902,6 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
             </div>
           )}
 
-          {
-
-
-}
           {!IS_MAC && (
             <>
               <span className="mx-0.5 h-4 w-px flex-none bg-line-soft/80" />
@@ -884,7 +923,7 @@ export default React.memo(function TitleBar({ activeView, onViewChange }: Props)
                 {maximized ? <Copy size={13} strokeWidth={2} /> : <Square size={13} strokeWidth={2} />}
               </button>
               <button
-                className={`${ICON} text-text-dim hover:bg-bg-hover hover:text-text`}
+                className={`${ICON} text-text-dim hover:bg-[#e04343] hover:text-white`}
                 title="Close"
                 aria-label="Close"
                 onClick={() => void Promise.resolve(window.api.window.close()).catch(() => {})}

@@ -25,7 +25,7 @@ const STRING_LIST: CommandPayloadSchema['properties'][string] = {
 
 
 export function registerOrchestrationCommands(deps: CommandDeps): void {
-  const { core, orchestration, terminals, requestWidget, originWidgetId, defaultCwd } = deps
+  const { core, orchestration, terminals, requestWidget, requestWidgetRemoval, originWidgetId, defaultCwd } = deps
   const { flow } = core
 
   flow.registerVersions('run', orchestration.runVersions)
@@ -149,6 +149,16 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
         const task = orchestration.requireTask(String(p.taskId ?? ''))
         const run = orchestration.requireRun(task.runId)
         const agent = String(p.agent ?? 'claude')
+        if (!/^[A-Za-z0-9_.-]{1,64}$/.test(agent)) {
+          throw new CommandError('invalid', 'agent must be 1–64 chars of [A-Za-z0-9_.-]')
+        }
+        const conflicting = orchestration.listDispatches({ taskId: task.id }).find((d) => d.state === 'running')
+        if (conflicting) {
+          throw new CommandError('conflict', `task "${task.id}" already has a running dispatch`, {
+            dispatchId: conflicting.id,
+            terminalId: conflicting.terminalId
+          })
+        }
 
         let terminalId = String(p.terminalId ?? '').trim()
         let opened = false
@@ -172,50 +182,84 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
           const ready = await terminals.waitUntilRunning(info.id, 10_000, signal)
           if (!ready) {
             terminals.dispose(info.id)
+            requestWidgetRemoval(info.id)
             throw new CommandError('failed', 'the OrcSpace window did not open a terminal for this dispatch', {
               id: info.id
             })
           }
         }
 
+        const cleanupOpened = (): void => {
+          if (!opened) return
+          try {
+            terminals.dispose(terminalId)
+          } catch {
 
+          }
+          try {
+            requestWidgetRemoval(terminalId)
+          } catch {
 
-        const dispatch = orchestration.createDispatch({
-          taskId: task.id,
-          terminalId,
-          agent,
-          preamble: ''
-        })
+          }
+          try {
+            deps.forgetOrigin(terminalId)
+          } catch {
+
+          }
+        }
+
+        let dispatch
+        try {
+          dispatch = orchestration.createDispatch({
+            taskId: task.id,
+            terminalId,
+            agent,
+            preamble: ''
+          })
+        } catch (err) {
+          cleanupOpened()
+          throw err
+        }
         const preamble = buildPreamble({ run, task, dispatchId: dispatch.id, agent })
         dispatch.preamble = preamble
 
-        let injected = false
-        if (p.inject !== false) {
+        try {
+          let injected = false
+          if (p.inject !== false) {
 
 
 
-          if (opened) {
-            const start = String(p.command ?? agent)
-            if (!await submitPtyLine(terminals, terminalId, start, signal)) {
-              throw new CommandError('failed', `could not start ${start} in terminal ${terminalId}`)
+            if (opened) {
+              const start = String(p.command ?? agent)
+              if (!await submitPtyLine(terminals, terminalId, start, signal)) {
+                throw new CommandError('failed', `could not start ${start} in terminal ${terminalId}`)
+              }
+              await delay(2_500, signal)
             }
-            await delay(2_500, signal)
+            injected = await submitPtyLine(terminals, terminalId, preamble, signal)
           }
-          injected = await submitPtyLine(terminals, terminalId, preamble, signal)
+
+          orchestration.send({
+            runId: run.id,
+            type: 'dispatch',
+            from: actor.id,
+            to: terminalId,
+            subject: `dispatch ${task.id}`,
+            body: dispatchSummary(dispatch, task),
+            taskId: task.id,
+            dispatchId: dispatch.id
+          })
+
+          return { dispatchId: dispatch.id, taskId: task.id, terminalId, agent, injected }
+        } catch (err) {
+          try {
+            orchestration.settleDispatch(dispatch.id, 'failed')
+          } catch {
+
+          }
+          cleanupOpened()
+          throw err
         }
-
-        orchestration.send({
-          runId: run.id,
-          type: 'dispatch',
-          from: actor.id,
-          to: terminalId,
-          subject: `dispatch ${task.id}`,
-          body: dispatchSummary(dispatch, task),
-          taskId: task.id,
-          dispatchId: dispatch.id
-        })
-
-        return { dispatchId: dispatch.id, taskId: task.id, terminalId, agent, injected }
       }
     }
   })
@@ -271,7 +315,10 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
     handler: {
       apply: ({ command }) => {
         const p = command.payload ?? {}
-        const state = p.state === 'retained' ? 'retained' : 'released'
+        const state = p.state
+        if (state !== 'retained' && state !== 'released') {
+          throw new CommandError('invalid', 'state must be retained|released')
+        }
         const dispatch = orchestration.setDispatchState(idOf(command.target, 'dispatch'), state)
         if (state === 'released' && p.closeTerminal) {
           terminals.dispose(dispatch.terminalId)
@@ -331,6 +378,11 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
           throw new CommandError('invalid', `type must be one of ${MESSAGE_TYPES.join(', ')}`)
         }
         const runId = resolveRunId(p.runId)
+        const to = resolveRecipient(
+          { terminals, orchestration, knownActor: (id) => !!core.actors.get(id) },
+          p.to,
+          actor.id
+        )
 
 
 
@@ -355,11 +407,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
           from: actor.id,
 
 
-          to: resolveRecipient(
-            { terminals, orchestration, knownActor: (id) => !!core.actors.get(id) },
-            p.to,
-            actor.id
-          ),
+          to,
           subject: p.subject,
           body: p.body,
           taskId: p.taskId,
@@ -462,6 +510,19 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
   }
 }
 
+export function failTerminalDispatches(deps: Pick<CommandDeps, 'orchestration'>, terminalId: string): void {
+  const running = deps.orchestration.listDispatches({ terminalId }).filter((d) => d.state === 'running')
+  for (const dispatch of running) {
+    try {
+      deps.orchestration.settleDispatch(dispatch.id, 'failed')
+    } catch {
+
+    }
+  }
+}
+
+const PTY_CHUNK_CHARS = 8000
+
 async function submitPtyLine(
   terminals: CommandDeps['terminals'],
   terminalId: string,
@@ -469,7 +530,21 @@ async function submitPtyLine(
   signal?: AbortSignal
 ): Promise<boolean> {
   const singleLine = text.replace(/\r\n|\r|\n/g, ' ')
-  return (await terminals.writeLine(terminalId, singleLine, { signal })).ok
+  if (singleLine.length <= PTY_CHUNK_CHARS) {
+    return (await terminals.writeLine(terminalId, singleLine, { signal })).ok
+  }
+  for (let i = 0; i < singleLine.length; i += PTY_CHUNK_CHARS) {
+    if (signal?.aborted) return false
+    const last = i + PTY_CHUNK_CHARS >= singleLine.length
+    const ok = (
+      await terminals.writeLine(terminalId, singleLine.slice(i, i + PTY_CHUNK_CHARS), {
+        pressEnter: last,
+        signal
+      })
+    ).ok
+    if (!ok) return false
+  }
+  return true
 }
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {

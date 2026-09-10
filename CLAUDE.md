@@ -13,9 +13,13 @@ orc whoami                                   # your own agent id, terminal & tas
 orc workers                                  # who else is open; * marks you
 orc rename --to term-3 --name backend        # give one a name that means something
 orc tell backend "run the tests and report"  # type into its terminal
+orc worker-read backend                       # read its ordinary terminal answer
 ```
 
 Names beat ids: rename a sibling once, then address it by name everywhere.
+`orc tell` does not create inbox mail. After a quick question sent with `tell`,
+read the answer with `orc worker-read <name>`. Use `orc check` only for messages
+sent through runs/tasks (`worker_done`, `ask`, `escalation`, and similar).
 
 **Good orchestration.** Before dispatching, turn the objective into a small, bounded
 task graph. Every task spec should state its goal, owned files or responsibility,
@@ -45,12 +49,12 @@ report instead of a guess.
 
 ```sh
 orc status                                   # what is running right now
-orc run-create --objective "..."             # open a run
+orc run-create --objective "..."             # open a run; check mail from this same terminal
 orc task-create --spec "..." [--deps '["otask-1"]']
 orc task-list --ready                        # what can be dispatched now
 orc task-show <id>                           # view full specification and status
 orc worker-start --task <id> --agent opencode  # opens a terminal and briefs it
-orc check --wait --types worker_done,escalation,ask   # block until a worker reports
+orc check --wait --types worker_done,escalation,ask,permission   # block until a worker reports
 orc reply <askId> "..."                      # unblock a worker that asked
 orc ask --type permission --question "..."     # request safety approval and wait
 orc allow <permission-id> [--note "..."]      # approve a permission request
@@ -68,18 +72,16 @@ orc ask --question "..."     # blocks until the coordinator answers
 orc escalate --body "..."    # you are stuck and need intervention
 ```
 
-**Planner & Kanban Tasks.** The day planner and kanban board are live and synced.
-You can pick tasks directly and report progress:
+**Planner.** The day planner is the workspace task list.
+Use it to track work and report progress:
 
 ```sh
 orc plan list                                # see all planner tasks
-orc board list                               # list kanban tasks
-orc board claim <id>                         # claim a task (moves to In Progress with your name)
-orc board update <id> done                   # complete a task (moves to Done and checks off in Planner)
+orc plan create|update|toggle|delete [<id>]   # manage planner tasks
 ```
 
 **The rest of the app** is the same CLI: `orc canvas`, `orc plan`,
-`orc board`, `orc terminal`, `orc git`, `orc journal`. Add `--json` for parseable
+`orc terminal`, `orc git`, `orc journal`. Add `--json` for parseable
 output. Prefer putting results on the canvas or a task over loose files —
 the user is looking at the canvas, not at your scrollback.
 <!-- END ORCSPACE (managed) -->

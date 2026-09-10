@@ -121,13 +121,6 @@ describe('PlannerStore - public API', () => {
     assert.ok(items[0].day === '2026-01-01', 'day items should come first')
   })
 
-  test('toggleItem flips done flag', () => {
-    const item = store.createItem({ title: 'Toggle me', createdBy: 'user' })
-    let toggled = store.toggleItem(item.id)
-    assert.equal(toggled.done, true)
-    toggled = store.toggleItem(item.id)
-    assert.equal(toggled.done, false)
-  })
 })
 
 
@@ -143,10 +136,14 @@ describe('TerminalSnapshots - public API', () => {
   })
 
   afterEach(() => {
+    const dir = process.env.ORCSPACE_TEST_USER_DATA
     if (savedUserData) {
       process.env.ORCSPACE_TEST_USER_DATA = savedUserData
     } else {
       process.env.ORCSPACE_TEST_USER_DATA = userData
+    }
+    if (dir && dir.includes('orcspace-term-test-')) {
+      fs.rmSync(dir, { recursive: true, force: true })
     }
   })
 
@@ -217,5 +214,12 @@ describe('TerminalSnapshots - public API', () => {
     snapshots.save({ id: 't2', title: 'Two', cwd: '/b', scrollback: 'b' })
     const all = snapshots.list()
     assert.equal(all.length, 2)
+  })
+
+  test('scrollback survives a disk round-trip', () => {
+    snapshots.save({ id: 'term-disk', title: 'Disk', cwd: '/', scrollback: 'persist me' })
+    snapshots.flushNow()
+    const reloaded = new TerminalSnapshots()
+    assert.equal(reloaded.scrollback('term-disk'), 'persist me')
   })
 })

@@ -19,11 +19,12 @@ export type RustPtyResult = { ok: true } | { ok: false; error: string }
 type EngineEvent =
   | { type: 'ready' }
   | { type: 'data'; id: string; data: string }
-  | { type: 'exit'; id: string }
+  | { type: 'exit'; id: string; code?: number }
   | { type: 'response'; requestId?: string; ok: boolean; id?: string; error?: string }
 
 const electronApp = (electron as unknown as { app?: { isPackaged?: boolean } }).app
 const moduleDir = dirname(fileURLToPath(import.meta.url))
+const MAX_ENGINE_STDIN_BUFFER_BYTES = 1 * 1024 * 1024
 
 
 
@@ -34,6 +35,7 @@ export class RustPtySidecar extends EventEmitter {
   private readonly child: ChildProcessWithoutNullStreams
   private stdoutBuffer = ''
   private closing = false
+  private backendFailureSignalled = false
 
   private constructor(binary: string) {
     super()
@@ -42,6 +44,10 @@ export class RustPtySidecar extends EventEmitter {
       env: { ...process.env, ORCSPACE_RUST_ENGINE: '1' },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true
+    })
+    this.child.stdin.on('error', (error) => {
+      console.warn('[rust-engine] sidecar stdin error', error)
+      this.signalBackendFailure(error)
     })
     this.child.stdout.setEncoding('utf8')
     this.child.stdout.on('data', (chunk: string) => this.consumeStdout(chunk))
@@ -52,10 +58,13 @@ export class RustPtySidecar extends EventEmitter {
     })
     this.child.on('error', (error) => {
       console.warn('[rust-engine] sidecar error', error)
-      this.emit('backend-error', error)
+      this.signalBackendFailure(error)
     })
     this.child.on('exit', (code) => {
-      if (!this.closing) this.emit('backend-exit', code ?? 1)
+      if (!this.closing && !this.backendFailureSignalled) {
+        this.backendFailureSignalled = true
+        this.emit('backend-exit', code ?? 1)
+      }
     })
   }
 
@@ -114,12 +123,25 @@ export class RustPtySidecar extends EventEmitter {
     }
   }
 
+  private signalBackendFailure(error: Error): void {
+    if (this.closing || this.backendFailureSignalled) return
+    this.backendFailureSignalled = true
+    this.emit('backend-error', error)
+    this.emit('backend-exit', 1)
+  }
+
   private send(command: Record<string, unknown>): RustPtyResult {
     if (this.child.exitCode !== null || this.child.stdin.destroyed) {
       return { ok: false, error: 'rust engine is not running' }
     }
+    if (this.child.stdin.writableLength > MAX_ENGINE_STDIN_BUFFER_BYTES) {
+      return { ok: false, error: 'rust engine input buffer is full' }
+    }
     try {
       this.child.stdin.write(`${JSON.stringify(command)}\n`)
+      if (this.child.stdin.writableLength > MAX_ENGINE_STDIN_BUFFER_BYTES) {
+        return { ok: false, error: 'rust engine input buffer is full' }
+      }
       return { ok: true }
     } catch (error) {
       return { ok: false, error: String((error as Error)?.message ?? error) }
@@ -129,7 +151,8 @@ export class RustPtySidecar extends EventEmitter {
   private consumeStdout(chunk: string): void {
     this.stdoutBuffer += chunk
     if (this.stdoutBuffer.length > 2_000_000) {
-      this.stdoutBuffer = this.stdoutBuffer.slice(-1_000_000)
+      const newline = this.stdoutBuffer.indexOf('\n', this.stdoutBuffer.length - 1_000_000)
+      this.stdoutBuffer = newline >= 0 ? this.stdoutBuffer.slice(newline + 1) : ''
     }
     while (true) {
       const newline = this.stdoutBuffer.indexOf('\n')
@@ -145,11 +168,10 @@ export class RustPtySidecar extends EventEmitter {
         continue
       }
       if (event.type === 'data') this.emit('data', event.id, event.data)
-      else if (event.type === 'exit') this.emit('exit', event.id, 0)
+      else if (event.type === 'exit') this.emit('exit', event.id, typeof event.code === 'number' ? event.code : 0)
       else if (event.type === 'response' && !event.ok) {
         const error = new Error(event.error || 'rust engine request failed')
         this.emit('request-error', event.id, error)
-        this.emit('backend-error', error)
       } else if (event.type === 'ready') {
         this.emit('ready')
       }

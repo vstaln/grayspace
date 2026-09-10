@@ -61,8 +61,9 @@ test('a terminal spawns from the canvas menu, runs a command, and closes for rea
   const { page } = ctx
   const tag = `e2e-${Date.now()}`
 
+  const knownBefore = (await listTerminals(ctx)).map((t) => t.id)
   await openTerminalFromCanvas()
-  const id = await waitForTerminalShell(ctx, page)
+  const id = await waitForTerminalShell(ctx, page, knownBefore)
 
 
   const frame = terminalFrame(page)
@@ -89,8 +90,9 @@ test('a terminal spawns from the canvas menu, runs a command, and closes for rea
 test('the agent-launch button types the CLI command into the shell', async () => {
   const { page } = ctx
 
+  const knownBefore = (await listTerminals(ctx)).map((t) => t.id)
   await openTerminalFromCanvas()
-  const id = await waitForTerminalShell(ctx, page)
+  const id = await waitForTerminalShell(ctx, page, knownBefore)
 
   const frame = terminalFrame(page)
   await frame.getByTestId('widget-launch-agent').click()
@@ -104,8 +106,9 @@ test('the agent-launch button types the CLI command into the shell', async () =>
 test('choosing an agent from the portal menu does not pan the canvas', async () => {
   const { page } = ctx
 
+  const knownBefore = (await listTerminals(ctx)).map((t) => t.id)
   await openTerminalFromCanvas()
-  await waitForTerminalShell(ctx, page)
+  await waitForTerminalShell(ctx, page, knownBefore)
   await page.getByTestId('tool-pan').click()
 
   const world = page.getByTestId('canvas').locator(':scope > div').first()
@@ -162,6 +165,55 @@ test('choosing an agent from the portal menu does not pan the canvas', async () 
   await page.keyboard.press('ArrowRight')
   await expect(menu).toHaveCount(0)
   await closeTerminal(page)
+})
+
+test('three Code terminals can be resized in both directions', async () => {
+  const { page } = ctx
+
+  await page.evaluate(() => localStorage.removeItem('orcspace:code-three-way-split'))
+  const viewport = page.viewportSize()
+  test.skip(!viewport || viewport.width < 1100, 'three-way resize needs a wide viewport')
+  await page.getByRole('tab', { name: 'Code' }).click()
+  while (await page.getByRole('button', { name: 'Close session' }).count()) {
+    await page.getByRole('button', { name: 'Close session' }).first().click()
+  }
+  await page.getByRole('button', { name: 'Launch', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Launch Code Session' })
+  await dialog.getByRole('button', { name: '2', exact: true }).click()
+  await dialog.getByRole('button', { name: /Launch 2 terminals/ }).click()
+  await page.getByRole('button', { name: 'Launch', exact: true }).click()
+  await dialog.getByRole('button', { name: '1', exact: true }).click()
+  await dialog.getByRole('button', { name: /Launch 1 terminal/ }).click()
+
+  const cards = page.getByTestId('code-view').locator('.code-terminal-shell')
+  await expect(cards).toHaveCount(3, { timeout: 30_000 })
+  const beforeFirst = await cards.nth(0).boundingBox()
+  const beforeThird = await cards.nth(2).boundingBox()
+  if (!beforeFirst || !beforeThird) throw new Error('three-way Code layout is not visible')
+
+  const columnHandle = page.getByTestId('code-resize-columns')
+  const columnBox = await columnHandle.boundingBox()
+  if (!columnBox) throw new Error('column resize handle is not visible')
+  await page.mouse.move(columnBox.x + columnBox.width / 2, columnBox.y + 50)
+  await page.mouse.down()
+  await page.mouse.move(columnBox.x + 100, columnBox.y + 50)
+  await page.mouse.up()
+
+  const rowHandle = page.getByTestId('code-resize-rows')
+  const rowBox = await rowHandle.boundingBox()
+  if (!rowBox) throw new Error('row resize handle is not visible')
+  await page.mouse.move(rowBox.x + 50, rowBox.y + rowBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(rowBox.x + 50, rowBox.y + 70)
+  await page.mouse.up()
+
+  const afterFirst = await cards.nth(0).boundingBox()
+  const afterThird = await cards.nth(2).boundingBox()
+  expect(afterFirst?.width).toBeGreaterThan((beforeFirst?.width ?? 0) + 40)
+  expect(afterThird?.height).toBeLessThan((beforeThird?.height ?? 0) - 30)
+
+  while (await cards.count()) await page.getByRole('button', { name: 'Close session' }).first().click()
+  await expect(cards).toHaveCount(0)
 })
 
 test('Code paste is delivered only to the focused terminal', async () => {

@@ -385,6 +385,12 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
     return items.filter((item) => item.name.toLowerCase().includes(q))
   }, [items, search])
 
+  const [visibleCount, setVisibleCount] = useState(200)
+  useEffect(() => {
+    setVisibleCount(200)
+  }, [items, search, currentPath])
+  const visibleItems = filteredItems.slice(0, visibleCount)
+
   const breadcrumbs = useMemo(() => {
     if (!currentPath) return []
     const parts = currentPath.split(/[\\/]/).filter(Boolean)
@@ -592,7 +598,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
               </tr>
             </thead>
             <tbody>
-              {filteredItems.map((entry) => {
+              {visibleItems.map((entry) => {
                 const isRenaming = renamingPath === entry.path
                 return (
                   <tr
@@ -671,6 +677,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                             className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
                             onClick={() => void viewFile(entry.path)}
                             title="Preview file"
+                            aria-label={`Preview ${entry.name}`}
                           >
                             <Eye size={12} />
                           </button>
@@ -679,6 +686,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                           className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
                           onClick={() => void openPath(entry.path)}
                           title="Open in default app"
+                          aria-label={`Open ${entry.name} in default app`}
                         >
                           <ExternalLink size={12} />
                         </button>
@@ -686,6 +694,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                           className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
                           onClick={() => void copyPath(entry.path)}
                           title="Copy path"
+                          aria-label={`Copy path of ${entry.name}`}
                         >
                           <Copy size={12} />
                         </button>
@@ -693,6 +702,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                           className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
                           onClick={() => startRename(entry)}
                           title="Rename"
+                          aria-label={`Rename ${entry.name}`}
                         >
                           <Pencil size={12} />
                         </button>
@@ -700,6 +710,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                           className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-danger/20 hover:text-danger"
                           onClick={() => void handleDelete(entry)}
                           title="Delete"
+                          aria-label={`Delete ${entry.name}`}
                         >
                           <Trash2 size={12} />
                         </button>
@@ -708,6 +719,19 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                   </tr>
                 )
               })}
+              {visibleCount < filteredItems.length && (
+                <tr>
+                  <td colSpan={4} className="py-2 text-center">
+                    <button
+                      type="button"
+                      className="rounded-md border border-line px-3 py-1 text-[11px] text-text-dim hover:bg-bg-hover hover:text-text"
+                      onClick={() => setVisibleCount((c) => c + 200)}
+                    >
+                      Show more ({filteredItems.length - visibleCount} remaining)
+                    </button>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
           </div>

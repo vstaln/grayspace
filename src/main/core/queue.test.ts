@@ -63,6 +63,22 @@ describe('Priority Queue, Rate Limiter and Backpressure', () => {
     assert.deepEqual(log, ['first', 'high', 'normal', 'low'])
   })
 
+  test('queue over maxQueueLength throws backpressure instead of growing', async () => {
+    const queue = new PriorityCommandQueue({ maxQueueLength: 1 })
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const p1 = queue.enqueue({ id: 't-1', actorId: 'a', priority: 'normal', run: async () => gate })
+    const p2 = queue.enqueue({ id: 't-2', actorId: 'a', priority: 'normal', run: async () => {} })
+    assert.throws(
+      () => queue.enqueue({ id: 't-3', actorId: 'a', priority: 'normal', run: async () => {} }),
+      (err: unknown) => (err as { code?: string }).code === 'backpressure'
+    )
+    release()
+    await Promise.all([p1, p2])
+  })
+
   test('ActorRateLimiter enforces token bucket limits', () => {
     let now = 1000
     const limiter = new ActorRateLimiter({ capacity: 3, refillPerSec: 1, now: () => now })

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { isSafeUrl, sanitizeUrl, safeHref } from '../renderer/src/lib/sanitizeUrl.ts'
 import { renderMarkdownInlineLinks, renderMarkdownSafe, extractSafeLinks } from '../renderer/src/lib/markdown.ts'
 import { DRAW_CLICK_THRESHOLD_PX } from '../renderer/src/lib/canvasMetrics.ts'
+import { parseWidgetInvocation } from '../renderer/src/lib/commandInput.ts'
 import { pasteHasImage } from '../renderer/src/lib/paste.ts'
 import {
   provider,
@@ -78,6 +79,27 @@ describe('canvasMetrics', () => {
   it('DRAW_CLICK_THRESHOLD_PX is stable', () => {
     assert.equal(DRAW_CLICK_THRESHOLD_PX, 4)
     assert.ok(Number.isFinite(DRAW_CLICK_THRESHOLD_PX))
+  })
+})
+
+describe('command input', () => {
+  it('recognizes slash, dot, at and plain widget shortcuts', () => {
+    assert.equal(parseWidgetInvocation('/terminal')?.kind, 'terminal')
+    assert.equal(parseWidgetInvocation('.files')?.kind, 'files')
+    assert.equal(parseWidgetInvocation('@planner')?.kind, 'planner')
+    assert.equal(parseWidgetInvocation('terminal')?.kind, 'terminal')
+  })
+
+  it('keeps a trailing terminal command for the new widget', () => {
+    assert.deepEqual(parseWidgetInvocation('/terminal npm test'), {
+      kind: 'terminal',
+      initialCommand: 'npm test'
+    })
+  })
+
+  it('respects a configured prefix', () => {
+    assert.equal(parseWidgetInvocation('/terminal', '.') , null)
+    assert.equal(parseWidgetInvocation('.terminal', '.')?.kind, 'terminal')
   })
 })
 

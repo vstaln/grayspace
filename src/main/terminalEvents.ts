@@ -5,7 +5,8 @@ import type { PlannerStore } from './plannerStore.ts'
 import type { CanvasStore } from './canvasState.ts'
 import type { CodeStore } from './codeState.ts'
 import type { TerminalSnapshots } from './terminalSnapshots.ts'
-import { focusedTerminalId, isTerminalMounted } from './ipc/index.ts'
+import { isTerminalMounted } from './ipc/index.ts'
+import { TerminalOutputGate } from './terminalStream.ts'
 
 export function setupTerminalEvents(deps: {
   terminals: TerminalManager
@@ -19,17 +20,66 @@ export function setupTerminalEvents(deps: {
 }): void {
   const { terminals, terminalBatcher, snapshots, planner, canvas, code, send, isShuttingDown } = deps
 
-  terminals.on('data', (id: string, chunk: string) => {
-    terminalBatcher.push(id, chunk)
-  })
-  terminalBatcher.on('batch', (id: string, chunk: string) => {
+  const snapshotDebounce = new Map<string, ReturnType<typeof setTimeout>>()
+  const liveOutput = new TerminalOutputGate((id, chunk) => {
     if (isTerminalMounted(id)) send('terminal:onData', id, chunk)
   })
+  terminals.on('data', (id: string, chunk: string) => {
+    terminalBatcher.push(id, chunk)
+    if (!snapshotDebounce.has(id)) {
+      const timer = setTimeout(() => {
+        snapshotDebounce.delete(id)
+        if (isShuttingDown()) return
+        const full = terminals.fullOutput(id)
+        if (full !== null) {
+          const info = terminals.list().find((t) => t.id === id)
+          snapshots.saveAsync({
+            id,
+            title: info?.title || id,
+            cwd: info?.cwd || '',
+            scrollback: full
+          })
+        }
+      }, 1500)
+      timer.unref?.()
+      snapshotDebounce.set(id, timer)
+    }
+  })
+  terminalBatcher.on('batch', (id: string, chunk: string) => {
+    liveOutput.enqueue(id, chunk)
+  })
+  const cancelSnapshotTimer = (id: string): void => {
+    const timer = snapshotDebounce.get(id)
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      snapshotDebounce.delete(id)
+    }
+  }
   terminals.on('exit', (id: string, codeVal: number) => {
+    cancelSnapshotTimer(id)
     terminalBatcher.flush(id)
+    liveOutput.flush(id)
     send('terminal:onExit', id, codeVal)
+    if (!isShuttingDown()) {
+      const full = terminals.fullOutput(id)
+      if (full !== null) {
+        const info = terminals.list().find((t) => t.id === id)
+        snapshots.saveAsync({
+          id,
+          title: info?.title || id,
+          cwd: info?.cwd || '',
+          scrollback: full
+        })
+      }
+    }
+  })
+  terminals.on('title', (id: string, title: string) => {
+    send('control:rename-widget', { id, title })
   })
   terminals.on('release', (info: { id: string; title: string; cwd: string; scrollback: string }) => {
+    cancelSnapshotTimer(info.id)
+    terminalBatcher.flush(info.id)
+    liveOutput.flush(info.id)
     if (isShuttingDown()) return
     snapshots.saveAsync({ id: info.id, title: info.title, cwd: info.cwd, scrollback: info.scrollback })
   })
@@ -38,18 +88,14 @@ export function setupTerminalEvents(deps: {
   code.on('change', (snapshot) => send('code:onChange', snapshot))
 }
 
-export function setupKeyboardShortcuts(terminals: TerminalManager): void {
+export function setupKeyboardShortcuts(_terminals: TerminalManager): void {
   app.on('browser-window-created', (_, window) => {
-    window.webContents.on('before-input-event', (event, input) => {
+    window.webContents.on('before-input-event', (_event, input) => {
       if (input.type !== 'keyDown' || input.isComposing) return
-      const termId = focusedTerminalId()
-      if (termId && isTerminalMounted(termId)) {
-        if (input.control && input.key.toLowerCase() === 'c') {
-          event.preventDefault()
-          terminals.write(termId, '\x03')
-          return
-        }
-      }
+      // NOTE: Escape / Ctrl-C are delivered to the pty via xterm onData when
+      // a terminal is actually focused. Hijacking them here by
+      // focusedTerminalId() breaks Settings modals, canvas inputs and the
+      // browser omnibox, so global shortcuts must not send input to the pty.
       const isControlOrMeta = process.platform === 'darwin' ? input.meta : input.control
       if (isControlOrMeta && ['c', 'v', 'x', 'z', 'a', 'r', 'w'].includes(input.key.toLowerCase())) {
         return

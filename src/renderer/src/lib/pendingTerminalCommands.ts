@@ -17,3 +17,7 @@ export function takeInitialCommand(id: string): string | undefined {
   if (command !== undefined) pending.delete(id)
   return command
 }
+
+export function clearInitialCommand(id: string): void {
+  pending.delete(id)
+}

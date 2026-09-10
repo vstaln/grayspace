@@ -8,7 +8,7 @@ import { TerminalManager } from './terminals.ts'
 import { CanvasStore } from './canvasState.ts'
 import type { PlannerStore } from './plannerStore.ts'
 import type { OrchestrationStore } from './orchestration/store.ts'
-import type { MessageType } from './orchestration/types.ts'
+import { MESSAGE_TYPES, TASK_STATUSES, type MessageType } from './orchestration/types.ts'
 import { listWorkers, resolveWorker } from './orchestration/workers.ts'
 import { CONTROL_TOKEN_HEADER, controlToken } from './controlToken.ts'
 import { CANVAS_TARGET } from './commands/canvas.ts'
@@ -486,6 +486,9 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
         }
       }
       const status = url.searchParams.get('status') || undefined
+      if (status !== undefined && !(TASK_STATUSES as readonly string[]).includes(status)) {
+        return sendJson(res, 400, { error: `unknown task status "${status}"`, code: 'invalid' })
+      }
       return sendJson(res, 200, {
         tasks: orchestration.listTasks({
           runId: runIdParam,
@@ -544,16 +547,19 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
 
       if (method === 'POST' && (parts[2] === 'tell' || parts[2] === 'rename')) {
         const body = await readJson(req)
+        const bodyAgent = typeof body.agentId === 'string' && body.agentId ? body.agentId : undefined
+        const effectiveCaller = bodyAgent ?? caller
         let worker: ReturnType<typeof resolveWorker>
         try {
-          worker = resolveWorker({ terminals, orchestration }, String(body.to ?? ''), caller)
+          worker = resolveWorker({ terminals, orchestration }, String(body.to ?? ''), effectiveCaller)
         } catch (err) {
           const code = (err as { code?: CommandErrorCode }).code ?? 'invalid'
           return sendJson(res, STATUS_BY_CODE[code] ?? 400, { error: (err as Error).message, code })
         }
 
         if (parts[2] === 'rename') {
-          const title = String(body.name ?? '')
+          const title = String(body.name ?? '').trim().slice(0, 200)
+          if (!title) return sendJson(res, 400, { error: 'name must not be empty', code: 'invalid' })
           if (!canvas.widget(worker.id) && terminals.has(worker.id)) {
             terminals.setTitle(worker.id, title)
             deps.broadcast?.('control:rename-widget', { id: worker.id, title })
@@ -582,10 +588,15 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       const types = (url.searchParams.get('types') || '')
         .split(',')
         .map((t) => t.trim())
-        .filter(Boolean) as MessageType[]
+        .filter(Boolean)
+      for (const type of types) {
+        if (!(MESSAGE_TYPES as readonly string[]).includes(type)) {
+          return sendJson(res, 400, { error: `unknown message type "${type}"`, code: 'invalid' })
+        }
+      }
       const filter = {
         runId: runIdParam,
-        types: types.length ? types : undefined,
+        types: types.length ? (types as MessageType[]) : undefined,
         includeAcked: url.searchParams.get('all') === '1',
         limit: clampInt(url.searchParams.get('limit'), 50, 1, 200)
       }
@@ -593,30 +604,33 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       if (immediate.length > 0 || url.searchParams.get('wait') !== '1') {
         return sendJson(res, 200, { messages: immediate, waited: false })
       }
-      const messages = await waitForInbox(
+      const inboxWait = await waitForInbox(
         orchestration,
         registered.agentId,
         filter,
         clampInt(url.searchParams.get('timeoutMs'), 900_000, 1_000, 3_600_000),
         req
       )
-      return sendJson(res, 200, { messages, waited: true })
+      return sendJson(res, 200, { messages: inboxWait.messages, waited: !inboxWait.overloaded })
     }
 
 
     if (method === 'GET' && parts[1] === 'replies' && parts[2]) {
       const askId = decodeURIComponent(parts[2])
+      if (!orchestration.messageById(askId)) {
+        return sendJson(res, 404, { error: `no message "${askId}"`, code: 'not_found' })
+      }
       const existing = orchestration.replyTo(askId)
       if (existing || url.searchParams.get('wait') !== '1') {
         return sendJson(res, 200, { reply: existing ?? null, waited: false })
       }
-      const answered = await waitForReply(
+      const replyWait = await waitForReply(
         orchestration,
         askId,
         clampInt(url.searchParams.get('timeoutMs'), 600_000, 1_000, 3_600_000),
         req
       )
-      return sendJson(res, 200, { reply: answered ?? null, waited: true })
+      return sendJson(res, 200, { reply: replyWait.reply ?? null, waited: !replyWait.overloaded })
     }
 
 
@@ -642,7 +656,27 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     }
     if (method === 'POST' && parts[1] === 'dispatches' && parts[3] === 'settle') {
       const body = await readJson(req)
-      return reply(await submit(body, 'dispatch.settle', `dispatch:${decodeURIComponent(parts[2])}`, body))
+      const result = await submit(body, 'dispatch.settle', `dispatch:${decodeURIComponent(parts[2])}`, body)
+      if (result.ok) {
+        try {
+          const data = result.data as { dispatchId: string; taskId: string; status: string }
+          const dispatch = orchestration.requireDispatch(data.dispatchId)
+          const from = typeof body.agentId === 'string' && body.agentId ? body.agentId : 'api'
+          orchestration.send({
+            runId: dispatch.runId,
+            type: 'worker_done',
+            from,
+            to: dispatch.terminalId,
+            subject: `worker_done ${dispatch.taskId}`,
+            body: `dispatch ${dispatch.id} settled as ${data.status} via API`,
+            taskId: dispatch.taskId,
+            dispatchId: dispatch.id
+          })
+        } catch {
+
+        }
+      }
+      return reply(result)
     }
     if (method === 'POST' && parts[1] === 'dispatches' && parts[3] === 'account') {
       const body = await readJson(req)
@@ -791,8 +825,12 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
 
   if (method === 'GET' && parts[0] === 'terminal' && parts[2] === 'output') {
     const rawId = safeDecode(parts[1])
-    if (!rawId || !/^[A-Za-z0-9_-]{1,128}$/.test(rawId)) return sendJson(res, 400, { error: 'invalid terminal id' })
-    const id = rawId
+    let id = rawId
+    if (id && !terminals.has(id)) {
+      const exact = listWorkers({ terminals, orchestration }, undefined).find((w) => w.id === id || w.name === id)
+      if (exact) id = exact.id
+    }
+    if (!id || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) return sendJson(res, 400, { error: 'invalid terminal id' })
     if (url.searchParams.get('full') === '1') {
       const output = terminals.fullOutput(id)
       if (output === null) return sendJson(res, 404, { error: 'terminal not found' })
@@ -836,16 +874,20 @@ function safeDecode(part: string): string | null {
 let activeWaiters = 0
 const MAX_WAITERS = 50
 
+function overloadedWaiters(): boolean {
+  return activeWaiters >= MAX_WAITERS
+}
+
 function waitForInbox(
   orchestration: OrchestrationStore,
   agentId: string,
   filter: { runId?: string; types?: MessageType[]; includeAcked?: boolean; limit?: number },
   timeoutMs: number,
   req: http.IncomingMessage
-): Promise<unknown[]> {
+): Promise<{ messages: unknown[]; overloaded: boolean }> {
 
 
-  if (activeWaiters >= MAX_WAITERS) return Promise.resolve(orchestration.inbox(agentId, filter))
+  if (overloadedWaiters()) return Promise.resolve({ messages: orchestration.inbox(agentId, filter), overloaded: true })
   activeWaiters += 1
   return new Promise((resolve) => {
     let done = false
@@ -856,7 +898,7 @@ function waitForInbox(
       clearTimeout(timer)
       orchestration.off('message', onMessage)
       req.off('close', onClose)
-      resolve(value)
+      resolve({ messages: value, overloaded: false })
     }
     const onMessage = (message?: { runId?: string; type?: MessageType }): void => {
       if (message) {
@@ -880,8 +922,8 @@ function waitForReply(
   askId: string,
   timeoutMs: number,
   req: http.IncomingMessage
-): Promise<unknown> {
-  if (activeWaiters >= MAX_WAITERS) return Promise.resolve(orchestration.replyTo(askId) ?? null)
+): Promise<{ reply: unknown; overloaded: boolean }> {
+  if (overloadedWaiters()) return Promise.resolve({ reply: orchestration.replyTo(askId) ?? null, overloaded: true })
   activeWaiters += 1
   return new Promise((resolve) => {
     let done = false
@@ -892,7 +934,7 @@ function waitForReply(
       clearTimeout(timer)
       orchestration.off('message', onMessage)
       req.off('close', onClose)
-      resolve(value)
+      resolve({ reply: value, overloaded: false })
     }
     const onMessage = (): void => {
       const found = orchestration.replyTo(askId)

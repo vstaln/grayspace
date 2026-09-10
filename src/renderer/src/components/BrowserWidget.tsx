@@ -1,11 +1,89 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Lock, RotateCw, Search, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, FileText, Lock, RotateCw, Search, X } from 'lucide-react'
 import { BROWSER_PARTITION, HOME_URL, hostOf, toNavigationUrl, type Webview } from '../lib/browserShared'
 
+export type DroppedMediaKind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'doc'
+
+interface DroppedMedia {
+  mediaUrl: string
+  path: string
+  name: string
+  kind: DroppedMediaKind
+}
+
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'svg', 'ico', 'tif', 'tiff', 'heic'])
+const VIDEO_EXTS = new Set(['mp4', 'm4v', 'webm', 'mkv', 'mov', 'avi', 'wmv', 'flv', 'ogv', 'mpg', 'mpeg'])
+const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'flac', 'aac', 'm4a', 'opus', 'weba', 'wma'])
+const TEXT_EXTS = new Set(['txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'yaml', 'yml', 'xml', 'html', 'htm', 'log', 'js', 'ts', 'jsx', 'tsx', 'py', 'sh', 'bat', 'cmd', 'ps1'])
+
+const WIDGET_FULLSCREEN_SCRIPT = `(() => {
+  if (window.__orcWidgetFullscreen) return;
+  window.__orcWidgetFullscreen = true;
+  let active = null;
+  const style = document.createElement('style');
+  style.textContent = '.orc-widget-fullscreen{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:2147483647!important;background:#000!important}.orc-widget-fullscreen video{max-height:100%!important}';
+  (document.head || document.documentElement).appendChild(style);
+  const enter = function () {
+    active = this;
+    active.classList.add('orc-widget-fullscreen');
+    document.documentElement.style.overflow = 'hidden';
+    document.dispatchEvent(new Event('fullscreenchange'));
+    return Promise.resolve();
+  };
+  Element.prototype.requestFullscreen = enter;
+  Element.prototype.webkitRequestFullscreen = enter;
+  Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => active });
+  Object.defineProperty(document, 'webkitFullscreenElement', { configurable: true, get: () => active });
+  document.exitFullscreen = () => {
+    if (active) active.classList.remove('orc-widget-fullscreen');
+    active = null;
+    document.documentElement.style.overflow = '';
+    document.dispatchEvent(new Event('fullscreenchange'));
+    return Promise.resolve();
+  };
+  document.webkitExitFullscreen = document.exitFullscreen;
+})();`
+
+export function mediaKindForName(name: string, fallback?: string): DroppedMediaKind {
+  if (fallback === 'image' || fallback === 'video' || fallback === 'audio' || fallback === 'pdf' || fallback === 'text' || fallback === 'doc') {
+    return fallback
+  }
+  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : ''
+  if (IMAGE_EXTS.has(ext)) return 'image'
+  if (VIDEO_EXTS.has(ext)) return 'video'
+  if (AUDIO_EXTS.has(ext)) return 'audio'
+  if (ext === 'pdf') return 'pdf'
+  if (TEXT_EXTS.has(ext)) return 'text'
+  return 'doc'
+}
+
+function readMedia(widgetId: string | undefined): DroppedMedia | null {
+  if (!widgetId) return null
+  try {
+    const raw = localStorage.getItem(`orcspace-browser-media:${widgetId}`)
+    if (!raw) return null
+    const v = JSON.parse(raw) as Partial<DroppedMedia>
+    if (typeof v.mediaUrl !== 'string' || typeof v.path !== 'string' || typeof v.name !== 'string') return null
+    if (v.mediaUrl.startsWith('data:')) return null
+    return { mediaUrl: v.mediaUrl, path: v.path, name: v.name, kind: mediaKindForName(v.name, v.kind) }
+  } catch {
+    return null
+  }
+}
+
+function readUrl(widgetId: string | undefined): string {
+  if (!widgetId) return HOME_URL
+  try {
+    const raw = localStorage.getItem(`orcspace-browser-url:${widgetId}`)
+    if (raw && (raw.startsWith('http://') || raw.startsWith('https://'))) return raw
+  } catch {}
+  return HOME_URL
+}
+
 export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: string }): React.JSX.Element {
-  const [url, setUrl] = useState(HOME_URL)
-  const [address, setAddress] = useState(HOME_URL)
-  const [imageSrc, setImageSrc] = useState<string | null>(null)
+  const [url, setUrl] = useState(() => readUrl(widgetId))
+  const [address, setAddress] = useState(() => readUrl(widgetId))
+  const [media, setMedia] = useState<DroppedMedia | null>(() => readMedia(widgetId))
   const [editing, setEditing] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -13,10 +91,34 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
   const [canGoForward, setCanGoForward] = useState(false)
   const viewRef = useRef<Webview | null>(null)
   const [viewEl, setViewEl] = useState<Webview | null>(null)
+  const retryCountRef = useRef(0)
+  const [initialUrl] = useState(url)
 
   useEffect(() => {
-    if (!editing) setAddress(url)
-  }, [url, editing])
+    if (!editing && !media) setAddress(url)
+  }, [url, editing, media])
+
+  useEffect(() => {
+    if (!widgetId || media) return
+    try {
+      localStorage.setItem(`orcspace-browser-url:${widgetId}`, url)
+    } catch {}
+  }, [url, media, widgetId])
+
+  // Persist dropped media per widget so video/audio/docs survive restart.
+  // data: URLs are never persisted (quota + OOM): only orc://media/ entries.
+  useEffect(() => {
+    if (!widgetId) return
+    try {
+      if (media && media.mediaUrl.startsWith('orc://media/')) {
+        localStorage.setItem(`orcspace-browser-media:${widgetId}`, JSON.stringify(media))
+      } else if (media) {
+        localStorage.removeItem(`orcspace-browser-media:${widgetId}`)
+      } else {
+        localStorage.removeItem(`orcspace-browser-media:${widgetId}`)
+      }
+    } catch {}
+  }, [media, widgetId])
 
   const setViewRef = useCallback((el: HTMLElement | null): void => {
     const w = el ? (el as unknown as Webview) : null
@@ -40,6 +142,7 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
     }
     const onStop = (): void => {
       setLoading(false)
+      retryCountRef.current = 0
       syncHistory()
     }
 
@@ -47,6 +150,7 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
 
     const onDomReady = (): void => {
       syncHistory()
+      void view.executeJavaScript(WIDGET_FULLSCREEN_SCRIPT, true).catch(() => {})
     }
     const onFail = (event: Event): void => {
       const e = event as Event & { errorCode?: number; errorDescription?: string; isMainFrame?: boolean }
@@ -66,6 +170,10 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
       const e = event as Event & { url?: string; isMainFrame?: boolean }
       if (e.isMainFrame && e.url && !e.url.startsWith('data:')) setUrl(e.url)
       syncHistory()
+    }
+    const onEnterHtmlFullscreen = (event: Event): void => {
+      // A webview fullscreen request must stay inside this widget, never promote the app window.
+      event.preventDefault()
     }
     let crashReloads = 0
     const onCrashed = (): void => {
@@ -87,6 +195,7 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
     view.addEventListener('did-fail-load', onFail)
     view.addEventListener('did-navigate', onNavigate)
     view.addEventListener('did-navigate-in-page', onInPage)
+    view.addEventListener('enter-html-full-screen', onEnterHtmlFullscreen)
     view.addEventListener('crashed', onCrashed)
     return () => {
       view.removeEventListener('did-start-loading', onStart)
@@ -96,6 +205,7 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
       view.removeEventListener('did-fail-load', onFail)
       view.removeEventListener('did-navigate', onNavigate)
       view.removeEventListener('did-navigate-in-page', onInPage)
+      view.removeEventListener('enter-html-full-screen', onEnterHtmlFullscreen)
       view.removeEventListener('crashed', onCrashed)
     }
   }, [viewEl])
@@ -103,46 +213,104 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
 
 
 
-
   useEffect(() => {
-    const onDroppedImage = (event: Event): void => {
-      const detail = (event as CustomEvent<{ widgetId?: string; path?: string; name?: string }>).detail
+    const onDroppedMedia = (event: Event): void => {
+      const detail = (event as CustomEvent<{ widgetId?: string; path?: string; name?: string; mediaUrl?: string; kind?: string }>).detail
       if (!detail?.path || detail.widgetId !== widgetId) return
-      void window.api.media.dataUrl(detail.path).then((dataUrl) => {
-        if (!dataUrl) {
-          setLoadError('Could not load the dropped image')
+      const open = (mediaUrl: string): void => {
+        const ok =
+          mediaUrl.startsWith('orc://media/') ||
+          mediaUrl.startsWith('data:image/') ||
+          mediaUrl.startsWith('data:audio/') ||
+          mediaUrl.startsWith('data:video/') ||
+          mediaUrl.startsWith('data:application/pdf')
+        if (!ok) {
+          setLoadError('Could not load the dropped media')
+          setLoading(false)
           return
         }
-        setImageSrc(dataUrl)
-        setUrl('')
-        setAddress(detail.name || 'Dropped image')
+        setMedia({ mediaUrl, path: detail.path!, name: detail.name || 'Dropped file', kind: mediaKindForName(detail.name || detail.path!, detail.kind) })
+        setAddress(detail.name || 'Dropped file')
         setEditing(false)
-        setLoading(true)
-        setLoadError(null)
-      }).catch((error) => {
-        setLoadError(error instanceof Error ? error.message : 'Could not load the dropped image')
         setLoading(false)
-      })
+        setLoadError(null)
+      }
+      if (detail.mediaUrl) {
+        open(detail.mediaUrl)
+      } else {
+        const kind = mediaKindForName(detail.name || detail.path!, detail.kind)
+        if (kind !== 'image') {
+          setLoadError('Could not load the dropped media')
+          setLoading(false)
+          return
+        }
+        void window.api.media.dataUrl(detail.path).then((dataUrl) => {
+          if (!dataUrl) {
+            setLoadError('Could not load the dropped media')
+            return
+          }
+          open(dataUrl)
+        }).catch((error) => {
+          setLoadError(error instanceof Error ? error.message : 'Could not load the dropped media')
+          setLoading(false)
+        })
+      }
     }
-    window.addEventListener('orcspace:open-image', onDroppedImage)
-    return () => window.removeEventListener('orcspace:open-image', onDroppedImage)
+    window.addEventListener('orcspace:open-image', onDroppedMedia)
+    window.addEventListener('orcspace:open-media', onDroppedMedia)
+    return () => {
+      window.removeEventListener('orcspace:open-image', onDroppedMedia)
+      window.removeEventListener('orcspace:open-media', onDroppedMedia)
+    }
   }, [widgetId])
 
-const host = hostOf(url)
+  const closeMedia = useCallback((): void => {
+    setMedia(null)
+    setLoadError(null)
+    setLoading(false)
+  }, [])
+
+  const openExternally = useCallback((path: string): void => {
+    void window.api.fs.openPath(path).catch(() => {})
+  }, [])
+
+  const navigate = useCallback((value: string): void => {
+    const target = toNavigationUrl(value)
+    if (!target) {
+      setLoadError('URL must start with http:// or https://')
+      return
+    }
+    setUrl(target)
+    setAddress(target)
+    setLoading(true)
+    setLoadError(null)
+    setEditing(false)
+    setMedia(null)
+    void viewRef.current?.loadURL(target).catch(() => {})
+  }, [])
+
+  const isHome = !media && (() => {
+    try {
+      const home = new URL(url)
+      return home.hostname === 'www.google.com' && home.pathname === '/'
+    } catch {
+      return false
+    }
+  })()
+  const host = hostOf(url)
     const isHttps = url.startsWith('https://')
-    const navError = !url && address.trim() && (
+    const navError = !url && !media && address.trim() && (
       'URL must start with http:// or https://'
     )
 
     return (
       <div className="browser-surface flex h-full min-h-0 flex-col">
-        {}
         <div className="browser-chrome flex h-8 flex-none items-center gap-1 px-2">
           <button
             type="button"
             aria-label="Back"
             title="Back"
-            disabled={!canGoBack}
+            disabled={!canGoBack || !!media}
             onClick={() => viewRef.current?.goBack()}
             className="browser-icon-btn grid h-6 w-6 flex-none place-items-center rounded-md disabled:opacity-30 disabled:pointer-events-none"
           >
@@ -152,7 +320,7 @@ const host = hostOf(url)
             type="button"
             aria-label="Forward"
             title="Forward"
-            disabled={!canGoForward}
+            disabled={!canGoForward || !!media}
             onClick={() => viewRef.current?.goForward()}
             className="browser-icon-btn grid h-6 w-6 flex-none place-items-center rounded-md disabled:opacity-30 disabled:pointer-events-none"
           >
@@ -169,27 +337,13 @@ const host = hostOf(url)
           </button>
           <form
             className="relative ml-1 flex min-w-0 flex-1 items-center"
-            onSubmit={(e) => {
-              e.preventDefault()
-              const target = toNavigationUrl(address)
-              if (!target) {
-                setLoadError('URL must start with http:// or https://')
-                return
-              }
-              setUrl(target)
-              setAddress(target)
-              setLoading(true)
-              setLoadError(null)
-              setEditing(false)
-              setImageSrc(null)
-              void viewRef.current?.loadURL(target).catch(() => {})
-            }}
+            onSubmit={(e) => { e.preventDefault(); navigate(address) }}
           >
             <div className="pointer-events-none absolute left-2.5 flex items-center text-text-faint">
               {isHttps ? <Lock size={10} strokeWidth={2} /> : <Search size={10} strokeWidth={2} />}
             </div>
             <input
-              value={address}
+              value={isHome && (address === HOME_URL || address === `${HOME_URL}/`) ? '' : address}
               spellCheck={false}
               aria-label="Address and search"
               placeholder="Search or enter address"
@@ -205,31 +359,69 @@ const host = hostOf(url)
               onKeyDown={(e) => {
                 if (e.key === 'Escape') {
                   setEditing(false)
-                  setAddress(url)
+                  setAddress(media ? media.name : url)
                   e.currentTarget.blur()
                 }
               }}
               className="browser-omnibox h-6 w-full rounded-full pl-7 pr-2.5 text-[11px] outline-none placeholder:text-text-faint"
             />
           </form>
-          {host && !editing && <span className="mx-1 hidden max-w-[90px] flex-none truncate text-[10px] text-text-faint xl:block">{host}</span>}
+          {host && !editing && !media && <span className="mx-1 hidden max-w-[90px] flex-none truncate text-[10px] text-text-faint xl:block">{host}</span>}
+          {media && (
+            <button
+              type="button"
+              onClick={closeMedia}
+              title="Back to browser"
+              className="flex flex-none items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[10px] text-text-dim hover:bg-bg-hover hover:text-text"
+            >
+              <X size={10} /> Browser
+            </button>
+          )}
           {navError && <span className="text-[10px] text-danger">{navError}</span>}
         </div>
-        {loading && (
+        {loading && !media && !isHome && (
           <div className="load-bar-track h-px flex-none" aria-hidden>
             <div className="load-bar h-full w-1/3" />
           </div>
         )}
         {!loading && loadError && (
-          <div className="flex flex-none items-center justify-between gap-2 border-b border-danger/40 bg-bg-panel px-2 py-1 text-[11px] text-danger">
+          <div role="alert" className="flex flex-none items-center justify-between gap-2 border-b border-danger/40 bg-bg-panel px-2 py-1 text-[11px] text-danger">
             <span className="min-w-0 truncate">Error — {loadError}</span>
-            <button
-              type="button"
-              className="flex-none rounded-md bg-bg-raise px-2 py-0.5 text-[10px] text-danger hover:bg-bg-hover"
-              onClick={() => viewRef.current?.reload()}
-            >
-              Retry
-            </button>
+            <span className="flex flex-none gap-1">
+              {retryCountRef.current < 3 ? (
+                <button
+                  type="button"
+                  className="rounded-md bg-bg-raise px-2 py-0.5 text-[10px] text-danger hover:bg-bg-hover"
+                  onClick={() => {
+                    retryCountRef.current += 1
+                    setLoadError(null)
+                    setLoading(true)
+                    try {
+                      viewRef.current?.reload()
+                    } catch {}
+                  }}
+                >
+                  Retry
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="rounded-md bg-bg-raise px-2 py-0.5 text-[10px] text-text-dim hover:bg-bg-hover hover:text-text"
+                onClick={() => {
+                  retryCountRef.current = 0
+                  setLoadError(null)
+                  setMedia(null)
+                  setUrl(HOME_URL)
+                  setAddress(HOME_URL)
+                  setLoading(true)
+                  try {
+                    void viewRef.current?.loadURL(HOME_URL)
+                  } catch {}
+                }}
+              >
+                Home
+              </button>
+            </span>
           </div>
         )}
         <div className="browser-surface relative min-h-0 flex-1">
@@ -237,10 +429,78 @@ const host = hostOf(url)
             ref={setViewRef}
             partition={BROWSER_PARTITION}
             allowpopups={'true' as unknown as boolean}
-            src={imageSrc ?? HOME_URL}
+            src={initialUrl}
+            aria-label="Browser"
             className="absolute inset-0 h-full w-full"
+            style={media || isHome ? { visibility: 'hidden', pointerEvents: 'none' } : undefined}
           />
+          {media && (
+            <MediaViewer media={media} onClose={closeMedia} onOpenExternally={openExternally} />
+          )}
         </div>
       </div>
     )
 })
+
+function MediaViewer({ media, onClose, onOpenExternally }: { media: DroppedMedia; onClose(): void; onOpenExternally(path: string): void }): React.JSX.Element {
+  if (media.kind === 'image') {
+    return (
+      <div className="absolute inset-0 grid place-items-center overflow-auto bg-bg p-2">
+        <img src={media.mediaUrl} alt={media.name} className="max-h-full max-w-full rounded object-contain" />
+      </div>
+    )
+  }
+  if (media.kind === 'video') {
+    return (
+      <div className="absolute inset-0 flex flex-col bg-bg">
+        <div className="flex flex-none items-center justify-between gap-2 border-b border-line-soft px-2 py-1 text-[10px] text-text-faint">
+          <span className="min-w-0 truncate" title={media.name}>{media.name}</span>
+          <button type="button" onClick={onClose} className="flex-none rounded px-1.5 py-0.5 hover:bg-bg-hover hover:text-text">Close</button>
+        </div>
+        <video key={media.mediaUrl} src={media.mediaUrl} controls preload="metadata" className="min-h-0 w-full flex-1 bg-black" />
+      </div>
+    )
+  }
+  if (media.kind === 'audio') {
+    return (
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-bg p-4 text-center">
+        <div className="max-w-full truncate text-[12px] font-medium text-text" title={media.name}>{media.name}</div>
+        <audio key={media.mediaUrl} src={media.mediaUrl} controls preload="metadata" className="w-full max-w-[320px]" />
+      </div>
+    )
+  }
+  if (media.kind === 'pdf' || media.kind === 'text') {
+    return (
+      <div className="absolute inset-0 flex flex-col bg-bg">
+        <div className="flex flex-none items-center justify-between gap-2 border-b border-line-soft px-2 py-1 text-[10px] text-text-faint">
+          <span className="min-w-0 truncate" title={media.name}>{media.name}</span>
+          <button type="button" onClick={onClose} className="flex-none rounded px-1.5 py-0.5 hover:bg-bg-hover hover:text-text">Close</button>
+        </div>
+        <iframe key={media.mediaUrl} src={media.mediaUrl} title={media.name} sandbox="" className="min-h-0 w-full flex-1 border-0 bg-bg" />
+      </div>
+    )
+  }
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-bg p-4 text-center">
+      <FileText size={22} className="text-text-faint" />
+      <div className="max-w-full truncate text-[12px] font-medium text-text" title={media.name}>{media.name}</div>
+      <div className="max-w-full truncate text-[10px] text-text-faint" title={media.path}>{media.path}</div>
+      <div className="mt-1 flex gap-1.5">
+        <button
+          type="button"
+          onClick={() => onOpenExternally(media.path)}
+          className="rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-bg hover:opacity-90"
+        >
+          Open
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-md border border-line px-2.5 py-1 text-[11px] text-text-dim hover:bg-bg-hover hover:text-text"
+        >
+          Back
+        </button>
+      </div>
+    </div>
+  )
+}

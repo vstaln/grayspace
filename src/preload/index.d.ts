@@ -13,7 +13,6 @@ import type {
   FsApi,
   GitApi,
   MediaApi,
-  MissionApi,
   OrchestrationApi,
   PlannerApi,
   SettingsApi,
@@ -32,7 +31,6 @@ declare global {
       settings: SettingsApi
       media: MediaApi
       orchestration: OrchestrationApi
-      mission: MissionApi
       planner: PlannerApi
       canvas: CanvasApi
       code: CodeApi

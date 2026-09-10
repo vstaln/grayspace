@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AppSettings } from '../../../preload/index.d'
 
 const DEFAULTS: AppSettings = {
-  missionMode: false,
   linkSyntax: 'both',
   windowsShell: 'cmd',
+  commandPrefix: 'any',
   userName: 'you',
   backgroundDim: 45,
   backgroundBlur: 40,
@@ -17,10 +17,24 @@ const DEFAULTS: AppSettings = {
     idleTimeoutMs: 5 * 60_000,
     offloadVision: false
   },
-  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'mission', 'orchestration', 'browser', 'links', 'music-player']
+  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player'],
+  favoriteTerminalNames: []
 }
 
 const FAVORITES_ALL_MIGRATION_KEY = 'orcspace-favorites-all-enabled'
+
+function mergeDefaults(s: AppSettings): AppSettings {
+  return {
+    ...DEFAULTS,
+    ...s,
+    favoriteWidgets: (s.favoriteWidgets ?? DEFAULTS.favoriteWidgets ?? []).filter(
+      (kind) => kind !== 'translator' && kind !== 'id-generator' && kind !== 'note'
+    ),
+    favoriteTerminalNames: Array.isArray(s.favoriteTerminalNames)
+      ? s.favoriteTerminalNames.filter((name): name is string => typeof name === 'string')
+      : (DEFAULTS.favoriteTerminalNames ?? [])
+  }
+}
 
 
 export function useSettings(): {
@@ -38,12 +52,6 @@ export function useSettings(): {
 
   useEffect(() => {
     const seq = ++initSeqRef.current
-    const mergeDefaults = (s: AppSettings): AppSettings => ({
-      ...DEFAULTS,
-      ...s,
-      favoriteWidgets: (s.favoriteWidgets ?? DEFAULTS.favoriteWidgets ?? []).filter((kind) => kind !== 'translator' && kind !== 'id-generator' && kind !== 'note')
-    })
-
     void window.api.settings
       .get()
       .then((s) => {
@@ -94,13 +102,13 @@ export function useSettings(): {
     try {
       const next = (await window.api.settings.set(patch)) as AppSettings
       if (seq === initSeqRef.current && next && typeof next === 'object') {
-        setSettings(next)
+        setSettings(mergeDefaults(next))
       }
       return true
     } catch (err) {
 
 
-      setError(err instanceof Error ? err.message : String(err))
+      if (seq === initSeqRef.current) setError(err instanceof Error ? err.message : String(err))
       return false
     }
   }, [])

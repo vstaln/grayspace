@@ -186,7 +186,10 @@ export class CodeStore extends EventEmitter {
 
 
 
-  save(input: { sessions?: unknown; featuredId?: unknown; maximizedId?: unknown; activeView?: unknown }): CodeSnapshot {
+  save(
+    input: { sessions?: unknown; featuredId?: unknown; maximizedId?: unknown; activeView?: unknown },
+    flushImmediate = false
+  ): CodeSnapshot {
     this.ensure()
     let changed = false
     if (Array.isArray(input.sessions)) {
@@ -231,7 +234,12 @@ export class CodeStore extends EventEmitter {
     }
     if (changed) {
       this.version += 1
-      this.changed()
+      if (flushImmediate) {
+        this.emit('change', this.snapshot())
+        this.flush()
+      } else {
+        this.changed()
+      }
     }
     return this.snapshot()
   }
@@ -257,7 +265,7 @@ export class CodeStore extends EventEmitter {
     }
   }
 
-  private flush(): void {
+  flush(): void {
     if (this.saveTimer !== null) {
       clearTimeout(this.saveTimer)
       this.saveTimer = null

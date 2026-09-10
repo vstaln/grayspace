@@ -4,10 +4,10 @@ import { FitAddon } from 'xterm-addon-fit'
 import { Unicode11Addon } from 'xterm-addon-unicode11'
 import 'xterm/css/xterm.css'
 import { ThemeName, useTheme } from '../theme'
-import { pasteHasImage } from '../lib/paste'
+import { pasteHasImage, saveImageFromPaste } from '../lib/paste'
 import { takeInitialCommand } from '../lib/pendingTerminalCommands'
 import { IS_MAC } from '../lib/platform'
-import { palette } from '../design'
+import { palette } from '../ui/tokens'
 
 
 const cachedSubmit = '\r'
@@ -30,11 +30,9 @@ export function forgetTerminalViewport(id: string): void {
 
 interface Props {
   id: string
-
   surface?: 'canvas' | 'code'
-
-
-
+  agentId?: string
+  attachmentMode?: boolean
   onProcessExit?: () => void
 }
 
@@ -70,14 +68,18 @@ function xtermTheme(_appTheme: ThemeName, surface: 'canvas' | 'code'): ITheme {
   const isCanvas = surface === 'canvas'
   return {
     ...BASE_COLORS,
-    background: isCanvas ? 'transparent' : palette.terminalSolid,
+    background: isCanvas ? 'transparent' : (surface === 'code' ? '#080808' : palette.terminalSolid),
     cursorAccent: palette.wallpaperBase
   }
 }
 
-function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React.JSX.Element {
+function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = false, onProcessExit }: Props): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
+  const agentIdRef = useRef(agentId)
+  agentIdRef.current = agentId
+  const attachmentModeRef = useRef(attachmentMode || surface === 'code')
+  attachmentModeRef.current = attachmentMode || surface === 'code'
 
 
   const [connecting, setConnecting] = useState(true)
@@ -211,6 +213,21 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
     const dataUnsub = window.api.terminal.onData(id, (data) => batchedWrite(data))
     let closeTimer: ReturnType<typeof setTimeout> | null = null
     let initialCmdTimer: ReturnType<typeof setTimeout> | null = null
+    let resizeSendRaf: number | null = null
+    let pendingResize: { cols: number; rows: number } | null = null
+    let lastSentResize: { cols: number; rows: number } | null = null
+    const flushResize = (): void => {
+      resizeSendRaf = null
+      const next = pendingResize
+      pendingResize = null
+      if (!next || (lastSentResize?.cols === next.cols && lastSentResize.rows === next.rows)) return
+      lastSentResize = next
+      void window.api.terminal.resize(id, next.cols, next.rows)
+    }
+    const queueResize = (cols: number, rows: number): void => {
+      pendingResize = { cols, rows }
+      if (resizeSendRaf === null) resizeSendRaf = requestAnimationFrame(flushResize)
+    }
     const exitUnsub = window.api.terminal.onExit(id, (code) => {
       term.write(`\r\n\x1b[90m[Process exited${typeof code === 'number' ? ` (code ${code})` : ''}]\x1b[0m\r\n`)
 
@@ -238,8 +255,24 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
         }
       })
     }
-    term.onData((data) => writePty(data))
-    term.onResize(({ cols, rows }) => window.api.terminal.resize(id, cols, rows))
+    let typedCommand = ''
+    term.onData((data) => {
+      if (data === '\r' || data === '\n') {
+        const cmd = typedCommand.trim().split(/\s+/, 1)[0]?.toLowerCase()
+        if (cmd === 'agy' || cmd === 'antigravity') agentIdRef.current = 'antigravity'
+        else if (cmd === 'claude') agentIdRef.current = 'claude'
+        else if (cmd) agentIdRef.current = cmd
+        typedCommand = ''
+      } else if (data === '\x7f' || data === '\b') {
+        typedCommand = typedCommand.slice(0, -1)
+      } else if (data === '\x15' || data === '\x03') {
+        typedCommand = ''
+      } else if (!data.includes('\x1b')) {
+        typedCommand = `${typedCommand}${data}`.slice(-128)
+      }
+      writePty(data)
+    })
+    term.onResize(({ cols, rows }) => queueResize(cols, rows))
 
     const isImageFile = (f: { name?: string; type?: string }): boolean => {
       if (f.type && f.type.startsWith('image/')) return true
@@ -251,22 +284,106 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
     const writeImagePath = (image: { path: string } | null, addTrailingSpace = false): void => {
       if (!image) return void term.write('\r\n\x1b[33m[No image in clipboard]\x1b[0m\r\n')
 
-
-
       const pathText = /\s/.test(image.path) ? `"${image.path.replace(/"/g, '\\"')}"` : image.path
-      writePty(addTrailingSpace ? `${pathText} ` : pathText)
+      const toInsert = addTrailingSpace ? `${pathText} ` : pathText
+      writePty(toInsert)
+    }
+
+    const pasteImageToAgent = async (bytes?: Uint8Array): Promise<boolean> => {
+      if (!attachmentModeRef.current) return false
+      if (bytes) {
+        const staged = await window.api.media.stageClipboardImage(bytes)
+        if ('error' in staged) {
+          term.write(`\r\n\x1b[31m[${staged.error}]\x1b[0m\r\n`)
+          return false
+        }
+      }
+      writePty('\x16')
+      return true
+    }
+
+    const isPasteShortcut = (event: KeyboardEvent): boolean => {
+      const key = event.key ? event.key.toLowerCase() : ''
+      const isKeyV = key === 'v' || key === 'м' || event.code === 'KeyV' || event.keyCode === 86
+      const isInsert = event.key === 'Insert' || event.code === 'Insert' || event.keyCode === 45
+
+      if (IS_MAC) {
+        return Boolean(event.metaKey && !event.ctrlKey && !event.altKey && isKeyV)
+      }
+      if (event.ctrlKey && !event.altKey && isKeyV) return true
+      if (event.altKey && !event.ctrlKey && isKeyV) return true
+      if (event.shiftKey && !event.ctrlKey && !event.altKey && isInsert) return true
+      return false
+    }
+
+    let lastPasteAt = 0
+    const handlePaste = async (event?: ClipboardEvent): Promise<void> => {
+      const now = Date.now()
+      if (now - lastPasteAt < 150) return
+      lastPasteAt = now
+
+      try {
+        if (agentIdRef.current === 'claude') {
+          if (event && pasteHasImage(event)) {
+            writePty('\x16')
+            return
+          }
+          const scratch = await window.api.media.saveClipboardScratch()
+          if (scratch && 'path' in scratch) {
+            writePty('\x16')
+            return
+          }
+          const text = event ? event.clipboardData?.getData('text/plain') : await window.api.media.readClipboardText()
+          if (text) {
+            term.paste(text)
+          } else {
+            writePty('\x16')
+          }
+          return
+        }
+
+        if (event && pasteHasImage(event)) {
+          const saved = await saveImageFromPaste(event, { scratch: true })
+          if (saved && 'path' in saved) {
+            if (attachmentModeRef.current) {
+              await pasteImageToAgent()
+            } else {
+              writeImagePath(saved, true)
+            }
+            return
+          }
+        }
+
+        const img = await window.api.media.saveClipboardScratch()
+        if (img && 'path' in img) {
+          if (attachmentModeRef.current) {
+            await pasteImageToAgent()
+          } else {
+            writeImagePath(img, true)
+          }
+          return
+        }
+
+        const text = event ? event.clipboardData?.getData('text/plain') : await window.api.media.readClipboardText()
+        if (text) {
+          term.paste(text)
+        }
+      } catch (err) {
+        try {
+          const fallbackText = await window.api.media.readClipboardText()
+          if (fallbackText) term.paste(fallbackText)
+        } catch {
+          term.write(`\r\n\x1b[31m[${err instanceof Error ? err.message : 'Failed to paste'}]\x1b[0m\r\n`)
+        }
+      }
     }
 
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true
 
-
-
+      const key = event.key.toLowerCase()
 
       if (IS_MAC && event.metaKey && !event.ctrlKey && !event.altKey) {
-        const key = event.key.toLowerCase()
-
-
         if (key === 'c' && !event.shiftKey) {
           const selection = term.getSelection()
           if (selection) {
@@ -278,34 +395,23 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
           return false
         }
 
-
-        if (key === 'v') return true
         if (key === 'a' && !event.shiftKey) {
           term.selectAll()
           return false
         }
         if (key === 'k' && !event.shiftKey) {
-
           term.clear()
           return false
         }
       }
 
-
-
-
-
-      if (!IS_MAC && event.altKey && !event.ctrlKey && event.key.toLowerCase() === 'v') {
-        void window.api.media
-          .saveClipboardScratch()
-          .then((img) => writeImagePath(img, false))
-          .catch((err) => {
-            term.write(
-              `\r\n\x1b[31m[${err instanceof Error ? err.message : 'Failed to save image'}]\x1b[0m\r\n`
-            )
-          })
+      if (isPasteShortcut(event)) {
+        event.preventDefault()
+        event.stopPropagation()
+        void handlePaste()
         return false
       }
+
       if (event.shiftKey && event.key === 'PageUp') {
         term.scrollPages(-1)
         return false
@@ -389,22 +495,25 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
 
 
     const onKeyShortcut = (e: KeyboardEvent): void => {
-
-
       if (!container.contains(document.activeElement)) return
+
+      if (isPasteShortcut(e)) {
+        e.preventDefault()
+        e.stopPropagation()
+        void handlePaste()
+        return
+      }
+
+      const key = e.key ? e.key.toLowerCase() : ''
+
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey) return
       if ((e.ctrlKey || e.metaKey) && e.shiftKey) {
-        e.preventDefault()
-        const key = e.key.toLowerCase()
         if (key === 'c') {
           const selection = term.getSelection()
           if (selection) {
             void navigator.clipboard.writeText(selection).catch(() => {})
             term.clearSelection()
           }
-        }
-        if (key === 'v') {
-          void navigator.clipboard.readText().then((text) => term.paste(text)).catch(() => {})
         }
         if (key === 'x') {
           const selection = term.getSelection()
@@ -434,16 +543,33 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
       menu.style.padding = '8px'
       menu.style.boxShadow = '0 4px 12px rgba(8,9,11,.6)'
       menu.style.zIndex = '99999'
-      menu.innerHTML = `
-        ${hasSelection
-          ? `<button style="width:100%;margin-bottom:4px;padding:4px;border:none;border-radius:4px;background:var(--tok-color-bg-panel);color:var(--tok-color-text);font-size:12px;cursor:pointer;" onclick="void navigator.clipboard.writeText('${selection}')">Copy</button>`
-          : ''}
-        ${!hasSelection
-          ? `<button style="width:100%;padding:4px;border:none;border-radius:4px;background:var(--tok-color-bg-panel);color:var(--tok-color-text);font-size:12px;cursor:pointer;" onclick="void navigator.clipboard.readText().then(t=>term.paste(t)).catch(()=>{})">Paste</button>`
-          : ''}
-      `
+
+      if (hasSelection) {
+        const copyBtn = document.createElement('button')
+        copyBtn.textContent = 'Copy'
+        copyBtn.style.cssText =
+          'width:100%;margin-bottom:4px;padding:4px;border:none;border-radius:4px;background:var(--tok-color-bg-panel);color:var(--tok-color-text);font-size:12px;cursor:pointer;'
+        copyBtn.onclick = (): void => {
+          void navigator.clipboard.writeText(selection)
+          if (document.body.contains(menu)) document.body.removeChild(menu)
+        }
+        menu.appendChild(copyBtn)
+      } else {
+        const pasteBtn = document.createElement('button')
+        pasteBtn.textContent = 'Paste'
+        pasteBtn.style.cssText =
+          'width:100%;padding:4px;border:none;border-radius:4px;background:var(--tok-color-bg-panel);color:var(--tok-color-text);font-size:12px;cursor:pointer;'
+        pasteBtn.onclick = (): void => {
+          void handlePaste()
+          if (document.body.contains(menu)) document.body.removeChild(menu)
+        }
+        menu.appendChild(pasteBtn)
+      }
+
       document.body.appendChild(menu)
-      setTimeout(() => document.body.removeChild(menu), 1200)
+      setTimeout(() => {
+        if (document.body.contains(menu)) document.body.removeChild(menu)
+      }, 2500)
     }
     container.addEventListener('contextmenu', onContextMenu)
 
@@ -506,40 +632,12 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
 
 
     const onPaste = (event: ClipboardEvent): void => {
-
-
-
       const eventTarget = event.target
       const ownsEvent = container.contains(document.activeElement) || (eventTarget instanceof Node && container.contains(eventTarget))
       if (!ownsEvent) return
       event.preventDefault()
       event.stopPropagation()
-
-
-
-
-      if (pasteHasImage(event)) {
-        writePty('\x16')
-        return
-      }
-      const text = event.clipboardData?.getData('text/plain')
-      if (!text) {
-
-
-
-        writePty('\x16')
-        return
-      }
-
-
-
-
-
-
-
-
-
-      term.paste(text)
+      void handlePaste(event)
     }
     container.addEventListener('paste', onPaste, true)
 
@@ -579,6 +677,10 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
             if (isImageFile(file)) {
               const bytes = new Uint8Array(await file.arrayBuffer())
               const ext = file.name.includes('.') ? file.name.split('.').pop()! : file.type.split('/')[1] || 'png'
+              if (attachmentModeRef.current) {
+                await pasteImageToAgent(bytes)
+                continue
+              }
               const saved = await window.api.media.saveBytesScratch(bytes, ext)
               if (saved && 'path' in saved) {
                 writeImagePath(saved, true)
@@ -712,6 +814,8 @@ function TerminalWidget({ id, surface = 'canvas', onProcessExit }: Props): React
         atBottom: activeBuffer.viewportY >= activeBuffer.baseY
       })
       if (writeRaf !== null) { cancelAnimationFrame(writeRaf); writeRaf = null; pendingWrites.length = 0 }
+      if (resizeSendRaf !== null) { cancelAnimationFrame(resizeSendRaf); resizeSendRaf = null }
+      pendingResize = null
       if (resizeRaf !== null) cancelAnimationFrame(resizeRaf)
       resizeAnchorGeneration++
       if (resizeRestoreTimerShort) clearTimeout(resizeRestoreTimerShort)

@@ -1,5 +1,7 @@
 import { CommandError, parseResource } from '../core/index.ts'
+import { isDefaultTerminalTitle } from '../terminalNames.ts'
 import type { CommandDeps } from './index.ts'
+import { failTerminalDispatches } from './orchestration.ts'
 
 function terminalIdOf(target: string): string {
   const parsed = parseResource(target)
@@ -32,6 +34,7 @@ export function registerTerminalCommands({
   core,
   terminals,
   snapshots,
+  orchestration,
   requestWidget,
   requestWidgetRemoval,
   originWidgetId,
@@ -139,7 +142,9 @@ export function registerTerminalCommands({
         if (result.reconnected) {
           return { ok: true, live: true, scrollback: terminals.fullOutput(id) ?? '' }
         }
-        if (saved?.title) terminals.setTitle(id, saved.title)
+        if (saved?.title && saved.title !== id && !isDefaultTerminalTitle(saved.title)) {
+          terminals.setTitle(id, saved.title, { unique: true })
+        }
         return { ok: true, live: false, scrollback: snapshots.scrollback(id) }
       }
     }
@@ -350,6 +355,7 @@ export function registerTerminalCommands({
 
         forgetOrigin(id)
         requestWidgetRemoval(id)
+        failTerminalDispatches({ orchestration }, id)
         return { id }
       }
     }

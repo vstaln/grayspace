@@ -48,4 +48,21 @@ describe('TerminalStreamBatcher (Frame Batching & High-Throughput Protection)', 
 
     batcher.dispose()
   })
+
+  test('accounts multibyte output in bytes without splitting surrogates', () => {
+    const batcher = new TerminalStreamBatcher({ frameIntervalMs: 10_000, maxBatchBytes: 1_000_000, maxPendingBytes: 100 })
+    const batches: Array<{ id: string; chunk: string }> = []
+    batcher.on('batch', (id, chunk) => {
+      batches.push({ id, chunk })
+    })
+
+    batcher.push('term-3', '😀'.repeat(100))
+    batcher.flush('term-3')
+    assert.equal(batches.length, 1)
+    assert.ok(Buffer.byteLength(batches[0].chunk, 'utf8') <= 100)
+    assert.ok(!/[\ud800-\udbff]$/.test(batches[0].chunk))
+    assert.ok(!/^[\udc00-\udfff]/.test(batches[0].chunk))
+
+    batcher.dispose()
+  })
 })

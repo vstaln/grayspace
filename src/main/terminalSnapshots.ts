@@ -104,6 +104,7 @@ export class TerminalSnapshots {
 
   save(input: { id: string; title: string; cwd: string; scrollback: string }): void {
     this.ensure()
+    this.generations.set(input.id, (this.generations.get(input.id) ?? 0) + 1)
     const { text, entry } = this.prepare(input)
     try {
       fs.mkdirSync(this.dir, { recursive: true })
@@ -135,7 +136,8 @@ export class TerminalSnapshots {
 
     if (this.shuttingDown) return
     const { text, entry } = this.prepare(input)
-    const gen = this.generations.get(input.id) ?? 0
+    const gen = (this.generations.get(input.id) ?? 0) + 1
+    this.generations.set(input.id, gen)
     this.index[input.id] = entry
     void (async () => {
       try {
@@ -150,7 +152,9 @@ export class TerminalSnapshots {
         if ((this.generations.get(input.id) ?? 0) !== gen) {
           if (this.index[input.id] === entry) delete this.index[input.id]
           this.scheduleFlush()
-          await fsp.rm(this.scrollbackFile(input.id), { force: true }).catch(() => {})
+          if (this.index[input.id] === undefined || this.index[input.id] === entry) {
+            await fsp.rm(this.scrollbackFile(input.id), { force: true }).catch(() => {})
+          }
         }
       } catch (err) {
 

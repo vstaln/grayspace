@@ -111,11 +111,11 @@ function isLiveRuntime(raw) {
 }
 
 function getDiscoveredTargets() {
-  if (process.env.ORCSPACE_SOCKET_PATH) {
-    return [{ socketPath: process.env.ORCSPACE_SOCKET_PATH }]
-  }
   if (process.env.ORCSPACE_URL) {
     return [{ url: process.env.ORCSPACE_URL.replace(/\/+$/, '') }]
+  }
+  if (process.env.ORCSPACE_SOCKET_PATH) {
+    return [{ socketPath: process.env.ORCSPACE_SOCKET_PATH }]
   }
   if (process.env.WORKSPACE_CONTROL_PORT) {
     const envPort = Number(process.env.WORKSPACE_CONTROL_PORT)
@@ -206,7 +206,15 @@ function parseArgs(argv) {
     const body = arg.slice(2)
     const eq = body.indexOf('=')
     if (eq >= 0) {
-      flags[camel(body.slice(0, eq))] = body.slice(eq + 1)
+      const rawKey = body.slice(0, eq)
+      const rawValue = body.slice(eq + 1)
+      if (rawKey.startsWith('no-')) {
+        const name = camel(rawKey.slice(3))
+        const v = rawValue.toLowerCase()
+        flags[name] = v === 'false' || v === '0' || v === 'no'
+        continue
+      }
+      flags[camel(rawKey)] = rawValue
       continue
     }
     if (body.startsWith('no-')) {
@@ -220,6 +228,10 @@ function parseArgs(argv) {
       flags[camel(body)] = next
       i += 1
     }
+  }
+  for (const key of Object.keys(flags)) {
+    if (flags[key] === 'true') flags[key] = true
+    else if (flags[key] === 'false') flags[key] = false
   }
   return { flags, positional }
 }
@@ -537,7 +549,7 @@ THE OTHER AGENTS & ROSTER
   orc version | orc --version                 print the CLI version
   orc help <command>                          per-command usage, e.g. orc help workers
   orc rename [<worker>] [--name <name>]       rename a terminal (canvas title = worker name)
-  orc tell <worker> "run the tests"           deliver and confirm text in another agent's terminal
+  orc tell <worker> "run the tests"           deliver text; read its answer with worker-read
   Workers are addressed by name anywhere --to is taken: a name, @name, a
   case-insensitive or unambiguous prefix, the terminal id, or "self".
 
@@ -560,8 +572,8 @@ DISPATCH & WORKERS
                               [--terminal <id>] [--command "..."] [--no-inject]
   orc dispatch [<taskId>] --to <terminalId>   dispatch work into an existing terminal
   orc worker-show [<dispatchId>]              view details/preamble of a dispatch
-  orc worker-read [<dispatchId>] [--limit N]  read tail output of a worker terminal
-  orc logs [<dispatchId|terminalId>] [limit]  shortcut to read worker output
+  orc worker-read [<dispatchId|name>] [--limit N]  read tail output of a worker terminal
+  orc logs [<dispatchId|terminalId|name>] [limit]  shortcut to read worker output
   orc worker-release [<dispatchId>] [--close] release worker (optionally close terminal)
   orc worker-retain [<dispatchId>]            retain worker for subsequent tasks
 
@@ -622,8 +634,8 @@ const COMMAND_HELP = {
   'worker-retain': 'orc worker-retain [<dispatchId>] — keep a worker for subsequent tasks.',
   'dispatch-show': 'orc dispatch-show [--task <taskId>] — list dispatches.',
   dispatch: 'orc dispatch [<taskId>] --to <terminalId> — dispatch into an existing terminal.',
-  'worker-read': 'orc worker-read [<dispatchId>] [--limit N] | orc logs [<dispatchId|terminalId>] [limit] — tail worker output.',
-  tell: 'orc tell <worker> "run the tests" — deliver and confirm text in its terminal.',
+  'worker-read': 'orc worker-read [<dispatchId|terminalId|name>] [--limit N] | orc logs [<dispatchId|terminalId|name>] [limit] — tail worker output.',
+  tell: 'orc tell <worker> "run the tests" — deliver text; use `orc worker-read <worker>` to read its answer.',
   rename: 'orc rename [<worker>] [--name <name>] — rename a terminal.',
   check: 'orc check | orc inbox [--wait] [--types ...] [--ack <msgId>] [--all] — read coordinator mail.',
   reply: 'orc reply [<askId>] [<bodyText>] — answer a worker question.',
@@ -740,9 +752,9 @@ async function main(argv) {
         get('/orchestration/workers'),
         get('/orchestration')
       ])
-      const selfWorker = workersData.workers?.find((w) => w.self || w.id === AGENT_ID || w.name === AGENT_ID)
+      const selfWorker = workersData.workers?.find((w) => w.self) ?? workersData.workers?.find((w) => w.id === AGENT_ID)
       const activeDispatch = snapshot.dispatches?.find(
-        (d) => (d.terminalId === AGENT_ID || d.agent === AGENT_ID || d.terminalId === selfWorker?.id) && d.state === 'running'
+        (d) => (d.terminalId === AGENT_ID || d.terminalId === selfWorker?.id) && d.state === 'running'
       )
       const activeTask = activeDispatch ? snapshot.tasks?.find((t) => t.id === activeDispatch.taskId) : null
       const me = {
@@ -775,9 +787,9 @@ async function main(argv) {
         get('/orchestration/workers'),
         get('/orchestration')
       ])
-      const selfWorker = workersData.workers?.find((w) => w.self || w.id === AGENT_ID || w.name === AGENT_ID)
+      const selfWorker = workersData.workers?.find((w) => w.self) ?? workersData.workers?.find((w) => w.id === AGENT_ID)
       const activeDispatch = snapshot.dispatches?.find(
-        (d) => (d.terminalId === AGENT_ID || d.agent === AGENT_ID || d.terminalId === selfWorker?.id) && d.state === 'running'
+        (d) => (d.terminalId === AGENT_ID || d.terminalId === selfWorker?.id) && d.state === 'running'
       )
       const activeTask = activeDispatch ? snapshot.tasks?.find((t) => t.id === activeDispatch.taskId) : null
       const selected = codeWorkspace.workspaces?.find((workspace) => workspace.id === codeWorkspace.activeId)
@@ -980,10 +992,10 @@ async function main(argv) {
       const taskId = require1(pick(flags, 'task', 'taskId', 'id') ?? positional[1], `${command} needs <task-id>`)
       const started = await post('/orchestration/dispatches', {
         taskId,
-        terminalId: pick(flags, 'to', 'terminal', 'terminalId'),
-        agent: pick(flags, 'agent') ?? positional[2],
+        terminalId: pick(flags, 'to', 'terminal', 'terminalId') ?? (command === 'dispatch' ? positional[2] : undefined),
+        agent: pick(flags, 'agent') ?? (command === 'worker-start' ? positional[2] : undefined),
         command: pick(flags, 'command'),
-        inject: flags.inject === false ? false : undefined
+        inject: flags.inject === false || flags.inject === 'false' ? false : undefined
       })
       return emit(
         started,
@@ -1021,7 +1033,7 @@ async function main(argv) {
     case 'worker-read':
     case 'logs':
     case 'tail': {
-      const target = require1(pick(flags, 'dispatch', 'dispatchId', 'id', 'terminal') ?? positional[1], `${command} needs <dispatch-id|terminal-id>`)
+      const target = require1(pick(flags, 'dispatch', 'dispatchId', 'id', 'terminal') ?? positional[1], `${command} needs <dispatch-id|terminal-id|name>`)
       let terminalId = target
       if (target.startsWith('disp-')) {
         let found
@@ -1033,8 +1045,11 @@ async function main(argv) {
           const data = await get('/orchestration/dispatches')
           found = data.dispatches.find((d) => d.id === target)
         }
-        if (!found) throw new OrcError(`no dispatch "${target}"`, 'not_found')
-        terminalId = found.terminalId
+        if (found) {
+          terminalId = found.terminalId
+        } else if (!/^[A-Za-z0-9_-]{1,128}$/.test(target)) {
+          throw new OrcError(`no dispatch "${target}"`, 'not_found')
+        }
       }
       const limitLines = Math.max(0, int(pick(flags, 'limit') ?? positional[2], 50))
       const output = await get(`/terminal/${enc(terminalId)}/output`, { full: '1' })
@@ -1173,7 +1188,7 @@ async function main(argv) {
             ? d.messages.map(messageLine).join('\n')
             : d.waited
               ? '  (nothing arrived before the timeout)'
-              : '  (inbox empty)'
+              : '  (inbox empty — replies to `orc tell` stay in that terminal; use `orc worker-read <name>`)'
         )
       } finally {
         stop()
@@ -1246,12 +1261,15 @@ async function main(argv) {
       const text = require1(pick(flags, 'text', 'message', 'body') ?? positional[2], 'tell needs "text to type"')
       return emit(
         await post('/orchestration/workers/tell', { to, text }),
-        (result) => `delivered to ${to} (${result.delivery?.id ?? 'confirmed'})`
+        (result) => `delivered to ${to} (${result.delivery?.id ?? 'confirmed'})\nread the answer with: orc worker-read ${to}`
       )
     }
 
     case 'reset':
       requireConfirm(flags, 'reset')
+      if (flags.tasks !== true && flags.messages !== true && flags.all !== true) {
+        throw new OrcError('reset needs --tasks, --messages or --all', 'invalid')
+      }
       return emit(
         await post('/orchestration/reset', {
           tasks: flags.tasks === true,
@@ -1447,7 +1465,7 @@ const enc = (s) => encodeURIComponent(String(s))
 const num = (v) => (v === undefined ? undefined : Number(v))
 
 function requireConfirm(flags, action, id) {
-  if (flags.yes === true || !process.stdin.isTTY) return
+  if (flags.yes === true || flags.yes === 'true') return
   const label = id ? `${action} ${id}` : action
   throw new OrcError(` destructive: ${label} — add --yes to confirm`, 'needs_confirm')
 }

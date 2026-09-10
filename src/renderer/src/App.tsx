@@ -1,11 +1,13 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import Sidebar from './components/Sidebar'
-import WidgetFrame from './components/WidgetFrame'
+import Sidebar, { SettingsModal } from './components/Sidebar'
+import WidgetFrame, { forgetAgentSelection } from './components/WidgetFrame'
+import { forgetTerminalViewport } from './components/TerminalWidget'
+import { clearInitialCommand } from './lib/pendingTerminalCommands'
 import ContextMenu from './components/ContextMenu'
 import TitleBar from './components/TitleBar'
 import type { WorkView } from './components/TitleBar'
 import { useCanvas } from './hooks/useCanvas'
-import { Camera, MIN_H, MIN_W, NON_MAXIMIZABLE, Point, ResizeDir, Widget, WidgetKind, WIDGET_DEFAULTS, WIDGET_H, WIDGET_W } from './types'
+import { Camera, MIN_H, MIN_W, NON_MAXIMIZABLE, Point, ResizeDir, WidgetKind, WIDGET_DEFAULTS, WIDGET_H, WIDGET_W } from './types'
 import ErrorBoundary from './components/ErrorBoundary'
 import StrokesLayer from './components/StrokesLayer'
 import ConnectionsLayer from './components/ConnectionsLayer'
@@ -15,6 +17,7 @@ import { useSettings } from './hooks/useSettings'
 import { DRAW_CLICK_THRESHOLD_PX } from './lib/canvasMetrics'
 import { ToastContainer, usePersistErrorToasts, useToasts } from './components/Toast'
 import Toolbar from './components/Toolbar'
+import { queueInitialCommand } from './lib/pendingTerminalCommands'
 
 
 
@@ -90,20 +93,34 @@ export default function App(): React.JSX.Element {
   const showView = useCallback((view: WorkView): void => {
     if (view === 'code') setCodeStarted(true)
     setActiveView(view)
-
-
+    if (typeof window.api.code.saveSync === 'function') {
+      try { window.api.code.saveSync({ activeView: view, codeWorkspaceId: codeWorkspaceIdRef.current }) } catch {}
+    }
     void window.api.code.save({ activeView: view, codeWorkspaceId: codeWorkspaceIdRef.current }).catch(() => {})
   }, [])
 
   useEffect(() => {
-    const onMissionView = (event: Event): void => {
-      const view = (event as CustomEvent<{ view?: WorkView }>).detail?.view
-      if (view !== 'canvas') return
-      setActiveView(view)
-      void window.api.code.save({ activeView: view, codeWorkspaceId: codeWorkspaceIdRef.current }).catch(() => {})
+    const onBeforeUnload = (): void => {
+      if (typeof window.api.code.saveSync === 'function') {
+        try {
+          window.api.code.saveSync({ activeView, codeWorkspaceId: codeWorkspaceIdRef.current })
+        } catch {}
+      }
     }
-    window.addEventListener('orcspace:mission-view', onMissionView)
-    return () => window.removeEventListener('orcspace:mission-view', onMissionView)
+    window.addEventListener('beforeunload', onBeforeUnload)
+    window.addEventListener('pagehide', onBeforeUnload)
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      window.removeEventListener('pagehide', onBeforeUnload)
+    }
+  }, [activeView])
+
+  useEffect(() => {
+    const onToggle = (): void => {
+      setCodeSidebarCollapsed((prev) => !prev)
+    }
+    window.addEventListener('orcspace:toggle-left-panel', onToggle)
+    return () => window.removeEventListener('orcspace:toggle-left-panel', onToggle)
   }, [])
 
   const { toasts, push, dismiss } = useToasts()
@@ -115,7 +132,13 @@ export default function App(): React.JSX.Element {
         <ConfirmProvider>
           <div className="relative flex h-full flex-col">
             <Wallpaper />
-            <TitleBar activeView={activeView} onViewChange={showView} />
+            <TitleBar
+              activeView={activeView}
+              onViewChange={showView}
+              sidebarCollapsed={codeSidebarCollapsed}
+              onToggleSidebar={() => setCodeSidebarCollapsed((collapsed) => !collapsed)}
+            />
+            <SettingsModal listenForToolbar />
             <div className="flex flex-1 flex-col">
               <ErrorBoundary>
                 <OrcSpaceCanvas
@@ -168,7 +191,7 @@ function Wallpaper(): React.JSX.Element | null {
         {dimRatio > 0 && (
           <div
             className="wallpaper-dim"
-            style={{ backgroundColor: `rgba(8, 9, 11, ${dimRatio})` }}
+            style={{ backgroundColor: `rgba(8, 8, 8, ${dimRatio})` }}
           />
         )}
       </div>
@@ -198,7 +221,7 @@ function OrcSpaceCanvas({
   sidebarCollapsed: boolean
   onToggleSidebar(): void
 }): React.JSX.Element {
-  const { settings } = useSettings()
+  const { settings, update: updateSettings } = useSettings()
   const canvas = useCanvas()
   const {
     widgets,
@@ -211,9 +234,7 @@ function OrcSpaceCanvas({
     strokes,
     strokeColor,
     setStrokeColor,
-    connections,
-    connectWidgets,
-    disconnectWidgets
+    connections
   } = canvas
   const confirm = useConfirm()
   const mainRef = useRef<HTMLElement>(null)
@@ -227,7 +248,7 @@ function OrcSpaceCanvas({
     const measure = (): void => {
       const r = el.getBoundingClientRect()
       mainOffsetRef.current = { left: r.left, top: r.top }
-      setMainSize({ w: r.width, h: r.height })
+      setMainSize((prev) => (prev.w === r.width && prev.h === r.height ? prev : { w: r.width, h: r.height }))
     }
     measure()
     const ro = new ResizeObserver(measure)
@@ -320,6 +341,9 @@ function OrcSpaceCanvas({
 
       canvas.removeWidget(id)
       setEditingId((cur) => (cur === id ? null : cur))
+      forgetAgentSelection(id)
+      clearInitialCommand(id)
+      forgetTerminalViewport(id)
 
 
       handlerCacheRef.current.delete(id)
@@ -389,108 +413,25 @@ function OrcSpaceCanvas({
     [canvas.addWidget, clampToVisibleWorld]
   )
 
-  const missionLinksRef = useRef(new Map<string, { plannerId: string; terminalId: string; positioned: boolean }>())
-  const missionPlannerByPlanRef = useRef(new Map<string, string>())
+  const createWidgetFromCommand = useCallback((kind: WidgetKind, initialCommand: string): void => {
+    const cx = mainSize.w > 0 ? mainSize.w / 2 : window.innerWidth / 2
+    const cy = mainSize.h > 0 ? mainSize.h / 2 : window.innerHeight / 2
+    const center = toWorld(cx, cy)
+    const defaults = WIDGET_DEFAULTS[kind]
+    const id = placeWidget(kind, {
+      x: center.x - defaults.w / 2,
+      y: center.y - defaults.h / 2
+    })
+    if (id && kind === 'terminal' && initialCommand) queueInitialCommand(id, initialCommand)
+  }, [mainSize.h, mainSize.w, placeWidget, toWorld])
 
 
 
 
 
-  useEffect(() => {
-    const ensurePlanner = (planId: string | undefined, missionId: string | undefined, title: string | undefined, anchorTerminalId?: string): string => {
-      const existingForPlan = planId ? missionPlannerByPlanRef.current.get(planId) : undefined
-      const existingPlanner = widgetsRef.current.find((widget) => widget.kind === 'planner')
-      const plannerId = existingForPlan || existingPlanner?.id || `mission-planner-${planId || missionId || Date.now()}`
-      const anchor = anchorTerminalId ? widgetsRef.current.find((widget) => widget.id === anchorTerminalId) : undefined
-      const center = toWorld(
-        mainSize.w > 0 ? mainSize.w / 2 : window.innerWidth / 2,
-        mainSize.h > 0 ? mainSize.h / 2 : window.innerHeight / 2
-      )
-      const planner = widgetsRef.current.find((widget) => widget.id === plannerId)
-      if (!planner) {
-        const plannerTitle = title ? (title.startsWith('Mission ·') ? title : `Mission · ${title}`) : 'Mission Planner'
-        placeWidget(
-          'planner',
-          anchor
-            ? { x: anchor.x + anchor.w + 80, y: anchor.y }
-            : { x: center.x - WIDGET_DEFAULTS.planner.w / 2, y: center.y - WIDGET_DEFAULTS.planner.h / 2 },
-          plannerId,
-          plannerTitle
-        )
-      }
-      if (planId) missionPlannerByPlanRef.current.set(planId, plannerId)
-      return plannerId
-    }
 
-    const onMissionPlan = (event: Event): void => {
-      const detail = (event as CustomEvent<{ planId?: string; title?: string; anchorTerminalId?: string }>).detail
-      if (!detail?.planId) return
-      ensurePlanner(detail.planId, undefined, detail.title, detail.anchorTerminalId)
-    }
-    const onMissionStart = (event: Event): void => {
-      const detail = (event as CustomEvent<{
-        missionId?: string
-        planId?: string
-        title?: string
-        terminalId?: string
-      }>).detail
-      if (!detail?.missionId || !detail.terminalId) return
-      if (missionLinksRef.current.has(detail.missionId)) return
-      const plannerId = ensurePlanner(detail.planId, detail.missionId, detail.title)
-      missionLinksRef.current.set(detail.missionId, {
-        plannerId,
-        terminalId: detail.terminalId,
-        positioned: false
-      })
-    }
-    window.addEventListener('orcspace:mission-plan', onMissionPlan)
-    window.addEventListener('orcspace:mission-start', onMissionStart)
-    const onMissionWorker = (event: Event): void => {
-      const detail = (event as CustomEvent<{ planId?: string; terminalId?: string }>).detail
-      if (!detail?.planId || !detail.terminalId) return
-      const plannerId = missionPlannerByPlanRef.current.get(detail.planId)
-      if (plannerId) connectWidgets(plannerId, detail.terminalId)
-    }
-    window.addEventListener('orcspace:mission-worker', onMissionWorker)
-    return () => {
-      window.removeEventListener('orcspace:mission-plan', onMissionPlan)
-      window.removeEventListener('orcspace:mission-start', onMissionStart)
-      window.removeEventListener('orcspace:mission-worker', onMissionWorker)
-    }
-  }, [connectWidgets, mainSize.h, mainSize.w, placeWidget, toWorld])
 
-  useEffect(() => {
-    for (const link of missionLinksRef.current.values()) {
-      const planner = widgets.find((widget) => widget.id === link.plannerId)
-      const terminal = widgets.find((widget) => widget.id === link.terminalId)
-      if (!planner || !terminal) continue
-      if (!link.positioned) {
-        canvas.updateWidget(link.terminalId, {
-          x: planner.x + planner.w + 80,
-          y: planner.y + 35
-        })
-        link.positioned = true
-      }
-      connectWidgets(link.plannerId, link.terminalId)
-    }
-  }, [canvas.updateWidget, connectWidgets, widgets])
 
-  useEffect(() => {
-    const onConnect = (event: Event): void => {
-      const detail = (event as CustomEvent<{ controllerId?: string; terminalId?: string }>).detail
-      if (detail?.controllerId && detail.terminalId) connectWidgets(detail.controllerId, detail.terminalId)
-    }
-    const onDisconnect = (event: Event): void => {
-      const detail = (event as CustomEvent<{ controllerId?: string; terminalId?: string }>).detail
-      if (detail?.controllerId) disconnectWidgets(detail.controllerId, detail.terminalId)
-    }
-    window.addEventListener('orcspace:mission-connect', onConnect)
-    window.addEventListener('orcspace:mission-disconnect', onDisconnect)
-    return () => {
-      window.removeEventListener('orcspace:mission-connect', onConnect)
-      window.removeEventListener('orcspace:mission-disconnect', onDisconnect)
-    }
-  }, [connectWidgets, disconnectWidgets])
 
 
 
@@ -500,6 +441,26 @@ function OrcSpaceCanvas({
 
     void window.api.workspace.pickDir().catch((err) => console.warn('workspace:pickDir failed', err))
   }, [])
+
+  const terminalOptions = useMemo(
+    () => widgets
+      .filter((widget) => !widget.kind || widget.kind === 'terminal')
+      .sort((a, b) => b.z - a.z)
+      .map((widget) => ({ id: widget.id, title: widget.title || 'Terminal' })),
+    [widgets]
+  )
+
+  const onSubmitCommand = useCallback((id: string, command: string, mode: 'command' | 'message'): void => {
+    void window.api.terminal.write(id, mode === 'message' ? command : `${command}\r`).then((result) => {
+      if (result && 'error' in result) setCanvasNotice(result.error)
+    }).catch((error) => {
+      setCanvasNotice(error instanceof Error ? error.message : String(error))
+    })
+  }, [])
+
+  const onTargetTerminalChange = useCallback((id: string): void => {
+    void updateSettings({ targetTerminalId: id || null })
+  }, [updateSettings])
 
 
 
@@ -517,6 +478,11 @@ function OrcSpaceCanvas({
       canvas.bringToFront(id)
       const widget = widgetsRef.current.find((w) => w.id === id)
       if (!widget || widget.maximized) return
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId)
+      } catch {
+
+      }
 
       const startX = e.clientX
       const startY = e.clientY
@@ -534,13 +500,18 @@ function OrcSpaceCanvas({
       }
       trackDrag(onMove)
     },
-    [canvas]
+    [canvas.bringToFront, canvas.updateWidget]
   )
 
   const onResizeStart = useCallback(
     (e: React.PointerEvent, id: string, dir: ResizeDir): void => {
       e.preventDefault()
       e.stopPropagation()
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId)
+      } catch {
+
+      }
       canvas.bringToFront(id)
       const widget = widgetsRef.current.find((w) => w.id === id)
       if (!widget || widget.maximized) return
@@ -578,11 +549,10 @@ function OrcSpaceCanvas({
         }
         canvas.updateWidget(id, { x, y, w, h })
       }
-      trackDrag(onMove)
+      trackDrag(onMove, undefined, e.pointerId)
     },
-    [canvas]
+    [canvas.bringToFront, canvas.updateWidget]
   )
-
 
   const onWidgetFocus = useCallback((id: string): void => canvas.bringToFront(id), [canvas.bringToFront])
   const cancelledEditRef = useRef<string | null>(null)
@@ -750,7 +720,7 @@ function OrcSpaceCanvas({
         })
       }
     },
-    [canvas]
+    [canvas.bringToFront, canvas.updateWidget, onWidgetClose]
   )
 
 
@@ -1009,45 +979,94 @@ function OrcSpaceCanvas({
     e.preventDefault()
   }
 
+  const deliverWhenMounted = useCallback(
+    (widgetId: string, deliver: () => void, onDelivered: () => void, onFailed: () => void): void => {
+      let attempts = 0
+      const timer = window.setInterval(() => {
+        attempts += 1
+        if (widgetsRef.current.some((w) => w.id === widgetId)) {
+          window.clearInterval(timer)
+          deliver()
+          onDelivered()
+        } else if (attempts >= 10) {
+          window.clearInterval(timer)
+          onFailed()
+        }
+      }, 100)
+    },
+    []
+  )
+
   const onCanvasDrop = async (e: React.DragEvent): Promise<void> => {
     e.preventDefault()
     if (!e.dataTransfer || !e.dataTransfer.files.length) return
 
-
+    const dropPoint = toWorld(e.clientX, e.clientY)
+    const shortName = (name: string): string => (name.length > 80 ? `${name.slice(0, 77)}…` : name)
     const files = Array.from(e.dataTransfer.files)
     for (const file of files) {
+      const ext = file.name.includes('.') ? file.name.split('.').pop()!.toLowerCase() : file.type.split('/')[1] || 'bin'
+      const isAudio = file.type.startsWith('audio/') || /^(mp3|wav|ogg|oga|flac|aac|m4a|opus|weba|wma)$/i.test(ext)
+      const isVideo = file.type.startsWith('video/') || /^(mp4|m4v|webm|mkv|mov|avi|wmv|flv|ogv|mpg|mpeg)$/i.test(ext)
+      const isImage = file.type.startsWith('image/') || /^(png|jpe?g|gif|webp|avif|bmp|svg|ico|tif|tiff|heic)$/i.test(ext)
+      const isPdf = ext === 'pdf' || file.type === 'application/pdf'
+      const isTextDoc = /^(txt|md|markdown|json|csv|tsv|yaml|yml|xml|html?|log|js|ts|jsx|tsx|py|sh|bat|cmd|ps1)$/i.test(ext)
+      const mediaKind = isImage ? 'image' : isVideo ? 'video' : isAudio ? 'audio' : isPdf ? 'pdf' : isTextDoc ? 'text' : 'doc'
 
-      if (file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|tiff?)$/i.test(file.name)) {
-        try {
-          const arrayBuffer = await file.arrayBuffer()
-          const bytes = new Uint8Array(arrayBuffer)
-          const ext = file.name.includes('.') ? file.name.split('.').pop()! : file.type.split('/')[1] || 'png'
-
-
-          const saved = await window.api.media.saveBytes(bytes, ext)
-          if (saved && 'error' in saved) {
-            setCanvasNotice(`Failed to save image: ${saved.error}`)
-            continue
-          }
-          if (saved && 'path' in saved) {
-
-            const point = toWorld(e.clientX, e.clientY)
-
-
-
-            const widgetId = placeWidget('browser', point)
+      try {
+        const arrayBuffer = await file.arrayBuffer()
+        const bytes = new Uint8Array(arrayBuffer)
+        const saved = await window.api.media.saveBytes(bytes, ext)
+        if (saved && 'error' in saved) {
+          setCanvasNotice(`Failed to save file: ${saved.error}`)
+          continue
+        }
+        if (saved && 'path' in saved) {
+          if (isAudio) {
+            const existingPlayer = widgetsRef.current.find((w) => w.kind === 'music-player')
+            const track = {
+              id: crypto.randomUUID(),
+              url: `orc://media/${saved.name}`,
+              title: file.name.replace(/\.[a-z0-9]+$/i, ''),
+              provider: 'audio' as const
+            }
+            if (existingPlayer) {
+              window.dispatchEvent(new CustomEvent('orcspace:add-music-track', {
+                detail: { widgetId: existingPlayer.id, track }
+              }))
+              setCanvasNotice(`Added "${shortName(file.name)}" to music player`)
+            } else {
+              const widgetId = placeWidget('music-player', dropPoint)
+              if (widgetId) {
+                deliverWhenMounted(
+                  widgetId,
+                  () => window.dispatchEvent(new CustomEvent('orcspace:add-music-track', {
+                    detail: { widgetId, track }
+                  })),
+                  () => setCanvasNotice(`Added "${shortName(file.name)}" to music player`),
+                  () => setCanvasNotice(`Failed to open "${shortName(file.name)}"`)
+                )
+              }
+            }
+          } else {
+            const widgetId = placeWidget('browser', dropPoint)
             if (widgetId) {
-              window.setTimeout(() => {
-                window.dispatchEvent(new CustomEvent('orcspace:open-image', {
-                  detail: { widgetId, path: saved.path, name: file.name }
-                }))
-              }, 0)
+              const mediaUrl = `orc://media/${saved.name}`
+              const kind = mediaKind
+              deliverWhenMounted(
+                widgetId,
+                () => window.dispatchEvent(new CustomEvent('orcspace:open-media', {
+                  detail: { widgetId, path: saved.path, name: file.name, mediaUrl, kind }
+                })),
+                () => setCanvasNotice(`Opened "${shortName(file.name)}"`),
+                () => setCanvasNotice(`Failed to open "${shortName(file.name)}"`)
+              )
             }
           }
-        } catch (err) {
-          console.error('Failed to save dropped image:', err)
-          setCanvasNotice(`Failed to save image: ${err instanceof Error ? err.message : String(err)}`)
         }
+      } catch (err) {
+        console.error('Failed to handle dropped file:', err)
+        setCanvasNotice(`Failed to open file: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
   }
@@ -1100,19 +1119,22 @@ function OrcSpaceCanvas({
 
 
 
-  const widgetStyle = (w: Widget): React.CSSProperties => ({
-    left: w.x,
-    top: w.y,
-    width: w.w,
-    height: w.h,
-    zIndex: w.z
-  })
-
-
-
-
   const maximizedWidgets = useMemo(() => widgets.filter((w) => w.maximized), [widgets])
   const inWorldWidgets = useMemo(() => renderableWidgets.filter((w) => !w.maximized), [renderableWidgets])
+
+  const widgetStyles = useMemo(() => {
+    const styles = new Map<string, React.CSSProperties>()
+    for (const widget of inWorldWidgets) {
+      styles.set(widget.id, {
+        left: widget.x,
+        top: widget.y,
+        width: widget.w,
+        height: widget.h,
+        zIndex: widget.z
+      })
+    }
+    return styles
+  }, [inWorldWidgets])
 
 
 
@@ -1167,13 +1189,15 @@ function OrcSpaceCanvas({
 
   return (
     <div className="relative flex flex-1 overflow-hidden">
-      <Sidebar
-        workspaceDir={workspaceDir}
-        activeView={activeView}
-        onPickDir={onPickDir}
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={onToggleSidebar}
-      />
+      {activeView !== 'canvas' && (
+        <Sidebar
+          workspaceDir={workspaceDir}
+          activeView={activeView}
+          onPickDir={onPickDir}
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={onToggleSidebar}
+        />
+      )}
       <div className={active ? 'contents' : 'contents invisible pointer-events-none'} aria-hidden={!active} inert={!active}>
           <main
           ref={mainRef}
@@ -1218,7 +1242,7 @@ function OrcSpaceCanvas({
           >
             <div className="rounded-[14px] border border-line-soft bg-bg-panel/80 px-6 py-5 text-center shadow-xl backdrop-blur-md">
               <div className="mb-1 text-sm font-medium text-text">Your canvas is clear</div>
-              <div className="mb-3 text-[11px] text-text-faint">Right-click anywhere to add a widget</div>
+              <div className="mb-3 text-[11px] text-text-faint">Use the command bar below: /terminal, .files, @planner, or plain terminal</div>
               <button
                 type="button"
                 className="pointer-events-auto rounded-[8px] bg-accent px-3 py-1.5 text-[11px] font-medium text-bg hover:opacity-90"
@@ -1257,7 +1281,7 @@ function OrcSpaceCanvas({
               widget={w}
               active={w.z === topZ.current}
               editing={editingId === w.id}
-              style={widgetStyle(w)}
+              style={widgetStyles.get(w.id)!}
               {...widgetHandlers(w.id)}
               workspaceDir={workspaceDir}
             />
@@ -1292,7 +1316,6 @@ function OrcSpaceCanvas({
             onPickSysMonitor={() => { placeWidget('sys-monitor', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickTimer={() => { placeWidget('timer', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickPlanner={() => { placeWidget('planner', toWorld(menu.x, menu.y)); setMenu(null) }}
-            onPickMission={() => { placeWidget('mission', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickOrchestration={() => { placeWidget('orchestration', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickBrowser={() => { placeWidget('browser', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickLinks={() => { placeWidget('links', toWorld(menu.x, menu.y)); setMenu(null) }}
@@ -1314,6 +1337,14 @@ function OrcSpaceCanvas({
         }}
         strokeColor={strokeColor}
         onStrokeColorChange={setStrokeColor}
+        workspaceDir={workspaceDir}
+        onPickDir={onPickDir}
+        terminals={terminalOptions}
+        targetTerminalId={settings.targetTerminalId}
+        commandPrefix={settings.commandPrefix}
+        onTargetTerminalChange={onTargetTerminalChange}
+        onCreateWidget={createWidgetFromCommand}
+        onSubmitCommand={onSubmitCommand}
       />
       </div>
     </div>
@@ -1326,7 +1357,7 @@ function OrcSpaceCanvas({
 
 
 
-function trackDrag(onMove: (e: PointerEvent) => void, onEnd?: () => void): void {
+function trackDrag(onMove: (e: PointerEvent) => void, onEnd?: () => void, pointerId?: number): void {
   let released = false
   document.body.classList.add('is-dragging')
   const release = (): void => {
@@ -1340,12 +1371,16 @@ function trackDrag(onMove: (e: PointerEvent) => void, onEnd?: () => void): void 
     onEnd?.()
   }
   const move = (event: PointerEvent): void => {
-
+    if (pointerId !== undefined && event.pointerId !== pointerId) return
     if (event.buttons === 0) { release(); return }
     onMove(event)
   }
+  const up = (event: PointerEvent): void => {
+    if (pointerId !== undefined && event.pointerId !== pointerId) return
+    release()
+  }
   window.addEventListener('pointermove', move)
-  window.addEventListener('pointerup', release)
+  window.addEventListener('pointerup', up)
 
 
 

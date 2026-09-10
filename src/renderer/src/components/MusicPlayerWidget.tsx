@@ -6,6 +6,7 @@ import {
   provider,
   sanitizeAudioSrc,
   spotifyEmbed,
+  SUPPORTED_AUDIO_EXTS,
   titleFor,
   videoId,
   yandexEmbed,
@@ -137,9 +138,28 @@ function read(key: string): Playlist[] {
 
 export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): React.JSX.Element {
   const key = `orcspace-music-playlists:${widgetId}`
+  const idxKey = `orcspace-music-index:${widgetId}`
   const [lists, setLists] = useState(() => read(key))
-  const [listIndex, setListIndex] = useState(0)
-  const [trackIndex, setTrackIndex] = useState(0)
+  // Manual-start only: never autoplay after mount/restart. `playing` always
+  // starts false and `userWantsPlayRef` only flips on an explicit user gesture.
+  const [listIndex, setListIndex] = useState(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(idxKey) || 'null') as { list?: number; track?: number } | null
+      const li = typeof raw?.list === 'number' && Number.isFinite(raw.list) ? Math.max(0, Math.floor(raw.list)) : 0
+      return li
+    } catch {
+      return 0
+    }
+  })
+  const [trackIndex, setTrackIndex] = useState(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(idxKey) || 'null') as { list?: number; track?: number } | null
+      const ti = typeof raw?.track === 'number' && Number.isFinite(raw.track) ? Math.max(0, Math.floor(raw.track)) : 0
+      return ti
+    } catch {
+      return 0
+    }
+  })
   const [draft, setDraft] = useState('')
   const [name, setName] = useState('')
   const [playing, setPlaying] = useState(false)
@@ -173,6 +193,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
   const barRef = useRef<HTMLDivElement>(null)
   const dragging = useRef(false)
   const aliveRef = useRef(true)
+  const userWantsPlayRef = useRef(false)
   const list = lists[listIndex] ?? lists[0]
   const track = list?.tracks[trackIndex]
   const id = track?.provider === 'youtube' ? videoId(track.url) : null
@@ -182,9 +203,47 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
   }, [list])
   useEffect(() => {
     try {
-      localStorage.setItem(key, JSON.stringify(lists))
+      const persistable = lists.map((pl) => ({
+        ...pl,
+        tracks: pl.tracks
+          .filter((t) => !t.url.startsWith('data:') && t.url.length < 2000 && t.title.length < 500)
+          .slice(0, 200)
+      }))
+      localStorage.setItem(key, JSON.stringify(persistable))
     } catch {}
   }, [key, lists])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(idxKey, JSON.stringify({ list: listIndex, track: trackIndex }))
+    } catch {}
+  }, [idxKey, listIndex, trackIndex])
+
+  // Clamp restored indices (lists may differ in length after restart).
+  useEffect(() => {
+    if (listIndex >= lists.length) {
+      setListIndex(0)
+      setTrackIndex(0)
+      return
+    }
+    const count = lists[listIndex]?.tracks.length ?? 0
+    if (trackIndex >= Math.max(count, 1)) setTrackIndex(0)
+  }, [lists.length, listIndex, trackIndex, lists])
+
+  useEffect(() => {
+    const handleAddTrack = (e: Event): void => {
+      const detail = (e as CustomEvent<{ widgetId?: string; track?: Track }>).detail
+      if (detail && (!detail.widgetId || detail.widgetId === widgetId) && detail.track) {
+        setLists((prev) =>
+          prev.map((pl, idx) =>
+            idx === listIndex ? { ...pl, tracks: [...pl.tracks, detail.track!] } : pl
+          )
+        )
+      }
+    }
+    window.addEventListener('orcspace:add-music-track', handleAddTrack)
+    return () => window.removeEventListener('orcspace:add-music-track', handleAddTrack)
+  }, [widgetId, listIndex])
 
 
 
@@ -227,7 +286,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
 
           host: 'https://www.youtube-nocookie.com',
           playerVars: {
-            autoplay: 1,
+            autoplay: 0,
             controls: 0,
             rel: 0,
             playsinline: 1,
@@ -249,7 +308,9 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
                   p.unMute()
                   p.setVolume(volume)
                 }
-                p.playVideo()
+                if (userWantsPlayRef.current) {
+                  p.playVideo()
+                }
               } catch {}
               try {
                 const info = p.getVideoData?.()
@@ -275,6 +336,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
             onStateChange: (e) => {
               if (cancelled) return
               if (e.data === api.PlayerState.PLAYING) {
+                userWantsPlayRef.current = true
                 setPlaying(true)
                 setYtError(null)
                 setMediaError(null)
@@ -283,13 +345,16 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
                   if (Number.isFinite(dur) && dur > 0) setDuration(dur)
                 } catch {}
               } else if (e.data === api.PlayerState.PAUSED) {
+                userWantsPlayRef.current = false
                 setPlaying(false)
               } else if (e.data === api.PlayerState.ENDED) {
                 setPlaying(false)
                 if ((listRef.current?.tracks.length ?? 0) <= 1) {
                   try {
                     p.seekTo(0, true)
-                    p.playVideo()
+                    if (userWantsPlayRef.current) {
+                      p.playVideo()
+                    }
                   } catch {}
                 } else {
                   advance(1)
@@ -441,7 +506,17 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
     }
   }
 
+  useEffect(() => {
+    if (track?.provider === 'audio' && userWantsPlayRef.current) {
+      const a = audioRef.current
+      if (a && a.paused) {
+        void a.play().catch(() => {})
+      }
+    }
+  }, [track?.id, trackIndex])
+
   const stop = (): void => {
+    userWantsPlayRef.current = false
     if (track?.provider === 'audio') {
       const a = audioRef.current
       if (a) {
@@ -464,20 +539,27 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
       const a = audioRef.current
       if (!a) return
       if (a.paused) {
+        userWantsPlayRef.current = true
         void a.play().catch(() => setMediaError('Playback was blocked — press play again.'))
       } else {
+        userWantsPlayRef.current = false
         a.pause()
       }
     } else if (player.current && ready) {
       try {
         if (playing) {
+          userWantsPlayRef.current = false
           player.current.pauseVideo()
           setPlaying(false)
         } else {
+          userWantsPlayRef.current = true
           player.current.playVideo()
           setPlaying(true)
         }
       } catch {}
+    } else if (track?.provider === 'youtube' && !ready) {
+      userWantsPlayRef.current = !playing
+      setPlaying(!playing)
     }
   }
 
@@ -531,6 +613,14 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
   const addTrack = (e: React.FormEvent): void => {
     e.preventDefault()
     const url = draft.trim()
+    if (url.startsWith('data:')) {
+      setMediaError('Pasting raw audio data is not supported — drop the audio file on the canvas instead.')
+      return
+    }
+    if (url.length > 2000) {
+      setMediaError('Link is too long — use a direct audio-file URL.')
+      return
+    }
     const kind = provider(url)
     if (!list) return
     if (!kind) {
@@ -577,12 +667,77 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
 
   if (!list) return <div className="p-4 text-xs text-text-faint">Create a playlist to start.</div>
 
-  const embed = track ? (track.provider === 'yandex' ? yandexEmbed(track.url) : track.provider === 'spotify' ? spotifyEmbed(track.url) : null) : null
+  const rawEmbed = track ? (track.provider === 'yandex' ? yandexEmbed(track.url) : track.provider === 'spotify' ? spotifyEmbed(track.url) : null) : null
+  const embed =
+    rawEmbed &&
+    (rawEmbed.startsWith('https://open.spotify.com/embed/') || rawEmbed.startsWith('https://music.yandex.ru/iframe/'))
+      ? rawEmbed
+      : null
 
   const providerLabel = track?.provider === 'youtube' ? 'YouTube' : track?.provider === 'yandex' ? 'Yandex Music' : track?.provider === 'spotify' ? 'Spotify' : 'Audio file'
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden p-3" data-testid="music-player-widget">
+    <div
+      className="flex h-full min-h-0 flex-col gap-3 overflow-hidden p-3"
+      data-testid="music-player-widget"
+      onDragOver={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+      }}
+      onDrop={async (e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        if (!e.dataTransfer) return
+        const dt = e.dataTransfer
+        const text = dt.getData('text/plain')
+        if (text && provider(text)) {
+          const kind = provider(text)!
+          const item: Track = { id: crypto.randomUUID(), url: text.trim(), provider: kind, title: titleFor(kind, text) }
+          setLists((prev) => prev.map((pl, idx) => (idx === listIndex ? { ...pl, tracks: [...pl.tracks, item] } : pl)))
+          void fetchTrackTitle(kind, text).then((fetched) => {
+            if (aliveRef.current && fetched) {
+              setLists((prev) =>
+                prev.map((pl) => ({ ...pl, tracks: pl.tracks.map((t) => (t.id === item.id ? { ...t, title: fetched } : t)) }))
+              )
+            }
+          })
+        }
+        if (dt.files && dt.files.length > 0) {
+          for (const file of Array.from(dt.files)) {
+            const ext = (file.name.includes('.') ? file.name.split('.').pop()! : '').toLowerCase()
+            const isAudioFile = file.type.startsWith('audio/') || SUPPORTED_AUDIO_EXTS.has(ext)
+            if (!isAudioFile) {
+              setMediaError(`"${file.name}" is not audio — drop video/docs on the canvas to open them in a viewer.`)
+              continue
+            }
+            const extSafe = ext || (
+              file.type === 'audio/wav' || file.type === 'audio/x-wav' ? 'wav'
+              : file.type === 'audio/ogg' ? 'ogg'
+              : file.type === 'audio/flac' ? 'flac'
+              : file.type === 'audio/mp4' || file.type === 'audio/x-m4a' ? 'm4a'
+              : file.type === 'audio/webm' ? 'weba'
+              : 'mp3'
+            )
+            try {
+              const buf = await file.arrayBuffer()
+              const saved = await window.api.media.saveBytes(new Uint8Array(buf), extSafe)
+              if (saved && 'name' in saved) {
+                const item: Track = {
+                  id: crypto.randomUUID(),
+                  url: `orc://media/${saved.name}`,
+                  title: file.name.replace(/\.[a-z0-9]+$/i, ''),
+                  provider: 'audio'
+                }
+                setLists((prev) => prev.map((pl, idx) => (idx === listIndex ? { ...pl, tracks: [...pl.tracks, item] } : pl)))
+              }
+            } catch (err) {
+              console.error('Failed to add dropped file to music player:', err)
+            }
+          }
+        }
+      }}
+    >
       <div className="flex items-center gap-2">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-bg-hover text-text">
           <Music2 size={15} />
@@ -744,8 +899,13 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
                   className="flex min-w-0 flex-1 items-center gap-2 truncate text-left text-[11px] text-text"
                   title={i === trackIndex ? (playing ? 'Pause' : 'Play') : `Play ${t.title}`}
                   onClick={() => {
-                    if (i === trackIndex) togglePlay()
-                    else setTrackIndex(i)
+                    if (i === trackIndex) {
+                      togglePlay()
+                    } else {
+                      userWantsPlayRef.current = true
+                      setTrackIndex(i)
+                      setPlaying(true)
+                    }
                   }}
                 >
                   <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-line text-text-faint">
@@ -799,12 +959,15 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
         <audio
           key={track.id}
           ref={audioRef}
-          autoPlay
           preload="metadata"
+          autoPlay={false}
           crossOrigin="anonymous"
           src={audioSrc}
           className="hidden"
-          onPlay={() => setPlaying(true)}
+          onPlay={() => {
+            userWantsPlayRef.current = true
+            setPlaying(true)
+          }}
           onPause={() => setPlaying(false)}
           onTimeUpdate={() => {
             const a = audioRef.current
@@ -821,7 +984,9 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
             const a = audioRef.current
             if ((listRef.current?.tracks.length ?? 0) <= 1 && a) {
               a.currentTime = 0
-              void a.play().catch(() => {})
+              if (userWantsPlayRef.current) {
+                void a.play().catch(() => {})
+              }
             } else {
               advance(1)
             }
@@ -842,7 +1007,10 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
               className="w-full"
               style={{ height: track.provider === 'spotify' ? 80 : 100 }}
               frameBorder={0}
-              allow="autoplay; encrypted-media; clipboard-write"
+              sandbox="allow-scripts allow-same-origin allow-presentation"
+              allow="encrypted-media; autoplay"
+              loading="lazy"
+              referrerPolicy="no-referrer"
               tabIndex={0}
             />
           </div>

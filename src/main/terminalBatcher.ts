@@ -3,6 +3,7 @@ import { EventEmitter } from 'events'
 export interface BatcherOptions {
   frameIntervalMs?: number
   maxBatchBytes?: number
+  maxPendingBytes?: number
 }
 
 
@@ -15,12 +16,48 @@ export class TerminalStreamBatcher extends EventEmitter {
   private readonly pendingBytes = new Map<string, number>()
   private readonly frameIntervalMs: number
   private readonly maxBatchBytes: number
+  private readonly maxPendingBytes: number
   private timer: NodeJS.Timeout | null = null
 
   constructor(options: BatcherOptions = {}) {
     super()
     this.frameIntervalMs = options.frameIntervalMs ?? 16
     this.maxBatchBytes = options.maxBatchBytes ?? 32 * 1024
+    this.maxPendingBytes = options.maxPendingBytes ?? 256 * 1024
+  }
+
+  private static chunkBytes(chunk: string): number {
+    return Buffer.byteLength(chunk, 'utf8')
+  }
+
+  private static sliceTailBytes(chunk: string, maxBytes: number): string {
+    if (TerminalStreamBatcher.chunkBytes(chunk) <= maxBytes) return chunk
+    let bytes = 0
+    let cut = chunk.length
+    while (cut > 0) {
+      const low = chunk.charCodeAt(cut - 1)
+      let charLen = 1
+      let charBytes: number
+      if (low >= 0xdc00 && low <= 0xdfff && cut >= 2) {
+        const high = chunk.charCodeAt(cut - 2)
+        if (high >= 0xd800 && high <= 0xdbff) {
+          charLen = 2
+          charBytes = 4
+        } else {
+          charBytes = 3
+        }
+      } else if (low < 0x80) {
+        charBytes = 1
+      } else if (low < 0x800) {
+        charBytes = 2
+      } else {
+        charBytes = 3
+      }
+      if (bytes + charBytes > maxBytes) break
+      bytes += charBytes
+      cut -= charLen
+    }
+    return chunk.slice(cut)
   }
 
   push(terminalId: string, chunk: string): void {
@@ -33,8 +70,15 @@ export class TerminalStreamBatcher extends EventEmitter {
       this.pendingBytes.set(terminalId, 0)
     }
 
-    list.push(chunk)
-    const currentBytes = (this.pendingBytes.get(terminalId) || 0) + chunk.length
+    const incomingBytes = TerminalStreamBatcher.chunkBytes(chunk)
+    let currentBytes = (this.pendingBytes.get(terminalId) || 0) + incomingBytes
+    while (list.length > 0 && currentBytes > this.maxPendingBytes) {
+      const dropped = list.shift()!
+      currentBytes -= TerminalStreamBatcher.chunkBytes(dropped)
+    }
+    const tail = TerminalStreamBatcher.sliceTailBytes(chunk, this.maxPendingBytes)
+    currentBytes -= incomingBytes - TerminalStreamBatcher.chunkBytes(tail)
+    list.push(tail)
     this.pendingBytes.set(terminalId, currentBytes)
 
     if (currentBytes >= this.maxBatchBytes) {
@@ -86,6 +130,11 @@ export class TerminalStreamBatcher extends EventEmitter {
   }
 
   dispose(): void {
-    this.flushAll()
+    if (this.timer !== null) {
+      clearTimeout(this.timer)
+      this.timer = null
+    }
+    this.pending.clear()
+    this.pendingBytes.clear()
   }
 }

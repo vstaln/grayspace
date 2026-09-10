@@ -63,7 +63,7 @@ export function createWindow(): BrowserWindow {
     autoHideMenuBar: true,
     transparent: false,
     hasShadow: true,
-    backgroundColor: '#08090b',
+    backgroundColor: '#080808',
     title: APP_TITLE,
     webPreferences: {
       preload: getPreloadPath(),
@@ -81,6 +81,14 @@ export function createWindow(): BrowserWindow {
     win.focus()
   })
 
+  // HTML fullscreen from embedded pages must not promote the whole app window.
+  const onWebContentsEvent = win.webContents.on.bind(win.webContents) as unknown as (
+    event: string,
+    listener: (event: { preventDefault(): void }) => void
+  ) => void
+  onWebContentsEvent('enter-html-full-screen', (event) => event.preventDefault())
+  onWebContentsEvent('leave-html-full-screen', (event) => event.preventDefault())
+
 
   const showTimer = setTimeout(() => {
     if (!win.isDestroyed() && !win.isVisible()) {
@@ -89,6 +97,17 @@ export function createWindow(): BrowserWindow {
     }
   }, 1200)
   win.once('show', () => clearTimeout(showTimer))
+  win.on('closed', () => {
+    clearTimeout(showTimer)
+    if (mainWindow === win) mainWindow = null
+  })
+  try {
+    win.webContents.session.setPermissionRequestHandler((_wc, _permission, callback) => {
+      callback(false)
+    })
+  } catch {
+
+  }
 
 
 
@@ -208,7 +227,14 @@ export function setupWebContentsHandlers(sendFn: (channel: string, ...args: unkn
       ;(webPreferences as Record<string, unknown>).sandbox = true
 
       ;(webPreferences as Record<string, unknown>).webviewTag = false
-      void e
+      try {
+        const src = String((params as Record<string, unknown>).src ?? '')
+        if (!src) return
+        const proto = new URL(src).protocol
+        if (proto !== 'http:' && proto !== 'https:' && src !== 'about:blank') e.preventDefault()
+      } catch {
+        e.preventDefault()
+      }
     })
 
     if (contents.getType() !== 'webview') return
@@ -243,9 +269,13 @@ export function setupWebContentsHandlers(sendFn: (channel: string, ...args: unkn
 
 
     try {
-      contents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
-        callback(ALLOWED_WEBVIEW_PERMISSIONS.has(permission))
-      })
+      const sess = contents.session
+      if (!(sess as unknown as { __orcPermGuard?: boolean }).__orcPermGuard) {
+        ;(sess as unknown as { __orcPermGuard?: boolean }).__orcPermGuard = true
+        sess.setPermissionRequestHandler((_webContents, permission, callback) => {
+          callback(ALLOWED_WEBVIEW_PERMISSIONS.has(permission as string))
+        })
+      }
     } catch {
 
     }

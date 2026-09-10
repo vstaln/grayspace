@@ -218,10 +218,34 @@ export function readJsonFile<T>(file: string): JsonRead<T> {
 
 
 
+export function sweepTempFiles(dir: string, maxAgeMs = 3_600_000): void {
+  let names: string[]
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return
+  }
+  const now = Date.now()
+  for (const name of names) {
+    if (!/^\.\d+-\d+-[0-9a-f]+\.tmp$/.test(name)) continue
+    try {
+      const full = join(dir, name)
+      const stat = fs.statSync(full)
+      if (now - stat.mtimeMs > maxAgeMs) fs.unlinkSync(full)
+    } catch {
+
+    }
+  }
+}
+
 export function readStoreJson<T>(file: string, fallback: T): T {
   const read = readJsonFile<T>(file)
   if (read.ok) return read.data
-  if (read.error === 'missing') return fallback
+  if (read.error === 'missing') {
+    const backup = readJsonFile<T>(backupPath(file))
+    if (backup.ok) return backup.data
+    return fallback
+  }
 
   try {
     const quarantined = `${file}.corrupt-${Date.now()}`

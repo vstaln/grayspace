@@ -93,9 +93,54 @@ const baseLayer: Sheet = {
 
 const componentsLayer: Sheet = {
 
+  '.title-bar-shell': {
+    borderRadius: geometry.radiusBar,
+    background: monochrome.surface,
+    borderBottom: `1px solid ${monochrome.raised}`
+  },
+
+  '.title-bar-shell .title-bar-view-tab': {
+    borderRadius: `${geometry.radiusPill} !important`
+  },
+
+  '.title-bar-shell .title-bar-view-switch, .title-bar-shell .title-bar-git-switch, .title-bar-shell .title-bar-left-switch': {
+    height: '30px',
+    gap: '0',
+    padding: '3px',
+    background: monochrome.base,
+    border: `1px solid ${monochrome.surface}`,
+    borderRadius: `${geometry.radiusPill} !important`
+  },
+
+  '.title-bar-shell .title-bar-view-switch .title-bar-view-tab, .title-bar-shell .title-bar-git-switch .title-bar-git, .title-bar-shell .title-bar-left-switch .title-bar-left-btn': {
+    height: '24px',
+    paddingLeft: '11px',
+    paddingRight: '11px',
+    fontSize: '12px',
+    background: monochrome.base,
+    borderRadius: `${geometry.radiusPill} !important`
+  },
+
+  '.title-bar-shell .title-bar-left-switch .title-bar-left-btn': {
+    paddingLeft: '8px',
+    paddingRight: '8px'
+  },
+
+  '.title-bar-shell .title-bar-view-switch .title-bar-view-tab + .title-bar-view-tab': {
+    borderLeft: '0'
+  },
+
+  '.title-bar-shell .title-bar-view-switch .title-bar-view-tab[aria-selected="true"], .title-bar-shell .title-bar-git-switch .title-bar-git[aria-expanded="true"], .title-bar-shell .title-bar-left-switch .title-bar-left-btn[aria-pressed="true"]': {
+    background: monochrome.raised,
+    border: '0',
+    color: '#ffffff',
+    fontWeight: 600,
+    boxShadow: 'none'
+  },
 
   '.rail-shell': {
-    background: palette.graphite,
+    background: `${monochrome.surface} !important`,
+    backgroundColor: `${monochrome.surface} !important`,
     boxShadow: `inset -1px 0 0 ${hairline.faint}`,
 
 
@@ -104,14 +149,16 @@ const componentsLayer: Sheet = {
       WebkitAppRegion: 'no-drag'
     },
     'html[data-translucent] &': {
-      background: palette.graphite,
-      backdropFilter: frost.shell,
-      WebkitBackdropFilter: frost.shell
+      background: `${monochrome.surface} !important`,
+      backgroundColor: `${monochrome.surface} !important`,
+      backdropFilter: 'none !important',
+      WebkitBackdropFilter: 'none !important'
     },
     '&.is-expanded': {
-      background: 'rgba(8, 9, 11, 0.94)',
-      backdropFilter: frost.shell,
-      WebkitBackdropFilter: frost.shell
+      background: `${monochrome.surface} !important`,
+      backgroundColor: `${monochrome.surface} !important`,
+      backdropFilter: 'none !important',
+      WebkitBackdropFilter: 'none !important'
     }
   },
 
@@ -146,6 +193,10 @@ const componentsLayer: Sheet = {
       backdropFilter: 'none',
       WebkitBackdropFilter: 'none'
     }
+  },
+
+  "html[data-theme='dark'] .canvas-area": {
+    background: `linear-gradient(135deg, ${monochrome.base} 0%, ${monochrome.surface} 52%, ${monochrome.raised} 100%)`
   },
 
 
@@ -189,7 +240,7 @@ const componentsLayer: Sheet = {
 
 
   '.widget-shell': {
-    background: palette.graphite,
+    background: monochrome.surface,
     boxShadow: `0 0 0 1px ${hairline.soft}`,
 
 
@@ -206,7 +257,7 @@ const componentsLayer: Sheet = {
       boxShadow: `0 0 0 1px ${hairline.soft}, 0 0 0 3px ${hairline.active}`
     },
     'html[data-translucent] &': {
-      background: palette.graphite,
+      background: 'rgba(18, 18, 18, 0.82)',
       backdropFilter: frost.shell,
       WebkitBackdropFilter: frost.shell,
       boxShadow: `0 0 0 1px ${hairline.glassSoft}`
@@ -254,9 +305,9 @@ const componentsLayer: Sheet = {
   },
 
   '.widget-header-shell': {
-    background: palette.graphite,
+    background: monochrome.surface,
     boxShadow: `inset 0 -1px 0 ${hairline.faint}`,
-    'html[data-translucent] &': { background: palette.graphite },
+    'html[data-translucent] &': { background: 'rgba(18, 18, 18, 0.82)' },
 
 
     button: { position: 'relative' },
@@ -304,21 +355,21 @@ const componentsLayer: Sheet = {
     transition: 'background 120ms ease, color 120ms ease'
   },
   '.browser-tab-active': {
-    background: 'rgba(169, 171, 176, 0.12)',
-    color: monochrome.graphite,
+    background: monochrome.raised,
+    color: palette.white,
     borderColor: 'transparent'
   },
   '.browser-tab-idle': {
     background: 'transparent',
-    color: 'rgba(169, 171, 176, 0.58)',
-    '&:hover': { background: 'rgba(169, 171, 176, 0.08)', color: monochrome.graphite }
+    color: palette.white,
+    '&:hover': { background: monochrome.raised, color: palette.white }
   },
   '.browser-omnibox': {
     background: monochrome.surface,
     border: `1px solid ${hairline.soft}`,
     transition: 'border-color 120ms ease, background 120ms ease',
     '&:focus-within': {
-      background: monochrome.surface,
+      background: monochrome.raised,
       borderColor: hairline.active
     }
   },
@@ -327,10 +378,10 @@ const componentsLayer: Sheet = {
     outline: 'none'
   },
   '.browser-icon-btn': {
-    color: 'rgba(169, 171, 176, 0.7)',
+    color: palette.white,
     transition: 'background 120ms ease, color 120ms ease',
-    '&:hover': { background: 'rgba(169, 171, 176, 0.08)', color: monochrome.graphite },
-    '&:active': { background: 'rgba(169, 171, 176, 0.14)' },
+    '&:hover': { background: monochrome.raised, color: palette.white },
+    '&:active': { background: monochrome.raised },
     '&:disabled': { opacity: 0.3, pointerEvents: 'none' }
   },
   '.browser-surface': {
@@ -340,7 +391,7 @@ const componentsLayer: Sheet = {
 
 
   '.load-bar': {
-    background: monochrome.graphite,
+    background: monochrome.surface,
     willChange: 'transform',
     animation: 'load-bar-slide 1.0s ease-in-out infinite',
     contain: 'paint'
@@ -367,8 +418,8 @@ const componentsLayer: Sheet = {
     },
 
     '&.is-code-term .xterm, &.is-code-term .xterm-screen, &.is-code-term .xterm-viewport, .code-terminal-shell & .xterm, .code-terminal-shell & .xterm-screen, .code-terminal-shell & .xterm-viewport': {
-      background: `${palette.terminalSolid} !important`,
-      backgroundColor: `${palette.terminalSolid} !important`
+      background: '#080808 !important',
+      backgroundColor: '#080808 !important'
     },
 
 
@@ -379,10 +430,10 @@ const componentsLayer: Sheet = {
 
 
   '.code-terminal-shell': {
-    background: monochrome.base,
+    background: '#080808',
     borderColor: hairline.soft,
-    '& .code-session-header': { background: palette.titleBar.surface },
-    '& .code-session-header:hover': { background: palette.titleBar.active }
+    '& .code-session-header': { background: monochrome.surface },
+    '& .code-session-header:hover': { background: monochrome.raised }
   },
 
 
@@ -438,6 +489,6 @@ export const appStylesheet: Sheet = {
 
 
 
-  ':is(input, textarea):focus-visible': { outline: 'none' },
+
   '@layer components': componentsLayer
 }

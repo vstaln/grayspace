@@ -24,6 +24,8 @@
     "src/renderer/src/lib/markdown.ts",
     "src/renderer/src/lib/sanitizeUrl.ts",
     "src/renderer/src/lib/canvasMetrics.ts",
+    "src/renderer/src/lib/commandInput.ts",
+    "src/renderer/src/types.ts",
     "src/renderer/src/lib/music.ts",
     "src/renderer/src/lib/paste.ts"
   ]
