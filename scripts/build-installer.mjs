@@ -6,7 +6,7 @@
 
 
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -66,6 +66,13 @@ function run(command, args, env = process.env) {
 function runNpm(args) {
   const invocation = npmInvocation(args)
   return run(invocation.command, invocation.args, invocation.env)
+}
+
+function runLocalBin(name, args) {
+  const suffix = process.platform === 'win32' ? '.cmd' : ''
+  const command = join(root, 'node_modules', '.bin', `${name}${suffix}`)
+  if (!existsSync(command)) throw new Error(`Missing local build tool: ${command}`)
+  return run(command, args)
 }
 
 function sha256(path) {
@@ -131,6 +138,8 @@ try {
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   if (!packageJson.version || !packageJson.name) throw new Error('package.json has no valid name/version.')
   if (!existsSync(join(root, 'package-lock.json'))) throw new Error('package-lock.json is required for a reproducible build.')
+  const installer = join(dist, `OrcSpace-Setup-${packageJson.version}-x64.exe`)
+  const legacyPortable = join(dist, `OrcSpace-${packageJson.version}-x64-Portable.exe`)
 
   if (!skipCi) {
     runNpm(['ci', '--no-fund', '--no-audit'])
@@ -139,16 +148,19 @@ try {
   }
   runNpm(['run', 'typecheck'])
   if (!skipTests) runNpm(['test'])
-  runNpm(['run', 'dist'])
+  // Build once, then package only the NSIS installer. The old `dist` script
+  // produced both NSIS and portable artifacts, which doubled the work and
+  // could leave a stale installer in `dist` after a partial build.
+  runNpm(['run', 'build'])
+  rmSync(join(dist, 'win-unpacked'), { recursive: true, force: true })
+  rmSync(installer, { force: true })
+  rmSync(legacyPortable, { force: true })
+  runLocalBin('electron-builder', ['--win', 'nsis', '--x64', '--publish', 'never'])
 
   verifyUnpackedRelease(packageJson)
 
-  const installer = join(dist, `OrcSpace-Setup-${packageJson.version}-x64.exe`)
-  const portable = join(dist, `OrcSpace-${packageJson.version}-x64-Portable.exe`)
-  for (const artifact of [installer, portable]) {
-    if (!existsSync(artifact) || statSync(artifact).size < 10 * 1024 * 1024) {
-      throw new Error(`Expected release artifact is missing or suspiciously small: ${artifact}`)
-    }
+  if (!existsSync(installer) || statSync(installer).size < 10 * 1024 * 1024) {
+    throw new Error(`Expected release artifact is missing or suspiciously small: ${installer}`)
   }
 
   const dirty = skipCi || process.argv.includes('--dirty')
@@ -160,7 +172,6 @@ try {
     dirty,
     packageLockSha256: sha256(join(root, 'package-lock.json')),
     installer: { file: installer.split(/[/\\]/).pop(), sha256: sha256(installer), bytes: statSync(installer).size },
-    portable: { file: portable.split(/[/\\]/).pop(), sha256: sha256(portable), bytes: statSync(portable).size },
     generatedAt: new Date().toISOString(),
   }
   mkdirSync(dist, { recursive: true })

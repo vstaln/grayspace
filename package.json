@@ -113,12 +113,6 @@
           "arch": [
             "x64"
           ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
         }
       ]
     },
@@ -176,7 +170,7 @@
     "nsis": {
       "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
       "oneClick": false,
-    "perMachine": true,
+      "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
