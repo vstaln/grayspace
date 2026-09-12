@@ -3,6 +3,13 @@ resolver = "2"
 members = [
     "orcspace-app",
 ]
+# canvas-core and storage-core are NOT workspace members on purpose. They are
+# N-API addons built by `napi build --platform --release` (see native/build.mjs),
+# which expects each crate to own its target directory, its profile and its own
+# Cargo.lock. Pulling them into the workspace would make them share this
+# target/ and these profile settings, and the napi build would no longer find
+# the artifact where it puts it. Adding them to `members` for tidiness breaks
+# the addon build — leave them excluded.
 exclude = ["canvas-core", "storage-core"]
 
 [profile.release]

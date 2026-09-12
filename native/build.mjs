@@ -4,6 +4,15 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { patchWindowsPtyAgents } from '../scripts/patch-pty.mjs'
 
+// The N-API addons, built one at a time by `napi build` below. They are
+// deliberately absent from native/Cargo.toml's `members` and listed in its
+// `exclude` — see the comment there. This list is therefore not a workspace
+// member list and is not expected to match one; the workspace builds a single
+// member, orcspace-app, through scripts/native-cargo.mjs instead.
+//
+// Every crate here degrades to a JavaScript fallback when its build fails, so
+// a missing Rust toolchain costs speed, never function (src/main/storage.ts
+// and src/main/ansi.ts catch the load error).
 const CRATES = ['canvas-core', 'storage-core']
 const ELECTRON_VERSION = '43.3.0'
 
