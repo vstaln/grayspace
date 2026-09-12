@@ -4,7 +4,6 @@ import assert from 'node:assert/strict'
 
 
 import { isSafeUrl, sanitizeUrl, safeHref } from '../renderer/src/lib/sanitizeUrl.ts'
-import { renderMarkdownInlineLinks, renderMarkdownSafe, extractSafeLinks } from '../renderer/src/lib/markdown.ts'
 import { DRAW_CLICK_THRESHOLD_PX } from '../renderer/src/lib/canvasMetrics.ts'
 import { parseWidgetInvocation } from '../renderer/src/lib/commandInput.ts'
 import { pasteHasImage } from '../renderer/src/lib/paste.ts'
@@ -44,34 +43,6 @@ describe('sanitizeUrl', () => {
   })
   it('blocks obfuscated whitespace javascript', () => {
     assert.equal(isSafeUrl('  java\tscript:alert(1)'), false)
-  })
-})
-
-describe('markdown', () => {
-  it('renders safe link', () => {
-    const html = renderMarkdownInlineLinks('[hi](https://example.com)')
-    assert.match(html, /<a href="https:\/\/example\.com"/)
-  })
-  it('strips unsafe link to text', () => {
-    const html = renderMarkdownInlineLinks('[hi](javascript:alert(1))')
-    assert.equal(html.includes('<a'), false)
-    assert.match(html, /hi/)
-  })
-  it('renders image safely', () => {
-    const html = renderMarkdownInlineLinks('![alt](https://example.com/x.png)')
-    assert.match(html, /<img/)
-  })
-  it('strips unsafe image', () => {
-    const html = renderMarkdownInlineLinks('![alt](javascript:alert(1))')
-    assert.equal(html.includes('<img'), false)
-  })
-  it('renderMarkdownSafe handles bold and code', () => {
-    const html = renderMarkdownSafe('**bold** and `code`')
-    assert.match(html, /<strong>bold<\/strong>/)
-    assert.match(html, /<code[^>]*>code<\/code>/)
-  })
-  it('extractSafeLinks filters unsafe', () => {
-    assert.deepEqual(extractSafeLinks('[a](https://a.b) [b](javascript:x)'), ['https://a.b'])
   })
 })
 

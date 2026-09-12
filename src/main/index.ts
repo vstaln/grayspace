@@ -23,7 +23,7 @@ import { captureScreen } from './screenshot.ts'
 import { ensureOrcExecutable } from './orcCli.ts'
 import { syncOrcGuide } from './orchestration/guide.ts'
 import { writeRuntimePresence } from './runtimePresence'
-import { registerIpc, originTerminalId, forgetTerminalOrigin } from './ipc'
+import { registerIpc, originTerminalId, forgetTerminalOrigin } from './ipc/index.ts'
 import { registerCommands } from './commands/index.ts'
 import { onPersistError } from './persistNotifier.ts'
 
