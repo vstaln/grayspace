@@ -195,6 +195,55 @@ describe('Regression — undo/redo (rewind) boundaries', () => {
     assert.equal(result.brokenSeq, e2.seq)
   })
 
+  test('a keystroke command declared requiresLock:false survives a foreign lock', async () => {
+    // Guards the contract `terminal.input` relies on: the person typing into
+    // their own terminal widget is not a participant in agent coordination.
+    // While an agent holds `terminal:<id>` (terminal.write takes it for the
+    // whole of a delivery, and it lingers for its TTL if a release is ever
+    // missed), a lock-checked keystroke throws `locked` and is thrown away —
+    // typing dies, Ctrl+C never reaches the shell, and the terminal looks
+    // hung until the widget is closed.
+    const core = createCore()
+    core.actors.register({ id: 'user', type: 'user', label: 'tester', transport: 'test' })
+    core.actors.register({ id: 'agent-a', type: 'agent', label: 'a', transport: 'test' })
+
+    const typed: string[] = []
+    core.flow.register('keys.send', {
+      requiresLock: false,
+      transient: true,
+      bypassQueue: true,
+      ignoreVersion: true,
+      apply: ({ command }) => {
+        typed.push(String((command.payload as { data?: string })?.data ?? ''))
+        return { ok: true }
+      }
+    })
+    core.flow.register('keys.locked', {
+      transient: true,
+      bypassQueue: true,
+      ignoreVersion: true,
+      apply: () => ({ ok: true })
+    })
+
+    core.locks.acquire({ resource: 'terminal:t1', actorId: 'agent-a', reason: 'terminal.write' })
+
+    await core.flow.submit({
+      actorId: 'user',
+      type: 'keys.send',
+      target: 'terminal:t1',
+      payload: { data: '' }
+    })
+    assert.deepEqual(typed, [''])
+
+    const gated = await core.flow
+      .submit({ actorId: 'user', type: 'keys.locked', target: 'terminal:t1', payload: {} })
+      .then(
+        (result) => result,
+        (error: Error) => ({ ok: false as const, error: error.message })
+      )
+    assert.equal(gated.ok, false, 'a lock-checked command must still be refused')
+  })
+
   test('readStoreJson fallback on missing file does not throw', async () => {
     const missing = join(getUserDataDir(), `__nonexistent_${Date.now()}.json`)
     const { readStoreJson } = await import('./storage.ts')

@@ -3,6 +3,8 @@ import { TERMINAL_ID } from '../terminals.ts'
 import { ipcMain } from './shims.ts'
 import { makeSend, unwrap } from './shared.ts'
 import {
+  blurTerminal,
+  forgetTerminalMounted,
   markTerminalMounted,
   setFocusedTerminal,
   unmarkTerminalMounted
@@ -29,16 +31,12 @@ export function registerTerminalIpc(deps: IpcDeps): void {
     if (typeof id !== 'string' || !TERMINAL_ID.test(id)) {
       return { ok: false, error: 'terminal id is required' }
     }
+    // The mark belongs to the widget until detach, even if spawning fails.
+    // A delayed failure must not consume a replacement widget's mount.
     markTerminalMounted(id)
     try {
-      const result = unwrap(await send<{ ok: boolean; error?: string }>('terminal.spawn', `terminal:${id}`, { cols, rows }))
-
-
-
-      if (!('ok' in result) || result.ok !== true) unmarkTerminalMounted(id)
-      return result
+      return unwrap(await send<{ ok: boolean; error?: string }>('terminal.spawn', `terminal:${id}`, { cols, rows }))
     } catch (err) {
-      unmarkTerminalMounted(id)
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
@@ -77,7 +75,9 @@ export function registerTerminalIpc(deps: IpcDeps): void {
 
 
 
-    if (!(result && typeof result === 'object' && 'error' in result)) unmarkTerminalMounted(id)
+    // Disposed for good (the id is banned from here on), so drop every
+    // outstanding mount rather than decrementing one of them.
+    if (!(result && typeof result === 'object' && 'error' in result)) forgetTerminalMounted(id)
     return result
   })
   ipcMain.handle('terminal:set-title', async (_e, id: string, title: string) => {
@@ -94,6 +94,10 @@ export function registerTerminalIpc(deps: IpcDeps): void {
   })
 
   ipcMain.on('terminal:focus', (_e, focused: boolean, id?: string) => {
-    setFocusedTerminal(focused && typeof id === 'string' && TERMINAL_ID.test(id) ? id : null)
+    if (typeof id !== 'string' || !TERMINAL_ID.test(id)) return
+    // Blur is scoped to the reporting terminal: a widget going away must not
+    // clear focus that another terminal has already taken.
+    if (focused) setFocusedTerminal(id)
+    else blurTerminal(id)
   })
 }

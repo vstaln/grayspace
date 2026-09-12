@@ -19,6 +19,7 @@ import {
 import { setupKeyboardShortcuts, setupTerminalEvents } from './terminalEvents.ts'
 import { setupLifecycle } from './appLifecycle.ts'
 import { startControlServer } from './controlServer'
+import { captureScreen } from './screenshot.ts'
 import { ensureOrcExecutable } from './orcCli.ts'
 import { syncOrcGuide } from './orchestration/guide.ts'
 import { writeRuntimePresence } from './runtimePresence'
@@ -203,6 +204,7 @@ if (hasInstanceLock) {
       rendererDir: process.env['ELECTRON_RENDERER_URL'] ? undefined : join(__dirname, '../renderer'),
       defaultCwd: () => state.workspaceDir,
       broadcast: (channel, payload) => send(channel, payload),
+      capture: (widgetId) => captureScreen(getMainWindow(), widgetId),
       onPortAssigned: () => doPublishPresence(),
       onSocketAssigned: () => doPublishPresence()
     })

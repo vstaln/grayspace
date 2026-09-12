@@ -124,4 +124,58 @@ describe('Priority Queue, Rate Limiter and Backpressure', () => {
     assert.equal(r3.ok, false)
     assert.equal(r3.code, 'rate_limited')
   })
+
+  test('a task that hands its lane on and then throws does not free the lane twice', async () => {
+    const queue = new PriorityCommandQueue()
+    let concurrent = 0
+    let maxConcurrent = 0
+    let releaseSecond!: () => void
+    const secondHeld = new Promise<void>((r) => {
+      releaseSecond = r
+    })
+
+    const track = async (hold: Promise<void>): Promise<void> => {
+      concurrent += 1
+      maxConcurrent = Math.max(maxConcurrent, concurrent)
+      await hold
+      concurrent -= 1
+    }
+
+    let second!: Promise<void>
+    let third!: Promise<void>
+
+    // Hands the lane on, then throws synchronously. The contenders are queued
+    // from inside the task so the hand-off has somewhere to go: `unblock` lets
+    // `second` take the lane, and freeing it a second time on the way out
+    // would let `third` in on top of it.
+    const first = queue.enqueue({
+      id: 'hand-off-then-throw',
+      actorId: 'agent',
+      lanes: ['shared'],
+      run: (unblock) => {
+        second = queue.enqueue({
+          id: 'holder',
+          actorId: 'agent',
+          lanes: ['shared'],
+          run: () => track(secondHeld)
+        })
+        third = queue.enqueue({
+          id: 'must-wait',
+          actorId: 'agent',
+          lanes: ['shared'],
+          run: () => track(Promise.resolve())
+        })
+        unblock()
+        throw new Error('boom')
+      }
+    })
+
+    await assert.rejects(first, /boom/)
+    await new Promise((r) => setTimeout(r, 10))
+    assert.equal(maxConcurrent, 1, 'the lane must admit one task at a time')
+
+    releaseSecond()
+    await Promise.all([second, third])
+    assert.equal(maxConcurrent, 1)
+  })
 })

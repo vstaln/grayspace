@@ -207,8 +207,25 @@ export function registerCanvasCommands({
     }
   })
 
+  flow.registerDefinition<{ connections: unknown }, { count: number }>({
+    type: 'canvas.connections',
+    description: 'Update the arcs drawn between widgets on the canvas.',
+    targetScheme: 'canvas',
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        connections: { type: 'array' }
+      }
+    },
+    handler: {
+      apply: ({ command }) => {
+        return { count: canvas.setConnections(command.payload?.connections).length }
+      }
+    }
+  })
+
   flow.registerDefinition<
-    { widgets?: unknown; camera?: unknown; strokes?: unknown },
+    { widgets?: unknown; camera?: unknown; strokes?: unknown; connections?: unknown },
     { applied: number; skipped: number; removed: number; removedWidgets: Array<{ id: string; kind?: WidgetKind }> }
   >({
     type: 'canvas.import',

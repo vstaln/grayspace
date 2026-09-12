@@ -2,10 +2,55 @@ import { strict as assert } from 'node:assert'
 import { EventEmitter } from 'node:events'
 import { describe, test } from 'node:test'
 import * as fs from 'node:fs'
-import { TerminalManager, normalizeDeliveryText } from './terminals.ts'
+import { TerminalManager, normalizeDeliveryText, windowsShellArgs } from './terminals.ts'
 import { defaultShell } from './config.ts'
 
 describe('TerminalManager', () => {
+  test('Ctrl+C reaches the backend while ordinary input awaits an ACK', async () => {
+    const manager = new TerminalManager()
+    const writes: string[] = []
+    let finish!: (value: { ok: true }) => void
+    manager.write = async (_id, data) => {
+      writes.push(data)
+      if (data === 'blocked') return new Promise((resolve) => { finish = resolve })
+      return { ok: true }
+    }
+    const pending = manager.writeLine('test', 'blocked')
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    const queued = manager.writeInput('test', 'stale input')
+    try {
+      const interrupt = manager.writeInput('test', '\x03')
+      assert.deepEqual(writes, ['blocked', '\x03'])
+      assert.equal((await interrupt).ok, true)
+    } finally {
+      finish({ ok: true })
+      assert.equal((await pending).ok, false)
+      assert.equal((await queued).ok, false)
+      assert.deepEqual(writes, ['blocked', '\x03'], 'interrupt cancels pending Enter and queued text')
+      manager.disposeAll()
+    }
+  })
+
+  test('expired queued input is rejected and never typed out of order', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const manager = new TerminalManager()
+    let finish!: (value: { ok: true }) => void
+    const writes: string[] = []
+    manager.write = async (_id, data) => {
+      writes.push(data)
+      return new Promise((resolve) => { finish = resolve })
+    }
+    const first = manager.writeInput('test', 'blocked')
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    const second = manager.writeInput('test', 'expired')
+    t.mock.timers.tick(5_001)
+    assert.equal((await second).ok, false)
+    finish({ ok: true })
+    await first
+    assert.deepEqual(writes, ['blocked'])
+    manager.disposeAll()
+  })
+
   test('reserve keeps explicit agent names and numbers unnamed agents', () => {
     const manager = new TerminalManager()
 
@@ -19,12 +64,12 @@ describe('TerminalManager', () => {
     assert.equal(agent1.title, 'Custom Agent')
 
     const agent2 = manager.reserve({ prefix: 'agent' })
-    assert.match(agent2.title, /^[a-z]+-[a-z]+$/)
+    assert.match(agent2.title, /^[A-Z][a-z]+$/)
 
 
     manager.dispose(agent1.id)
     const agent3 = manager.reserve({ prefix: 'agent' })
-    assert.match(agent3.title, /^[a-z]+-[a-z]+$/)
+    assert.match(agent3.title, /^[A-Z][a-z]+$/)
     assert.notEqual(agent3.title, agent2.title)
 
     manager.disposeAll()
@@ -40,7 +85,7 @@ describe('TerminalManager', () => {
     assert.equal(second.title, 'frontend')
 
     const third = manager.reserve({})
-    assert.match(third.title, /^[a-z]+-[a-z]+$/)
+    assert.match(third.title, /^[A-Z][a-z]+$/)
 
     const placeholder = manager.reserve({ title: 'Terminal 9' })
     assert.notEqual(placeholder.title, 'Terminal 9')
@@ -133,32 +178,32 @@ describe('TerminalManager', () => {
     manager.disposeAll()
   })
 
-  test('write validates terminal state before attempting pty write', () => {
+  test('write validates terminal state before attempting pty write', async () => {
     const manager = new TerminalManager()
     const term = manager.reserve()
 
-    const notFound = manager.write('nonexistent-id', 'ls\n')
+    const notFound = await manager.write('nonexistent-id', 'ls\n')
     assert.equal(notFound.ok, false)
     assert.match((notFound as { error: string }).error, /not found/)
 
-    const notRunning = manager.write(term.id, 'ls\n')
+    const notRunning = await manager.write(term.id, 'ls\n')
     assert.equal(notRunning.ok, false)
     assert.match((notRunning as { error: string }).error, /not running/)
 
     manager.disposeAll()
   })
 
-  test('write refuses an oversized payload instead of silently truncating', () => {
+  test('write refuses an oversized payload instead of silently truncating', async () => {
     const manager = new TerminalManager()
     const term = manager.reserve()
     const tooBig = 'x'.repeat(64 * 1024 + 1)
-    const result = manager.write(term.id, tooBig)
+    const result = await manager.write(term.id, tooBig)
     assert.equal(result.ok, false)
     assert.match((result as { error: string }).error, /exceeds/)
     manager.disposeAll()
   })
 
-  test('write reports an error when the pty write throws', () => {
+  test('write reports an error when the pty write throws', async () => {
     const manager = new TerminalManager()
     const term = manager.reserve()
     const record = (
@@ -170,7 +215,7 @@ describe('TerminalManager', () => {
         throw new Error('EIO')
       }
     }
-    const result = manager.write(term.id, 'ls\n')
+    const result = await manager.write(term.id, 'ls\n')
     assert.equal(result.ok, false)
     manager.disposeAll()
   })
@@ -254,6 +299,68 @@ describe('TerminalManager', () => {
     assert.equal(normalizeDeliveryText('\x1b[31mhello\x1b[0m\r\n world'), 'hello world')
   })
 
+  test('delivery matching strips OSC sequences on every terminator', () => {
+    assert.equal(normalizeDeliveryText('\x1b]0;window title\x07run tests'), 'run tests')
+    assert.equal(normalizeDeliveryText('\x1b]8;;https://example.com\x1b\\link'), 'link')
+    assert.equal(normalizeDeliveryText('\x1b]0;title\x9cafter'), 'after')
+  })
+
+  test('unterminated OSC introducers stay linear instead of backtracking', () => {
+    // `cat` on a binary file emits ESC ] pairs with no terminator. With a body
+    // class that could swallow them, matching was quadratic: 50KB — the size
+    // of the output buffer this runs over during a delivery — blocked the main
+    // thread for well over half a second per scan. The budget here is loose
+    // enough not to be flaky and still two orders of magnitude under that.
+    const started = Date.now()
+    assert.equal(normalizeDeliveryText('\x1b]'.repeat(25_000)), '')
+    assert.ok(Date.now() - started < 150, `took ${Date.now() - started}ms`)
+  })
+
+  test('split delivery echo is confirmed promptly after the final data event', async () => {
+    const manager = new TerminalManager()
+    const term = manager.reserve()
+    const record = (manager as unknown as { terminals: Map<string, { pty: unknown }> }).terminals.get(term.id)!
+    record.pty = { write: () => {} }
+    const emit = (text: string): void => {
+      manager.appendOutput(term.id, text)
+      manager.emit('data', term.id, text)
+    }
+    const timers: ReturnType<typeof setTimeout>[] = []
+    try {
+      const delivery = manager.deliverLine(term.id, 'hello world', { pressEnter: false, timeoutMs: 2000 })
+      timers.push(setTimeout(() => { emit('hello '); emit('world') }, 30))
+      const result = await Promise.race([
+        delivery,
+        new Promise<null>((resolve) => timers.push(setTimeout(() => resolve(null), 700)))
+      ])
+      assert.ok(result?.ok, 'confirmation must not wait for the two-second timeout')
+    } finally {
+      timers.forEach(clearTimeout)
+      manager.disposeAll()
+    }
+  })
+
+  test('cancelled queued messages never type into the terminal', async () => {
+    const manager = new TerminalManager()
+    const term = manager.reserve()
+    const writes: string[] = []
+    const record = (manager as unknown as { terminals: Map<string, { pty: unknown }> }).terminals.get(term.id)!
+    record.pty = { write: (data: string) => writes.push(data) }
+    const controller = new AbortController()
+    try {
+      const first = manager.writeLine(term.id, 'first')
+      const second = manager.writeLine(term.id, 'cancelled', { signal: controller.signal })
+      const third = manager.deliverLine(term.id, 'also cancelled', { signal: controller.signal })
+      controller.abort()
+      assert.equal((await first).ok, true)
+      assert.equal((await second).ok, false)
+      assert.equal((await third).ok, false)
+      assert.deepEqual(writes, ['first', '\r'])
+    } finally {
+      manager.disposeAll()
+    }
+  })
+
   test('dispose prevents resurrecting banned terminal IDs', () => {
     const manager = new TerminalManager()
     const term = manager.reserve()
@@ -268,13 +375,52 @@ describe('TerminalManager', () => {
     manager.disposeAll()
   })
 
-  test('a Rust PTY request error does not leave a zombie terminal', () => {
+  test('a Rust PTY request error surfaces without destroying the session', async () => {
     class FakeRustPty extends EventEmitter {
       spawnCalls = 0
       spawn(): { ok: true } { this.spawnCalls += 1; return { ok: true } }
       write(): { ok: true } { return { ok: true } }
       resize(): { ok: true } { return { ok: true } }
       dispose(): { ok: true } { return { ok: true } }
+      beginClose(): void {}
+      close(): void {}
+    }
+
+    const sidecar = new FakeRustPty()
+    const manager = new TerminalManager({ rustPty: sidecar as never })
+    const term = manager.reserve()
+    const record = (
+      manager as unknown as { terminals: Map<string, { nativeAlive: boolean }> }
+    ).terminals.get(term.id)
+    assert.ok(record)
+    record.nativeAlive = true
+    const errors: unknown[] = []
+    manager.on('backend-error', (error: unknown) => errors.push(error))
+    const exits: Array<{ id: string; code: number }> = []
+    manager.on('exit', (id: string, code: number) => exits.push({ id, code }))
+
+    // A slow write must not silently replace the shell: that orphaned the
+    // live child, whose reader kept interleaving output into the new
+    // session while input went elsewhere — indistinguishable from a hang.
+    assert.equal(manager.isRunning(term.id), true)
+    sidecar.emit('request-error', term.id, new Error('input timed out'))
+
+    assert.equal(sidecar.spawnCalls, 0)
+    assert.equal(manager.isRunning(term.id), true)
+    assert.equal(errors.length, 1)
+    assert.deepEqual(exits, [])
+    assert.equal((await manager.write(term.id, 'x')).ok, true)
+    manager.disposeAll()
+  })
+
+  test('an engine error that means the session is gone is reported as an exit', () => {
+    class FakeRustPty extends EventEmitter {
+      spawnCalls = 0
+      spawn(): { ok: true } { this.spawnCalls += 1; return { ok: true } }
+      write(): { ok: true } { return { ok: true } }
+      resize(): { ok: true } { return { ok: true } }
+      dispose(): { ok: true } { return { ok: true } }
+      beginClose(): void {}
       close(): void {}
     }
 
@@ -289,13 +435,15 @@ describe('TerminalManager', () => {
     const exits: Array<{ id: string; code: number }> = []
     manager.on('exit', (id: string, code: number) => exits.push({ id, code }))
 
-    assert.equal(manager.isRunning(term.id), true)
-    sidecar.emit('request-error', term.id, new Error('input timed out'))
+    // "actor stopped" is the engine saying this terminal has no writer thread
+    // any more. Leaving the record alive was what made a dead shell look hung:
+    // every keystroke was accepted and dropped, with nothing on screen to say
+    // so, and only closing the widget helped.
+    sidecar.emit('request-error', term.id, new Error(`terminal ${term.id} actor stopped`))
 
-    assert.equal(sidecar.spawnCalls, 1)
-    assert.equal(manager.isRunning(term.id), true)
-    assert.deepEqual(exits, [])
-    assert.equal(manager.write(term.id, 'x').ok, true)
+    assert.equal(sidecar.spawnCalls, 0)
+    assert.equal(manager.isRunning(term.id), false)
+    assert.deepEqual(exits, [{ id: term.id, code: 1 }])
     manager.disposeAll()
   })
 
@@ -328,6 +476,96 @@ describe('TerminalManager', () => {
     manager.disposeAll()
   })
 
+  test('respawning after exit does not inherit the previous session output', () => {
+    class FakeRustPty extends EventEmitter {
+      spawn(): { ok: true } { return { ok: true } }
+      write(): { ok: true } { return { ok: true } }
+      resize(): { ok: true } { return { ok: true } }
+      dispose(): { ok: true } { return { ok: true } }
+      beginClose(): void {}
+      close(): void {}
+    }
+
+    const sidecar = new FakeRustPty()
+    const manager = new TerminalManager({ rustPty: sidecar as never })
+    const term = manager.reserve()
+
+    assert.equal(manager.spawn(term.id, 80, 24).ok, true)
+    manager.appendOutput(term.id, 'stale-session-bytes')
+    assert.ok((manager.fullOutput(term.id) ?? '').includes('stale-session-bytes'))
+
+    sidecar.emit('exit', term.id, 0)
+    assert.equal(manager.isRunning(term.id), false)
+
+    assert.equal(manager.spawn(term.id, 80, 24).ok, true)
+    assert.equal(manager.fullOutput(term.id), '')
+    manager.appendOutput(term.id, 'fresh')
+    assert.equal(manager.readOutput(term.id, true), 'fresh')
+
+    manager.disposeAll()
+  })
+
+  test('a backend restart reuses the last known terminal geometry', () => {
+    class FakeRustPty extends EventEmitter {
+      spawns: Array<{ cols: number; rows: number }> = []
+      spawn(options: { cols: number; rows: number }): { ok: true } {
+        this.spawns.push({ cols: options.cols, rows: options.rows })
+        return { ok: true }
+      }
+      write(): { ok: true } { return { ok: true } }
+      resize(): { ok: true } { return { ok: true } }
+      dispose(): { ok: true } { return { ok: true } }
+      beginClose(): void {}
+      close(): void {}
+    }
+
+    const sidecar = new FakeRustPty()
+    const manager = new TerminalManager({ rustPty: sidecar as never })
+    const term = manager.reserve()
+
+    assert.equal(manager.spawn(term.id, 80, 24).ok, true)
+    manager.resize(term.id, 111, 27)
+    sidecar.emit('backend-exit', 1)
+
+    assert.equal(sidecar.spawns.length, 2)
+    assert.deepEqual(sidecar.spawns[1], { cols: 111, rows: 27 })
+    assert.equal(manager.isRunning(term.id), true)
+
+    manager.disposeAll()
+  })
+
+  test('a backend failure during shutdown does not respawn terminals', () => {
+    class FakeRustPty extends EventEmitter {
+      spawnCalls = 0
+      closed = false
+      beginCloseCalls = 0
+      spawn(): { ok: true } { this.spawnCalls += 1; return { ok: true } }
+      write(): { ok: true } { return { ok: true } }
+      resize(): { ok: true } { return { ok: true } }
+      dispose(): { ok: true } { return { ok: true } }
+      beginClose(): void { this.beginCloseCalls += 1 }
+      close(): void { this.closed = true }
+    }
+
+    const sidecar = new FakeRustPty()
+    const manager = new TerminalManager({ rustPty: sidecar as never })
+    const term = manager.reserve()
+    const record = (
+      manager as unknown as { terminals: Map<string, { nativeAlive: boolean }> }
+    ).terminals.get(term.id)
+    assert.ok(record)
+    record.nativeAlive = true
+
+    manager.disposeAll()
+    assert.equal(sidecar.beginCloseCalls, 1, 'the sidecar must be told before terminals are released')
+
+    // Quitting closes the engine's stdin, so the writes that release each
+    // terminal fail with EPIPE and the sidecar reports the backend as dead.
+    // Respawning here would leave fresh orphaned shells behind the closing app.
+    sidecar.emit('backend-exit', 1)
+    assert.equal(sidecar.spawnCalls, 0, 'no shell may be started while shutting down')
+  })
+
   test('markPreferred sets focus for target resolution', () => {
     const manager = new TerminalManager()
     const term1 = manager.reserve()
@@ -349,6 +587,24 @@ describe('TerminalManager', () => {
       assert.ok(fs.existsSync(cmd), `cmd path must exist: ${cmd}`)
       assert.ok(fs.existsSync(ps), `powershell path must exist: ${ps}`)
       assert.match(ps.toLowerCase(), /powershell\.exe|pwsh\.exe/)
+    }
+  })
+
+  test('windowsShellArgs starts cmd without setup commands', () => {
+    // cmd.exe receives no startup command, keeping its prompt on row one.
+    if (process.platform !== 'win32') {
+      assert.deepEqual(windowsShellArgs('cmd'), [])
+      assert.deepEqual(windowsShellArgs('powershell'), [])
+      return
+    }
+    const cmd = windowsShellArgs('cmd')
+    assert.deepEqual(cmd, ['/K'], 'cmd.exe must open directly on its first prompt row')
+
+    const ps = windowsShellArgs('powershell')
+    assert.ok(ps.includes('-NoExit'), 'the PowerShell session must stay interactive')
+    assert.ok(ps.some((arg) => arg.includes('65001')))
+    for (const arg of ps) {
+      assert.ok(!/[\r\n]/.test(arg), `argv entry must not carry an Enter: ${arg}`)
     }
   })
 })

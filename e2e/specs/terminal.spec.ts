@@ -171,17 +171,21 @@ test('three Code terminals can be resized in both directions', async () => {
   const { page } = ctx
 
   await page.evaluate(() => localStorage.removeItem('orcspace:code-three-way-split'))
-  const viewport = page.viewportSize()
-  test.skip(!viewport || viewport.width < 1100, 'three-way resize needs a wide viewport')
+  const viewportWidth = await page.evaluate(() => window.innerWidth)
+  test.skip(viewportWidth < 1100, 'three-way resize needs a wide viewport')
   await page.getByRole('tab', { name: 'Code' }).click()
   while (await page.getByRole('button', { name: 'Close session' }).count()) {
     await page.getByRole('button', { name: 'Close session' }).first().click()
   }
-  await page.getByRole('button', { name: 'Launch', exact: true }).click()
+  await page.getByRole('button', { name: 'Other CLI', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Launch Code Session' })
+  await dialog.getByRole('button', { name: 'Other CLI', exact: true }).click()
+  await dialog.getByRole('textbox').fill('cmd /d')
   await dialog.getByRole('button', { name: '2', exact: true }).click()
   await dialog.getByRole('button', { name: /Launch 2 terminals/ }).click()
-  await page.getByRole('button', { name: 'Launch', exact: true }).click()
+  await page.getByRole('button', { name: 'Open another CLI or browser', exact: true }).first().click()
+  await dialog.getByRole('button', { name: 'Other CLI', exact: true }).click()
+  await dialog.getByRole('textbox').fill('cmd /d')
   await dialog.getByRole('button', { name: '1', exact: true }).click()
   await dialog.getByRole('button', { name: /Launch 1 terminal/ }).click()
 
@@ -220,8 +224,11 @@ test('Code paste is delivered only to the focused terminal', async () => {
   const { page } = ctx
 
   await page.getByRole('tab', { name: 'Code' }).click()
-  await page.getByRole('button', { name: 'Launch', exact: true }).click()
+  await page.getByRole('button', { name: 'Other CLI', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Launch Code Session' })
+  await dialog.getByRole('button', { name: 'Other CLI', exact: true }).click()
+  await dialog.getByRole('textbox').fill('cmd /d')
+  await dialog.getByRole('button', { name: '4', exact: true }).click()
   await dialog.getByRole('button', { name: /Launch 4 terminals/ }).click()
 
   const textareas = page.getByTestId('code-view').locator('.xterm-helper-textarea')
@@ -232,7 +239,12 @@ test('Code paste is delivered only to the focused terminal', async () => {
 
   const codeTerminals = (await listTerminals(ctx)).filter((terminal) => terminal.id.startsWith('code-'))
   const marker = `CODE_PASTE_${Date.now()}`
-  await page.evaluate(async (value) => { await navigator.clipboard.writeText(value) }, marker)
+  await ctx.app.evaluate(({ ipcMain }, value) => {
+    ipcMain.removeHandler('media:read-clipboard-text')
+    ipcMain.handle('media:read-clipboard-text', () => value)
+    ipcMain.removeHandler('media:save-clipboard-scratch')
+    ipcMain.handle('media:save-clipboard-scratch', () => null)
+  }, marker)
   await textareas.nth(2).focus()
   await page.keyboard.press('Control+Shift+V')
 

@@ -1,7 +1,7 @@
 import * as http from 'http'
 import * as fs from 'fs'
 import * as os from 'os'
-import { extname, join, normalize, resolve, sep } from 'path'
+import { basename, extname, join, normalize, resolve, sep } from 'path'
 import { CONTROL_PORT, MAX_TERMINAL_WRITE_BYTES, getActiveControlPort, setActiveControlPort } from './config.ts'
 import { getIpcSocketPath, prepareSocketPath, setActiveSocketPath } from './ipcSocket.ts'
 import { TerminalManager } from './terminals.ts'
@@ -18,6 +18,8 @@ import { applyLoopbackCors, isLoopbackRequest, secretsEqual } from './netGuard.t
 import { APP_VERSION, buildPresence, buildSnapshot } from './linkSnapshot.ts'
 import type { AppState } from './appState.ts'
 import { fileResource, parseResource, type ActorType, type CommandErrorCode, type CommandResult, type Core } from './core/index.ts'
+import { resolveImage } from './imageAttachments.ts'
+import { hasImageExtension, hasAudioExtension, hasVideoExtension, hasDocExtension, importFile, isLocalPath } from './media.ts'
 
 const MAX_BODY_BYTES = 1_000_000
 const BODY_TIMEOUT_MS = 30_000
@@ -66,6 +68,9 @@ interface ControlDeps {
 
   rendererDir?: string
   broadcast?(channel: string, payload: unknown): void
+
+
+  capture?(widgetId?: string): Promise<{ name: string; path: string } | { error: string }>
 
   onPortAssigned?(port: number): void
 
@@ -570,6 +575,19 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
           return reply(result)
         }
 
+        const images = imageList(body)
+        if (images.length > 0) {
+          return reply(
+            await submit(body, 'terminal.attach', `terminal:${worker.id}`, {
+              images,
+              text: String(body.text ?? ''),
+              pressEnter: body.pressEnter !== false,
+              confirmDelivery: body.confirmDelivery === true,
+              deliveryTimeoutMs: typeof body.deliveryTimeoutMs === 'number' ? body.deliveryTimeoutMs : undefined
+            })
+          )
+        }
+
         return reply(
           await submit(body, 'terminal.write', `terminal:${worker.id}`, {
             text: String(body.text ?? ''),
@@ -644,7 +662,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     }
     if (method === 'POST' && parts[1] === 'tasks' && parts.length === 2) {
       const body = await readJson(req)
-      return reply(await submit(body, 'orctask.create', NEW.orctask, body), 201)
+      let images: string[]
+      try {
+        images = importImages(imageList(body))
+      } catch (err) {
+        return sendJson(res, 400, { error: err instanceof Error ? err.message : String(err), code: 'invalid' })
+      }
+      return reply(await submit(body, 'orctask.create', NEW.orctask, { ...body, images }), 201)
     }
     if (method === 'PATCH' && parts[1] === 'tasks' && parts[2]) {
       const body = await readJson(req)
@@ -684,7 +708,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     }
     if (method === 'POST' && parts[1] === 'messages' && parts.length === 2) {
       const body = await readJson(req)
-      return reply(await submit(body, 'orc.send', runTarget(body.runId), body), 201)
+      let images: string[]
+      try {
+        images = importImages(imageList(body))
+      } catch (err) {
+        return sendJson(res, 400, { error: err instanceof Error ? err.message : String(err), code: 'invalid' })
+      }
+      return reply(await submit(body, 'orc.send', runTarget(body.runId), { ...body, images }), 201)
     }
     if (method === 'POST' && parts[1] === 'messages' && parts[3] === 'ack') {
       const body = await readJson(req)
@@ -802,6 +832,72 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     return reply(await submit(body, 'canvas.camera', CANVAS_TARGET, body))
   }
 
+  if (method === 'POST' && parts[0] === 'terminal' && parts[2] === 'attach') {
+    const rawId = safeDecode(parts[1])
+    if (!rawId || !/^[A-Za-z0-9_-]{1,128}$/.test(rawId)) return sendJson(res, 400, { error: 'invalid terminal id' })
+    const body = await readJson(req)
+    return reply(
+      await submit(body, 'terminal.attach', `terminal:${rawId}`, {
+        images: imageList(body),
+        text: typeof body.text === 'string' ? body.text : '',
+        pressEnter: body.pressEnter !== false,
+        confirmDelivery: body.confirmDelivery === true,
+        deliveryTimeoutMs: typeof body.deliveryTimeoutMs === 'number' ? body.deliveryTimeoutMs : undefined
+      })
+    )
+  }
+
+  if (method === 'POST' && parts[0] === 'canvas' && parts[1] === 'media') {
+    const body = await readJson(req)
+    const source = String(body.path ?? body.image ?? body.file ?? '').trim()
+    if (!source) return sendJson(res, 400, { error: 'canvas media needs a file path', code: 'invalid' })
+    if (!isLocalPath(source)) {
+      return sendJson(res, 400, { error: `path must be absolute and local: ${source}`, code: 'invalid' })
+    }
+    let file: { name: string; path: string }
+    try {
+      file = importFile(source)
+    } catch (err) {
+      return sendJson(res, 400, { error: err instanceof Error ? err.message : String(err), code: 'invalid' })
+    }
+    const created = await submit<{ id: string; title: string }>(body, 'widget.create', NEW.widget, {
+      kind: 'browser',
+      title: typeof body.title === 'string' && body.title.trim() ? body.title.trim() : basename(source),
+      x: typeof body.x === 'number' ? body.x : undefined,
+      y: typeof body.y === 'number' ? body.y : undefined
+    })
+    if (!created.ok) return reply(created)
+    deps.broadcast?.('control:open-media', {
+      widgetId: created.data.id,
+      path: file.path,
+      name: basename(source),
+      mediaUrl: `orc://media/${file.name}`,
+      kind: mediaKindOf(source)
+    })
+    return sendJson(res, 201, {
+      ok: true,
+      data: { id: created.data.id, title: created.data.title, path: file.path, kind: mediaKindOf(source) }
+    })
+  }
+
+  if (method === 'POST' && parts[0] === 'screenshot') {
+    const body = await readJson(req)
+    if (!deps.capture) return sendJson(res, 503, { error: 'screen capture is unavailable', code: 'failed' })
+    const raw = String(body.worker ?? body.target ?? '').trim()
+    let widgetId: string | undefined
+    if (raw) {
+      try {
+        widgetId = resolveWorker({ terminals, orchestration }, raw, undefined).id
+      } catch (err) {
+        const code = (err as { code?: CommandErrorCode }).code ?? 'invalid'
+        return sendJson(res, STATUS_BY_CODE[code] ?? 400, { error: (err as Error).message, code })
+      }
+    }
+    const shot = await deps.capture(widgetId)
+    if ('error' in shot) return sendJson(res, 500, { error: shot.error, code: 'failed' })
+    return sendJson(res, 200, { ok: true, data: { path: shot.path, name: shot.name, ...(widgetId ? { widgetId } : {}) } })
+  }
+
   if (method === 'POST' && parts[0] === 'terminal' && parts[2] === 'write') {
     const rawId = safeDecode(parts[1])
     if (!rawId || !/^[A-Za-z0-9_-]{1,128}$/.test(rawId)) return sendJson(res, 400, { error: 'invalid terminal id' })
@@ -842,6 +938,38 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
   }
 
   sendJson(res, 404, { error: 'not found' })
+}
+
+/**
+ * Image paths on a request body, from either `image` or `images`.
+ *
+ * The control API is local — the CLI and the app share a filesystem — so an
+ * attachment travels as a path rather than as bytes on the wire.
+ */
+function imageList(body: Json): string[] {
+  const raw = Array.isArray(body.images) ? body.images : []
+  const single = typeof body.image === 'string' ? [body.image] : []
+  return [...raw, ...single]
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter((value) => value.length > 0)
+    .slice(0, 8)
+}
+
+/**
+ * Copy every attachment into the media store, so a path in mail or a task
+ * spec still resolves long after the command that sent it.
+ */
+function importImages(paths: string[]): string[] {
+  return paths.map((path) => resolveImage(path).path)
+}
+
+function mediaKindOf(path: string): 'image' | 'video' | 'audio' | 'pdf' | 'doc' {
+  if (hasImageExtension(path)) return 'image'
+  if (hasVideoExtension(path)) return 'video'
+  if (hasAudioExtension(path)) return 'audio'
+  if (path.toLowerCase().endsWith('.pdf')) return 'pdf'
+  if (hasDocExtension(path)) return 'doc'
+  return 'doc'
 }
 
 function runTarget(runId: unknown): string {

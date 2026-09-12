@@ -114,6 +114,7 @@ export class CommandFlow extends EventEmitter {
           transient: def.transient ?? def.handler.transient,
           bypassQueue: def.bypassQueue ?? def.handler.bypassQueue,
           description: def.description,
+          extraLocks: def.handler.extraLocks,
           apply: def.handler.apply
         })
       } catch (error) {
@@ -160,10 +161,23 @@ export class CommandFlow extends EventEmitter {
 
 
 
+  private extraLocksOf(cmd: Command): ResourceId[] {
+    const handler = this.handlers.get(cmd.type)
+    const fn = handler?.extraLocks as ((command: Command) => ResourceId[]) | undefined
+    if (!fn) return []
+    try {
+      return fn(cmd) ?? []
+    } catch {
+      return []
+    }
+  }
+
   private lanesOf(command: Command): string[] {
     const parsed = parseResource(command.target)
-    if (!parsed) return [command.target]
-    return [parsed.scheme === 'file' ? fileResource(parsed.id) : command.target]
+    const primary = parsed ? (parsed.scheme === 'file' ? fileResource(parsed.id) : command.target) : command.target
+    const lanes = new Set<string>([primary])
+    for (const extra of this.extraLocksOf(command)) lanes.add(extra)
+    return [...lanes]
   }
 
   private lanesOfCommands(commands: Command[]): string[] {
@@ -209,21 +223,39 @@ export class CommandFlow extends EventEmitter {
 
 
   private assertUnlockedFor(cmd: Command): void {
-    if (!this.locks.isLockedByOther(cmd.target, cmd.actorId)) return
-    const lock = this.locks.holder(cmd.target)
-    throw new CommandError('locked', `${cmd.target} is locked by ${lock?.actorId}`, { lock })
+    for (const resource of [cmd.target, ...this.extraLocksOf(cmd)]) {
+      if (!this.locks.isLockedByOther(resource, cmd.actorId)) continue
+      const lock = this.locks.holder(resource)
+      throw new CommandError('locked', `${resource} is locked by ${lock?.actorId}`, { lock })
+    }
   }
 
 
-  private takeImplicitLockFor(cmd: Command, ttlMs: number | undefined, reason: string): ResourceId {
-    this.locks.acquire({
-      resource: cmd.target,
-      actorId: cmd.actorId,
-      ttlMs: ttlMs ?? this.implicitLockTtl,
-      reason,
-      implicit: true
-    })
-    return cmd.target
+  private takeImplicitLockFor(cmd: Command, ttlMs: number | undefined, reason: string): ResourceId[] {
+    const acquired: ResourceId[] = []
+    try {
+      for (const resource of [cmd.target, ...this.extraLocksOf(cmd)]) {
+        if (this.locks.isHeldBy(resource, cmd.actorId)) continue
+        this.locks.acquire({
+          resource,
+          actorId: cmd.actorId,
+          ttlMs: ttlMs ?? this.implicitLockTtl,
+          reason,
+          implicit: true
+        })
+        acquired.push(resource)
+      }
+    } catch (error) {
+      // All-or-nothing. A throw partway (an extra resource that fails
+      // validation, or one taken between the caller's check and here) used to
+      // leave the locks already taken in this loop held by nobody's `finally`
+      // — the caller only releases what was *returned*. They would then sit
+      // there until their TTL expired, and every command touching those
+      // resources meanwhile came back `locked` with no holder able to release.
+      for (const resource of acquired) this.exitLockGate(resource, cmd.actorId)
+      throw error
+    }
+    return acquired
   }
 
   private exitLockGate(lock: ResourceId | null, actorId: string): void {
@@ -614,8 +646,8 @@ export class CommandFlow extends EventEmitter {
         for (const v of validated) {
           const cmd = v.command
           if (v.handler.requiresLock === false) continue
-          if (!this.locks.isHeldBy(cmd.target, cmd.actorId) && !implicitLocks.includes(cmd.target)) {
-            implicitLocks.push(this.takeImplicitLockFor(cmd, options?.implicitLockTtlMs, `transact:${cmd.type}`))
+          for (const resource of this.takeImplicitLockFor(cmd, options?.implicitLockTtlMs, `transact:${cmd.type}`)) {
+            if (!implicitLocks.includes(resource)) implicitLocks.push(resource)
           }
         }
       }
@@ -769,7 +801,7 @@ export class CommandFlow extends EventEmitter {
     overlayId?: string,
     signal?: AbortSignal
   ): Promise<CommandResult<T>> {
-    let implicitLock: ResourceId | null = null
+    let implicitLocks: ResourceId[] = []
     let intentWritten = false
     let cmd = command
     try {
@@ -790,8 +822,8 @@ export class CommandFlow extends EventEmitter {
 
 
 
-        if (handler.transient !== true && !this.locks.isHeldBy(cmd.target, actor.id)) {
-          implicitLock = this.takeImplicitLockFor(cmd, undefined, cmd.type)
+        if (handler.transient !== true) {
+          implicitLocks = this.takeImplicitLockFor(cmd, undefined, cmd.type)
         }
       }
 
@@ -881,7 +913,7 @@ export class CommandFlow extends EventEmitter {
       this.emit('rejected', { command: cmd, result })
       return result
     } finally {
-      this.exitLockGate(implicitLock, cmd.actorId)
+      for (const lock of implicitLocks) this.exitLockGate(lock, cmd.actorId)
     }
   }
 }

@@ -119,7 +119,13 @@ export function detectRunning(title: string, tail: string | null): string | unde
   if (!tail) return undefined
   const text = tail
     .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ' ')
-    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, ' ')
+    // Same linear-matching rule as normalizeDeliveryText in terminals.ts: the
+    // body must not be able to swallow a following OSC introducer, or a tail
+    // full of unterminated ESC] pairs (what `cat` on a binary leaves behind)
+    // makes this quadratic. Bounded to 4KB here rather than 50KB, so it was
+    // milliseconds rather than seconds — but it runs once per terminal on
+    // every worker listing, and the safe pattern costs nothing.
+    .replace(/\x1b\][^\x07\x9c\x1b]*(?:\x07|\x9c|\x1b\\)?/g, ' ')
     .toLowerCase()
   for (const tool of TAIL_TOOLS) {
     if (tool.pattern.test(text)) return `~${tool.name}`

@@ -8,6 +8,7 @@
 
 export const monochrome = {
   base: '#080808',
+  terminalHeader: '#0D0D0D',
   surface: '#121212',
   elevated: '#181818',
   raised: '#1F1F1F'
@@ -81,7 +82,7 @@ export interface ThemeTokens {
 export const darkTokens: ThemeTokens = {
   colorBg: monochrome.base,
   colorBgRaise: monochrome.surface,
-  colorBgPanel: monochrome.raised,
+  colorBgPanel: monochrome.elevated,
   colorBgHover: monochrome.raised,
   colorLine: '#2A2A2E',
   colorLineSoft: monochrome.raised,

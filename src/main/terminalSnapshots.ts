@@ -199,7 +199,11 @@ export class TerminalSnapshots {
   forget(id: string): void {
     this.ensure()
 
-    this.generations.set(id, (this.generations.get(id) ?? 0) + 1)
+    // Terminal ids are never reused. Dropping the generation marker both
+    // invalidates in-flight async saves (their check sees a mismatch) and
+    // keeps this map from growing by one entry per terminal for the lifetime
+    // of the app.
+    this.generations.delete(id)
     if (!this.index[id]) return
     delete this.index[id]
 

@@ -78,4 +78,21 @@ describe('TerminalRingBuffer', () => {
     assert.equal(sliced.includes('\uFFFD'), false)
     assert.equal(sliced, '😀')
   })
+
+  test('compacts tiny chunks without changing bytes or offsets', () => {
+    const buffer = new TerminalRingBuffer({ maxBytes: 100_000 })
+    for (let i = 0; i < 5000; i += 1) buffer.append('x')
+
+    assert.equal(buffer.length, 5000)
+    assert.equal(buffer.globalOffset, 5000)
+    assert.equal(buffer.toString(), 'x'.repeat(5000))
+
+    const mid = buffer.read(2500, 10)
+    assert.equal(mid.data, 'x'.repeat(10))
+    assert.equal(mid.newOffset, 2510)
+
+    const all = buffer.read(0, 100_000)
+    assert.equal(all.data, 'x'.repeat(5000))
+    assert.equal(all.newOffset, 5000)
+  })
 })

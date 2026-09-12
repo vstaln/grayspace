@@ -81,6 +81,8 @@ export interface OrcTask {
   spec: string
 
   deps: string[]
+
+  images?: string[]
   status: OrcTaskStatus
   createdBy: string
   createdAt: number
@@ -129,6 +131,9 @@ export interface Message {
   dispatchId?: string
   outcome?: Outcome
   filesModified?: string[]
+
+
+  images?: string[]
 
   options?: string[]
 

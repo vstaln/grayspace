@@ -28,6 +28,23 @@ export const ORCHESTRATION_SCHEMA_VERSION = 1
 
 
 const MAX_MESSAGES = 2_000
+const MAX_BODY_BYTES = 64 * 1024
+const MAX_INBOX_SCAN = 2_000
+
+function capBody(body: string): string {
+  const text = String(body ?? '')
+  if (Buffer.byteLength(text, 'utf8') <= MAX_BODY_BYTES) return text
+  // Byte-accurate truncation that never splits a UTF-8 sequence.
+  let end = Math.min(text.length, MAX_BODY_BYTES)
+  while (end > 0 && Buffer.byteLength(text.slice(0, end), 'utf8') > MAX_BODY_BYTES) {
+    end = Math.floor(end / 2)
+  }
+  // Grow back to the exact limit without overshooting.
+  while (end < text.length && Buffer.byteLength(text.slice(0, end + 1), 'utf8') <= MAX_BODY_BYTES) {
+    end += 1
+  }
+  return text.slice(0, end)
+}
 
 
 const PERSIST_DEBOUNCE_MS = 250
@@ -272,6 +289,7 @@ export class OrchestrationStore extends EventEmitter {
     title?: string
     spec: string
     deps?: string[]
+    images?: string[]
     createdBy: string
   }): OrcTask {
     const run = this.requireRun(input.runId)
@@ -294,6 +312,7 @@ export class OrchestrationStore extends EventEmitter {
       title: String(input.title ?? '').trim() || firstLine(spec),
       spec,
       deps,
+      ...(input.images?.length ? { images: input.images.map(String) } : {}),
       status: satisfied ? 'ready' : 'pending',
       createdBy: input.createdBy,
       createdAt: this.now(),
@@ -487,6 +506,7 @@ export class OrchestrationStore extends EventEmitter {
     dispatchId?: string
     outcome?: Outcome
     filesModified?: string[]
+    images?: string[]
     options?: string[]
     replyTo?: string
   }): Message {
@@ -505,12 +525,13 @@ export class OrchestrationStore extends EventEmitter {
 
 
       to: String(input.to || '@coordinator'),
-      subject: String(input.subject ?? '').trim() || defaultSubject(input.type, input.taskId),
-      body: String(input.body ?? ''),
+      subject: String(input.subject ?? '').trim().slice(0, 500) || defaultSubject(input.type, input.taskId),
+      body: capBody(String(input.body ?? '')),
       ...(input.taskId ? { taskId: input.taskId } : {}),
       ...(input.dispatchId ? { dispatchId: input.dispatchId } : {}),
       ...(input.outcome ? { outcome: input.outcome } : {}),
       ...(input.filesModified ? { filesModified: input.filesModified } : {}),
+      ...(input.images?.length ? { images: input.images.map(String) } : {}),
       ...(input.options ? { options: input.options } : {}),
       ...(input.replyTo ? { replyTo: input.replyTo } : {}),
       createdAt: this.now(),
@@ -522,15 +543,22 @@ export class OrchestrationStore extends EventEmitter {
       this.repliesByAskId.set(message.replyTo, message)
     }
     if (this.messages.length > MAX_MESSAGES) {
-
-      const keep = this.messages.filter((m) => m.ackedBy.length === 0)
-      const spare = MAX_MESSAGES - keep.length
-      this.messages =
-        spare > 0
-          ? [...this.messages.filter((m) => m.ackedBy.length > 0).slice(-spare), ...keep].sort(
-              (a, b) => a.createdAt - b.createdAt
-            )
-          : keep
+      // Unread mail is evicted last, but it is still evicted. The previous
+      // shape fell back to "keep every unacked message" once they alone
+      // exceeded the cap, which is not a cap at all: a fleet where nobody runs
+      // `orc check` grew this array — and the file behind it — without bound,
+      // and paid two filters, a sort and two Map rebuilds on every single
+      // message from then on.
+      const unacked = this.messages.filter((m) => m.ackedBy.length === 0)
+      if (unacked.length >= MAX_MESSAGES) {
+        this.messages = unacked.slice(-MAX_MESSAGES)
+      } else {
+        const spare = MAX_MESSAGES - unacked.length
+        this.messages = [
+          ...this.messages.filter((m) => m.ackedBy.length > 0).slice(-spare),
+          ...unacked
+        ].sort((a, b) => a.createdAt - b.createdAt)
+      }
       this.messageIndex.clear()
       this.repliesByAskId.clear()
       for (const m of this.messages) {
@@ -596,14 +624,14 @@ export class OrchestrationStore extends EventEmitter {
     actorId: string,
     filter: { runId?: string; types?: MessageType[]; includeAcked?: boolean; limit?: number } = {}
   ): Message[] {
-    const limit = filter.limit ?? 50
+    const limit = Math.min(filter.limit ?? 50, MAX_INBOX_SCAN)
     const context = this.addressingContext(actorId)
     const types = filter.types?.length ? new Set(filter.types) : null
     const found: Message[] = []
 
 
 
-    for (const message of this.messages) {
+    for (const message of this.messages.slice(-MAX_INBOX_SCAN)) {
       if (found.length >= limit) break
       if (filter.runId && message.runId !== filter.runId) continue
       if (types && !types.has(message.type)) continue
@@ -637,8 +665,9 @@ export class OrchestrationStore extends EventEmitter {
   }
 
   listMessages(filter: { runId?: string; limit?: number } = {}): Message[] {
+    const capped = Math.min(filter.limit ?? 200, MAX_INBOX_SCAN)
     const all = filter.runId ? this.messages.filter((m) => m.runId === filter.runId) : this.messages
-    return all.slice(-(filter.limit ?? 200))
+    return all.slice(-capped)
   }
 
 

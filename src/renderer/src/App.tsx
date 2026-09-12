@@ -7,7 +7,7 @@ import ContextMenu from './components/ContextMenu'
 import TitleBar from './components/TitleBar'
 import type { WorkView } from './components/TitleBar'
 import { useCanvas } from './hooks/useCanvas'
-import { Camera, MIN_H, MIN_W, NON_MAXIMIZABLE, Point, ResizeDir, WidgetKind, WIDGET_DEFAULTS, WIDGET_H, WIDGET_W } from './types'
+import { Camera, clampWidgetSize, MIN_H, NON_MAXIMIZABLE, Point, ResizeDir, WidgetKind, WIDGET_DEFAULTS, WIDGET_H, WIDGET_W } from './types'
 import ErrorBoundary from './components/ErrorBoundary'
 import StrokesLayer from './components/StrokesLayer'
 import ConnectionsLayer from './components/ConnectionsLayer'
@@ -15,7 +15,7 @@ import { ThemeProvider, useTheme, wallpaperBackgroundImage } from './theme'
 import { ConfirmProvider, useConfirm } from './components/ConfirmDialog'
 import { useSettings } from './hooks/useSettings'
 import { DRAW_CLICK_THRESHOLD_PX } from './lib/canvasMetrics'
-import { ToastContainer, usePersistErrorToasts, useToasts } from './components/Toast'
+import { ToastContainer, usePersistErrorToasts, useTerminalBackendErrorToasts, useToasts } from './components/Toast'
 import Toolbar from './components/Toolbar'
 import { queueInitialCommand } from './lib/pendingTerminalCommands'
 
@@ -41,6 +41,7 @@ export default function App(): React.JSX.Element {
 
   const [activeView, setActiveView] = useState<WorkView>('canvas')
   const [codeSidebarCollapsed, setCodeSidebarCollapsed] = useState(false)
+  const toggleCodeSidebar = useCallback(() => setCodeSidebarCollapsed((collapsed) => !collapsed), [])
 
 
   const [codeStarted, setCodeStarted] = useState(false)
@@ -115,16 +116,9 @@ export default function App(): React.JSX.Element {
     }
   }, [activeView])
 
-  useEffect(() => {
-    const onToggle = (): void => {
-      setCodeSidebarCollapsed((prev) => !prev)
-    }
-    window.addEventListener('orcspace:toggle-left-panel', onToggle)
-    return () => window.removeEventListener('orcspace:toggle-left-panel', onToggle)
-  }, [])
-
   const { toasts, push, dismiss } = useToasts()
   usePersistErrorToasts(push)
+  useTerminalBackendErrorToasts(push)
 
   return (
     <ErrorBoundary>
@@ -135,8 +129,8 @@ export default function App(): React.JSX.Element {
             <TitleBar
               activeView={activeView}
               onViewChange={showView}
-              sidebarCollapsed={codeSidebarCollapsed}
-              onToggleSidebar={() => setCodeSidebarCollapsed((collapsed) => !collapsed)}
+              codeSidebarCollapsed={codeSidebarCollapsed}
+              onToggleCodeSidebar={toggleCodeSidebar}
             />
             <SettingsModal listenForToolbar />
             <div className="flex flex-1 flex-col">
@@ -144,8 +138,7 @@ export default function App(): React.JSX.Element {
                 <OrcSpaceCanvas
                   active={activeView === 'canvas'}
                   activeView={activeView}
-                  sidebarCollapsed={codeSidebarCollapsed}
-                  onToggleSidebar={() => setCodeSidebarCollapsed((collapsed) => !collapsed)}
+                  codeSidebarCollapsed={codeSidebarCollapsed}
                 />
               </ErrorBoundary>
             </div>
@@ -213,13 +206,11 @@ function Wallpaper(): React.JSX.Element | null {
 function OrcSpaceCanvas({
   active,
   activeView,
-  sidebarCollapsed,
-  onToggleSidebar
+  codeSidebarCollapsed
 }: {
   active: boolean
   activeView: WorkView
-  sidebarCollapsed: boolean
-  onToggleSidebar(): void
+  codeSidebarCollapsed: boolean
 }): React.JSX.Element {
   const { settings, update: updateSettings } = useSettings()
   const canvas = useCanvas()
@@ -395,6 +386,15 @@ function OrcSpaceCanvas({
     return () => window.removeEventListener('orcspace:new-terminal', onNewTerminal)
   }, [spawnTerminalAtCenter])
 
+  useEffect(() => {
+    const onNotice = (event: Event): void => {
+      const message = (event as CustomEvent<{ message?: string }>).detail?.message
+      if (message) setCanvasNotice(message)
+    }
+    window.addEventListener('orcspace:canvas-notice', onNotice)
+    return () => window.removeEventListener('orcspace:canvas-notice', onNotice)
+  }, [])
+
   const placeWidget = useCallback(
     (kind: WidgetKind, point: Point, requestedId?: string, title?: string): string | null => {
       const defaults = WIDGET_DEFAULTS[kind]
@@ -423,6 +423,51 @@ function OrcSpaceCanvas({
       y: center.y - defaults.h / 2
     })
     if (id && kind === 'terminal' && initialCommand) queueInitialCommand(id, initialCommand)
+  }, [mainSize.h, mainSize.w, placeWidget, toWorld])
+
+  // A link opened with target=_blank or window.open() inside any <webview>
+  // (main.ts denies the new window and rebroadcasts the URL instead — see
+  // windowManager.ts) used to have no listener at all: the click did
+  // nothing. This is the destination — open it the way a new browser tab
+  // would, as a fresh browser widget seeded with the URL. The broadcast
+  // isn't scoped to a widget id, so a new widget (rather than guessing
+  // which existing one to target) is the only option that is always right.
+  useEffect(() => {
+    // The URL on this channel comes from a page inside a <webview>: any site
+    // calling window.open() reaches here, and every arrival used to mint a
+    // browser widget — a whole Chromium renderer process — with only the
+    // main-process 350ms repeat guard and MAX_WIDGETS between a popup loop
+    // and 200 of them, persisted to the canvas so they came back on restart.
+    // A person opening links in quick succession stays well inside this;
+    // anything faster is a script, and dropping those is what a popup blocker
+    // is for.
+    const openedAt: number[] = []
+    const OPEN_WINDOW_MS = 5_000
+    const MAX_OPENS_PER_WINDOW = 3
+    return window.api.browser.onOpenTab((url) => {
+      const now = Date.now()
+      while (openedAt.length > 0 && now - openedAt[0] > OPEN_WINDOW_MS) openedAt.shift()
+      if (openedAt.length >= MAX_OPENS_PER_WINDOW) {
+        console.warn('suppressed a burst of window.open() calls from a browser widget', url)
+        return
+      }
+      openedAt.push(now)
+
+      const cx = mainSize.w > 0 ? mainSize.w / 2 : window.innerWidth / 2
+      const cy = mainSize.h > 0 ? mainSize.h / 2 : window.innerHeight / 2
+      const center = toWorld(cx, cy)
+      const defaults = WIDGET_DEFAULTS.browser
+      const id = placeWidget('browser', {
+        x: center.x - defaults.w / 2,
+        y: center.y - defaults.h / 2
+      })
+      if (!id) return
+      try {
+        localStorage.setItem(`orcspace-browser-url:${id}`, url)
+      } catch {
+
+      }
+    })
   }, [mainSize.h, mainSize.w, placeWidget, toWorld])
 
 
@@ -472,33 +517,73 @@ function OrcSpaceCanvas({
 
   const onHeaderPointerDown = useCallback(
     (e: React.PointerEvent, id: string): void => {
+      const target = e.target as Element
+      // preventDefault() on the second click suppresses the browser's
+      // dblclick event, which makes the terminal consume the rename text.
+      // Leave that click alone so the title's rename handler can run.
+      if (target.matches('[data-testid="widget-title"]') && e.detail >= 2) return
       if (e.button !== 0 || !e.currentTarget.contains(e.target as Node) || editingRef.current === id ||
-        (e.target as Element).closest('button, input, [role="menu"], [data-canvas-interactive]')) return
-      e.preventDefault()
+        target.closest('button, input, [role="menu"], [data-canvas-interactive]')) return
+      // Keep the title's native click sequence intact so a double-click can
+      // enter rename mode. The canvas is globally user-select:none, and the
+      // pointer capture below still owns the drag stream.
+      if (!target.matches('[data-testid="widget-title"]')) e.preventDefault()
       canvas.bringToFront(id)
       const widget = widgetsRef.current.find((w) => w.id === id)
       if (!widget || widget.maximized) return
-      try {
-        e.currentTarget.setPointerCapture(e.pointerId)
-      } catch {
-
-      }
-
       const startX = e.clientX
       const startY = e.clientY
       const { x: origX, y: origY } = widget
       const startZoom = cameraRef.current.zoom
-      const onMove = (ev: MouseEvent): void => {
+      const header = e.currentTarget as HTMLElement
+      const shell = header.parentElement
+      let latestX = origX
+      let latestY = origY
+      let dragging = false
+      const onMove = (ev: PointerEvent): void => {
+        if (!dragging) {
+          if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 3) return
+          dragging = true
+          try { header.setPointerCapture(e.pointerId) } catch {}
+        }
         const zoom = cameraRef.current.zoom || 1
-        canvas.updateWidget(id, {
-          x: origX + (ev.clientX - startX) / startZoom,
-          y: Math.max(
-            origY + (ev.clientY - startY) / startZoom,
-            titleBarWorldY(cameraRef.current.y, zoom)
-          )
-        })
+        latestX = origX + (ev.clientX - startX) / startZoom
+        latestY = Math.max(
+          origY + (ev.clientY - startY) / startZoom,
+          titleBarWorldY(cameraRef.current.y, zoom)
+        )
+
+        // Keep the pointer path on the compositor while the pointer is down.
+        // Updating React state for every mouse packet forces the terminal and
+        // any backdrop-filter layers to participate in layout before the next
+        // frame. The final world position is committed once on release.
+        if (shell?.isConnected) {
+          shell.style.transform = `translate3d(${latestX - origX}px, ${latestY - origY}px, 0)`
+          shell.style.willChange = 'transform'
+        }
       }
-      trackDrag(onMove)
+      const onEnd = (): void => {
+        if (!dragging) return
+        canvas.updateWidget(id, { x: latestX, y: latestY })
+        if (shell?.isConnected) {
+          // Let the rAF-batched state update paint before removing the preview.
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              if (!shell.isConnected) return
+              shell.style.transform = ''
+              shell.style.willChange = ''
+            })
+          })
+        }
+        try {
+          if (header.hasPointerCapture(e.pointerId)) header.releasePointerCapture(e.pointerId)
+        } catch {
+
+        }
+      }
+      // Synthetic pointer events used by automation can have pointerId=0;
+      // don't filter real mouse packets in that case.
+      trackDrag(onMove, onEnd, e.pointerId > 0 ? e.pointerId : undefined)
     },
     [canvas.bringToFront, canvas.updateWidget]
   )
@@ -523,29 +608,24 @@ function OrcSpaceCanvas({
       const onMove = (ev: MouseEvent): void => {
         const dx = (ev.clientX - startX) / startZoom
         const dy = (ev.clientY - startY) / startZoom
-        let [x, y, w, h] = [ox, oy, ow, oh]
-        if (dir.includes('e')) w = Math.max(MIN_W, ow + dx)
-        if (dir.includes('s')) h = Math.max(MIN_H, oh + dy)
-        if (dir.includes('w')) {
-          w = Math.max(MIN_W, ow - dx)
-          x = ox + ow - w
-        }
-        if (dir.includes('n')) {
-          h = Math.max(MIN_H, oh - dy)
-          y = oy + oh - h
-        }
+        // Size first, position second. Deriving x/y from an unclamped size
+        // and only then applying the kind's maximum left the anchored edge
+        // travelling with the pointer after the size had stopped growing,
+        // which slid the whole widget across the canvas.
+        const { w, h } = clampWidgetSize(
+          widget.kind,
+          dir.includes('e') ? ow + dx : dir.includes('w') ? ow - dx : ow,
+          dir.includes('s') ? oh + dy : dir.includes('n') ? oh - dy : oh
+        )
+        let x = dir.includes('w') ? ox + ow - w : ox
+        let y = dir.includes('n') ? oy + oh - h : oy
 
-        const kind = widget.kind as string
-        if (kind === 'timer') { w = Math.min(w, 360); h = Math.min(h, 320) }
-        else if (kind === 'links') { w = Math.min(w, 560); h = Math.min(h, 520) }
-        else if (kind === 'files') { w = Math.min(w, 760); h = Math.min(h, 620) }
-        else if (kind === 'music-player') { w = Math.min(w, 620); h = Math.min(h, 580) }
-        else if (kind === 'orchestration') { w = Math.min(w, 760); h = Math.min(h, 720) }
         const minY = titleBarWorldY(cameraRef.current.y, cameraRef.current.zoom)
         if (y < minY) {
           const bottom = y + h
           y = minY
-          h = Math.max(MIN_H, bottom - y)
+          canvas.updateWidget(id, { x, y, w, h: Math.max(MIN_H, bottom - y) })
+          return
         }
         canvas.updateWidget(id, { x, y, w, h })
       }
@@ -687,30 +767,21 @@ function OrcSpaceCanvas({
       if (e.altKey) {
 
 
-        let { x, y, w: width, h: height } = widget
-        if (dx > 0) width = Math.max(MIN_W, width + dx * step)
-        else if (dx < 0) {
-          const shrunk = Math.max(MIN_W, width + dx * step)
-          x += width - shrunk
-          width = shrunk
-        }
-        if (dy > 0) height = Math.max(MIN_H, height + dy * step)
-        else if (dy < 0) {
-          const shrunk = Math.max(MIN_H, height + dy * step)
-          y += height - shrunk
-          height = shrunk
-        }
-        const k = widget.kind as string
-        if (k === 'timer') { width = Math.min(width, 360); height = Math.min(height, 320) }
-        else if (k === 'links') { width = Math.min(width, 560); height = Math.min(height, 520) }
-        else if (k === 'files') { width = Math.min(width, 760); height = Math.min(height, 620) }
-        else if (k === 'music-player') { width = Math.min(width, 620); height = Math.min(height, 580) }
-        else if (k === 'orchestration') { width = Math.min(width, 760); height = Math.min(height, 720) }
+        // Same ordering rule as the pointer path above: clamp the size, then
+        // place the edges the keystroke is not moving.
+        const { w: width, h: height } = clampWidgetSize(
+          widget.kind,
+          widget.w + dx * step,
+          widget.h + dy * step
+        )
+        let x = dx < 0 ? widget.x + widget.w - width : widget.x
+        let y = dy < 0 ? widget.y + widget.h - height : widget.y
         const minY = titleBarWorldY(cameraRef.current.y, cameraRef.current.zoom)
         if (y < minY) {
           const bottom = y + height
           y = minY
-          height = Math.max(MIN_H, bottom - y)
+          canvas.updateWidget(id, { x, y, w: width, h: Math.max(MIN_H, bottom - y) })
+          return
         }
         canvas.updateWidget(id, { x, y, w: width, h: height })
       } else {
@@ -997,6 +1068,24 @@ function OrcSpaceCanvas({
     []
   )
 
+  // `orc canvas image <path>` places the browser widget from the main process
+  // and then sends the file here. The widget is created through the same
+  // control:add-widget round trip as a terminal, so it is not mounted yet when
+  // this arrives — deliverWhenMounted is what a drop onto the canvas uses for
+  // exactly the same reason.
+  useEffect(() => {
+    return window.api.control.onOpenMedia(({ widgetId, path, name, mediaUrl, kind }) => {
+      deliverWhenMounted(
+        widgetId,
+        () => window.dispatchEvent(new CustomEvent('orcspace:open-media', {
+          detail: { widgetId, path, name, mediaUrl, kind }
+        })),
+        () => setCanvasNotice(`Opened "${name}"`),
+        () => setCanvasNotice(`Failed to open "${name}"`)
+      )
+    })
+  }, [deliverWhenMounted])
+
   const onCanvasDrop = async (e: React.DragEvent): Promise<void> => {
     e.preventDefault()
     if (!e.dataTransfer || !e.dataTransfer.files.length) return
@@ -1090,10 +1179,18 @@ function OrcSpaceCanvas({
   const renderableWidgets = useMemo(() => {
     if (!mainSize.w || !mainSize.h) return widgets
     const zoom = camera.zoom || 1
-    const minX = (-mainSize.w - camera.x) / zoom
-    const minY = (-mainSize.h - camera.y) / zoom
-    const maxX = (2 * mainSize.w - camera.x) / zoom
-    const maxY = (2 * mainSize.h - camera.y) / zoom
+    // Culling a terminal unmounts it, and unmounting disposes its xterm and
+    // detaches from the pty — coming back re-runs the whole connect: a
+    // "Connecting…" overlay, stdin disabled, and up to 512KB of scrollback
+    // replayed slice by slice. At one screen of margin an ordinary pan across
+    // the canvas was enough to trigger that on every terminal it passed. The
+    // widgets are memoised, so keeping more of them mounted is far cheaper
+    // than rebuilding one.
+    const margin = 3
+    const minX = (-margin * mainSize.w - camera.x) / zoom
+    const minY = (-margin * mainSize.h - camera.y) / zoom
+    const maxX = ((1 + margin) * mainSize.w - camera.x) / zoom
+    const maxY = ((1 + margin) * mainSize.h - camera.y) / zoom
     return widgets.filter((w) => {
       if (w.maximized) return true
       if ((w.kind ?? 'terminal') !== 'terminal') return true
@@ -1119,12 +1216,32 @@ function OrcSpaceCanvas({
 
 
 
-  const maximizedWidgets = useMemo(() => widgets.filter((w) => w.maximized), [widgets])
-  const inWorldWidgets = useMemo(() => renderableWidgets.filter((w) => !w.maximized), [renderableWidgets])
+  const maximizedWidgets = useMemo(
+    () => widgets.filter((w) => w.maximized && w.kind !== 'browser'),
+    [widgets]
+  )
+  // Keep browser webviews under one React parent while maximizing. Moving a
+  // webview between the world and overlay trees destroys its guest contents,
+  // which makes an actively playing video disappear.
+  const inWorldWidgets = useMemo(
+    () => renderableWidgets.filter((w) => !w.maximized || w.kind === 'browser'),
+    [renderableWidgets]
+  )
 
   const widgetStyles = useMemo(() => {
     const styles = new Map<string, React.CSSProperties>()
     for (const widget of inWorldWidgets) {
+      if (widget.maximized && widget.kind === 'browser') {
+        const zoom = camera.zoom || 1
+        styles.set(widget.id, {
+          left: -camera.x / zoom,
+          top: (TITLE_BAR_HEIGHT - camera.y) / zoom,
+          width: mainSize.w / zoom,
+          height: Math.max(0, mainSize.h - TITLE_BAR_HEIGHT) / zoom,
+          zIndex: 200
+        })
+        continue
+      }
       styles.set(widget.id, {
         left: widget.x,
         top: widget.y,
@@ -1134,7 +1251,7 @@ function OrcSpaceCanvas({
       })
     }
     return styles
-  }, [inWorldWidgets])
+  }, [inWorldWidgets, camera.x, camera.y, camera.zoom, mainSize.w, mainSize.h])
 
 
 
@@ -1189,13 +1306,11 @@ function OrcSpaceCanvas({
 
   return (
     <div className="relative flex flex-1 overflow-hidden">
-      {activeView !== 'canvas' && (
+      {activeView !== 'canvas' && !codeSidebarCollapsed && (
         <Sidebar
           workspaceDir={workspaceDir}
           activeView={activeView}
           onPickDir={onPickDir}
-          sidebarCollapsed={sidebarCollapsed}
-          onToggleSidebar={onToggleSidebar}
         />
       )}
       <div className={active ? 'contents' : 'contents invisible pointer-events-none'} aria-hidden={!active} inert={!active}>
@@ -1365,9 +1480,12 @@ function trackDrag(onMove: (e: PointerEvent) => void, onEnd?: () => void, pointe
     released = true
     document.body.classList.remove('is-dragging')
     window.removeEventListener('pointermove', move)
-    window.removeEventListener('pointerup', release)
+    // `up` (not `release`) is what was registered: removing the wrong
+    // reference left one dead pointerup listener on window per drag — every
+    // widget move, canvas pan and pen stroke — for the life of the session.
+    window.removeEventListener('pointerup', up)
+    window.removeEventListener('pointercancel', up)
     window.removeEventListener('blur', release)
-    window.removeEventListener('pointercancel', release)
     onEnd?.()
   }
   const move = (event: PointerEvent): void => {
@@ -1381,11 +1499,8 @@ function trackDrag(onMove: (e: PointerEvent) => void, onEnd?: () => void, pointe
   }
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', up)
-
-
-
+  window.addEventListener('pointercancel', up)
   window.addEventListener('blur', release)
-  window.addEventListener('pointercancel', release)
 }
 
 function clamp(value: number, min: number, max: number): number {

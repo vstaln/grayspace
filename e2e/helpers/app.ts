@@ -82,12 +82,16 @@ export async function launchOrcSpace(options?: LaunchOptions): Promise<OrcSpaceF
     args: [mainJs, `--user-data-dir=${profileDir}`, '--disable-gpu'],
     env: {
       ...process.env,
+      ORCSPACE_TEST_USER_DATA: profileDir,
       WORKSPACE_CONTROL_PORT: String(controlPort),
     },
     timeout: 120_000
   })
 
   const page = await app.firstWindow()
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const window of BrowserWindow.getAllWindows()) window.setPosition(-20000, 0)
+  })
   await page.waitForLoadState('domcontentloaded')
 
   if (options?.viewport) {
@@ -116,13 +120,14 @@ export async function launchOrcSpace(options?: LaunchOptions): Promise<OrcSpaceF
 
 export async function waitForCanvas(page: Page): Promise<void> {
   await page.getByTestId('canvas').waitFor({ state: 'visible' })
+  await page.locator('#startup-screen').waitFor({ state: 'detached' })
 }
 
 
 
 
 
-export async function controlGet(fixture: OrcSpaceFixture, path: string): Promise<any> {
+export async function controlGet(fixture: Pick<OrcSpaceFixture, 'controlPort' | 'controlToken'>, path: string): Promise<any> {
   const res = await fetch(`http://127.0.0.1:${fixture.controlPort}${path}`, {
     headers: { 'x-orcspace-token': fixture.controlToken }
   })
@@ -159,7 +164,7 @@ export async function controlSend(
 }
 
 
-export async function readTerminalOutput(fixture: OrcSpaceFixture, id: string): Promise<string> {
+export async function readTerminalOutput(fixture: Pick<OrcSpaceFixture, 'controlPort' | 'controlToken'>, id: string): Promise<string> {
 
 
 
@@ -187,7 +192,7 @@ export async function waitForTerminalOutput(
 }
 
 
-export async function listTerminals(fixture: OrcSpaceFixture): Promise<Array<{ id: string; title: string }>> {
+export async function listTerminals(fixture: Pick<OrcSpaceFixture, 'controlPort' | 'controlToken'>): Promise<Array<{ id: string; title: string }>> {
   const data = await controlGet(fixture, '/widgets')
   return (data.widgets ?? []).filter((w: { kind?: string }) => w.kind === 'terminal')
 }
@@ -221,9 +226,10 @@ export async function waitForTerminalShell(fixture: OrcSpaceFixture, page: Page,
 
 
 export async function closeOrcSpace(
-  fixture: OrcSpaceFixture,
+  fixture: OrcSpaceFixture | undefined,
   options?: { keepProfile?: boolean }
 ): Promise<void> {
+  if (!fixture) return
   await fixture.app.close().catch(() => {})
   if (!options?.keepProfile) fs.rmSync(fixture.profileDir, { recursive: true, force: true })
 }

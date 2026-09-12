@@ -56,22 +56,29 @@ export function registerSettingsIpc(deps: IpcDeps): void {
 
       const dir = backgroundDir()
       await fs.promises.mkdir(dir, { recursive: true })
-
-
-      for (const name of await fs.promises.readdir(dir)) {
-        try {
-          await fs.promises.rm(join(dir, name), { force: true })
-        } catch {
-
-        }
-      }
       const rawExt = extname(source).toLowerCase() || '.png'
 
 
 
       const safeExt = media.IMAGE_EXTENSIONS.includes(rawExt.slice(1)) ? rawExt : '.png'
       const target = join(dir, `background-${Date.now()}${safeExt}`)
+
+      // Copy the replacement in first, before touching anything that
+      // currently works. A failed copy (disk full, source gone mid-pick)
+      // must leave the existing background exactly as it was instead of
+      // deleting it out from under a setting that still points to it. This
+      // also makes re-picking the currently active background (itself a
+      // file inside `dir`) safe: `source` survives until `target` exists.
       await fs.promises.copyFile(source, target)
+      for (const name of await fs.promises.readdir(dir)) {
+        const full = join(dir, name)
+        if (full === target) continue
+        try {
+          await fs.promises.rm(full, { force: true })
+        } catch {
+
+        }
+      }
       state.patchSettings({ backgroundImage: target })
       return { dataUrl: await backgroundDataUrl() }
     } catch (err) {

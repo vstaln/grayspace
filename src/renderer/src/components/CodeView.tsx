@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Maximize2, Minimize2, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
 import TerminalWidget, { forgetTerminalViewport } from './TerminalWidget'
 import BrowserWidget from './BrowserWidget'
-import CodeLauncher, { CODE_AGENTS, CodeAgent } from './CodeLauncher'
-import { queueInitialCommand } from '../lib/pendingTerminalCommands'
+import CodeLauncher, { CODE_AGENTS, CODE_LAUNCH_COUNTS, CodeAgent } from './CodeLauncher'
+import { clearInitialCommand, queueInitialCommand, queueInitialCommandOnce } from '../lib/pendingTerminalCommands'
 import { forgetAgentSelection } from './WidgetFrame'
+import { attachmentAgent } from '../lib/terminalAttachments'
 
 interface Session {
   id: string
@@ -16,7 +17,6 @@ interface Session {
 let sessionCounter = 0
 const MAX_CODE_SESSIONS = 32
 const INLINE_AGENTS = CODE_AGENTS.filter((agent) => agent.id !== 'browser' && agent.id !== 'custom')
-const LAUNCH_COUNTS = [1, 2, 4, 6, 8, 10, 12]
 
 function makeSessionId(): string {
   sessionCounter += 1
@@ -50,8 +50,9 @@ function denseRowCounts(count: number): number[] {
 
 function placementForIndex(count: number, index: number): React.CSSProperties {
   if (count === 3) {
-    if (index < 2) return { gridColumn: '1', gridRow: `${index + 1}` }
-    return { gridColumn: '2', gridRow: '1 / span 2' }
+    return index === 0
+      ? { gridColumn: '1', gridRow: '1 / 4' }
+      : { gridColumn: '3', gridRow: index === 1 ? '1' : '3' }
   }
   if (count === 5) {
     if (index < 4) return { gridColumn: `${index % 2 + 1}`, gridRow: `${Math.floor(index / 2) + 1}` }
@@ -80,7 +81,7 @@ interface Props {
 
 
   active: boolean
-  sidebarCollapsed?: boolean
+  sidebarCollapsed: boolean
 }
 
 const SessionCard = React.memo(function SessionCard({
@@ -124,12 +125,29 @@ const SessionCard = React.memo(function SessionCard({
 
   return (
     <div
-      className={`flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[8px] border border-line-soft transition-[opacity,box-shadow] ${
+      className={`flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[6px] border border-[#121212] transition-[opacity,box-shadow] ${
         isBrowserSession(session) ? 'bg-bg-panel' : 'code-terminal-shell'
       } ${
         maximized ? 'absolute inset-0 z-20 rounded-none' : ''
       } ${dragging ? 'opacity-45' : ''} ${dropTarget ? 'ring-2 ring-accent ring-inset' : ''}`}
       style={style}
+      onDragOver={(e) => {
+        if (editing || maximized) return
+        if (!Array.from(e.dataTransfer.types).includes('text/session-id')) return
+        e.preventDefault()
+        e.stopPropagation()
+        e.dataTransfer.dropEffect = 'move'
+        onDragOver(session.id)
+      }}
+      onDrop={(e) => {
+        if (editing || maximized) return
+        const sourceId = e.dataTransfer.getData('text/session-id')
+        if (!sourceId) return
+        e.preventDefault()
+        e.stopPropagation()
+        if (sourceId !== session.id) onSwap(sourceId, session.id)
+        onDragEnd()
+      }}
     >
       {
 
@@ -138,7 +156,7 @@ const SessionCard = React.memo(function SessionCard({
       <div
         draggable={!editing && !maximized}
         aria-grabbed={dragging || undefined}
-        className={`code-session-header flex h-7 flex-none items-center justify-between gap-2 border-b border-line-soft px-2 ${
+        className={`code-session-header flex h-6 flex-none items-center justify-between gap-2 border-b border-line-soft px-1.5 ${
           !editing && !maximized ? 'cursor-grab transition-colors hover:bg-bg-hover active:cursor-grabbing' : ''
         }`}
         onDragStart={(e) => {
@@ -154,22 +172,6 @@ const SessionCard = React.memo(function SessionCard({
         }}
         onDragEnd={(e) => {
           e.stopPropagation()
-          onDragEnd()
-        }}
-        onDragOver={(e) => {
-          if (editing || maximized) return
-          if (!Array.from(e.dataTransfer.types).some((type) => type === 'text/session-id' || type === 'text/plain')) return
-          e.preventDefault()
-          e.stopPropagation()
-          e.dataTransfer.dropEffect = 'move'
-          onDragOver(session.id)
-        }}
-        onDrop={(e) => {
-          if (editing || maximized) return
-          e.preventDefault()
-          e.stopPropagation()
-          const sourceId = e.dataTransfer.getData('text/session-id') || e.dataTransfer.getData('text/plain')
-          if (sourceId && sourceId !== session.id) onSwap(sourceId, session.id)
           onDragEnd()
         }}
         onClick={(e) => {
@@ -250,11 +252,12 @@ const SessionCard = React.memo(function SessionCard({
             type="button"
             aria-label={maximized ? 'Restore session' : 'Expand session'}
             title={maximized ? 'Restore session' : 'Expand session'}
+            aria-pressed={maximized}
             onClick={(e) => {
               e.stopPropagation()
               onToggleMaximize()
             }}
-            className="grid h-[18px] w-[18px] place-items-center rounded-[4px] text-text-faint transition-colors hover:bg-bg-hover hover:text-text"
+            className={`grid h-[18px] w-[18px] place-items-center rounded-[4px] transition-colors ${maximized ? 'bg-bg-hover text-white' : 'text-text-faint hover:bg-bg-hover hover:text-text'}`}
           >
             {maximized ? <Minimize2 size={10} strokeWidth={2.4} /> : <Maximize2 size={10} strokeWidth={2.4} />}
           </button>
@@ -273,13 +276,13 @@ const SessionCard = React.memo(function SessionCard({
         </div>
       </div>
       <div className="min-h-0 flex-1 bg-[#080808]">
-        {isBrowserSession(session) ? <BrowserWidget /> : <TerminalWidget id={session.id} surface="code" attachmentMode agentId={session.agent.id} onProcessExit={onProcessExit} />}
+        {isBrowserSession(session) ? <BrowserWidget /> : <TerminalWidget id={session.id} surface="code" attachmentMode agentId={attachmentAgent(session.agent.command) ?? attachmentAgent(session.agent.id)} onProcessExit={onProcessExit} />}
       </div>
     </div>
   )
 })
 
-export default function CodeView({ active, sidebarCollapsed = false }: Props): React.JSX.Element {
+export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX.Element {
   const [sessions, setSessions] = useState<Session[]>([])
   const sessionsRef = useRef<Session[]>(sessions)
   sessionsRef.current = sessions
@@ -323,52 +326,77 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
     return { col: 50, row: 50 }
   })
   const threeWayContainerRef = useRef<HTMLDivElement>(null)
+  const splitRef = useRef(threeWaySplit)
+  splitRef.current = threeWaySplit
+  const splitDragCleanupRef = useRef<(() => void) | null>(null)
 
-  const handleStartColumnResize = (e: React.MouseEvent): void => {
-    e.preventDefault()
-    const container = threeWayContainerRef.current
-    if (!container) return
-    const rect = container.getBoundingClientRect()
-    const onMove = (moveEv: MouseEvent): void => {
-      if (rect.width <= 0) return
-      const colPx = moveEv.clientX - rect.left
-      const col = Math.min(80, Math.max(20, (colPx / rect.width) * 100))
-      setThreeWaySplit((prev) => {
-        const next = { ...prev, col }
-        try { localStorage.setItem('orcspace:code-three-way-split', JSON.stringify(next)) } catch {}
-        return next
-      })
-    }
-    const onUp = (): void => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }
+  // Both splitters previously ended their drag on `mouseup` alone. Releasing
+  // the button outside the window (or the window losing focus mid-drag) never
+  // delivers that event, so the divider stayed glued to the pointer with no
+  // way out but another click, and its listeners outlived the drag — and the
+  // component, if it unmounted while one was live. They also wrote the new
+  // ratio to localStorage from inside the state updater: a synchronous,
+  // disk-backed write for every mouse packet, and one React is free to run
+  // twice per update. Persist once, on release.
+  const startSplitDrag = useCallback(
+    (axis: 'col' | 'row'): void => {
+      const container = threeWayContainerRef.current
+      if (!container) return
+      const rect = container.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) return
 
-  const handleStartRowResize = (e: React.MouseEvent): void => {
-    e.preventDefault()
-    const container = threeWayContainerRef.current
-    if (!container) return
-    const rect = container.getBoundingClientRect()
-    const onMove = (moveEv: MouseEvent): void => {
-      if (rect.height <= 0) return
-      const rowPx = moveEv.clientY - rect.top
-      const row = Math.min(80, Math.max(20, (rowPx / rect.height) * 100))
-      setThreeWaySplit((prev) => {
-        const next = { ...prev, row }
-        try { localStorage.setItem('orcspace:code-three-way-split', JSON.stringify(next)) } catch {}
-        return next
-      })
-    }
-    const onUp = (): void => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }
+      const onMove = (moveEv: MouseEvent): void => {
+        // The button being released off-window is not reported; the next
+        // move that arrives with no buttons down is how we learn about it.
+        if (moveEv.buttons === 0) {
+          finish()
+          return
+        }
+        const ratio =
+          axis === 'col'
+            ? ((moveEv.clientX - rect.left) / rect.width) * 100
+            : ((moveEv.clientY - rect.top) / rect.height) * 100
+        setThreeWaySplit((prev) => ({ ...prev, [axis]: Math.min(80, Math.max(20, ratio)) }))
+      }
+      const finish = (): void => {
+        if (splitDragCleanupRef.current !== detach) return
+        detach()
+        try {
+          localStorage.setItem('orcspace:code-three-way-split', JSON.stringify(splitRef.current))
+        } catch {}
+      }
+      function detach(): void {
+        splitDragCleanupRef.current = null
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', finish)
+        window.removeEventListener('blur', finish)
+      }
+
+      splitDragCleanupRef.current?.()
+      splitDragCleanupRef.current = detach
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', finish)
+      window.addEventListener('blur', finish)
+    },
+    []
+  )
+  useEffect(() => () => splitDragCleanupRef.current?.(), [])
+
+  const handleStartColumnResize = useCallback(
+    (e: React.MouseEvent): void => {
+      e.preventDefault()
+      startSplitDrag('col')
+    },
+    [startSplitDrag]
+  )
+
+  const handleStartRowResize = useCallback(
+    (e: React.MouseEvent): void => {
+      e.preventDefault()
+      startSplitDrag('row')
+    },
+    [startSplitDrag]
+  )
 
   const [featuredId, setFeaturedId] = useState<string | null>(null)
   const [maximizedId, setMaximizedId] = useState<string | null>(null)
@@ -466,7 +494,7 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
 
 
         for (const session of restored) {
-          if (session.status === 'active' && !isBrowserSession(session)) queueInitialCommand(session.id, session.agent.command)
+          if (session.status === 'active' && !isBrowserSession(session)) queueInitialCommandOnce(session.id, session.agent.command)
         }
 
         let maxCounter = 0
@@ -566,7 +594,7 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
         status: s.status === 'finished' ? 'finished' : 'active'
       }))
       for (const session of restored) {
-        if (session.status === 'active' && !isBrowserSession(session)) queueInitialCommand(session.id, session.agent.command)
+        if (session.status === 'active' && !isBrowserSession(session)) queueInitialCommandOnce(session.id, session.agent.command)
       }
       let maxCounter = 0
       for (const s of restored) {
@@ -673,6 +701,9 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
     handlerCacheRef.current.delete(id)
     forgetTerminalViewport(id)
     forgetAgentSelection(id)
+    // The session is gone; an undelivered launch command must not survive to
+    // be typed into anything, and its id must not keep a slot in the queue.
+    clearInitialCommand(id)
     setFeaturedId((current) => (current === id ? null : current))
     setMaximizedId((current) => (current === id ? null : current))
     setSessions((current) => current.filter((s) => s.id !== id))
@@ -781,7 +812,7 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
 
   const sessionPlacements = useMemo(() => {
     const placements = new Map<string, React.CSSProperties>()
-    if (sessions.length === 3) return placements
+
     sessions.forEach((session, index) => {
       const style = placementForIndex(sessions.length, index)
       if (Object.keys(style).length > 0) placements.set(session.id, style)
@@ -797,139 +828,18 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
 
   return (
     <div
-      className={`absolute inset-y-0 right-0 ${sidebarCollapsed ? 'left-[56px]' : 'left-[200px]'} z-[40000] flex flex-row pt-10 bg-[#121212] ${
+      className={`absolute inset-y-0 right-0 ${sidebarCollapsed ? 'left-0' : 'left-[200px]'} z-[40000] flex flex-row pt-10 bg-[#121212] ${
         active ? '' : 'pointer-events-none invisible'
       }`}
       data-testid="code-view"
       aria-hidden={!active}
     >
       <div className="flex min-w-0 min-h-0 flex-1 flex-col bg-[#121212]">
-        {sessions.length > 0 && <div className="flex h-9 flex-none items-center justify-between border-b border-line bg-bg-panel px-3">
-          <div className="flex items-center gap-2 text-xs text-text-dim">
-            <span className="font-semibold text-text">{sessions.length}</span>
-            <span>{sessions.length === 1 ? 'session' : 'sessions'}</span>
-          </div>
-          <button
-            type="button"
-            className="flex min-h-[28px] items-center gap-1.5 rounded-[8px] bg-accent px-3 py-1 text-xs font-semibold text-bg transition hover:opacity-90 disabled:opacity-35"
-            onClick={openLauncher}
-            disabled={sessions.length >= MAX_CODE_SESSIONS}
-          >
-            <Plus size={13} strokeWidth={2.5} /> Launch
-          </button>
-        </div>}
-
-        {sessions.length === 3 ? (
-          <div
-            ref={threeWayContainerRef}
-            className="relative flex min-h-0 flex-1 overflow-hidden p-1 gap-1 bg-[#121212]"
-          >
-            <div style={{ width: `${threeWaySplit.col}%` }} className="min-w-0 h-full">
-              {(() => {
-                const s = sessions[0]
-                const handlers = getSessionHandlers(s.id)
-                return (
-                  <SessionCard
-                    key={s.id}
-                    session={s}
-                    onClose={handlers.onClose}
-                    onProcessExit={handlers.onProcessExit}
-                    onFocus={handlers.onFocus}
-                    onRename={handlers.onRename}
-                    onOpenLauncher={openLauncher}
-                    onSwap={swapSessions}
-                    onDragStart={handleDragStart}
-                    onDragOver={handleDragOver}
-                    onDragEnd={handleDragEnd}
-                    dragging={draggedSessionId === s.id}
-                    dropTarget={dropTargetId === s.id && draggedSessionId !== s.id}
-                    promotable={false}
-                    maximized={maximizedId === s.id}
-                    onToggleMaximize={handlers.onToggleMaximize}
-                  />
-                )
-              })()}
-            </div>
-
-            <div
-              data-testid="code-resize-columns"
-              onMouseDown={handleStartColumnResize}
-              className="relative z-10 w-2.5 flex-none cursor-col-resize hover:bg-accent/40 active:bg-accent/60 transition-colors"
-              role="separator"
-              aria-label="Resize columns"
-            />
-
-            <div
-              style={{ width: `calc(${100 - threeWaySplit.col}% - 10px)` }}
-              className="min-w-0 h-full flex flex-col gap-1"
-            >
-              <div style={{ height: `${threeWaySplit.row}%` }} className="min-h-0 w-full">
-                {(() => {
-                  const s = sessions[1]
-                  const handlers = getSessionHandlers(s.id)
-                  return (
-                    <SessionCard
-                      key={s.id}
-                      session={s}
-                      onClose={handlers.onClose}
-                      onProcessExit={handlers.onProcessExit}
-                      onFocus={handlers.onFocus}
-                      onRename={handlers.onRename}
-                      onOpenLauncher={openLauncher}
-                      onSwap={swapSessions}
-                      onDragStart={handleDragStart}
-                      onDragOver={handleDragOver}
-                      onDragEnd={handleDragEnd}
-                      dragging={draggedSessionId === s.id}
-                      dropTarget={dropTargetId === s.id && draggedSessionId !== s.id}
-                      promotable={false}
-                      maximized={maximizedId === s.id}
-                      onToggleMaximize={handlers.onToggleMaximize}
-                    />
-                  )
-                })()}
-              </div>
-
-              <div
-                data-testid="code-resize-rows"
-                onMouseDown={handleStartRowResize}
-                className="relative z-10 h-2.5 flex-none cursor-row-resize hover:bg-accent/40 active:bg-accent/60 transition-colors"
-                role="separator"
-                aria-label="Resize rows"
-              />
-
-              <div style={{ height: `calc(${100 - threeWaySplit.row}% - 10px)` }} className="min-h-0 w-full">
-                {(() => {
-                  const s = sessions[2]
-                  const handlers = getSessionHandlers(s.id)
-                  return (
-                    <SessionCard
-                      key={s.id}
-                      session={s}
-                      onClose={handlers.onClose}
-                      onProcessExit={handlers.onProcessExit}
-                      onFocus={handlers.onFocus}
-                      onRename={handlers.onRename}
-                      onOpenLauncher={openLauncher}
-                      onSwap={swapSessions}
-                      onDragStart={handleDragStart}
-                      onDragOver={handleDragOver}
-                      onDragEnd={handleDragEnd}
-                      dragging={draggedSessionId === s.id}
-                      dropTarget={dropTargetId === s.id && draggedSessionId !== s.id}
-                      promotable={false}
-                      maximized={maximizedId === s.id}
-                      onToggleMaximize={handlers.onToggleMaximize}
-                    />
-                  )
-                })()}
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div
-            className="relative grid min-h-0 flex-1 gap-1 overflow-auto bg-[#121212] p-1"
-            style={{ gridTemplateColumns, gridAutoRows: 'minmax(180px, 1fr)' }}
+        <div ref={threeWayContainerRef} className="relative grid min-h-0 flex-1 gap-0 overflow-auto bg-[#121212] p-0"
+            style={sessions.length === 3 ? {
+              gridTemplateColumns: `minmax(0, ${threeWaySplit.col}fr) 2px minmax(0, ${100 - threeWaySplit.col}fr)`,
+              gridTemplateRows: `minmax(0, ${threeWaySplit.row}fr) 2px minmax(0, ${100 - threeWaySplit.row}fr)`
+            } : { gridTemplateColumns, gridAutoRows: 'minmax(180px, 1fr)' }}
           >
             {sessions.map((session) => {
               const handlers = getSessionHandlers(session.id)
@@ -955,11 +865,25 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
                 />
               )
             })}
+            {sessions.length === 3 && <>
+              <div data-testid="code-resize-columns" onMouseDown={handleStartColumnResize}
+                style={{ gridColumn: '2', gridRow: '1 / 4' }}
+                className="z-10 cursor-col-resize hover:bg-bg-raise active:bg-bg-hover"
+                role="separator" aria-label="Resize columns" />
+              <div data-testid="code-resize-rows" onMouseDown={handleStartRowResize}
+                style={{ gridColumn: '3', gridRow: '2' }}
+                className="z-10 cursor-row-resize hover:bg-bg-raise active:bg-bg-hover"
+                role="separator" aria-label="Resize rows" />
+            </>}
             {sessions.length === 0 && (
               <div className="flex min-h-full flex-1 justify-center overflow-auto bg-[#121212] px-6 pb-10">
                 <div className="w-full max-w-[760px] translate-y-4 pt-[78px]">
                   <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-text">Launch your workspace</h1>
                   <p className="mt-1.5 text-[13px] text-text-faint">Choose the CLIs you want to run together.</p>
+                  <button type="button" onClick={openLauncher}
+                    className="mt-3 rounded-[7px] border border-line px-3 py-2 text-xs text-text-dim hover:bg-bg-hover hover:text-text">
+                    Other CLI
+                  </button>
 
                   <div className="mb-1.5 mt-8 text-[10px] font-semibold tracking-[0.12em] text-text-faint uppercase">CLI</div>
                   <div className="mb-5 grid grid-cols-3 gap-1.5">
@@ -999,7 +923,7 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
                         <span className="text-[11px] text-text-faint">{selectedSessionCount} sessions</span>
                       </div>
                       <div className="mb-5 flex flex-wrap gap-1.5">
-                        {LAUNCH_COUNTS.map((count) => (
+                        {CODE_LAUNCH_COUNTS.map((count) => (
                           <button
                             key={count}
                             type="button"
@@ -1028,7 +952,6 @@ export default function CodeView({ active, sidebarCollapsed = false }: Props): R
               </div>
             )}
           </div>
-        )}
       </div>
 
       {launcherOpen && (

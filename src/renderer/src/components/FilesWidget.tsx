@@ -105,6 +105,11 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
   const [showHidden, setShowHidden] = useState(false)
   const [previewFile, setPreviewFile] = useState<FileReadResult | null>(null)
   const [actionNotice, setActionNotice] = useState<string | null>(null)
+  // Backend caps a single folder listing (see ipc/filesystem.ts). Past that
+  // cap, files further down were invisible with nothing on screen saying
+  // so — the folder looked shorter than it is and search silently only
+  // covered the entries that made it into `items`.
+  const [truncated, setTruncated] = useState(false)
 
 
   const [creatingType, setCreatingType] = useState<'file' | 'dir' | null>(null)
@@ -167,10 +172,12 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
       if ('error' in res && res.error) {
         setError(res.error)
         setItems([])
+        setTruncated(false)
       } else if ('items' in res) {
         setItems(res.items)
         setCurrentPath(res.currentPath)
         setParentPath(res.parentPath)
+        setTruncated(Boolean(res.truncated))
       }
     } catch (err) {
       if (seq !== dirSeq.current) return
@@ -531,6 +538,16 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
       {actionNotice && (
         <div className="flex-none border-b border-accent/30 bg-accent/10 px-3 py-1 text-[11px] text-accent">
           {actionNotice}
+        </div>
+      )}
+
+      {}
+      {truncated && (
+        <div
+          className="flex-none border-b border-line-soft bg-bg-hover px-3 py-1 text-[11px] text-text-faint"
+          title="This folder has more items than are listed here. Search and browsing only cover what's loaded."
+        >
+          Showing the first 2,000 items{search ? ' — search only covers those' : ''}. Some files in this folder are not listed.
         </div>
       )}
 

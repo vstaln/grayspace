@@ -19,7 +19,7 @@ test.afterAll(async () => {
 test('settings modal opens and switches tabs', async () => {
   const { page } = ctx
 
-  await page.getByTestId('rail-settings').click()
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
   const modal = page.getByTestId('settings-modal')
   await expect(modal).toBeVisible()
 
@@ -31,4 +31,45 @@ test('settings modal opens and switches tabs', async () => {
 
   await modal.getByRole('button', { name: 'Close' }).click()
   await expect(modal).not.toBeVisible()
+})
+
+test('account opens one settings dialog and Escape closes it', async () => {
+  const { page } = ctx
+  await page.getByRole('tab', { name: 'Code', exact: true }).click()
+  await page.getByRole('button', { name: 'Account', exact: true }).click()
+  await expect(page.getByTestId('settings-modal')).toHaveCount(1)
+  await expect(page.getByTestId('settings-tab-account')).toHaveAttribute('aria-current', 'true')
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('settings-modal')).toHaveCount(0)
+  await page.getByRole('tab', { name: 'Canvas', exact: true }).click()
+})
+
+test('favorite names validate, persist, name new terminals and can be cleared', async () => {
+  const { page } = ctx
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  const modal = page.getByTestId('settings-modal')
+  const names = modal.getByRole('textbox', { name: 'Favorite terminal names', exact: true })
+  const save = modal.getByRole('button', { name: 'Save names', exact: true })
+  await names.fill('invalid name!')
+  await expect(names).toHaveAttribute('aria-invalid', 'true')
+  await expect(save).toBeDisabled()
+  await names.fill('Arthur, HENRY\narthur')
+  await save.click()
+  await expect(modal.getByText('Favorite terminal names saved.', { exact: true })).toBeVisible()
+  await page.reload()
+  await waitForCanvas(page)
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await expect(names).toHaveValue('Arthur\nHENRY')
+  await modal.getByRole('button', { name: 'Close settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Add terminal', exact: true }).click()
+  await expect(page.getByTestId('widget-title')).toHaveText('Arthur')
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await names.fill('')
+  await save.click()
+  await expect(modal.getByText('Favorite terminal names saved.', { exact: true })).toBeVisible()
+  await page.reload()
+  await waitForCanvas(page)
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await expect(names).toHaveValue('')
+  await modal.getByRole('button', { name: 'Close settings', exact: true }).click()
 })

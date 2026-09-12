@@ -6,6 +6,9 @@ export interface BatcherOptions {
   maxPendingBytes?: number
 }
 
+/** Invisible SGR reset: resyncs the stream after dropped bytes cut a sequence in half. */
+const RESYNC_PREFIX = '\x1b[0m'
+
 
 
 
@@ -17,6 +20,12 @@ export class TerminalStreamBatcher extends EventEmitter {
   private readonly frameIntervalMs: number
   private readonly maxBatchBytes: number
   private readonly maxPendingBytes: number
+  /**
+   * Same resync contract as TerminalOutputGate: when pressure forces a drop
+   * of the oldest chunks, the next emitted batch carries an invisible SGR
+   * reset so a sequence cut in half cannot corrupt everything after it.
+   */
+  private readonly resyncPending = new Set<string>()
   private timer: NodeJS.Timeout | null = null
 
   constructor(options: BatcherOptions = {}) {
@@ -75,8 +84,10 @@ export class TerminalStreamBatcher extends EventEmitter {
     while (list.length > 0 && currentBytes > this.maxPendingBytes) {
       const dropped = list.shift()!
       currentBytes -= TerminalStreamBatcher.chunkBytes(dropped)
+      this.resyncPending.add(terminalId)
     }
     const tail = TerminalStreamBatcher.sliceTailBytes(chunk, this.maxPendingBytes)
+    if (tail !== chunk) this.resyncPending.add(terminalId)
     currentBytes -= incomingBytes - TerminalStreamBatcher.chunkBytes(tail)
     list.push(tail)
     this.pendingBytes.set(terminalId, currentBytes)
@@ -112,7 +123,8 @@ export class TerminalStreamBatcher extends EventEmitter {
     this.pending.delete(terminalId)
     this.pendingBytes.delete(terminalId)
 
-    this.emit('batch', terminalId, combined)
+    const batch = this.resyncPending.delete(terminalId) ? `${RESYNC_PREFIX}${combined}` : combined
+    this.emit('batch', terminalId, batch)
   }
 
   flushAll(): void {
@@ -136,5 +148,6 @@ export class TerminalStreamBatcher extends EventEmitter {
     }
     this.pending.clear()
     this.pendingBytes.clear()
+    this.resyncPending.clear()
   }
 }

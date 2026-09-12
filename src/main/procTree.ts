@@ -60,6 +60,21 @@ export function killProcessTree(rootPid: number | undefined, settleMs = SWEEP_DE
   if (!rootPid || !Number.isInteger(rootPid) || rootPid <= 0) return
 
   if (process.platform !== 'win32') {
+    // node-pty puts the shell in its own session (forkpty calls setsid so the
+    // slave can become the controlling terminal), which makes the shell's pid
+    // its process-group id too — so a negative pid reaps every descendant.
+    //
+    // This used to kill the bare pid, which left agents, dev servers and every
+    // other grandchild running headless after the widget was closed: exactly
+    // what the Windows branch below goes out of its way to prevent. The shell
+    // has already been sent a soft signal by `pty.kill()` at this point, so
+    // SIGKILL here is the escalation, not the first attempt.
+    try {
+      process.kill(-rootPid, 'SIGKILL')
+      return
+    } catch {
+      // Not a group leader, or the group is already gone.
+    }
     try {
       process.kill(rootPid, 'SIGKILL')
     } catch {

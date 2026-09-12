@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, FileText, Lock, RotateCw, Search, X } from 'lucide-react'
 import { BROWSER_PARTITION, HOME_URL, hostOf, toNavigationUrl, type Webview } from '../lib/browserShared'
+import { WIDGET_FULLSCREEN_SCRIPT } from '../lib/widgetFullscreen'
 
 export type DroppedMediaKind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'doc'
 
@@ -15,34 +16,6 @@ const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 
 const VIDEO_EXTS = new Set(['mp4', 'm4v', 'webm', 'mkv', 'mov', 'avi', 'wmv', 'flv', 'ogv', 'mpg', 'mpeg'])
 const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'flac', 'aac', 'm4a', 'opus', 'weba', 'wma'])
 const TEXT_EXTS = new Set(['txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'yaml', 'yml', 'xml', 'html', 'htm', 'log', 'js', 'ts', 'jsx', 'tsx', 'py', 'sh', 'bat', 'cmd', 'ps1'])
-
-const WIDGET_FULLSCREEN_SCRIPT = `(() => {
-  if (window.__orcWidgetFullscreen) return;
-  window.__orcWidgetFullscreen = true;
-  let active = null;
-  const style = document.createElement('style');
-  style.textContent = '.orc-widget-fullscreen{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;z-index:2147483647!important;background:#000!important}.orc-widget-fullscreen video{max-height:100%!important}';
-  (document.head || document.documentElement).appendChild(style);
-  const enter = function () {
-    active = this;
-    active.classList.add('orc-widget-fullscreen');
-    document.documentElement.style.overflow = 'hidden';
-    document.dispatchEvent(new Event('fullscreenchange'));
-    return Promise.resolve();
-  };
-  Element.prototype.requestFullscreen = enter;
-  Element.prototype.webkitRequestFullscreen = enter;
-  Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => active });
-  Object.defineProperty(document, 'webkitFullscreenElement', { configurable: true, get: () => active });
-  document.exitFullscreen = () => {
-    if (active) active.classList.remove('orc-widget-fullscreen');
-    active = null;
-    document.documentElement.style.overflow = '';
-    document.dispatchEvent(new Event('fullscreenchange'));
-    return Promise.resolve();
-  };
-  document.webkitExitFullscreen = document.exitFullscreen;
-})();`
 
 export function mediaKindForName(name: string, fallback?: string): DroppedMediaKind {
   if (fallback === 'image' || fallback === 'video' || fallback === 'audio' || fallback === 'pdf' || fallback === 'text' || fallback === 'doc') {

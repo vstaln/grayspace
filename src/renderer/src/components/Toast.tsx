@@ -116,3 +116,12 @@ export function usePersistErrorToasts(push: (store: string, message: string) => 
     return () => window.removeEventListener('orcspace:persist-error', handler as EventListener)
   }, [push])
 }
+
+export function useTerminalBackendErrorToasts(push: (store: string, message: string) => void): void {
+  useEffect(() => {
+    const off = window.api?.terminal?.onBackendError?.((message) => {
+      push('terminal-engine', message)
+    })
+    return off
+  }, [push])
+}

@@ -28,6 +28,9 @@ export function buildPreamble(input: { run: Run; task: OrcTask; dispatchId: stri
     'SPEC:',
     task.spec,
     '',
+    ...(task.images?.length
+      ? ['IMAGES attached to this task — open them before you start:', ...task.images.map((path) => `  ${path}`), '']
+      : []),
     'WORK RULES — keep this dispatch bounded:',
     '  • Read the relevant local instructions and inspect the current state before editing.',
     '  • Stay inside the scope and ownership in SPEC; do not rewrite unrelated files or',

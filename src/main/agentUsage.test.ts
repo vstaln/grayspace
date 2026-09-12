@@ -13,7 +13,7 @@ describe('agentUsage - getAgentUsageStats', () => {
           { id: 'term-3', title: 'opencode interpreter', alive: true },
           { id: 'term-4', title: 'zsh', alive: true }
         ],
-        fullOutput: (id: string) => (id === 'term-1' ? 'agy session' : id === 'term-3' ? 'opencode interpreter v1.0' : '')
+        tailOutput: (id: string) => (id === 'term-1' ? 'agy session' : id === 'term-3' ? 'opencode interpreter v1.0' : '')
       }
     } as unknown as IpcDeps
 
@@ -71,7 +71,7 @@ Monthly Limit Remaining: 92.40%
     const mockDeps = {
       terminals: {
         list: () => [{ id: 'term-agy', title: 'Antigravity CLI', alive: true }],
-        fullOutput: () => sampleOutput
+        tailOutput: () => sampleOutput
       }
     } as unknown as IpcDeps
 

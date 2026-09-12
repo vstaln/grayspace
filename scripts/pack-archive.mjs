@@ -4,6 +4,7 @@ import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+throw new Error('Source installers are disabled. Distribute signed binaries with npm run dist:mac or npm run installer:win.')
 const zipPath = join(root, 'OrcSpace-mac-source.zip')
 const updateCmdPath = join(root, 'OrcSpace-Update.command')
 const installerCmdPath = join(root, 'OrcSpace-Installer.command')

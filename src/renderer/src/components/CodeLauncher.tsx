@@ -9,6 +9,7 @@ import CursorIcon from './CursorIcon'
 import KimiIcon from './KimiIcon'
 
 export const MAX_CODE_SESSIONS = 32
+export const CODE_LAUNCH_COUNTS = [1, 2, 4, 6, 8, 10, 12] as const
 
 export interface CodeAgent {
   id: string
@@ -21,15 +22,13 @@ export const CODE_AGENTS: CodeAgent[] = [
   { id: 'claude', label: 'Claude Code', command: 'claude', Icon: ClaudeIcon },
   { id: 'codex', label: 'Codex', command: 'codex', Icon: CodexIcon },
   { id: 'antigravity', label: 'Antigravity', command: 'agy', Icon: AntigravityIcon },
-  { id: 'grok', label: 'Grok', command: 'grok', Icon: GrokIcon },
+  { id: 'grok', label: 'Grok Build', command: 'grok', Icon: GrokIcon },
   { id: 'opencode', label: 'OpenCode', command: 'opencode', Icon: OpenCodeIcon },
   { id: 'kimi', label: 'Kimi Code', command: 'kimi', Icon: KimiIcon },
   { id: 'cursor', label: 'Cursor Agent', command: 'cursor-agent', Icon: CursorIcon },
   { id: 'browser', label: 'Browser', command: 'browser', Icon: Globe2 },
   { id: 'custom', label: 'Other CLI', command: '', Icon: Terminal }
 ]
-
-const COUNTS = [1, 2, 3, 4]
 
 interface Props {
   onClose(): void
@@ -174,7 +173,7 @@ export default function CodeLauncher({
                 Instances
               </p>
               <div className="flex gap-1.5 rounded-[10px] border border-line-soft bg-bg-raise p-1">
-                {COUNTS.map((n) => (
+                {CODE_LAUNCH_COUNTS.map((n) => (
                   <button
                     key={n}
                     type="button"

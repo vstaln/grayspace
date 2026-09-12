@@ -63,7 +63,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
 
 
   flow.registerDefinition<
-    { runId?: string; title?: string; spec?: string; deps?: string[] },
+    { runId?: string; title?: string; spec?: string; deps?: string[]; images?: string[] },
     ReturnType<typeof orchestration.createTask>
   >({
     type: 'orctask.create',
@@ -78,7 +78,8 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
         runId: { type: 'string', description: 'Run to file under; defaults to the newest open run' },
         title: { type: 'string', description: 'Short label for the UI; defaults to the spec’s first line' },
         spec: { type: 'string', description: 'The brief handed to the worker verbatim' },
-        deps: { ...STRING_LIST, description: 'Task ids that must reach completed before this becomes ready' }
+        deps: { ...STRING_LIST, description: 'Task ids that must reach completed before this becomes ready' },
+        images: { ...STRING_LIST, description: 'Image files the worker should look at; paths reach it in the preamble' }
       }
     },
     handler: {
@@ -89,6 +90,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
           title: p.title,
           spec: String(p.spec ?? ''),
           deps: p.deps,
+          images: p.images,
           createdBy: actor.id
         })
       }
@@ -343,6 +345,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
       dispatchId?: string
       outcome?: Outcome
       filesModified?: string[]
+      images?: string[]
       options?: string[]
       replyTo?: string
     },
@@ -366,6 +369,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
         dispatchId: { type: 'string', description: 'Required on worker_done — it is the authority to settle' },
         outcome: { type: 'string', enum: [...OUTCOMES], description: 'worker_done only' },
         filesModified: STRING_LIST,
+        images: { ...STRING_LIST, description: 'Image files attached to the message; the reader opens them by path' },
         options: { ...STRING_LIST, description: 'ask only: the choices offered' },
         replyTo: { type: 'string', description: 'reply only: the ask being answered' }
       }
@@ -414,6 +418,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
           dispatchId: p.dispatchId,
           outcome: p.outcome,
           filesModified: p.filesModified,
+          images: p.images,
           options: p.options,
           replyTo: p.replyTo
         })
@@ -424,6 +429,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
           to: message.to,
           subject: message.subject,
           body: message.body,
+          ...(message.images?.length ? { images: message.images } : {}),
           taskId: message.taskId,
           dispatchId: message.dispatchId,
           replyTo: message.replyTo,

@@ -26,12 +26,17 @@ export interface TerminalApi {
   setFocused(focused: boolean, id: string): void
   onData(id: string, cb: (data: string) => void): () => void
   onExit(id: string, cb: (exitCode: number) => void): () => void
+  onBackendError(cb: (message: string) => void): () => void
 }
 
 export interface ControlApi {
   onAddWidget(cb: (payload: { id: string; title: string; kind?: string; x?: number; y?: number; from?: string | null }) => void): () => void
   onRemoveWidget(cb: (id: string) => void): () => void
   onRenameWidget(cb: (payload: { id: string; title: string }) => void): () => void
+
+  onOpenMedia(
+    cb: (payload: { widgetId: string; path: string; name: string; mediaUrl: string; kind: string }) => void
+  ): () => void
 }
 
 export interface RecentDir {
@@ -194,6 +199,7 @@ export interface OrcTask {
   title: string
   spec: string
   deps: string[]
+  images?: string[]
   status: OrcTaskStatus
   createdBy: string
   createdAt: number
@@ -229,6 +235,7 @@ export interface OrcMessage {
   dispatchId?: string
   outcome?: OrcOutcome
   filesModified?: string[]
+  images?: string[]
   options?: string[]
   replyTo?: string
   createdAt: number
@@ -352,11 +359,19 @@ export interface CanvasStroke {
   color: string
 }
 
+export interface CanvasConnection {
+  id: string
+  from: string
+  to: string
+  bornAt: number
+}
+
 export interface CanvasSnapshot {
   schemaVersion: number
   widgets: CanvasWidget[]
   camera: { x: number; y: number; zoom: number }
   strokes: CanvasStroke[]
+  connections: CanvasConnection[]
   version: number
 }
 
@@ -367,7 +382,7 @@ export interface CanvasApi {
 
 
 
-  save(snapshot: { widgets: CanvasWidget[]; camera: { x: number; y: number; zoom: number }; strokes: CanvasStroke[] }): Promise<
+  save(snapshot: { widgets: CanvasWidget[]; camera: { x: number; y: number; zoom: number }; strokes: CanvasStroke[]; connections: CanvasConnection[] }): Promise<
     { applied: number; skipped: number; removed: number } | { ok: true; discarded: true } | { error: string }
   >
 }
@@ -437,6 +452,8 @@ export interface FsListResult {
   currentPath: string
   parentPath: string | null
   items: FileEntry[]
+  /** True when the folder has more entries than were returned; see FilesWidget. */
+  truncated?: boolean
   error?: string
 }
 

@@ -9,7 +9,8 @@ import OpenCodeIcon from './OpenCodeIcon'
 import CursorIcon from './CursorIcon'
 import KimiIcon from './KimiIcon'
 import TerminalWidget from './TerminalWidget'
-import { clearInitialCommand, queueInitialCommand } from '../lib/pendingTerminalCommands'
+import { clearInitialCommand, queueInitialCommand, queueInitialCommandOnce } from '../lib/pendingTerminalCommands'
+import { capOldest } from '../lib/boundedCache'
 import TimerWidget from './TimerWidget'
 import PlannerWidget from './PlannerWidget'
 import OrchestrationWidget from './OrchestrationWidget'
@@ -46,7 +47,7 @@ const AGENTS = [
   { id: 'claude', label: 'Claude', command: 'claude', Icon: ClaudeIcon },
   { id: 'codex', label: 'Codex', command: 'codex', Icon: CodexIcon },
   { id: 'opencode', label: 'OpenCode', command: 'opencode', Icon: OpenCodeIcon },
-  { id: 'grok', label: 'Grok', command: 'grok', Icon: GrokIcon },
+  { id: 'grok', label: 'Grok Build', command: 'grok', Icon: GrokIcon },
   { id: 'kimi', label: 'Kimi Code', command: 'kimi', Icon: KimiIcon },
   { id: 'cursor', label: 'Cursor Agent', command: 'cursor-agent', Icon: CursorIcon },
 ] as const
@@ -84,21 +85,25 @@ function loadPersistedAgent(widgetId: string): { idx: number; attached: boolean;
   } catch {}
   return { idx, attached, launched }
 }
+// All three are keyed by widget id and cleared by `forgetAgentSelection`, but
+// only the interactive close path calls that — a widget removed through `orc`,
+// or one that disappears because another session edited the canvas, never
+// reaches it. The cap keeps a long session from accumulating an entry per
+// widget it has ever seen.
 function rememberAgentSelection(widgetId: string, idx: number): void {
   agentSelectionByWidget.set(widgetId, idx)
   try { localStorage.setItem(agentStoreKey(widgetId), String(idx)) } catch {}
-  if (agentSelectionByWidget.size > MAX_AGENT_SELECTION) {
-    const oldest = agentSelectionByWidget.keys().next().value as string | undefined
-    if (oldest) agentSelectionByWidget.delete(oldest)
-  }
+  capOldest(agentSelectionByWidget, MAX_AGENT_SELECTION)
 }
 function rememberAttachment(widgetId: string): void {
   attachmentModeByWidget.add(widgetId)
   try { localStorage.setItem(attachStoreKey(widgetId), '1') } catch {}
+  capOldest(attachmentModeByWidget, MAX_AGENT_SELECTION)
 }
 function rememberLaunchedAgent(widgetId: string, agentId: string): void {
   launchedAgentByWidget.set(widgetId, agentId)
   try { localStorage.setItem(launchedStoreKey(widgetId), agentId) } catch {}
+  capOldest(launchedAgentByWidget, MAX_AGENT_SELECTION)
 }
 export function forgetAgentSelection(widgetId: string): void {
   agentSelectionByWidget.delete(widgetId)
@@ -223,7 +228,9 @@ function WidgetFrame({
     const persistedLaunched = launchedAgentByWidget.get(widget.id) ?? persisted.launched
     if (!persistedLaunched) return
     const entry = AGENTS.find((a) => a.id === persistedLaunched)
-    if (entry) queueInitialCommand(widget.id, entry.command)
+    // Once-only: a remount of a widget whose agent already started must not
+    // type the command into the session that is already running it.
+    if (entry) queueInitialCommandOnce(widget.id, entry.command)
   }, [isTerminal, widget.id, persisted])
 
   const stopAgentAutoLaunch = useCallback(() => {
@@ -378,6 +385,7 @@ function WidgetFrame({
       ].join(' ')}
       style={style}
       data-testid={`widget-${widget.kind ?? 'terminal'}-${widget.id}`}
+      data-widget-id={widget.id}
       aria-roledescription="canvas widget"
 
 
@@ -404,13 +412,19 @@ function WidgetFrame({
         {editing ? (
           <input
             aria-label="Widget title"
+            data-testid="widget-title-input"
             className="h-[22px] min-w-0 flex-1 appearance-none rounded border border-transparent bg-transparent px-1.5 text-xs text-text outline-none focus:border-line focus:bg-bg-raise"
             autoFocus
             defaultValue={widget.title}
             onBlur={(e) => onRename(e.target.value.trim() || widget.title)}
             onKeyDown={(e) => {
               if (e.key === 'Escape') onCancelEditing()
-              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                const input = e.currentTarget as HTMLInputElement
+                onRename(input.value.trim() || widget.title)
+                input.blur()
+              }
             }}
           />
         ) : (
@@ -418,6 +432,22 @@ function WidgetFrame({
             className="min-w-0 flex-1 truncate text-xs text-text"
             data-testid="widget-title"
             title={`${widget.title} (double-click to rename)`}
+            onPointerDown={(e) => {
+              if (e.detail >= 2) {
+                e.preventDefault()
+                e.stopPropagation()
+                onStartEditing()
+              }
+            }}
+            onClick={(e) => {
+              // Electron can suppress dblclick when the header owns pointer
+              // capture. The second click still carries detail=2, so handle
+              // it directly as a reliable rename entry point.
+              if (e.detail >= 2) {
+                e.stopPropagation()
+                onStartEditing()
+              }
+            }}
             onDoubleClick={(e) => {
               e.stopPropagation()
               onStartEditing()
@@ -575,7 +605,7 @@ function WidgetFrame({
             widget={widget}
             workspaceDir={workspaceDir}
             attachmentMode={attachmentMode}
-            agentId={launchedAgentId}
+            agentId={launchedAgentId ?? (agent?.id === 'codex' ? 'codex' : undefined)}
             onProcessExit={onProcessExit ?? onClose}
           />
         </ErrorBoundary>

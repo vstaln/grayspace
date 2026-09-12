@@ -11,6 +11,7 @@ import {
   WIDGET_DEFAULTS
 } from '../types'
 import { clearTimerPersist } from '../lib/timerPersist'
+import { clearInitialCommand } from '../lib/pendingTerminalCommands'
 
 let localCounter = 0
 const makeLocalId = (kind: WidgetKind = 'terminal'): string => {
@@ -91,13 +92,76 @@ function strokeBounds(stroke: Stroke): StrokeBounds {
 
 
 
-const WIDGET_STORAGE_PREFIXES = [
+/**
+ * Every localStorage key namespaced by widget id, cleared when that widget is
+ * removed. The two browser entries were missing, so closing a browser widget
+ * left its address (and, for dropped media, a JSON blob) behind permanently —
+ * one pair per browser widget ever opened, for the life of the install.
+ *
+ * That matters beyond the wasted space: localStorage has a hard quota, and
+ * every write in this app is wrapped in `try {} catch {}`. Once the quota is
+ * reached the throw is swallowed and *all* widget persistence silently stops
+ * working, with nothing on screen to say why. Anything that starts writing a
+ * per-widget key belongs in this list.
+ */
+/**
+ * Per-widget keys that only ever belong to a canvas widget, so "no widget with
+ * this id" is proof the entry is garbage and it is safe to sweep on hydration.
+ */
+const PRUNABLE_WIDGET_PREFIXES = [
   'orcspace-links:',
   'orcspace-music-playlists:',
   'orcspace-music-volume:',
-  'orcspace-music-muted:'
+  'orcspace-music-muted:',
+  'orcspace-browser-url:',
+  'orcspace-browser-media:'
 ] as const
 
+/**
+ * Written by WidgetFrame for both canvas widgets and Code sessions.
+ *
+ * Removing one widget clears its own keys by id, which is always correct. They
+ * are kept out of the prunable set above because a Code session is not a canvas
+ * widget: sweeping these by "not on the canvas" would wipe the agent selection
+ * of every open Code session on the next hydration.
+ */
+const AGENT_STORAGE_PREFIXES = [
+  'orcspace-agent-select:',
+  'orcspace-attach:',
+  'orcspace-launched-agent:'
+] as const
+
+/**
+ * Everything `removeWidget` clears for the widget going away. `closeWidget` in
+ * App also clears the agent keys through `forgetAgentSelection`, but that is
+ * only the interactive path — a widget removed through `orc` arrives here
+ * instead, and used to leave all three behind for good.
+ */
+const WIDGET_STORAGE_PREFIXES = [...PRUNABLE_WIDGET_PREFIXES, ...AGENT_STORAGE_PREFIXES] as const
+
+
+/**
+ * Drop per-widget storage whose widget is no longer on the canvas.
+ *
+ * `removeWidget` clears these keys going forward, but installs that ran before
+ * the browser prefixes were listed there still carry an entry for every
+ * browser widget they ever closed, and nothing else would ever collect them.
+ * Runs once per hydration against the freshly loaded widget set, which is the
+ * only point where "not on the canvas" is reliably known.
+ */
+function pruneOrphanWidgetStorage(liveWidgetIds: Set<string>): void {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const key = localStorage.key(i)
+      if (!key) continue
+      const prefix = PRUNABLE_WIDGET_PREFIXES.find((candidate) => key.startsWith(candidate))
+      if (!prefix) continue
+      if (!liveWidgetIds.has(key.slice(prefix.length))) localStorage.removeItem(key)
+    }
+  } catch {
+
+  }
+}
 
 function clearRemovedNoteStorage(): void {
   try {
@@ -191,8 +255,10 @@ export function useCanvas() {
       saveTimerRef.current = null
     }
     widgetsDirtyRef.current = false
+    dirtyWidgetIdsRef.current.clear()
     cameraDirtyRef.current = false
     strokesDirtyRef.current = false
+    connectionsDirtyRef.current = false
     pendingDeletesRef.current.clear()
     pendingCreatesRef.current.clear()
     const run = ++hydrationRunRef.current
@@ -206,13 +272,13 @@ export function useCanvas() {
           setWidgets(snapshot.widgets)
           setCamera(snapshot.camera)
           setStrokes(snapshot.strokes)
-          setConnections([])
+          setConnections(snapshot.connections ?? [])
+          // Only inside this branch: when local changes have already raced
+          // ahead of the load, the snapshot is stale and its widget list
+          // would read a just-created widget as an orphan and delete the
+          // storage it is about to use.
+          pruneOrphanWidgetStorage(new Set(snapshot.widgets.map((w) => w.id)))
         }
-
-
-
-
-
 
         const maxZ = snapshot.widgets.reduce((max, w) => Math.max(max, w.z), 0)
         zRef.current = Math.max(1, maxZ)
@@ -296,7 +362,7 @@ export function useCanvas() {
 
 
 
-    const hasLocalEdits = widgetsDirtyRef.current || cameraDirtyRef.current || strokesDirtyRef.current
+    const hasLocalEdits = widgetsDirtyRef.current || cameraDirtyRef.current || strokesDirtyRef.current || connectionsDirtyRef.current
     if (skipNextSaveRef.current) {
       skipNextSaveRef.current = false
       if (!hasLocalEdits) return
@@ -305,10 +371,12 @@ export function useCanvas() {
     const timer = setTimeout(() => {
       saveTimerRef.current = null
       if (workspaceDirRef.current !== dirAtSchedule) return
-      const payload = { widgets, camera, strokes, workspaceDir: dirAtSchedule ?? undefined }
+      const payload = { widgets, camera, strokes, connections, workspaceDir: dirAtSchedule ?? undefined }
       widgetsDirtyRef.current = false
+      dirtyWidgetIdsRef.current.clear()
       cameraDirtyRef.current = false
       strokesDirtyRef.current = false
+      connectionsDirtyRef.current = false
       void window.api.canvas.save(payload).catch(() => {
 
 
@@ -319,7 +387,7 @@ export function useCanvas() {
       clearTimeout(timer)
       if (saveTimerRef.current === timer) saveTimerRef.current = null
     }
-  }, [widgets, camera, strokes])
+  }, [widgets, camera, strokes, connections])
 
 
 
@@ -344,7 +412,16 @@ export function useCanvas() {
 
   const cameraDirtyRef = useRef(false)
   const strokesDirtyRef = useRef(false)
+  const connectionsDirtyRef = useRef(false)
   const widgetsDirtyRef = useRef(false)
+  /**
+   * Which widgets carry unsaved local edits. The merge below used the single
+   * `widgetsDirtyRef` boolean for this, so dragging one widget marked the whole
+   * canvas dirty and every incoming update — for widgets the user was nowhere
+   * near — was discarded until the next save 800ms later. Renames and moves
+   * made by other agents through `orc` simply vanished.
+   */
+  const dirtyWidgetIdsRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     return window.api.canvas.onChange((snapshot) => {
@@ -370,7 +447,7 @@ export function useCanvas() {
           if (local && incoming.version !== undefined && (local.version ?? 0) >= incoming.version) {
             return local
           }
-          if (local && local.version === undefined && (widgetsDirtyRef.current || pendingCreatesRef.current.has(local.id))) {
+          if (local && local.version === undefined && (dirtyWidgetIdsRef.current.has(local.id) || pendingCreatesRef.current.has(local.id))) {
             return local
           }
           return incoming
@@ -393,6 +470,7 @@ export function useCanvas() {
       }
       if (snapshot.camera && !cameraDirtyRef.current) setCamera(snapshot.camera)
       if (Array.isArray(snapshot.strokes) && !strokesDirtyRef.current) setStrokes(snapshot.strokes)
+      if (Array.isArray(snapshot.connections) && !connectionsDirtyRef.current) setConnections(snapshot.connections)
     })
   }, [])
 
@@ -432,6 +510,7 @@ export function useCanvas() {
         return false
       }
       widgetsDirtyRef.current = true
+      dirtyWidgetIdsRef.current.add(id)
       const widgetTitle = title || (kind === 'terminal' ? `Terminal ${nextTerminalNumber(current)}` : defaults.title)
       setWidgets((prev) => {
         if (prev.some((widget) => widget.id === id)) return prev
@@ -463,6 +542,7 @@ export function useCanvas() {
   const connectWidgets = useCallback((from: string, to: string): void => {
     if (!from || !to || from === to) return
     if (!widgetsRef.current.some((widget) => widget.id === from) || !widgetsRef.current.some((widget) => widget.id === to)) return
+    connectionsDirtyRef.current = true
     setConnections((prev) => {
       if (prev.some((connection) => connection.from === from && connection.to === to)) return prev
       return [...prev, { id: makeConnectionId(), from, to, bornAt: Date.now() }]
@@ -471,6 +551,7 @@ export function useCanvas() {
 
   const disconnectWidgets = useCallback((from: string, to?: string): void => {
     if (!from) return
+    connectionsDirtyRef.current = true
     setConnections((prev) => prev.filter((connection) => connection.from !== from || (to && connection.to !== to)))
   }, [])
 
@@ -482,6 +563,7 @@ export function useCanvas() {
     pendingDeletesRef.current.add(id)
     pendingCreatesRef.current.delete(id)
     widgetsDirtyRef.current = true
+    dirtyWidgetIdsRef.current.add(id)
 
 
 
@@ -500,6 +582,9 @@ export function useCanvas() {
 
       }
     }
+    // A launch command that never made it to the pty must not outlive the
+    // widget it was meant for.
+    clearInitialCommand(id)
     if ((target?.kind ?? 'terminal') === 'timer') clearTimerPersist(id)
     if (target && (target.kind ?? 'terminal') === 'terminal') {
 
@@ -511,6 +596,7 @@ export function useCanvas() {
     setWidgets((prev) => prev.filter((w) => w.id !== id))
 
 
+    connectionsDirtyRef.current = true
     setConnections((prev) => prev.filter((c) => c.from !== id && c.to !== id))
   }, [])
 
@@ -522,6 +608,7 @@ export function useCanvas() {
 
   const updateWidget = useCallback((id: string, change: Partial<Widget>): void => {
     widgetsDirtyRef.current = true
+    dirtyWidgetIdsRef.current.add(id)
     const pending = widgetPatchRef.current.get(id)
     widgetPatchRef.current.set(id, pending ? { ...pending, ...change } : change)
     if (widgetRafRef.current !== null) return
@@ -550,7 +637,12 @@ export function useCanvas() {
 
 
 
-      if (widgetsRef.current.find((w) => w.id === id)?.z === zRef.current) return
+      // `widgetsRef` only catches up on render, and updateWidget defers its
+      // patch to a RAF, so consulting it alone made every click in a rapid
+      // series look like the widget was still behind — each one burned another
+      // z value.
+      const currentZ = widgetPatchRef.current.get(id)?.z ?? widgetsRef.current.find((w) => w.id === id)?.z
+      if (currentZ === zRef.current) return
       updateWidget(id, { z: nextZ() })
     },
     [nextZ, updateWidget]
@@ -676,7 +768,14 @@ export function useCanvas() {
 
 
 
-          if (pts.length < 2) continue
+          // A dot — a click with no drag — is a one-point stroke the user can
+          // see. Skipping it here dropped it from `next` entirely, so erasing
+          // anywhere on the canvas silently deleted every dot on it.
+          if (pts.length === 0) continue
+          if (pts.length === 1) {
+            if (!near(pts[0])) next.push(s)
+            continue
+          }
           const bounds = strokeBounds(s)
           const r = pending.worldRadius
           if (
@@ -743,6 +842,16 @@ export function useCanvas() {
       const requestedKind = typeof kind === 'string' ? kind : undefined
       if (requestedKind === 'note' || (requestedKind && !(requestedKind in WIDGET_DEFAULTS))) return
       const added = addWidget(point, id, title, (requestedKind as WidgetKind | undefined) ?? 'terminal')
+      // The in-app paths report a full canvas; this one used to drop the
+      // request on the floor, so `orc canvas add` at the cap looked like the
+      // CLI had simply not run.
+      if (!added) {
+        window.dispatchEvent(
+          new CustomEvent('orcspace:canvas-notice', {
+            detail: { message: 'Canvas is full — close a widget before adding another.' }
+          })
+        )
+      }
 
 
 
@@ -750,6 +859,7 @@ export function useCanvas() {
 
 
       if (added && from) {
+        connectionsDirtyRef.current = true
         setConnections((prev) => [
           ...prev,
           { id: makeConnectionId(), from, to: id, bornAt: Date.now() }

@@ -110,6 +110,36 @@ export const WIDGET_DEFAULTS: Record<WidgetKind, { title: string; w: number; h: 
 
 
 
+/**
+ * Upper bound on a widget's size, per kind. Kinds not listed have no cap.
+ *
+ * This lived as two copies of an if/else chain inside App.tsx's pointer and
+ * keyboard resize handlers, and both applied it *after* deriving the widget's
+ * new x/y from the unclamped size — so dragging the west or north edge of a
+ * capped widget past its limit kept moving the anchored corner while the
+ * size stood still, and the widget slid across the canvas. Callers must clamp
+ * the size first and derive the position from the clamped result.
+ */
+const WIDGET_MAX_SIZE: Partial<Record<WidgetKind, { w: number; h: number }>> = {
+  timer: { w: 360, h: 320 },
+  links: { w: 560, h: 520 },
+  files: { w: 760, h: 620 },
+  'music-player': { w: 620, h: 580 },
+  orchestration: { w: 760, h: 720 }
+}
+
+export function clampWidgetSize(
+  kind: WidgetKind | string | undefined,
+  w: number,
+  h: number
+): { w: number; h: number } {
+  const max = WIDGET_MAX_SIZE[kind as WidgetKind]
+  return {
+    w: Math.min(Math.max(w, MIN_W), max?.w ?? Number.POSITIVE_INFINITY),
+    h: Math.min(Math.max(h, MIN_H), max?.h ?? Number.POSITIVE_INFINITY)
+  }
+}
+
 export function coerceWidgetSize(w: number, h: number, vw: number, vh: number): { w: number; h: number } {
   const maxW = Math.max(MIN_W, (vw || 0) - 32)
   const maxH = Math.max(MIN_H, (vh || 0) - 32)

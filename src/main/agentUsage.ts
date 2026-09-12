@@ -42,7 +42,25 @@ interface ExactQuotaData {
 
 const exactQuotaCache = new Map<string, ExactQuotaData>()
 
+// A quota line parsed from a live CLI's own output is authoritative only
+// while it is recent: closing that terminal, resetting the quota window, or
+// switching accounts leaves nothing to correct a stale reading, so an
+// unbounded cache would keep repeating a number the provider stopped saying
+// hours ago. 20 minutes is generous next to how often these panels get
+// re-read, while short enough that "stale" and "gone" both self-heal.
+const EXACT_QUOTA_TTL_MS = 20 * 60 * 1000
+
+// Per-terminal snapshot of the tail text last scanned for a quota line. The
+// same old scrollback re-enters this scan on every poll as long as the
+// terminal stays open and that text is still within the tail window; without
+// this, re-matching unchanged text would keep stamping a fresh `updatedAt`
+// on the cache forever, defeating the TTL above for any agent with one idle
+// terminal left open.
+const lastScannedQuotaTail = new Map<string, string>()
+
 interface LogCacheEntry {
+  readAt: number
+  expiresAt: number
   mtimeMs: number
   size: number
   lastTs: number
@@ -55,6 +73,22 @@ interface LogCacheEntry {
   oldest5h: number | null
 }
 const logCache = new Map<string, LogCacheEntry>()
+
+/**
+ * Floor on how often one log file is re-read, regardless of how much it has
+ * changed.
+ *
+ * The cache key was mtime+size alone, which never holds for the log of an
+ * agent that is currently working — so every System Monitor poll (5s by
+ * default) re-read up to 4MB and JSON.parsed it line by line, synchronously,
+ * on the thread that pumps every PTY. That is a stall in every terminal, on a
+ * timer, for as long as the widget is open.
+ *
+ * The numbers this feeds are totals over 5 hours, 7 days and 30 days, so
+ * serving them up to half a minute stale costs nothing observable. `expiresAt`
+ * still forces a re-read when a record actually ages out of a window.
+ */
+const MIN_REREAD_MS = 30_000
 
 function parseQuotaFromTerminalOutput(rawText: string): ExactQuotaData | null {
   if (!rawText) return null
@@ -162,7 +196,7 @@ function formatTimeRemaining(ms: number): string {
   return `Resets in ${mins}m`
 }
 
-function parseJsonlHistory(filePaths: string[], isSec = false): {
+export function parseJsonlHistory(filePaths: string[], isSec = false): {
   requests5h: number
   requestsWeekly: number
   requestsMonthly: number
@@ -205,8 +239,11 @@ function parseJsonlHistory(filePaths: string[], isSec = false): {
       let fileRequests5h = 0
       let fileLastTs = 0
       let fileOldest5h: number | null = null
+      let expiresAt = Number.POSITIVE_INFINITY
 
-      if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      const unchanged = cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size
+      const readTooRecently = cached !== undefined && now - cached.readAt < MIN_REREAD_MS
+      if (cached && (unchanged || readTooRecently) && now >= cached.readAt && now <= cached.expiresAt) {
         fileTokensMonthly = cached.tokensMonthly
         fileRequestsMonthly = cached.requestsMonthly
         fileTokensWeekly = cached.tokensWeekly
@@ -252,6 +289,9 @@ function parseJsonlHistory(filePaths: string[], isSec = false): {
               (item.prompt_tokens ? item.prompt_tokens + (item.candidates_tokens || item.completion_tokens || 0) : 0) ||
               0
 
+            for (const duration of [FIVE_HOURS_MS, SEVEN_DAYS_MS, THIRTY_DAYS_MS]) {
+              if (ts + duration >= now) expiresAt = Math.min(expiresAt, ts + duration)
+            }
             fileRequestsMonthly++
             fileTokensMonthly += tok
 
@@ -271,7 +311,12 @@ function parseJsonlHistory(filePaths: string[], isSec = false): {
           }
         }
 
+        if (!logCache.has(filePath) && logCache.size >= 256) {
+          logCache.delete(logCache.keys().next().value!)
+        }
         logCache.set(filePath, {
+          readAt: now,
+          expiresAt,
           mtimeMs: stat.mtimeMs,
           size: stat.size,
           lastTs: fileLastTs,
@@ -418,7 +463,7 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
     },
     {
       id: 'grok',
-      name: 'Grok',
+      name: 'Grok Build',
       command: 'grok',
       processNames: ['grok.exe', 'grok'],
       outputKeywords: ['grok', 'xai grok'],
@@ -445,13 +490,37 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
 
   const activeTerminals = deps?.terminals ? deps.terminals.list() : []
 
+  // Terminals that no longer exist can't produce new output; forget their
+  // tail snapshots so this map doesn't grow across a session of many
+  // short-lived terminals.
+  const liveTerminalIds = new Set(activeTerminals.map((t) => t.id))
+  for (const id of Array.from(lastScannedQuotaTail.keys())) {
+    if (!liveTerminalIds.has(id)) lastScannedQuotaTail.delete(id)
+  }
 
-  if (deps?.terminals && typeof deps.terminals.fullOutput === 'function') {
+  // Both scans below only ever look at the last few KB, but they used to get
+  // there by joining the terminal's entire ring buffer (up to half a megabyte)
+  // and slicing the tail off — twice per terminal, every poll, on the thread
+  // that also pumps every PTY. `tailOutput` walks back from the end instead.
+  const QUOTA_SCAN_TAIL_BYTES = 8192
+  const readTail = (id: string, maxBytes: number): string => {
+    try {
+      return deps?.terminals.tailOutput(id, maxBytes) || ''
+    } catch {
+      return ''
+    }
+  }
+
+  if (deps?.terminals && typeof deps.terminals.tailOutput === 'function') {
     for (const t of activeTerminals) {
       if (!t.alive) continue
       try {
-        const fullOut = deps.terminals.fullOutput(t.id) || ''
-        const out = fullOut.length > 8192 ? fullOut.slice(-8192) : fullOut
+        const out = readTail(t.id, QUOTA_SCAN_TAIL_BYTES)
+        // Nothing new since the last scan of this terminal: re-parsing the
+        // same text would just stamp exactQuotaCache with a fresh
+        // `updatedAt` for a reading the provider never repeated.
+        if (lastScannedQuotaTail.get(t.id) === out) continue
+        lastScannedQuotaTail.set(t.id, out)
         const parsed = parseQuotaFromTerminalOutput(out)
         if (parsed) {
           const lowerOut = out.toLowerCase()
@@ -475,16 +544,8 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
 
 
 
-  const tails: string[] = deps?.terminals && typeof deps.terminals.fullOutput === 'function'
-    ? activeTerminals.map((t) => {
-        if (!t.alive) return ''
-        try {
-          const out = deps.terminals.fullOutput(t.id) || ''
-          return out.slice(-8_000).toLowerCase()
-        } catch {
-          return ''
-        }
-      })
+  const tails: string[] = deps?.terminals && typeof deps.terminals.tailOutput === 'function'
+    ? activeTerminals.map((t) => (t.alive ? readTail(t.id, 8_000).toLowerCase() : ''))
     : activeTerminals.map(() => '')
 
   return AGENTS.map((agent) => {
@@ -540,7 +601,10 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
     }
 
 
-    const exact = exactQuotaCache.get(agent.id)
+    const exactCached = exactQuotaCache.get(agent.id)
+    const exact =
+      exactCached && Date.now() - exactCached.updatedAt <= EXACT_QUOTA_TTL_MS ? exactCached : undefined
+    if (exactCached && !exact) exactQuotaCache.delete(agent.id)
     const hasExactQuota = Boolean(
       exact &&
         (exact.fiveHourRemaining !== undefined ||

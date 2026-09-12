@@ -7,11 +7,11 @@ import { createCore, fileResource, type Core } from '../core/index.ts'
 import type { CommandDeps } from './index.ts'
 import { registerFileCommands } from './files.ts'
 
-function harness(): { core: Core; deps: CommandDeps } {
+function harness(workspaceDir?: string): { core: Core; deps: CommandDeps } {
   const core = createCore()
   core.actors.register({ id: 'user', type: 'user', label: 'You', transport: 'ipc' })
   core.actors.register({ id: 'agent-a', type: 'agent', label: 'Agent', transport: 'cli' })
-  const deps = { core } as unknown as CommandDeps
+  const deps = { core, defaultCwd: () => workspaceDir } as unknown as CommandDeps
   registerFileCommands(deps)
   return { core, deps }
 }
@@ -28,7 +28,7 @@ describe('file.* commands on the bus', () => {
   const targetOf = (abs: string): string => fileResource(abs)
 
   test('file.write creates and overwrites, journaling each commit', async () => {
-    const { core } = harness()
+    const { core } = harness(dir)
     const abs = join(dir, 'a.txt')
     const r1 = await core.flow.submit({
       actorId: 'user',
@@ -50,7 +50,7 @@ describe('file.* commands on the bus', () => {
   })
 
   test('an actor holding the file lock keeps other actors out', async () => {
-    const { core } = harness()
+    const { core } = harness(dir)
     const abs = join(dir, 'locked.txt')
     core.locks.acquire({ resource: targetOf(abs), actorId: 'agent-a', reason: 'refactor' })
     const res = await core.flow.submit({
@@ -65,7 +65,7 @@ describe('file.* commands on the bus', () => {
   })
 
   test('target/path mismatch is refused — locking A cannot justify writing B', async () => {
-    const { core } = harness()
+    const { core } = harness(dir)
     const a = join(dir, 'a.txt')
     const b = join(dir, 'b.txt')
     const res = await core.flow.submit({
@@ -79,7 +79,7 @@ describe('file.* commands on the bus', () => {
   })
 
   test('UNC / relative paths are refused', async () => {
-    const { core } = harness()
+    const { core } = harness(dir)
     const unc = '\\\\host\\share\\x.txt'
     const resUnc = await core.flow.submit({
       actorId: 'user',
@@ -100,7 +100,7 @@ describe('file.* commands on the bus', () => {
   })
 
   test('file.create refuses an existing file; mkdir refuses an existing folder', async () => {
-    const { core } = harness()
+    const { core } = harness(dir)
     const abs = join(dir, 'exists.txt')
     fs.writeFileSync(abs, '')
     const dup = await core.flow.submit({
@@ -123,7 +123,7 @@ describe('file.* commands on the bus', () => {
   })
 
   test('file.rename moves a file and refuses to clobber', async () => {
-    const { core } = harness()
+    const { core } = harness(dir)
     const src = join(dir, 'src.txt')
     const dst = join(dir, 'dst.txt')
     fs.writeFileSync(src, 'data')
@@ -150,8 +150,43 @@ describe('file.* commands on the bus', () => {
     assert.equal(fs.readFileSync(blocker, 'utf8'), 'keep')
   })
 
+  test('file.rename refuses to move into a destination another actor has locked', async () => {
+    const { core } = harness(dir)
+    const src = join(dir, 'a.txt')
+    const dst = join(dir, 'locked.txt')
+    fs.writeFileSync(src, 'mine')
+    core.locks.acquire({ resource: targetOf(dst), actorId: 'agent-a', reason: 'about to create' })
+
+    const res = await core.flow.submit({
+      actorId: 'user',
+      type: 'file.rename',
+      target: targetOf(src),
+      payload: { path: src, to: dst }
+    })
+    assert.equal(res.ok, false)
+    assert.equal(res.ok === false && res.code, 'locked')
+    assert.equal(fs.existsSync(src), true, 'source must stay put when the destination is locked')
+    assert.equal(fs.existsSync(dst), false)
+  })
+
+  test('file.create cannot clobber a file that appears after the existence check (wx race)', async () => {
+    const { core } = harness(dir)
+    const abs = join(dir, 'race.txt')
+    // Simulate an external process winning the race between existsSync and
+    // the write by creating the file with real content right before submit.
+    fs.writeFileSync(abs, 'EXTERNAL DATA')
+    const res = await core.flow.submit({
+      actorId: 'user',
+      type: 'file.create',
+      target: targetOf(abs),
+      payload: { path: abs }
+    })
+    assert.equal(res.ok, false)
+    assert.equal(fs.readFileSync(abs, 'utf8'), 'EXTERNAL DATA', 'the winning write must not be truncated')
+  })
+
   test('file.delete removes a file, recurses folders, reports missing targets', async () => {
-    const { core } = harness()
+    const { core } = harness(dir)
     const file = join(dir, 'gone.txt')
     fs.writeFileSync(file, '')
     const del = await core.flow.submit({
@@ -185,7 +220,7 @@ describe('file.* commands on the bus', () => {
   })
 
   test('definitions are registered — schema validation works', async () => {
-    const { core } = harness()
+    const { core } = harness(dir)
     const def = core.flow.getDefinition('file.write')
     assert.ok(def, 'file.write has a definition')
     const catalog = core.flow.catalog().map((d) => d.type)
@@ -203,7 +238,7 @@ describe('file.* commands on the bus', () => {
   })
 
   test('concurrent writes to different files run on disjoint lanes', async () => {
-    const { core } = harness()
+    const { core } = harness(dir)
     const startedAt = new Map<string, number>()
     const finished: string[] = []
 

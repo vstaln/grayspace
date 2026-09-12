@@ -169,7 +169,11 @@ export interface CommandHandler<P = never, R = unknown> {
   ignoreVersion?: boolean
   description?: string
 
-
+  // Additional resources this command touches beyond `target` (e.g. a
+  // rename/move destination). These are included in queue lane
+  // serialization and in the lock check/implicit-lock acquisition so a
+  // second actor can't race the same destination path.
+  extraLocks?(command: Command<P>): ResourceId[]
 
 
 

@@ -38,9 +38,9 @@ describe('terminalNames', () => {
     assert.equal(isDefaultTerminalTitle('my Terminal 1 backup'), false)
   })
 
-  test('randomTerminalName is a lowercase english pair', () => {
-    assert.equal(randomTerminalName(() => 0), 'brave-fox')
-    assert.match(randomTerminalName(), /^[a-z]+-[a-z]+$/)
+  test('randomTerminalName is an English male first name', () => {
+    assert.equal(randomTerminalName(() => 0), 'James')
+    assert.match(randomTerminalName(), /^[A-Z][a-z]+$/)
   })
 
   test('pickTerminalName prefers the first free favorite', () => {
@@ -60,8 +60,15 @@ describe('terminalNames', () => {
 
   test('pickTerminalName falls back to random and then to a suffix', () => {
     const random = pickTerminalName({ favorites: [], taken: [], rand: () => 0 })
-    assert.equal(random, 'brave-fox')
-    const suffixed = pickTerminalName({ favorites: ['ab'], taken: ['ab', 'brave-fox'], rand: () => 0 })
-    assert.equal(suffixed, 'ab-2')
+    assert.equal(random, 'James')
+    assert.equal(pickTerminalName({ taken: ['JAMES'], rand: () => 0 }), 'Henry')
+    const taken: string[] = []
+    for (let i = 0; i < 64; i += 1) {
+      const name = pickTerminalName({ taken, rand: () => 0 })
+      assert.match(name, /^[A-Z][a-z]+$/)
+      taken.push(name)
+    }
+    assert.equal(new Set(taken).size, 64)
+    assert.equal(pickTerminalName({ taken, rand: () => 0 }), 'James-2')
   })
 })

@@ -1,7 +1,34 @@
+import { readFileSync } from 'fs'
 import { CommandError, parseResource } from '../core/index.ts'
+import {
+  IMAGE_PASTE_SETTLE_MS,
+  attachmentMode,
+  imagePasteShortcut,
+  pathToken,
+  resolveImage,
+  terminalAgent,
+  type AttachmentMode
+} from '../imageAttachments.ts'
+import { stageClipboardImage, type MediaFile } from '../media.ts'
 import { isDefaultTerminalTitle } from '../terminalNames.ts'
 import type { CommandDeps } from './index.ts'
 import { failTerminalDispatches } from './orchestration.ts'
+
+
+function settle(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve()
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer)
+        resolve()
+      },
+      { once: true }
+    )
+  })
+}
 
 function terminalIdOf(target: string): string {
   const parsed = parseResource(target)
@@ -269,7 +296,6 @@ export function registerTerminalCommands({
           if (!written.ok) throw new CommandError('failed', written.error)
 
 
-          await new Promise((resolve) => setTimeout(resolve, 180))
           return { ok: true as const, id, text: singleLine }
         } finally {
           if (extraLock) {
@@ -295,6 +321,142 @@ export function registerTerminalCommands({
 
 
 
+
+
+  flow.registerDefinition<
+    {
+      image?: string
+      images?: string[]
+      text?: string
+      pressEnter?: boolean
+      confirmDelivery?: boolean
+      deliveryTimeoutMs?: number
+    },
+    { ok: true; id: string; mode: AttachmentMode; images: string[]; agent?: string; text?: string }
+  >({
+    type: 'terminal.attach',
+    description:
+      'Hand image files to whatever agent is running in a terminal — pasted through the clipboard when its TUI supports it, typed as paths when it does not — then optionally type a line of text.',
+    targetScheme: 'terminal',
+    ignoreVersion: true,
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        image: { type: 'string', description: 'Absolute path to an image file' },
+        images: { type: 'array', items: { type: 'string' }, description: 'Several images at once' },
+        text: { type: 'string', description: 'Line typed after the images' },
+        pressEnter: { type: 'boolean', description: 'Submit after typing (default true when there is text)' },
+        confirmDelivery: { type: 'boolean', description: 'Wait for the text to echo in the target terminal' },
+        deliveryTimeoutMs: { type: 'number', description: 'Receipt timeout in milliseconds' }
+      }
+    },
+    handler: {
+      apply: async ({ command, unblock, signal }) => {
+        let id = terminalIdOf(command.target)
+        if (!terminals.isRunning(id)) {
+          const resolved = terminals.resolveWriteTarget(id === 'new' ? '' : id)
+          if (resolved) id = resolved
+        }
+        const p = command.payload ?? {}
+        const sources = [...(Array.isArray(p.images) ? p.images : []), p.image]
+          .map((value) => (typeof value === 'string' ? value.trim() : ''))
+          .filter((value) => value.length > 0)
+        if (sources.length === 0) {
+          throw new CommandError('invalid', 'terminal.attach needs payload.image or payload.images')
+        }
+        let files: MediaFile[]
+        try {
+          files = sources.map((source) => resolveImage(source))
+        } catch (err) {
+          throw new CommandError('invalid', err instanceof Error ? err.message : String(err))
+        }
+
+        const resource = `terminal:${id}`
+        if (core.locks.isLockedByOther(resource, command.actorId)) {
+          const lock = core.locks.holder(resource)
+          throw new CommandError('locked', `${resource} is locked by ${lock?.actorId}`, { lock })
+        }
+        let extraLock = false
+        if (!core.locks.isHeldBy(resource, command.actorId)) {
+          core.locks.acquire({ resource, actorId: command.actorId, reason: 'terminal.attach', implicit: true })
+          extraLock = true
+        }
+        try {
+          if (!terminals.isRunning(id)) unblock()
+          if (!(await terminals.waitUntilRunning(id, 8_000, signal))) {
+            throw new CommandError('not_found', `terminal not running (wanted ${command.target})`, {
+              requested: command.target,
+              resolved: id
+            })
+          }
+
+          const agent = terminalAgent({ terminals, orchestration }, id)
+          const shortcut = imagePasteShortcut(agent, process.platform)
+          let mode = attachmentMode(files.length, shortcut)
+
+          if (mode === 'clipboard' && shortcut) {
+            const staged = stageClipboardImage(readFileSync(files[0].path))
+            if ('ok' in staged) {
+              const written = await terminals.writeInput(id, shortcut)
+              if (!written.ok) throw new CommandError('failed', written.error)
+              await settle(IMAGE_PASTE_SETTLE_MS, signal)
+            } else {
+
+              mode = 'path'
+            }
+          }
+          if (mode === 'path') {
+            for (const file of files) {
+              const written = await terminals.writeInput(id, pathToken(file.path))
+              if (!written.ok) throw new CommandError('failed', written.error)
+            }
+          }
+
+          const text = typeof p.text === 'string' ? p.text.replace(/\r\n|\r|\n/g, ' ').trim() : ''
+          const pressEnter = p.pressEnter === undefined ? text.length > 0 : p.pressEnter !== false
+          if (text) {
+            if (p.confirmDelivery === true) {
+              const receipt = await terminals.deliverLine(id, text, {
+                pressEnter,
+                timeoutMs: p.deliveryTimeoutMs,
+                signal
+              })
+              if (!receipt.ok) {
+                throw new CommandError('failed', receipt.error, { terminalId: receipt.terminalId, status: 'not_sent' })
+              }
+            } else {
+              const written = await terminals.writeLine(id, text, { pressEnter, signal })
+              if (!written.ok) throw new CommandError('failed', written.error)
+            }
+          } else if (pressEnter) {
+            const written = await terminals.writeInput(id, '\r')
+            if (!written.ok) throw new CommandError('failed', written.error)
+          }
+
+          return {
+            ok: true as const,
+            id,
+            mode,
+            images: files.map((file) => file.path),
+            ...(agent ? { agent } : {}),
+            ...(text ? { text } : {})
+          }
+        } finally {
+          if (extraLock) {
+            try {
+              core.locks.release(resource, command.actorId)
+            } catch {
+
+            }
+          }
+        }
+      }
+    }
+  })
+
+
+
+
   flow.registerDefinition<{ data: string }, { ok: true }>({
     type: 'terminal.input',
     description: '(Internal) raw keystrokes from the owning widget — no Enter added.',
@@ -302,6 +464,15 @@ export function registerTerminalCommands({
     ignoreVersion: true,
     transient: true,
     bypassQueue: true,
+    // The person at the keyboard is not a participant in agent coordination.
+    // Without this, every keystroke was rejected with `locked` while any
+    // actor held `terminal:<id>` — which `terminal.write` takes for the whole
+    // of its delivery (up to an 8s wait for the shell, plus a 4s echo
+    // confirmation), and which lingers for its 30s TTL if a release is ever
+    // missed. Typing was silently dropped and Ctrl+C could not get through,
+    // so a terminal that was merely busy looked permanently hung and closing
+    // the widget was the only way out. Same reasoning as `terminal.resize`.
+    requiresLock: false,
     payloadSchema: {
       type: 'object',
       required: ['data'],

@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
-import { buildSweepScript } from './procTree.ts'
+import { buildSweepScript, killProcessTree } from './procTree.ts'
 
 describe('killProcessTree script', () => {
   test('refuses to sweep when the pid was reused after the kill request', () => {
@@ -38,5 +38,47 @@ describe('killProcessTree script', () => {
     const script = buildSweepScript(roots)
     assert.equal(script.match(/pid = \d+/g)?.length, 100)
     assert.equal(script.match(/Get-CimInstance/g)?.length, 1)
+  })
+
+  test('on unix the whole process group is signalled, not just the shell', () => {
+    if (process.platform === 'win32') return
+
+    // node-pty gives the shell its own session, so its pid doubles as the
+    // process-group id. Signalling the bare pid left agents, dev servers and
+    // every other grandchild running headless after the widget was closed —
+    // the very thing the Windows sweep exists to prevent.
+    const signalled: number[] = []
+    const realKill = process.kill
+    process.kill = ((pid: number, signal?: string | number) => {
+      signalled.push(pid)
+      void signal
+    }) as typeof process.kill
+    try {
+      killProcessTree(4321)
+    } finally {
+      process.kill = realKill
+    }
+
+    assert.deepEqual(signalled, [-4321], 'the negative pid targets the whole group')
+  })
+
+  test('an invalid pid is never signalled', () => {
+    const signalled: number[] = []
+    const realKill = process.kill
+    process.kill = ((pid: number) => {
+      signalled.push(pid)
+    }) as typeof process.kill
+    try {
+      // 0 means 'my own process group' to kill(2): letting one through would
+      // have the app kill itself.
+      killProcessTree(0)
+      killProcessTree(-1)
+      killProcessTree(undefined)
+      killProcessTree(1.5)
+    } finally {
+      process.kill = realKill
+    }
+
+    assert.deepEqual(signalled, [])
   })
 })

@@ -118,7 +118,7 @@ export default function ContextMenu({
         icon: <Network size={15} className="text-accent" />,
         onSelect: onPickOrchestration
       }
-    ].filter((item) => (favoriteWidgets && favoriteWidgets.length > 0 ? favoriteWidgets.includes(item.id) : true)),
+    ].filter((item) => (favoriteWidgets ? favoriteWidgets.includes(item.id) : true)),
     [
       onPickTerminal,
       onPickFiles,
@@ -204,7 +204,29 @@ export default function ContextMenu({
 
       {}
       <div className="max-h-[360px] space-y-0.5 overflow-y-auto">
-        {items.length === 0 && <div className="px-2.5 py-3 text-[11px] text-text-faint">No favorites match</div>}
+        {/* Unchecking every widget in Settings is a reachable state, and it
+            used to leave this menu showing only "No favorites match" — the
+            canvas's only way to add anything, with no hint that a setting
+            caused it or where to change it back. */}
+        {items.length === 0 && (
+          <div className="flex flex-col items-start gap-2 px-2.5 py-3">
+            <p className="text-[11px] leading-relaxed text-text-faint">
+              No widgets are marked as favorites, so there is nothing to add from here.
+            </p>
+            <button
+              type="button"
+              className="rounded-[8px] border border-line-soft px-2.5 py-1 text-[11px] text-text-dim outline-none transition-colors duration-150 hover:border-line hover:bg-bg-hover hover:text-text focus-visible:ring-1 focus-visible:ring-line"
+              onClick={() => {
+                onClose()
+                window.dispatchEvent(
+                  new CustomEvent('orcspace:open-settings', { detail: { tab: 'appearance' } })
+                )
+              }}
+            >
+              Choose favorites…
+            </button>
+          </div>
+        )}
         {items.map((item, i) => {
           const isSelected = i === selectedIndex
           const isPanelGroupStart = item.group === 'panel' && items[i - 1]?.group !== 'panel'

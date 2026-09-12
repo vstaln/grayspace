@@ -55,12 +55,21 @@ export interface CanvasCamera {
   zoom: number
 }
 
+/** A directed arc drawn between two widgets, usually a spawn relationship. */
+export interface CanvasConnection {
+  id: string
+  from: string
+  to: string
+  bornAt: number
+}
+
 export interface CanvasSnapshot {
   snapshotSeq?: number
   schemaVersion: number
   widgets: CanvasWidget[]
   camera: CanvasCamera
   strokes: CanvasStroke[]
+  connections: CanvasConnection[]
 
   version: number
 }
@@ -69,11 +78,14 @@ export interface CanvasDataState {
   widgets: Map<string, CanvasWidget>
   camera: CanvasCamera
   strokes: CanvasStroke[]
+  connections: CanvasConnection[]
   version: number
 }
 
 const MAX_STROKE_POINTS = 200_000
 const MAX_WIDGETS = 200
+/** One arc per ordered widget pair, so the cap tracks the widget cap. */
+const MAX_CONNECTIONS = 2_000
 
 
 export const CANVAS_TARGET_ID = 'main'
@@ -179,6 +191,36 @@ function strokesShapeMatch(current: CanvasStroke[], incoming: unknown): boolean 
   return true
 }
 
+function sanitizeConnections(value: unknown): CanvasConnection[] {
+  if (!Array.isArray(value)) return []
+  const connections: CanvasConnection[] = []
+  const seen = new Set<string>()
+  for (const entry of value) {
+    const c = entry as Record<string, unknown> | null
+    if (!c || typeof c.id !== 'string' || typeof c.from !== 'string' || typeof c.to !== 'string') continue
+    if (!c.from || !c.to || c.from === c.to) continue
+    // An arc is identified by the pair, not by its generated id: replaying a
+    // journal that recorded the same link twice must not stack two of them.
+    const pair = `${c.from} ${c.to}`
+    if (seen.has(pair)) continue
+    seen.add(pair)
+    connections.push({
+      id: c.id,
+      from: c.from,
+      to: c.to,
+      bornAt: isNum(c.bornAt) ? c.bornAt : Date.now()
+    })
+    if (connections.length >= MAX_CONNECTIONS) break
+  }
+  return connections
+}
+
+/** Arcs whose endpoints are both still on the canvas. */
+function liveConnections(connections: CanvasConnection[], widgets: Map<string, CanvasWidget>): CanvasConnection[] {
+  const next = connections.filter((c) => widgets.has(c.from) && widgets.has(c.to))
+  return next.length === connections.length ? connections : next
+}
+
 function sanitizeCamera(value: unknown): CanvasCamera {
   const c = value as Record<string, unknown> | undefined
   if (!c || !isNum(c.x) || !isNum(c.y) || !isNum(c.zoom)) return { x: 0, y: 0, zoom: 1 }
@@ -194,6 +236,7 @@ export class CanvasStore extends EventEmitter {
   private widgets = new Map<string, CanvasWidget>()
   private camera: CanvasCamera = { x: 0, y: 0, zoom: 1 }
   private strokes: CanvasStroke[] = []
+  private connections: CanvasConnection[] = []
   private loaded = false
   private saveTimer: ReturnType<typeof setTimeout> | null = null
   private changeTimer: ReturnType<typeof setTimeout> | null = null
@@ -285,6 +328,7 @@ export class CanvasStore extends EventEmitter {
     let nextWidgets = state.widgets
     let nextCamera = state.camera
     let nextStrokes = state.strokes
+    let nextConnections = state.connections
     let nextVersion = state.version
     const payload = (event.payload ?? {}) as Record<string, unknown>
     const targetId = event.target.startsWith('widget:') ? event.target.slice('widget:'.length) : event.target
@@ -315,12 +359,20 @@ export class CanvasStore extends EventEmitter {
         if (merged) mutableWidgets().set(targetId, merged)
       }
     } else if (event.type === 'widget.remove') {
-      if (nextWidgets.has(targetId)) mutableWidgets().delete(targetId)
+      if (nextWidgets.has(targetId)) {
+        mutableWidgets().delete(targetId)
+        // An arc to a widget that no longer exists has nothing to draw between,
+        // so it is dropped with the widget rather than left to accumulate.
+        nextConnections = liveConnections(nextConnections, nextWidgets)
+      }
     } else if (event.type === 'canvas.camera') {
       nextCamera = sanitizeCamera(payload)
       nextVersion = event.version ?? nextVersion + 1
     } else if (event.type === 'canvas.strokes') {
       nextStrokes = sanitizeStrokes(payload.strokes)
+      nextVersion = event.version ?? nextVersion + 1
+    } else if (event.type === 'canvas.connections') {
+      nextConnections = liveConnections(sanitizeConnections(payload.connections), nextWidgets)
       nextVersion = event.version ?? nextVersion + 1
     } else if (event.type === 'canvas.import') {
       if (Array.isArray(payload.widgets)) {
@@ -331,6 +383,12 @@ export class CanvasStore extends EventEmitter {
       }
       if (payload.camera !== undefined) nextCamera = sanitizeCamera(payload.camera)
       if (payload.strokes !== undefined) nextStrokes = sanitizeStrokes(payload.strokes)
+      // Filtered after the widget loop above, so a snapshot carrying a widget
+      // and an arc to it in the same payload keeps the arc whatever order the
+      // two appear in.
+      if (payload.connections !== undefined) {
+        nextConnections = liveConnections(sanitizeConnections(payload.connections), nextWidgets)
+      }
       nextVersion = event.version ?? nextVersion + 1
     }
 
@@ -338,6 +396,10 @@ export class CanvasStore extends EventEmitter {
       widgets: nextWidgets,
       camera: nextCamera,
       strokes: nextStrokes,
+      // Deliberately not re-filtered here: only the three branches above can
+      // orphan an arc, and they each do their own. A blanket pass would run on
+      // every widget.update instead — once per frame of every drag.
+      connections: nextConnections,
       version: nextVersion
     }
   }
@@ -351,6 +413,7 @@ export class CanvasStore extends EventEmitter {
       widgets: this.widgets,
       camera: this.camera,
       strokes: this.strokes,
+      connections: this.connections,
       version: this.canvasVersions.current(CANVAS_TARGET_ID)
     }
     const nextState = CanvasStore.reduce(current, event)
@@ -360,6 +423,7 @@ export class CanvasStore extends EventEmitter {
     this.widgets = nextState.widgets
     this.camera = nextState.camera
     this.strokes = nextState.strokes
+    this.connections = nextState.connections
 
     if (typeof event.version === 'number') {
       if (event.target.startsWith('widget:')) {
@@ -387,6 +451,7 @@ export class CanvasStore extends EventEmitter {
       widgets: new Map(),
       camera: { x: 0, y: 0, zoom: 1 },
       strokes: [],
+      connections: [],
       version: 1
     }
     return fold(events, CanvasStore.reduce, start)
@@ -431,6 +496,9 @@ export class CanvasStore extends EventEmitter {
     for (const widget of this.widgets.values()) this.rendererBaseline.set(widget.id, widget.version)
     this.camera = sanitizeCamera(data.camera)
     this.strokes = sanitizeStrokes(data.strokes)
+    // Canvases written before arcs were persisted simply have no field here,
+    // which sanitises to an empty list — the behaviour they already had.
+    this.connections = liveConnections(sanitizeConnections(data.connections), this.widgets)
     const persisted = isNum(data.version) && data.version > 0 ? data.version : 1
     this.canvasVersions.seed([{ id: CANVAS_TARGET_ID, version: persisted }])
 
@@ -442,11 +510,13 @@ export class CanvasStore extends EventEmitter {
           widgets: this.widgets,
           camera: this.camera,
           strokes: this.strokes,
+          connections: this.connections,
           version: this.canvasVersions.current(CANVAS_TARGET_ID)
         })
         this.widgets = replayed.widgets
         this.camera = replayed.camera
         this.strokes = replayed.strokes
+        this.connections = replayed.connections
         this.widgetVersions.seed(this.widgets.values())
         this.canvasVersions.seed([{ id: CANVAS_TARGET_ID, version: replayed.version }])
         this.snapshotSeq = Math.max(this.snapshotSeq, ...tailToApply.map((e) => e.seq))
@@ -487,6 +557,7 @@ export class CanvasStore extends EventEmitter {
           widgets: new Map<string, CanvasWidget>(),
           camera: { x: 0, y: 0, zoom: 1 },
           strokes: [],
+          connections: [],
           version: 1
         }
       }
@@ -497,6 +568,7 @@ export class CanvasStore extends EventEmitter {
       widgets: Array.from(rewoundState.widgets.values()),
       camera: { ...rewoundState.camera },
       strokes: rewoundState.strokes,
+      connections: rewoundState.connections,
       version: rewoundState.version
     }
   }
@@ -510,6 +582,7 @@ export class CanvasStore extends EventEmitter {
       widgets: new Map(),
       camera: { x: 0, y: 0, zoom: 1 },
       strokes: [],
+      connections: [],
       version: 1
     }
     const state = fold(events, CanvasStore.reduce, start)
@@ -518,6 +591,7 @@ export class CanvasStore extends EventEmitter {
       widgets: Array.from(state.widgets.values()),
       camera: { ...state.camera },
       strokes: state.strokes,
+      connections: state.connections,
       version: state.version
     }
   }
@@ -533,6 +607,7 @@ export class CanvasStore extends EventEmitter {
       widgets: Array.from(forkedWidgets.values()),
       camera: { ...this.camera },
       strokes: this.strokes.slice(),
+      connections: this.connections.slice(),
       version: this.canvasVersions.current(CANVAS_TARGET_ID)
     }
   }
@@ -556,6 +631,7 @@ export class CanvasStore extends EventEmitter {
       widgets,
       camera: { ...this.camera },
       strokes: this.strokes,
+      connections: this.connections,
       version: this.canvasVersions.current(CANVAS_TARGET_ID, overlayId)
     }
   }
@@ -667,7 +743,20 @@ export class CanvasStore extends EventEmitter {
     return this.strokes
   }
 
-  importFromRenderer(input: { widgets?: unknown; camera?: unknown; strokes?: unknown }, overlayId?: string): {
+  setConnections(connections: unknown, overlayId?: string): CanvasConnection[] {
+    this.ensure()
+    const next = liveConnections(sanitizeConnections(connections), this.widgets)
+    const same = next.length === this.connections.length &&
+      next.every((c, i) => c.id === this.connections[i].id && c.from === this.connections[i].from && c.to === this.connections[i].to)
+    if (same) return this.connections
+    this.connections = next
+    this.canvasVersions.bump(CANVAS_TARGET_ID, overlayId)
+    this.eventsSinceSnapshot += 1
+    this.changed()
+    return this.connections
+  }
+
+  importFromRenderer(input: { widgets?: unknown; camera?: unknown; strokes?: unknown; connections?: unknown }, overlayId?: string): {
     applied: number
     skipped: number
     removed: number
@@ -737,6 +826,23 @@ export class CanvasStore extends EventEmitter {
       this.strokes = sanitizeStrokes(input.strokes)
       layoutChanged = true
     }
+    if (input.connections !== undefined) {
+      const nextConnections = liveConnections(sanitizeConnections(input.connections), this.widgets)
+      const same = nextConnections.length === this.connections.length &&
+        nextConnections.every((c, i) => c.from === this.connections[i].from && c.to === this.connections[i].to)
+      if (!same) {
+        this.connections = nextConnections
+        layoutChanged = true
+      }
+    } else if (removed > 0) {
+      // The renderer did not send arcs, but widgets just disappeared — the
+      // arcs that pointed at them must not outlive them.
+      const pruned = liveConnections(this.connections, this.widgets)
+      if (pruned !== this.connections) {
+        this.connections = pruned
+        layoutChanged = true
+      }
+    }
     if (applied === 0 && removed === 0 && !layoutChanged) {
       return { applied, skipped, removed, removedWidgets }
     }
@@ -770,6 +876,7 @@ export class CanvasStore extends EventEmitter {
     widgets: CanvasWidget[]
     camera: CanvasCamera
     strokes: CanvasStroke[]
+    connections: CanvasConnection[]
     version: number
   } {
     return {
@@ -778,6 +885,7 @@ export class CanvasStore extends EventEmitter {
       widgets: Array.from(this.widgets.values()),
       camera: this.camera,
       strokes: this.strokes,
+      connections: this.connections,
       version: this.canvasVersions.current(CANVAS_TARGET_ID)
     }
   }
@@ -866,11 +974,14 @@ export class CanvasStore extends EventEmitter {
 
 function migrate(
   raw: Record<string, unknown>
-): { widgets: unknown[]; camera: unknown; strokes: unknown; version?: unknown } {
+): { widgets: unknown[]; camera: unknown; strokes: unknown; connections: unknown; version?: unknown } {
   const version = Number(raw.schemaVersion) || 1
   const widgets = Array.isArray(raw.widgets) ? raw.widgets : []
+  // `connections` needs no migration step of its own: a canvas written before
+  // arcs were persisted has no such key, and `undefined` sanitises to an empty
+  // list — which is exactly the state those canvases were already in.
   if (version >= CANVAS_SCHEMA_VERSION) {
-    return { widgets, camera: raw.camera, strokes: raw.strokes, version: raw.version }
+    return { widgets, camera: raw.camera, strokes: raw.strokes, connections: raw.connections, version: raw.version }
   }
   const now = Date.now()
   return {
@@ -880,6 +991,7 @@ function migrate(
         : widgets,
     camera: raw.camera,
     strokes: raw.strokes,
+    connections: raw.connections,
     version: raw.version
   }
 }

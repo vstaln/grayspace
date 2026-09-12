@@ -99,11 +99,15 @@ const componentsLayer: Sheet = {
     borderBottom: `1px solid ${monochrome.raised}`
   },
 
+  '.title-bar-shell button, .title-bar-shell button *': {
+    WebkitAppRegion: 'no-drag'
+  },
+
   '.title-bar-shell .title-bar-view-tab': {
     borderRadius: `${geometry.radiusPill} !important`
   },
 
-  '.title-bar-shell .title-bar-view-switch, .title-bar-shell .title-bar-git-switch, .title-bar-shell .title-bar-left-switch': {
+  '.title-bar-shell .title-bar-view-switch, .title-bar-shell .title-bar-git-switch': {
     height: '30px',
     gap: '0',
     padding: '3px',
@@ -112,7 +116,7 @@ const componentsLayer: Sheet = {
     borderRadius: `${geometry.radiusPill} !important`
   },
 
-  '.title-bar-shell .title-bar-view-switch .title-bar-view-tab, .title-bar-shell .title-bar-git-switch .title-bar-git, .title-bar-shell .title-bar-left-switch .title-bar-left-btn': {
+  '.title-bar-shell .title-bar-view-switch .title-bar-view-tab, .title-bar-shell .title-bar-git-switch .title-bar-git': {
     height: '24px',
     paddingLeft: '11px',
     paddingRight: '11px',
@@ -121,16 +125,11 @@ const componentsLayer: Sheet = {
     borderRadius: `${geometry.radiusPill} !important`
   },
 
-  '.title-bar-shell .title-bar-left-switch .title-bar-left-btn': {
-    paddingLeft: '8px',
-    paddingRight: '8px'
-  },
-
   '.title-bar-shell .title-bar-view-switch .title-bar-view-tab + .title-bar-view-tab': {
     borderLeft: '0'
   },
 
-  '.title-bar-shell .title-bar-view-switch .title-bar-view-tab[aria-selected="true"], .title-bar-shell .title-bar-git-switch .title-bar-git[aria-expanded="true"], .title-bar-shell .title-bar-left-switch .title-bar-left-btn[aria-pressed="true"]': {
+  '.title-bar-shell .title-bar-view-switch .title-bar-view-tab[aria-selected="true"], .title-bar-shell .title-bar-git-switch .title-bar-git[aria-expanded="true"]': {
     background: monochrome.raised,
     border: '0',
     color: '#ffffff',
@@ -242,6 +241,7 @@ const componentsLayer: Sheet = {
   '.widget-shell': {
     background: monochrome.surface,
     boxShadow: `0 0 0 1px ${hairline.soft}`,
+    backfaceVisibility: 'hidden',
 
 
     touchAction: 'pan-x pan-y',
@@ -297,11 +297,24 @@ const componentsLayer: Sheet = {
 
 
     '&.is-terminal .widget-header-shell': {
-      background: palette.titleBar.surface,
-
-
+      background: 'rgba(18, 18, 18, 0.35)',
+      backdropFilter: 'blur(60px)',
+      WebkitBackdropFilter: 'blur(60px)',
       boxShadow: 'none'
     },
+  },
+
+  // Moving a terminal with a live backdrop-filter is one of the most
+  // expensive paths on Windows when the driver is under load. During a
+  // pointer drag the widget is already on its own compositor layer; suspend
+  // the blur until the final position is committed, then restore the glass.
+  'body.is-dragging .widget-shell': {
+    willChange: 'transform',
+    transition: 'none !important'
+  },
+  'body.is-dragging .widget-shell.is-canvas-terminal': {
+    backdropFilter: 'none',
+    WebkitBackdropFilter: 'none'
   },
 
   '.widget-header-shell': {
@@ -424,15 +437,31 @@ const componentsLayer: Sheet = {
 
 
     '& .xterm-viewport::-webkit-scrollbar': { width: '0px' },
-    '& .xterm-viewport': { scrollbarWidth: 'none' }
+    '& .xterm-viewport': { scrollbarWidth: 'none' },
+    '& .xterm-rows span': {
+      display: 'inline-block !important',
+      height: 'calc(100% + 1px) !important',
+      verticalAlign: 'top !important'
+    },
+    '& .xterm-rows > div': {
+      overflow: 'visible !important'
+    },
+    '& [data-ghost-cursor]': {
+      backgroundColor: 'transparent !important',
+      outline: 'none !important',
+      boxShadow: 'none !important',
+      border: 'none !important',
+      animation: 'none !important',
+      opacity: '0 !important'
+    }
   },
 
 
 
   '.code-terminal-shell': {
     background: '#080808',
-    borderColor: hairline.soft,
-    '& .code-session-header': { background: monochrome.surface },
+    borderColor: monochrome.surface,
+    '& .code-session-header': { background: monochrome.terminalHeader },
     '& .code-session-header:hover': { background: monochrome.raised }
   },
 

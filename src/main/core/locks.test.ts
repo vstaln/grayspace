@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { test, describe } from 'node:test'
-import { LockManager, DEFAULT_LOCK_TTL_MS } from './locks.ts'
+import { LockManager, DEFAULT_LOCK_TTL_MS, MIN_LOCK_TTL_MS } from './locks.ts'
 import { CommandError } from './types.ts'
 
 
@@ -192,5 +192,21 @@ describe('LockManager — input validation', () => {
     assert.ok(forever.expiresAt - clock.now() <= 10 * 60_000)
     const negative = locks.acquire({ resource: 'note:n2', actorId: 'a', ttlMs: -5 })
     assert.ok(negative.expiresAt > clock.now())
+  })
+
+  test('releasing a resource whose lock already expired is a no-op, not a refusal', () => {
+    const { locks, clock } = setup()
+    locks.acquire({ resource: 'note:n1', actorId: 'agent-a', ttlMs: MIN_LOCK_TTL_MS })
+    clock.advance(MIN_LOCK_TTL_MS + 1)
+
+    // `release` must be the first call after expiry, before anything else has
+    // a chance to evict the stale entry: `holder`, `acquire` and friends all
+    // go through `live`, which drops it as a side effect. Reading the raw map
+    // made release the one method that still saw the dead actor as holder.
+    assert.doesNotThrow(() => locks.release('note:n1', 'agent-b'))
+
+    // And the rest agree, as they always did.
+    assert.equal(locks.holder('note:n1'), undefined)
+    assert.equal(locks.isLockedByOther('note:n1', 'agent-b'), false)
   })
 })

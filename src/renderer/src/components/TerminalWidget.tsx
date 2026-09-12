@@ -4,13 +4,32 @@ import { FitAddon } from 'xterm-addon-fit'
 import { Unicode11Addon } from 'xterm-addon-unicode11'
 import 'xterm/css/xterm.css'
 import { ThemeName, useTheme } from '../theme'
-import { pasteHasImage, saveImageFromPaste } from '../lib/paste'
-import { takeInitialCommand } from '../lib/pendingTerminalCommands'
+import { attachmentAgent, imagePasteShortcut, insertAttachments, isTerminalPasteShortcut } from '../lib/terminalAttachments'
+import { markInitialCommandDelivered, peekInitialCommand } from '../lib/pendingTerminalCommands'
 import { IS_MAC } from '../lib/platform'
+import { TerminalRenderQueue } from '../lib/terminalRenderQueue'
 import { palette } from '../ui/tokens'
 
 
 const cachedSubmit = '\r'
+
+/**
+ * Turns off every private mode that belongs to a *running foreground
+ * application* rather than to the terminal itself: the mouse-reporting modes
+ * and their coordinate encodings, focus reporting, and bracketed paste.
+ * Cursor visibility and autowrap are restored alongside, since an application
+ * that died without cleaning up tends to leave those off too.
+ *
+ * Used when replaying saved scrollback into a terminal whose shell is new.
+ * The history carries whatever the previous application switched on, and
+ * replaying it puts the emulator back into those modes even though nothing is
+ * running that asked for them — most visibly mouse tracking, which then
+ * reports every pointer movement into the prompt as `^[[<35;40;18M` noise.
+ */
+const APP_OWNED_MODE_RESET =
+  '\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l' +
+  '\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l' +
+  '\x1b[?2004l\x1b[?25h\x1b[?7h'
 
 
 
@@ -32,6 +51,12 @@ interface Props {
   id: string
   surface?: 'canvas' | 'code'
   agentId?: string
+  /**
+   * Accepted and persisted per widget, but nothing in here reads it yet — the
+   * paste/drop attachment paths below run the same way whatever it is set to.
+   * Left in place because the plumbing (and its localStorage entry) belongs to
+   * a feature that is still being built, not to dead code.
+   */
   attachmentMode?: boolean
   onProcessExit?: () => void
 }
@@ -73,13 +98,15 @@ function xtermTheme(_appTheme: ThemeName, surface: 'canvas' | 'code'): ITheme {
   }
 }
 
-function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = false, onProcessExit }: Props): React.JSX.Element {
+function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Props): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
-  const agentIdRef = useRef(agentId)
-  agentIdRef.current = agentId
-  const attachmentModeRef = useRef(attachmentMode || surface === 'code')
-  attachmentModeRef.current = attachmentMode || surface === 'code'
+  const agentIdRef = useRef(attachmentAgent(agentId ?? ''))
+  const isCodexRef = useRef(agentId === 'codex')
+  useEffect(() => {
+    agentIdRef.current = attachmentAgent(agentId ?? '')
+    isCodexRef.current = agentIdRef.current === 'codex'
+  }, [agentId])
 
 
   const [connecting, setConnecting] = useState(true)
@@ -102,12 +129,11 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
       allowTransparency: surface === 'canvas',
       fontSize: 13,
       fontFamily: 'Consolas, "Cascadia Mono", monospace',
-      lineHeight: 1.15,
+      lineHeight: 1,
       scrollback: 5000,
-      cursorBlink: true,
-
-
-
+      // Keep xterm's timer disabled as well as using a transparent cursor so
+      // the artifact cannot blink even while the terminal owns focus.
+      cursorBlink: false,
       cursorInactiveStyle: 'none',
       convertEol: false,
 
@@ -124,19 +150,118 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
     const unicode11 = new Unicode11Addon()
     term.loadAddon(unicode11)
     term.unicode.activeVersion = '11'
-    const pendingWrites: string[] = []
-    let writeRaf: number | null = null
+    const renderQueue = new TerminalRenderQueue((data, done) => term.write(data, done), () => scheduleFlush())
+    let flushRaf: number | null = null
+    let flushTimer: ReturnType<typeof setTimeout> | null = null
+    // While a scrollback restore is streaming slice-by-slice, live output
+    // stays queued so it can never be interleaved into the middle of the
+    // history being replayed.
+    let restoreInFlight = false
+    let cancelRestore: (() => void) | undefined
+    let restoreWatchdog: ReturnType<typeof setTimeout> | null = null
+    const cancelScheduledFlush = (): void => {
+      if (flushRaf !== null) {
+        cancelAnimationFrame(flushRaf)
+        flushRaf = null
+      }
+      if (flushTimer !== null) {
+        clearTimeout(flushTimer)
+        flushTimer = null
+      }
+    }
     const flushWrites = (): void => {
-      writeRaf = null
-      if (pendingWrites.length === 0) return
-      const batch = pendingWrites.splice(0, pendingWrites.length).join('')
-      term.write(batch)
+      cancelScheduledFlush()
+      if (!mounted) {
+        renderQueue.dispose()
+        return
+      }
+      if (restoreInFlight) return
+      renderQueue.flush()
+    }
+    const scheduleFlush = (): void => {
+      if (flushRaf !== null || flushTimer !== null) return
+      flushRaf = requestAnimationFrame(flushWrites)
+      // RAF stops firing while the window is occluded/minimised. Without the
+      // timeout fallback the queue would grow unbounded and the eventual
+      // single giant write would freeze the UI thread (no typing, no Ctrl+C).
+      flushTimer = setTimeout(flushWrites, 120)
     }
     const batchedWrite = (data: string): void => {
-      pendingWrites.push(data)
-      if (writeRaf === null) writeRaf = requestAnimationFrame(flushWrites)
+      renderQueue.push(data)
+    }
+    // Ordered, backpressured writes for large restores: each slice is handed
+    // to xterm only after the previous one was parsed, so the UI thread is
+    // never blocked by a single huge write and ordering with later writes
+    // (markers, live output) is preserved.
+    const RESTORE_CHUNK_SIZE = 32768
+    // A restore that never reaches its last slice would leave the terminal
+    // permanently read-only behind a "Connecting…" overlay, because every
+    // exit from the slice chain used to be responsible for undoing the two
+    // flags it set. Both are now released from one place, and a generation
+    // counter makes sure a superseded chain can never release the flags that
+    // belong to the restore that replaced it.
+    let restoreGeneration = 0
+    const endRestore = (generation: number): void => {
+      if (generation !== restoreGeneration) return
+      restoreGeneration += 1
+      restoreInFlight = false
+      if (restoreWatchdog !== null) {
+        clearTimeout(restoreWatchdog)
+        restoreWatchdog = null
+      }
+      if (!mounted) return
+      renderQueue.pause(false)
+      term.options.disableStdin = false
+      setConnecting(false)
+      scheduleFlush()
+    }
+    const writePaced = (text: string, done?: () => void): void => {
+      cancelRestore?.()
+      const generation = ++restoreGeneration
+      restoreInFlight = true
+      renderQueue.pause(true)
+      term.options.disableStdin = true
+      let offset = 0
+      cancelRestore = () => endRestore(generation)
+      // xterm invokes the write callback from its parser; if a slice is ever
+      // dropped (a dispose racing the chain, a parser throw swallowed
+      // upstream) nothing else would ever re-enable input. Re-armed per
+      // slice, so it only fires when the chain has genuinely stalled.
+      const armWatchdog = (): void => {
+        if (restoreWatchdog !== null) clearTimeout(restoreWatchdog)
+        restoreWatchdog = setTimeout(() => {
+          restoreWatchdog = null
+          endRestore(generation)
+        }, 5000)
+      }
+
+      const writeNext = (): void => {
+        if (generation !== restoreGeneration || !mounted) {
+          endRestore(generation)
+          return
+        }
+        if (offset >= text.length) {
+          endRestore(generation)
+          done?.()
+          return
+        }
+        const end = Math.min(offset + RESTORE_CHUNK_SIZE, text.length)
+        const chunk = text.slice(offset, end)
+        offset = end
+        try {
+          armWatchdog()
+          term.write(chunk, writeNext)
+        } catch {
+          endRestore(generation)
+        }
+      }
+
+      writeNext()
     }
     const restoreViewport = (saved?: { line: number; atBottom: boolean }): void => {
+      // Never yank the viewport of a fullscreen TUI (alternate screen): it
+      // has no scrollback and forced scrolls tear the live frame.
+      if (term.buffer.active.type === 'alternate') return
       const viewport = saved ?? terminalViewportById.get(id)
       if (!viewport) return
       if (viewport.atBottom) term.scrollToBottom()
@@ -149,12 +274,11 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
     const restoreViewportAfterLayout = (): void => {
       if (!mounted) return
       restoreViewport()
+      // One frame is enough: the write that preceded this has been parsed, so
+      // the second pass runs against the final buffer geometry. The third
+      // nested frame only ever repeated the same scroll.
       requestAnimationFrame(() => {
-        if (!mounted) return
-        restoreViewport()
-        requestAnimationFrame(() => {
-          if (mounted) restoreViewport()
-        })
+        if (mounted) restoreViewport()
       })
     }
     type ViewportAnchor = { line: number; atBottom: boolean }
@@ -167,6 +291,9 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
     }
     const applyViewportAnchor = (anchor: ViewportAnchor): void => {
       if (!mounted) return
+      // Fullscreen TUIs live on the alternate screen buffer — forcing scroll
+      // positions there corrupts the rendered frame.
+      if (term.buffer.active.type === 'alternate') return
       if (anchor.atBottom) term.scrollToBottom()
       else term.scrollToLine(Math.min(anchor.line, term.buffer.active.baseY))
     }
@@ -179,8 +306,7 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
     let resizeAnchor: ViewportAnchor | null = null
     let resizeAnchorGeneration = 0
     let resizeRestoreUntil = 0
-    let resizeRestoreTimerShort: ReturnType<typeof setTimeout> | null = null
-    let resizeRestoreTimerLong: ReturnType<typeof setTimeout> | null = null
+    let resizeRestoreTimer: ReturnType<typeof setTimeout> | null = null
     const restoreResizeAnchor = (generation: number): void => {
       if (generation !== resizeAnchorGeneration || !resizeAnchor) return
       applyViewportAnchor(resizeAnchor)
@@ -190,17 +316,95 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
       resizeAnchorGeneration++
       const generation = resizeAnchorGeneration
       resizeRestoreUntil = performance.now() + 300
-      if (resizeRestoreTimerShort) clearTimeout(resizeRestoreTimerShort)
-      if (resizeRestoreTimerLong) clearTimeout(resizeRestoreTimerLong)
+      if (resizeRestoreTimer) clearTimeout(resizeRestoreTimer)
+      // Three staggered restores on top of the immediate one meant a single
+      // resize yanked the viewport four times; the RAF already lands after
+      // xterm has reflowed, and the timer only covers a reflow that spilled
+      // into a later frame.
       applyViewportAnchor(anchor)
       requestAnimationFrame(() => restoreResizeAnchor(generation))
-      resizeRestoreTimerShort = setTimeout(() => restoreResizeAnchor(generation), 60)
-      resizeRestoreTimerLong = setTimeout(() => restoreResizeAnchor(generation), 180)
+      resizeRestoreTimer = setTimeout(() => restoreResizeAnchor(generation), 150)
+    }
+    // `cleanGhostCursor` reads the textContent of every rendered row and runs
+    // regexes over it. It used to be called straight from onRender,
+    // onWriteParsed *and* onCursorMove — three of the hottest callbacks xterm
+    // has — so a chatty terminal paid a full-DOM text extraction hundreds of
+    // times a second, on the same thread that has to stay responsive to
+    // typing. It is now coalesced to at most one pass per animation frame,
+    // and for a terminal not yet known to be Codex the detection scan itself
+    // is rate-limited: the artifact only appears once the agent is running,
+    // so probing a few times a second is more than enough to catch it.
+    let isCleaningGhostCursor = false
+    let ghostCursorRaf: number | null = null
+    const scheduleGhostCursorClean = (): void => {
+      if (ghostCursorRaf !== null || !mounted) return
+      ghostCursorRaf = requestAnimationFrame(() => {
+        ghostCursorRaf = null
+        cleanGhostCursor()
+      })
+    }
+    // The scan reads textContent of every rendered row, which forces a style
+    // and layout flush. Running it once per animation frame — which is what
+    // the RAF coalescing above actually allows — put that cost on the UI
+    // thread 60 times a second for the whole time an agent was streaming. The
+    // artifact it hides is a stationary cursor, so a few passes a second is
+    // indistinguishable and an order of magnitude cheaper.
+    const GHOST_SCAN_INTERVAL_MS = 250
+    let lastGhostScanAt = 0
+    const cleanGhostCursor = (): void => {
+      if (isCleaningGhostCursor || !mounted) return
+      const knownCodex = isCodexRef.current || agentIdRef.current === 'codex'
+      if (!knownCodex) return
+      const now = performance.now()
+      if (now - lastGhostScanAt < GHOST_SCAN_INTERVAL_MS) return
+      lastGhostScanAt = now
+      isCleaningGhostCursor = true
+      try {
+        const rowsEl = container.querySelector<HTMLElement>('.xterm-rows')
+        if (!rowsEl) return
+        const rowsText = rowsEl.textContent ?? ''
+
+        const isWorking = /working\s*\(|esc to interrupt/i.test(rowsText)
+        if (!isWorking) return
+
+        const rowCount = rowsEl.children.length
+        if (rowCount === 0) return
+
+        for (let index = 0; index < rowCount; index++) {
+          const row = rowsEl.children[index] as HTMLElement
+          if (!row) continue
+          const rawText = (row.textContent ?? '').replace(/[\s\u00A0\u200B-\u200D\uFEFF]/g, '')
+          if (rawText !== '') continue
+          const nextText = rowsEl.children[index + 1]?.textContent ?? ''
+          const next2Text = rowsEl.children[index + 2]?.textContent ?? ''
+          if (!/working\s*\(|esc to interrupt/i.test(nextText) && !/working\s*\(|esc to interrupt/i.test(next2Text)) continue
+
+          const cursor = row.querySelector<HTMLElement>('.xterm-cursor, [data-ghost-cursor]')
+          if (cursor) {
+            cursor.classList.remove('xterm-cursor', 'xterm-cursor-blink', 'xterm-cursor-block')
+            cursor.setAttribute('data-ghost-cursor', 'true')
+            cursor.style.setProperty('background-color', 'transparent', 'important')
+            cursor.style.setProperty('outline', 'none', 'important')
+            cursor.style.setProperty('box-shadow', 'none', 'important')
+            cursor.style.setProperty('animation', 'none', 'important')
+            cursor.style.setProperty('opacity', '0', 'important')
+          }
+        }
+      } finally {
+        isCleaningGhostCursor = false
+      }
     }
     const writeParsedDisposable = term.onWriteParsed(() => {
+      scheduleGhostCursorClean()
       if (!resizeAnchor || performance.now() > resizeRestoreUntil) return
       const generation = resizeAnchorGeneration
       requestAnimationFrame(() => restoreResizeAnchor(generation))
+    })
+    const renderDisposable = term.onRender(() => {
+      scheduleGhostCursorClean()
+    })
+    const cursorMoveDisposable = term.onCursorMove(() => {
+      scheduleGhostCursorClean()
     })
     const scrollDisposable = term.onScroll(() => {
       const activeBuffer = term.buffer.active
@@ -214,26 +418,44 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
     let closeTimer: ReturnType<typeof setTimeout> | null = null
     let initialCmdTimer: ReturnType<typeof setTimeout> | null = null
     let resizeSendRaf: number | null = null
+    let resizeSendTimer: ReturnType<typeof setTimeout> | null = null
     let pendingResize: { cols: number; rows: number } | null = null
     let lastSentResize: { cols: number; rows: number } | null = null
     const flushResize = (): void => {
-      resizeSendRaf = null
+      if (resizeSendRaf !== null) {
+        cancelAnimationFrame(resizeSendRaf)
+        resizeSendRaf = null
+      }
+      if (resizeSendTimer !== null) {
+        clearTimeout(resizeSendTimer)
+        resizeSendTimer = null
+      }
       const next = pendingResize
       pendingResize = null
-      if (!next || (lastSentResize?.cols === next.cols && lastSentResize.rows === next.rows)) return
+      if (!next || (lastSentResize?.cols === next.cols && lastSentResize?.rows === next.rows)) return
       lastSentResize = next
       void window.api.terminal.resize(id, next.cols, next.rows)
     }
     const queueResize = (cols: number, rows: number): void => {
       pendingResize = { cols, rows }
       if (resizeSendRaf === null) resizeSendRaf = requestAnimationFrame(flushResize)
+      // Same RAF-starvation hazard as output writes: never leave a geometry
+      // update stranded when frames stop.
+      if (resizeSendTimer === null) resizeSendTimer = setTimeout(flushResize, 250)
     }
+    // A session can be announced as ended more than once — the engine's reader
+    // thread and its actor both report an exit when the actor stops first, and
+    // say so on the assumption that consumers ignore the second. This one did
+    // not: it printed the notice again and armed another 8s timer, and only
+    // the newest timer was ever cleared, so the earlier ones survived unmount
+    // and fired onProcessExit at a widget that was already gone.
+    let exitReported = false
     const exitUnsub = window.api.terminal.onExit(id, (code) => {
+      if (exitReported) return
+      exitReported = true
+      isCodexRef.current = agentId === 'codex'
+      if (agentIdRef.current === 'codex' && agentId !== 'codex') agentIdRef.current = undefined
       term.write(`\r\n\x1b[90m[Process exited${typeof code === 'number' ? ` (code ${code})` : ''}]\x1b[0m\r\n`)
-
-
-
-
       closeTimer = setTimeout(() => onProcessExitRef.current?.(), 8000)
     })
 
@@ -257,11 +479,14 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
     }
     let typedCommand = ''
     term.onData((data) => {
+      // Replayed device queries must not send historical replies to a live shell.
+      if (restoreInFlight) return
       if (data === '\r' || data === '\n') {
-        const cmd = typedCommand.trim().split(/\s+/, 1)[0]?.toLowerCase()
-        if (cmd === 'agy' || cmd === 'antigravity') agentIdRef.current = 'antigravity'
-        else if (cmd === 'claude') agentIdRef.current = 'claude'
-        else if (cmd) agentIdRef.current = cmd
+        const detected = attachmentAgent(typedCommand)
+        if (detected) {
+          agentIdRef.current = detected
+          isCodexRef.current = detected === 'codex'
+        }
         typedCommand = ''
       } else if (data === '\x7f' || data === '\b') {
         typedCommand = typedCommand.slice(0, -1)
@@ -274,10 +499,26 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
     })
     term.onResize(({ cols, rows }) => queueResize(cols, rows))
 
-    const isImageFile = (f: { name?: string; type?: string }): boolean => {
-      if (f.type && f.type.startsWith('image/')) return true
-      const name = (f.name || '').toLowerCase()
-      return /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|tiff?)$/i.test(name)
+    const attachmentShortcut = (): string | null => imagePasteShortcut(agentIdRef.current, /win/i.test(navigator.platform) ? 'win32' : IS_MAC ? 'darwin' : 'linux')
+    let attachmentQueue = Promise.resolve()
+    const attachFiles = (files: File[]): Promise<void> => {
+      const shortcut = attachmentShortcut()
+      attachmentQueue = attachmentQueue.then(async () => {
+        if (!mounted) return
+        term.focus()
+        await insertAttachments(files, shortcut, {
+          getPath: (file) => window.api.media.getPathForFile(file as File),
+          save: (bytes, ext) => window.api.media.saveBytesScratch(bytes, ext),
+          stage: (bytes) => window.api.media.stageClipboardImage(bytes),
+          paste: (text) => term.paste(text),
+          write: writePty,
+          report: (message) => term.write(`\r\n\x1b[31m[${message.replace(/[\x00-\x1f\x7f]/g, ' ')}]\x1b[0m\r\n`),
+          alive: () => mounted
+        })
+      }).catch((error) => {
+        console.error('Attachment failed', error)
+      })
+      return attachmentQueue
     }
 
 
@@ -286,11 +527,12 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
 
       const pathText = /\s/.test(image.path) ? `"${image.path.replace(/"/g, '\\"')}"` : image.path
       const toInsert = addTrailingSpace ? `${pathText} ` : pathText
-      writePty(toInsert)
+      term.paste(toInsert)
     }
 
     const pasteImageToAgent = async (bytes?: Uint8Array): Promise<boolean> => {
-      if (!attachmentModeRef.current) return false
+      const shortcut = attachmentShortcut()
+      if (!shortcut) return false
       if (bytes) {
         const staged = await window.api.media.stageClipboardImage(bytes)
         if ('error' in staged) {
@@ -298,23 +540,12 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
           return false
         }
       }
-      writePty('\x16')
+      if (!mounted) return false
+      writePty(shortcut)
       return true
     }
 
-    const isPasteShortcut = (event: KeyboardEvent): boolean => {
-      const key = event.key ? event.key.toLowerCase() : ''
-      const isKeyV = key === 'v' || key === 'м' || event.code === 'KeyV' || event.keyCode === 86
-      const isInsert = event.key === 'Insert' || event.code === 'Insert' || event.keyCode === 45
-
-      if (IS_MAC) {
-        return Boolean(event.metaKey && !event.ctrlKey && !event.altKey && isKeyV)
-      }
-      if (event.ctrlKey && !event.altKey && isKeyV) return true
-      if (event.altKey && !event.ctrlKey && isKeyV) return true
-      if (event.shiftKey && !event.ctrlKey && !event.altKey && isInsert) return true
-      return false
-    }
+    const isPasteShortcut = (event: KeyboardEvent): boolean => isTerminalPasteShortcut(event, IS_MAC)
 
     let lastPasteAt = 0
     const handlePaste = async (event?: ClipboardEvent): Promise<void> => {
@@ -323,42 +554,22 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
       lastPasteAt = now
 
       try {
-        if (agentIdRef.current === 'claude') {
-          if (event && pasteHasImage(event)) {
-            writePty('\x16')
-            return
+        const files = Array.from(event?.clipboardData?.files ?? [])
+        if (!files.length && event?.clipboardData?.items) {
+          for (const item of Array.from(event.clipboardData.items)) {
+            if (item.kind !== 'file') continue
+            const file = item.getAsFile()
+            if (file) files.push(file)
           }
-          const scratch = await window.api.media.saveClipboardScratch()
-          if (scratch && 'path' in scratch) {
-            writePty('\x16')
-            return
-          }
-          const text = event ? event.clipboardData?.getData('text/plain') : await window.api.media.readClipboardText()
-          if (text) {
-            term.paste(text)
-          } else {
-            writePty('\x16')
-          }
-          return
         }
-
-        if (event && pasteHasImage(event)) {
-          const saved = await saveImageFromPaste(event, { scratch: true })
-          if (saved && 'path' in saved) {
-            if (attachmentModeRef.current) {
-              await pasteImageToAgent()
-            } else {
-              writeImagePath(saved, true)
-            }
-            return
-          }
+        if (files.length) {
+          await attachFiles(files)
+          return
         }
 
         const img = await window.api.media.saveClipboardScratch()
         if (img && 'path' in img) {
-          if (attachmentModeRef.current) {
-            await pasteImageToAgent()
-          } else {
+          if (!await pasteImageToAgent()) {
             writeImagePath(img, true)
           }
           return
@@ -428,32 +639,13 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
         term.scrollToBottom()
         return false
       }
+      const fastScroll = IS_MAC ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
       if (event.shiftKey && event.key === 'ArrowUp') {
-        term.scrollLines(-1)
+        term.scrollLines(fastScroll ? -5 : -1)
         return false
       }
       if (event.shiftKey && event.key === 'ArrowDown') {
-        term.scrollLines(1)
-        return false
-      }
-
-
-
-      const fastScroll = IS_MAC ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
-      if (fastScroll && event.shiftKey && event.key === 'ArrowUp') {
-        term.scrollLines(-5)
-        return false
-      }
-      if (fastScroll && event.shiftKey && event.key === 'ArrowDown') {
-        term.scrollLines(5)
-        return false
-      }
-      if (fastScroll && event.shiftKey && event.key === 'Home') {
-        term.scrollToTop()
-        return false
-      }
-      if (fastScroll && event.shiftKey && event.key === 'End') {
-        term.scrollToBottom()
+        term.scrollLines(fastScroll ? 5 : 1)
         return false
       }
       return true
@@ -469,12 +661,11 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
 
       if (surface === 'canvas') term.focus()
     } catch (err) {
-
-
-
       console.error('failed to initialise terminal widget', err)
       term.write('\r\n\x1b[31m[Terminal could not be initialised; retrying is safe]\x1b[0m\r\n')
     }
+
+
 
 
     const handleResize = (): void => {
@@ -528,48 +719,129 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
     document.addEventListener('keydown', onKeyShortcut)
 
 
+    // The menu used to be pinned to the bottom-right corner of the *window*
+    // (nowhere near the click), a second right-click stacked another copy on
+    // top of the first, and the only way it ever went away was a 2.5s timer —
+    // so it could also vanish mid-reach. It is now anchored at the pointer,
+    // never more than one at a time, and dismissed the way a menu should be.
+    let openMenu: { el: HTMLElement; close: () => void } | null = null
+    const closeTerminalMenu = (): void => openMenu?.close()
     const onContextMenu = (e: MouseEvent): void => {
-      if (e.button !== 2) return
       e.preventDefault()
+      closeTerminalMenu()
       const selection = term.getSelection()
       const hasSelection = !!selection?.trim()
-      const menu = document.createElement('div')
-      menu.style.position = 'fixed'
-      menu.style.right = '10px'
-      menu.style.bottom = '10px'
-      menu.style.background = 'var(--bg-raise)'
-      menu.style.border = '1px solid var(--border-line-soft)'
-      menu.style.borderRadius = '6px'
-      menu.style.padding = '8px'
-      menu.style.boxShadow = '0 4px 12px rgba(8,9,11,.6)'
-      menu.style.zIndex = '99999'
 
-      if (hasSelection) {
-        const copyBtn = document.createElement('button')
-        copyBtn.textContent = 'Copy'
-        copyBtn.style.cssText =
-          'width:100%;margin-bottom:4px;padding:4px;border:none;border-radius:4px;background:var(--tok-color-bg-panel);color:var(--tok-color-text);font-size:12px;cursor:pointer;'
-        copyBtn.onclick = (): void => {
-          void navigator.clipboard.writeText(selection)
-          if (document.body.contains(menu)) document.body.removeChild(menu)
+      const menu = document.createElement('div')
+      menu.setAttribute('role', 'menu')
+      menu.style.cssText =
+        'position:fixed;min-width:132px;background:var(--tok-color-bg-raise,#16161a);' +
+        'border:1px solid var(--tok-color-line,#2a2a2e);border-radius:8px;padding:4px;' +
+        'box-shadow:0 8px 24px rgba(8,9,11,.55);z-index:99999;display:flex;flex-direction:column;gap:2px;'
+
+      const itemButtons: HTMLButtonElement[] = []
+      const close = (): void => {
+        if (openMenu?.el !== menu) return
+        openMenu = null
+        window.removeEventListener('pointerdown', onOutside, true)
+        window.removeEventListener('keydown', onMenuKey, true)
+        window.removeEventListener('blur', close)
+        window.removeEventListener('resize', close)
+        menu.remove()
+        // Focus went into the menu when it opened, so it has to come back —
+        // otherwise dismissing left the page with nothing focused and the
+        // next keystroke went nowhere instead of to the shell.
+        if (mounted) term.focus()
+      }
+      const onOutside = (event: Event): void => {
+        if (!menu.contains(event.target as Node)) close()
+      }
+      // Arrow navigation to match the canvas context menu, which had it while
+      // this one could only be driven with the pointer.
+      const moveFocus = (step: number): void => {
+        if (itemButtons.length === 0) return
+        const current = itemButtons.indexOf(document.activeElement as HTMLButtonElement)
+        const next = (current + step + itemButtons.length) % itemButtons.length
+        itemButtons[current < 0 ? (step > 0 ? 0 : itemButtons.length - 1) : next]?.focus()
+      }
+      const onMenuKey = (event: KeyboardEvent): void => {
+        if (event.key === 'Escape') {
+          event.stopPropagation()
+          close()
+        } else if (event.key === 'ArrowDown') {
+          event.preventDefault()
+          event.stopPropagation()
+          moveFocus(1)
+        } else if (event.key === 'ArrowUp') {
+          event.preventDefault()
+          event.stopPropagation()
+          moveFocus(-1)
+        } else if (event.key === 'Home' || event.key === 'End') {
+          event.preventDefault()
+          event.stopPropagation()
+          itemButtons[event.key === 'Home' ? 0 : itemButtons.length - 1]?.focus()
         }
-        menu.appendChild(copyBtn)
-      } else {
-        const pasteBtn = document.createElement('button')
-        pasteBtn.textContent = 'Paste'
-        pasteBtn.style.cssText =
-          'width:100%;padding:4px;border:none;border-radius:4px;background:var(--tok-color-bg-panel);color:var(--tok-color-text);font-size:12px;cursor:pointer;'
-        pasteBtn.onclick = (): void => {
-          void handlePaste()
-          if (document.body.contains(menu)) document.body.removeChild(menu)
-        }
-        menu.appendChild(pasteBtn)
       }
 
+      const addItem = (label: string, run: () => void): void => {
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.setAttribute('role', 'menuitem')
+        button.textContent = label
+        button.style.cssText =
+          'width:100%;padding:5px 10px;border:none;border-radius:5px;background:transparent;' +
+          'color:var(--tok-color-text,#e8e8ea);font:inherit;font-size:12px;text-align:left;cursor:pointer;'
+        button.onmouseenter = (): void => {
+          button.style.background = 'var(--tok-color-bg-hover,#232328)'
+        }
+        button.onmouseleave = (): void => {
+          button.style.background = 'transparent'
+        }
+        button.onclick = (): void => {
+          close()
+          run()
+        }
+        button.onfocus = (): void => {
+          button.style.background = 'var(--tok-color-bg-hover,#232328)'
+        }
+        button.onblur = (): void => {
+          button.style.background = 'transparent'
+        }
+        itemButtons.push(button)
+        menu.appendChild(button)
+      }
+
+      if (hasSelection) {
+        addItem('Copy', () => void navigator.clipboard.writeText(selection).catch(() => {}))
+      }
+      addItem('Paste', () => void handlePaste())
+      if (hasSelection) addItem('Clear selection', () => term.clearSelection())
+      // An application that dies without restoring the modes it set leaves the
+      // terminal in them, and the shell it dropped back to never asked for any
+      // of it. The most visible case is mouse tracking: every pointer movement
+      // over the widget then types a report into the prompt. Nothing else can
+      // clear that — the shell is still alive, so there is no exit to hook —
+      // so this is the way out.
+      addItem('Reset terminal', () => {
+        term.write(APP_OWNED_MODE_RESET)
+        term.clearSelection()
+      })
+
       document.body.appendChild(menu)
-      setTimeout(() => {
-        if (document.body.contains(menu)) document.body.removeChild(menu)
-      }, 2500)
+      // Measure once attached so the menu can never open past the viewport
+      // edge (the old fixed corner at least never did this by accident).
+      const rect = menu.getBoundingClientRect()
+      const left = Math.max(4, Math.min(e.clientX, window.innerWidth - rect.width - 4))
+      const top = Math.max(4, Math.min(e.clientY, window.innerHeight - rect.height - 4))
+      menu.style.left = `${left}px`
+      menu.style.top = `${top}px`
+
+      openMenu = { el: menu, close }
+      itemButtons[0]?.focus()
+      window.addEventListener('pointerdown', onOutside, true)
+      window.addEventListener('keydown', onMenuKey, true)
+      window.addEventListener('blur', close)
+      window.addEventListener('resize', close)
     }
     container.addEventListener('contextmenu', onContextMenu)
 
@@ -577,7 +849,15 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
 
 
     const onFocusIn = (): void => window.api.terminal.setFocused(true, id)
-    const onFocusOut = (): void => window.api.terminal.setFocused(false, id)
+    // xterm moves focus between its own helper textarea and the screen
+    // element, and each hop fires focusout. Reporting a blur for those made
+    // the main process briefly believe no terminal was focused, so an `orc
+    // tell` with no explicit target could land in the wrong terminal.
+    const onFocusOut = (event: FocusEvent): void => {
+      const next = event.relatedTarget
+      if (next instanceof Node && container.contains(next)) return
+      window.api.terminal.setFocused(false, id)
+    }
     container.addEventListener('focusin', onFocusIn)
     container.addEventListener('focusout', onFocusOut)
 
@@ -599,8 +879,22 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
 
 
     let wheelAcc = 0
+    // The 16px constant this replaced did not match the rendered row at any
+    // zoom or DPI other than the one it was picked at, so a wheel notch
+    // scrolled a different distance than it looked like it should.
+    const rowHeight = (): number => {
+      const screen = container.querySelector<HTMLElement>('.xterm-screen')
+      const height = screen?.clientHeight ?? 0
+      const rows = term.rows || 1
+      return height > 0 ? height / rows : 16
+    }
     const onWheel = (event: WheelEvent): void => {
       if (term.buffer.active.type === 'alternate') return
+      // Ctrl/Cmd + wheel is the canvas zoom gesture. Swallowing it meant the
+      // canvas could not be zoomed while the pointer sat over a terminal —
+      // and terminals cover most of the canvas. Alt keeps the fast-scroll
+      // role it used to share with Ctrl.
+      if (IS_MAC ? event.metaKey : event.ctrlKey) return
 
       event.preventDefault()
       event.stopPropagation()
@@ -611,15 +905,12 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
         delta *= 200
       }
 
-
-
-
-      if (event.altKey || (event.ctrlKey && !IS_MAC)) {
+      if (event.altKey) {
         delta *= 4
       }
 
       wheelAcc += delta
-      const lineHeight = 16
+      const lineHeight = rowHeight()
       const lines = Math.trunc(wheelAcc / lineHeight)
       if (lines !== 0) {
         wheelAcc -= lines * lineHeight
@@ -644,16 +935,19 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
 
 
     const onDragEnter = (event: DragEvent): void => {
+      if (Array.from(event.dataTransfer?.types ?? []).includes('text/session-id')) return
       event.preventDefault()
       event.stopPropagation()
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
     }
     const onDragOver = (event: DragEvent): void => {
+      if (Array.from(event.dataTransfer?.types ?? []).includes('text/session-id')) return
       event.preventDefault()
       event.stopPropagation()
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
     }
     const onDrop = (event: DragEvent): void => {
+      if (Array.from(event.dataTransfer?.types ?? []).includes('text/session-id')) return
       event.preventDefault()
       event.stopPropagation()
       const dt = event.dataTransfer
@@ -671,38 +965,7 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
 
 
 
-      void (async () => {
-        for (const file of dropped) {
-          try {
-            if (isImageFile(file)) {
-              const bytes = new Uint8Array(await file.arrayBuffer())
-              const ext = file.name.includes('.') ? file.name.split('.').pop()! : file.type.split('/')[1] || 'png'
-              if (attachmentModeRef.current) {
-                await pasteImageToAgent(bytes)
-                continue
-              }
-              const saved = await window.api.media.saveBytesScratch(bytes, ext)
-              if (saved && 'path' in saved) {
-                writeImagePath(saved, true)
-              } else if (saved && 'error' in saved) {
-                term.write(`\r\n\x1b[31m[${saved.error}]\x1b[0m\r\n`)
-              }
-              continue
-            }
-            const path = window.api.media.getPathForFile(file)
-            if (!path) continue
-
-
-
-            writePty(`"${path.replace(/"/g, '\\"')}" `)
-            term.write(`\x1b[90m[Dropped: ${file.name}]\x1b[0m`)
-          } catch (err) {
-            term.write(
-              `\r\n\x1b[31m[${err instanceof Error ? err.message : 'Failed to read dropped file'}]\x1b[0m\r\n`
-            )
-          }
-        }
-      })()
+      void attachFiles(dropped)
     }
     container.addEventListener('dragenter', onDragEnter)
     container.addEventListener('dragover', onDragOver)
@@ -720,8 +983,14 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
 
 
       if (!mounted) {
-        takeInitialCommand(id)
-        window.api.terminal.detach(id)
+        // No detach here: `mounted` is only false once the effect cleanup has
+        // run, and that cleanup already detached. Detaching twice for a single
+        // attach unbalanced the main process's mount count, which then dropped
+        // the *next* widget generation's output — a terminal that took input
+        // and painted nothing.
+        //
+        // The queued command stays queued: this generation is gone without
+        // having typed it, so the next one has to.
         return
       }
       if (!result || !('ok' in result) || !result.ok) {
@@ -729,21 +998,31 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
         term.write(`\r\n\x1b[31m[Failed to launch terminal${err ? `: ${err}` : ''}]\x1b[0m\r\n`)
 
 
-        takeInitialCommand(id)
         if (mounted) setConnecting(false)
         return
       }
       let viewportRestoredAfterWrite = false
       if (result.scrollback) {
-
-
-
-
-        term.write(result.scrollback, () => restoreViewportAfterLayout())
+        // A reconnect can hand back up to ~512KB of scrollback. One write()
+        // of that size blocks the UI thread (frozen input, stuck Ctrl+C), so
+        // the restore is paced in slices chained through the write callback,
+        // which fires once the slice has been parsed. Marker included in the
+        // same chain so the two can never interleave. The leading SGR reset
+        // is invisible and guards against history truncated mid-sequence by
+        // the main-process ring buffer.
+        // Replaying history also replays the private-mode switches the old
+        // foreground app turned on. For a session that is NOT live the shell
+        // underneath is brand new and never asked for any of them, but the
+        // emulator is now left in, above all, mouse-tracking mode — so every
+        // pointer move over the widget types an SGR mouse report straight into
+        // the prompt (`^[[<35;40;18M…`), which is unusable and looks like the
+        // terminal has been corrupted. A live re-attach is left alone: there
+        // the modes belong to a process that really is still running.
+        const marker = result.live
+          ? ''
+          : `${APP_OWNED_MODE_RESET}\r\n\x1b[90m[Session restored — new process started]\x1b[0m\r\n`
+        writePaced(`\x1b[0m${result.scrollback}${marker}`, () => restoreViewportAfterLayout())
         viewportRestoredAfterWrite = true
-        if (!result.live) {
-          term.write('\r\n\x1b[90m[Session restored — new process started]\x1b[0m\r\n')
-        }
       }
 
       if (result.live && container.clientWidth > 0 && container.clientHeight > 0) {
@@ -758,26 +1037,30 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
 
 
 
-      if (result.live) takeInitialCommand(id)
-
-
       if (!viewportRestoredAfterWrite) restoreViewportAfterLayout()
 
-
-
-
-      if (!result.live) {
-        const queued = takeInitialCommand(id)
-        if (queued) {
-          initialCmdTimer = setTimeout(() => {
-            if (mounted) writePty(`${queued}${cachedSubmit}`)
-          }, 300)
-        }
+      // A live re-attach gets the command too. `live` only means the pty was
+      // already running when this widget connected; it says nothing about
+      // whether the command was ever typed, and a still-queued entry says it
+      // was not. Discarding it here was the second half of the lost-command
+      // bug — a widget torn down mid-connect leaves the shell running, so its
+      // replacement always arrived to `live: true` and threw the command away.
+      // That is why closing some code sessions left the survivors sitting at a
+      // bare prompt with the agent never started.
+      const queued = peekInitialCommand(id)
+      if (queued) {
+        const detected = attachmentAgent(queued)
+        if (detected) agentIdRef.current = detected
+        initialCmdTimer = setTimeout(() => {
+          if (!mounted) return
+          // Cleared only now, at the point it actually goes to the pty.
+          markInitialCommandDelivered(id)
+          writePty(`${queued}${cachedSubmit}`)
+        }, 300)
       }
-      if (mounted) setConnecting(false)
+      if (mounted && !restoreInFlight) setConnecting(false)
     }).catch(() => {
-
-      takeInitialCommand(id)
+      // Leave the command queued: nothing was typed, so a retry still owes it.
       if (mounted) {
         term.write('\r\n\x1b[31m[Failed to launch terminal]\x1b[0m\r\n')
         setConnecting(false)
@@ -813,18 +1096,31 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
         line: activeBuffer.viewportY,
         atBottom: activeBuffer.viewportY >= activeBuffer.baseY
       })
-      if (writeRaf !== null) { cancelAnimationFrame(writeRaf); writeRaf = null; pendingWrites.length = 0 }
-      if (resizeSendRaf !== null) { cancelAnimationFrame(resizeSendRaf); resizeSendRaf = null }
+      cancelScheduledFlush()
+      cancelRestore?.()
+      renderQueue.dispose()
       pendingResize = null
+      if (resizeSendRaf !== null) {
+        cancelAnimationFrame(resizeSendRaf)
+        resizeSendRaf = null
+      }
+      if (resizeSendTimer !== null) {
+        clearTimeout(resizeSendTimer)
+        resizeSendTimer = null
+      }
       if (resizeRaf !== null) cancelAnimationFrame(resizeRaf)
+      if (ghostCursorRaf !== null) {
+        cancelAnimationFrame(ghostCursorRaf)
+        ghostCursorRaf = null
+      }
       resizeAnchorGeneration++
-      if (resizeRestoreTimerShort) clearTimeout(resizeRestoreTimerShort)
-      if (resizeRestoreTimerLong) clearTimeout(resizeRestoreTimerLong)
+      if (resizeRestoreTimer) clearTimeout(resizeRestoreTimer)
       observer.disconnect()
       window.removeEventListener('resize', handleResize)
       mediaQuery.removeEventListener('change', handleResolution)
       document.removeEventListener('keydown', onKeyShortcut)
       container.removeEventListener('contextmenu', onContextMenu)
+      closeTerminalMenu()
       container.removeEventListener('paste', onPaste, true)
       container.removeEventListener('dragenter', onDragEnter)
       container.removeEventListener('dragover', onDragOver)
@@ -840,6 +1136,9 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
       exitUnsub()
       scrollDisposable.dispose()
       writeParsedDisposable.dispose()
+      renderDisposable.dispose()
+      cursorMoveDisposable.dispose()
+
       try {
         term.dispose()
       } catch (err) {
@@ -859,8 +1158,8 @@ function TerminalWidget({ id, surface = 'canvas', agentId, attachmentMode = fals
   return (
     <div
       ref={containerRef}
-      className={`term-shell term relative h-full w-full p-2 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
-        surface === 'canvas' ? 'is-canvas-term' : 'is-code-term'
+      className={`term-shell term relative h-full w-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
+        surface === 'canvas' ? 'is-canvas-term p-0' : 'is-code-term px-1.5 py-0.5'
       }`}
       data-testid="terminal-xterm"
     >

@@ -11,18 +11,15 @@ function withSuffix(base: string, n: number): string {
   return `${base.slice(0, MAX_NAME_LENGTH - suffix.length)}${suffix}`
 }
 
-const RANDOM_ADJECTIVES = [
-  'brave', 'calm', 'clever', 'swift', 'bright', 'quiet', 'bold', 'keen',
-  'wild', 'noble', 'eager', 'gentle', 'happy', 'lucky', 'merry', 'nimble',
-  'patient', 'proud', 'silly', 'solid', 'sunny', 'tidy', 'warm', 'witty',
-  'amber', 'cobalt', 'cosmic', 'ember', 'frosty', 'golden', 'misty', 'solar'
-]
-
-const RANDOM_NOUNS = [
-  'fox', 'wolf', 'hawk', 'bear', 'owl', 'lynx', 'crow', 'otter',
-  'badger', 'bison', 'cobra', 'crane', 'dove', 'eagle', 'falcon', 'heron',
-  'ibis', 'jaguar', 'koala', 'lemur', 'moose', 'newt', 'orca', 'panda',
-  'quail', 'raven', 'salmon', 'tiger', 'viper', 'whale', 'zebra', 'pine'
+const MALE_NAMES = [
+  'James', 'Henry', 'Oliver', 'William', 'Jack', 'George', 'Thomas', 'Charles',
+  'Edward', 'Arthur', 'Harry', 'John', 'Robert', 'Michael', 'David', 'Daniel',
+  'Samuel', 'Joseph', 'Benjamin', 'Alexander', 'Matthew', 'Andrew', 'Joshua', 'Nathan',
+  'Peter', 'Paul', 'Luke', 'Mark', 'Adam', 'Simon', 'Isaac', 'Noah',
+  'Liam', 'Ethan', 'Jacob', 'Oscar', 'Leo', 'Louis', 'Frederick', 'Albert',
+  'Alfred', 'Theodore', 'Sebastian', 'Nicholas', 'Anthony', 'Jonathan', 'Christopher', 'Patrick',
+  'Richard', 'Philip', 'Stephen', 'Victor', 'Vincent', 'Hugo', 'Miles', 'Julian',
+  'Caleb', 'Dylan', 'Owen', 'Connor', 'Ryan', 'Aaron', 'Adrian', 'Eric'
 ]
 
 export function normalizeTerminalName(raw: unknown): string | null {
@@ -63,9 +60,7 @@ export function makeUniqueTitle(base: string, taken: Set<string> | Iterable<stri
 }
 
 export function randomTerminalName(rand: () => number = Math.random): string {
-  const adj = RANDOM_ADJECTIVES[Math.floor(rand() * RANDOM_ADJECTIVES.length)]
-  const noun = RANDOM_NOUNS[Math.floor(rand() * RANDOM_NOUNS.length)]
-  return `${adj}-${noun}`
+  return MALE_NAMES[Math.floor(rand() * MALE_NAMES.length)]
 }
 
 export function pickTerminalName(options: {
@@ -82,11 +77,12 @@ export function pickTerminalName(options: {
     const name = normalizeTerminalName(favorite)
     if (name && !taken.has(name.toLowerCase())) return name
   }
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const name = randomTerminalName(rand)
-    if (!taken.has(name)) return name
+  const start = Math.floor(rand() * MALE_NAMES.length)
+  for (let offset = 0; offset < MALE_NAMES.length; offset += 1) {
+    const name = MALE_NAMES[(start + offset) % MALE_NAMES.length]
+    if (!taken.has(name.toLowerCase())) return name
   }
-  const base = normalizeTerminalName(favorites[0]) ?? randomTerminalName(rand)
+  const base = MALE_NAMES[start]
   let n = 2
   while (taken.has(withSuffix(base, n).toLowerCase())) n += 1
   return withSuffix(base, n)

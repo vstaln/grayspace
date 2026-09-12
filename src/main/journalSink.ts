@@ -244,11 +244,22 @@ export class FileJournalSink implements JournalSink {
 
 
 
+  /**
+   * Byte count at which a rotation may next be attempted.
+   *
+   * Rotation is triggered by `bytes > maxBytes`, and a failed attempt leaves
+   * `bytes` exactly where it was — so a rotation that cannot succeed (the file
+   * held open by a virus scanner, a full disk defeating the temp write) was
+   * retried on *every* subsequent append, each retry reading the whole
+   * multi-megabyte journal synchronously on the main thread. One unlucky
+   * moment turned into a permanent stall. After a failure the journal must
+   * grow by another full budget before trying again.
+   */
+  private rotateFloorBytes = 0
+
   private rotate(): void {
-
-
-
     if (this.writing) return
+    if (this.bytes <= this.rotateFloorBytes) return
     try {
       const text = fs.readFileSync(this.file, 'utf8')
       const lines = text.split('\n').filter(Boolean)
@@ -271,7 +282,9 @@ export class FileJournalSink implements JournalSink {
         }
       }
       this.bytes = fs.statSync(this.file).size
+      this.rotateFloorBytes = 0
     } catch (err) {
+      this.rotateFloorBytes = this.bytes + this.maxBytes
       console.error('failed to compact the command journal', err)
     }
   }

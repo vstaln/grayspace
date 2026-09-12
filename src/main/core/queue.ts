@@ -219,8 +219,12 @@ export class PriorityCommandQueue {
     try {
       pending = Promise.resolve(item.run(unblock))
     } catch (err) {
-
-      release()
+      // Through `unblock`, not `release`: a task that handed its lanes on and
+      // *then* threw synchronously has already let the next task take them.
+      // Releasing unconditionally here deleted lanes that task now owns, so
+      // a third task started on the same lane and the mutual exclusion the
+      // lane exists to provide was silently gone.
+      unblock()
       item.reject(err)
       return
     }

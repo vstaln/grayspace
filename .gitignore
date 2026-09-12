@@ -57,6 +57,7 @@ opencode.json
 
 # Playwright E2E output
 test-results/
+test-results-*/
 playwright-report/
 playwright/.cache/
 

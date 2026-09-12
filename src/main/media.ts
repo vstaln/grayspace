@@ -5,7 +5,7 @@ const clipboard = (electron as unknown as { clipboard?: typeof electron.clipboar
 const nativeImage = (electron as unknown as { nativeImage?: typeof electron.nativeImage }).nativeImage
 import * as fs from 'fs'
 import * as os from 'os'
-import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'path'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { getUserDataDir } from './userData.ts'
 
 
@@ -227,7 +227,22 @@ export function saveBytesToScratch(bytes: Buffer, ext: string): MediaFile {
   const digest = createHash('sha1').update(bytes).digest('hex').slice(0, 16)
   const name = `${digest}.${safeExt}`
   const path = join(dir, name)
-  if (!fs.existsSync(path)) fs.writeFileSync(path, bytes)
+  if (fs.existsSync(path)) {
+    // The name is the content hash, so pasting the same image twice reuses
+    // the first file and skips the write — which also left its mtime at the
+    // original save. pruneScratch() ages files out by mtime, so a path handed
+    // out just now could be deleted by the very next paste if the bytes
+    // happened to be old enough, and the agent that was given the path found
+    // nothing there. Reuse means "wanted again": restart its lifetime.
+    try {
+      const now = new Date()
+      fs.utimesSync(path, now, now)
+    } catch {
+
+    }
+  } else {
+    fs.writeFileSync(path, bytes)
+  }
   return { name, path }
 }
 
@@ -279,6 +294,125 @@ export function saveClipboardImageToScratch(): MediaFile | null {
 export function isLocalPath(path: string): boolean {
   if (path.startsWith('\\\\') || path.startsWith('//')) return false
   return isAbsolute(path)
+}
+
+/**
+ * Lexical containment: is `candidate` the root itself or below it?
+ * Caller must pass absolute, normalized paths. Case-insensitive on
+ * win32/darwin to match the filesystem.
+ */
+export function isPathWithinRoot(candidateAbs: string, rootAbs: string): boolean {
+  const norm = (p: string): string => {
+    let out = resolve(p)
+    if (process.platform === 'win32' || process.platform === 'darwin') out = out.toLowerCase()
+    return out
+  }
+  const candidate = norm(candidateAbs)
+  const root = norm(rootAbs)
+  if (candidate === root) return true
+  const rel = relative(root, candidate)
+  if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false
+  return true
+}
+
+function realpathOfExisting(p: string): string | null {
+  try {
+    return fs.realpathSync(p)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Resolve `input` against the workspace jail.
+ * Returns the canonical absolute path when it is inside `workspaceDir`,
+ * otherwise null (deny-by-default: missing workspace, non-local path,
+ * or containment failure all deny).
+ *
+ * Symlinks are resolved via realpath. For paths that do not exist yet
+ * (create/mkdir/write-new) the nearest existing ancestor is resolved and
+ * the remainder re-appended before the containment check, so
+ * `<workspace>/new-file` passes but `<workspace>/link-to-etc/passwd`
+ * (where `link-to-etc` points outside) is denied.
+ */
+export function resolveInWorkspaceSync(input: string, workspaceDir: string | undefined | null): string | null {
+  if (typeof input !== 'string' || !input.trim()) return null
+  if (typeof workspaceDir !== 'string' || !workspaceDir.trim()) return null
+  const raw = input.trim()
+  if (!isLocalPath(raw)) return null
+  if (!isLocalPath(workspaceDir.trim())) return null
+  let rootReal: string
+  try {
+    rootReal = fs.realpathSync(resolve(workspaceDir.trim()))
+  } catch {
+    return null
+  }
+  const abs = resolve(raw)
+  const direct = realpathOfExisting(abs)
+  if (direct) {
+    return isPathWithinRoot(direct, rootReal) ? direct : null
+  }
+  // Walk up to the nearest existing ancestor (handles new files).
+  let cursor = abs
+  const parts: string[] = []
+  for (;;) {
+    const parent = dirname(cursor)
+    if (parent === cursor) return null
+    parts.unshift(cursor.slice(parent.length).replace(/^[/\\]+/, ''))
+    cursor = parent
+    const parentReal = realpathOfExisting(cursor)
+    if (parentReal) {
+      const canonical = join(parentReal, ...parts)
+      return isPathWithinRoot(canonical, rootReal) ? canonical : null
+    }
+    if (cursor === resolve(workspaceDir.trim()) || cursor.length < 3) {
+      // Fell past the workspace without hitting an existing dir: deny.
+      // (Prevents `C:\nope\..\workspace`-style lexically-inside but
+      // unresolvable games from being trusted.)
+      const fallback = join(rootReal, ...parts)
+      void fallback
+      return null
+    }
+  }
+}
+
+export async function resolveInWorkspace(
+  input: string,
+  workspaceDir: string | undefined | null
+): Promise<string | null> {
+  if (typeof input !== 'string' || !input.trim()) return null
+  if (typeof workspaceDir !== 'string' || !workspaceDir.trim()) return null
+  const raw = input.trim()
+  if (!isLocalPath(raw)) return null
+  if (!isLocalPath(workspaceDir.trim())) return null
+  let rootReal: string
+  try {
+    rootReal = await fs.promises.realpath(resolve(workspaceDir.trim()))
+  } catch {
+    return null
+  }
+  const abs = resolve(raw)
+  try {
+    const direct = await fs.promises.realpath(abs)
+    return isPathWithinRoot(direct, rootReal) ? direct : null
+  } catch {
+    // Nearest existing ancestor for not-yet-existing paths.
+    let cursor = abs
+    const parts: string[] = []
+    for (;;) {
+      const parent = dirname(cursor)
+      if (parent === cursor) return null
+      parts.unshift(cursor.slice(parent.length).replace(/^[/\\]+/, ''))
+      cursor = parent
+      try {
+        const parentReal = await fs.promises.realpath(cursor)
+        const canonical = join(parentReal, ...parts)
+        return isPathWithinRoot(canonical, rootReal) ? canonical : null
+      } catch {
+        continue
+      }
+    }
+  }
 }
 
 

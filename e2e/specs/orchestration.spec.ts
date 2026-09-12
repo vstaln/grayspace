@@ -146,8 +146,8 @@ test('an agent can see, name and type into a sibling agent', async () => {
 
 test('an ambiguous worker name is refused rather than guessed', async () => {
   const driver = await openTerminal('driver-3')
-  await openTerminal('twin')
-  await openTerminal('twin')
+  await openTerminal('twin-one')
+  await openTerminal('twin-two')
 
   const output = await run(driver, `orc tell twin ${q('should not arrive')}`)
   expect(output).toMatch(/matches several workers/)

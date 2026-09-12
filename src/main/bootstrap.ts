@@ -48,14 +48,24 @@ export function initAppSwitches(): void {
 
   app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 
-  app.commandLine.appendSwitch('enable-gpu-rasterization')
-  app.commandLine.appendSwitch('enable-zero-copy')
-  app.commandLine.appendSwitch('ignore-gpu-blocklist')
-  app.commandLine.appendSwitch('enable-accelerated-2d-canvas')
+  // Production windows use Chromium's compositor. Keep the software path
+  // available for CI/smoke runs that explicitly pass --disable-gpu, but do
+  // not accidentally carry that diagnostic mode into a normal install.
+  const softwareRendering =
+    process.env.ORCSPACE_DISABLE_GPU === '1' ||
+    process.argv.some((arg) => arg === '--disable-gpu' || arg === '--disable-gpu-compositing')
+  if (!softwareRendering) {
+    app.commandLine.appendSwitch('enable-gpu')
+    app.commandLine.appendSwitch('enable-gpu-compositing')
+    app.commandLine.appendSwitch('enable-gpu-rasterization')
+    app.commandLine.appendSwitch('enable-zero-copy')
+    app.commandLine.appendSwitch('enable-accelerated-2d-canvas')
+  }
 
 
 
-  app.commandLine.appendSwitch('js-flags', '--max-old-space-size=384')
+  // Let V8 size its heap for the machine. A fixed 384MB limit applies to the
+  // entire renderer, including every terminal's 5000-line scrollback.
 
   app.commandLine.appendSwitch('disk-cache-size', '33554432')
   app.commandLine.appendSwitch('media-cache-size', '33554432')
@@ -65,7 +75,7 @@ export function initAppSwitches(): void {
   app.commandLine.appendSwitch('disable-domain-reliability')
   app.commandLine.appendSwitch('disable-features', 'MediaRouter')
 
-  if (process.platform === 'win32') {
+  if (process.platform === 'win32' && !softwareRendering) {
     app.commandLine.appendSwitch('use-angle', 'd3d11')
   }
 }

@@ -22,5 +22,6 @@
       "@renderer/*": ["./src/renderer/src/*"]
     }
   },
-  "include": ["src/renderer/src/**/*", "src/preload/index.d.ts"]
+  "include": ["src/renderer/src/**/*", "src/preload/index.d.ts", "src/main/terminalNames.ts"],
+  "exclude": ["src/renderer/src/**/*.test.ts"]
 }

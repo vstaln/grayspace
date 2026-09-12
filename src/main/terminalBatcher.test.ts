@@ -59,9 +59,45 @@ describe('TerminalStreamBatcher (Frame Batching & High-Throughput Protection)', 
     batcher.push('term-3', '😀'.repeat(100))
     batcher.flush('term-3')
     assert.equal(batches.length, 1)
-    assert.ok(Buffer.byteLength(batches[0].chunk, 'utf8') <= 100)
-    assert.ok(!/[\ud800-\udbff]$/.test(batches[0].chunk))
-    assert.ok(!/^[\udc00-\udfff]/.test(batches[0].chunk))
+    const payload = batches[0].chunk.startsWith('\x1b[0m') ? batches[0].chunk.slice(4) : batches[0].chunk
+    assert.ok(Buffer.byteLength(payload, 'utf8') <= 100)
+    assert.ok(!/[\ud800-\udbff]$/.test(payload))
+    assert.ok(!/^[\udc00-\udfff]/.test(payload))
+
+    batcher.dispose()
+  })
+
+  test('prefixes a resync marker when pressure drops the oldest chunks', () => {
+    const batcher = new TerminalStreamBatcher({ frameIntervalMs: 10_000, maxBatchBytes: 1_000_000, maxPendingBytes: 10 })
+    const batches: Array<{ id: string; chunk: string }> = []
+    batcher.on('batch', (id, chunk) => {
+      batches.push({ id, chunk })
+    })
+
+    batcher.push('term-9', 'aaaaaaaaaa')
+    batcher.push('term-9', 'bbbbbbbbbb')
+    batcher.flush('term-9')
+
+    assert.equal(batches.length, 1)
+    assert.ok(batches[0].chunk.startsWith('\x1b[0m'))
+    assert.ok(batches[0].chunk.includes('bbbbbbbbbb'))
+    assert.ok(!batches[0].chunk.includes('a'))
+
+    batcher.dispose()
+  })
+
+  test('emits no resync marker when nothing was dropped', () => {
+    const batcher = new TerminalStreamBatcher({ frameIntervalMs: 10_000 })
+    const batches: Array<{ id: string; chunk: string }> = []
+    batcher.on('batch', (id, chunk) => {
+      batches.push({ id, chunk })
+    })
+
+    batcher.push('term-10', 'hello')
+    batcher.flush('term-10')
+
+    assert.equal(batches.length, 1)
+    assert.equal(batches[0].chunk, 'hello')
 
     batcher.dispose()
   })

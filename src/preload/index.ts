@@ -130,7 +130,8 @@ const terminal: TerminalApi = {
   detach: (id: string): void => ipcRenderer.send('terminal:detach', id),
   setFocused: (focused: boolean, id: string): void => ipcRenderer.send('terminal:focus', focused, id),
   onData: (id: string, cb: (data: string) => void): (() => void) => onScoped('terminal:onData', id, cb),
-  onExit: (id: string, cb: (exitCode: number) => void): (() => void) => onScoped('terminal:onExit', id, cb)
+  onExit: (id: string, cb: (exitCode: number) => void): (() => void) => onScoped('terminal:onExit', id, cb),
+  onBackendError: (cb: (message: string) => void): (() => void) => onBroadcast('terminal:onBackendError', cb)
 }
 
 const media: MediaApi = {
@@ -155,7 +156,10 @@ const control: ControlApi = {
   ): (() => void) => onBroadcast('control:add-widget', cb),
   onRemoveWidget: (cb: (id: string) => void): (() => void) => onBroadcast('control:remove-widget', cb),
   onRenameWidget: (cb: (payload: { id: string; title: string }) => void): (() => void) =>
-    onBroadcast('control:rename-widget', cb)
+    onBroadcast('control:rename-widget', cb),
+  onOpenMedia: (
+    cb: (payload: { widgetId: string; path: string; name: string; mediaUrl: string; kind: string }) => void
+  ): (() => void) => onBroadcast('control:open-media', cb)
 }
 
 const workspace: WorkspaceApi = {

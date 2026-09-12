@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url'
 
 const TOKEN_HEADER = 'x-orcspace-token'
 
-const ORC_VERSION = '2.0.0'
+const ORC_VERSION = '2.0.1'
 
 
 
@@ -111,11 +111,11 @@ function isLiveRuntime(raw) {
 }
 
 function getDiscoveredTargets() {
-  if (process.env.ORCSPACE_URL) {
-    return [{ url: process.env.ORCSPACE_URL.replace(/\/+$/, '') }]
-  }
   if (process.env.ORCSPACE_SOCKET_PATH) {
     return [{ socketPath: process.env.ORCSPACE_SOCKET_PATH }]
+  }
+  if (process.env.ORCSPACE_URL) {
+    return [{ url: process.env.ORCSPACE_URL.replace(/\/+$/, '') }]
   }
   if (process.env.WORKSPACE_CONTROL_PORT) {
     const envPort = Number(process.env.WORKSPACE_CONTROL_PORT)
@@ -286,6 +286,10 @@ async function requestTarget({ target, method, path, headers, body, signal, time
   if (target.socketPath) {
     return new Promise((resolve, reject) => {
       let req
+      const cleanup = () => {
+        if (timer) clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
+      }
       const timer = timeoutMs ? setTimeout(() => {
         if (req) req.destroy(new OrcError(`OrcSpace request timed out after ${Math.round(timeoutMs / 1000)}s for ${path}`, 'timeout'))
       }, timeoutMs) : null
@@ -295,6 +299,7 @@ async function requestTarget({ target, method, path, headers, body, signal, time
       }
       if (signal) {
         if (signal.aborted) {
+          cleanup()
           return reject(new OrcError('OrcSpace request aborted', 'aborted'))
         }
         signal.addEventListener('abort', onAbort, { once: true })
@@ -307,11 +312,14 @@ async function requestTarget({ target, method, path, headers, body, signal, time
         headers,
         timeout: timeoutMs
       }, (res) => {
-        if (timer) clearTimeout(timer)
-        if (signal) signal.removeEventListener('abort', onAbort)
         const chunks = []
         res.on('data', (chunk) => chunks.push(chunk))
+        res.on('error', (err) => {
+          cleanup()
+          reject(new OrcError(`OrcSpace response interrupted (${err.message})`, 'offline'))
+        })
         res.on('end', () => {
+          cleanup()
           const buffer = Buffer.concat(chunks)
           const text = buffer.toString('utf8')
           const contentType = res.headers['content-type'] || ''
@@ -330,8 +338,7 @@ async function requestTarget({ target, method, path, headers, body, signal, time
       })
 
       req.on('error', (err) => {
-        if (timer) clearTimeout(timer)
-        if (signal) signal.removeEventListener('abort', onAbort)
+        cleanup()
         if (err instanceof OrcError) return reject(err)
         reject(new OrcError(
           `OrcSpace is not reachable at ${target.socketPath} — is the app running? (${err.message})`,
@@ -1258,11 +1265,35 @@ async function main(argv) {
 
     case 'tell': {
       const to = require1(pick(flags, 'to', 'worker') ?? positional[1], 'tell needs <worker>')
-      const text = require1(pick(flags, 'text', 'message', 'body') ?? positional[2], 'tell needs "text to type"')
+      const image = pick(flags, 'image')
+      const images = image === undefined
+        ? list(pick(flags, 'images'))
+        : [require1(image, '--image needs a file path')]
+      const text = images
+        ? String(pick(flags, 'text', 'message', 'body') ?? positional[2] ?? '')
+        : require1(pick(flags, 'text', 'message', 'body') ?? positional[2], 'tell needs "text to type"')
       return emit(
-        await post('/orchestration/workers/tell', { to, text }),
-        (result) => `delivered to ${to} (${result.delivery?.id ?? 'confirmed'})\nread the answer with: orc worker-read ${to}`
+        await post('/orchestration/workers/tell', { to, text, ...(images ? { images } : {}) }),
+        (result) =>
+          (result.mode
+            ? `${result.images?.length ?? 1} image(s) attached to ${to} via ${result.mode}${result.agent ? ` (${result.agent})` : ''}`
+            : `delivered to ${to} (${result.delivery?.id ?? 'confirmed'})`) +
+          `\nread the answer with: orc worker-read ${to}`
       )
+    }
+
+    case 'screenshot':
+    case 'shot': {
+      const target = pick(flags, 'worker', 'to', 'terminal', 'widget') ?? positional[1]
+      const shot = await post('/screenshot', { worker: target === true ? undefined : target })
+      const out = pick(flags, 'out', 'output', 'save')
+      if (typeof out === 'string' && out.trim()) {
+        const destination = path.resolve(out.trim())
+        fs.mkdirSync(path.dirname(destination), { recursive: true })
+        fs.copyFileSync(shot.path, destination)
+        shot.savedAs = destination
+      }
+      return emit(shot, (r) => `screenshot: ${r.savedAs ?? r.path}`)
     }
 
     case 'reset':

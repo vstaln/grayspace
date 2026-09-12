@@ -1,6 +1,6 @@
 {
   "name": "orcspace",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "OrcSpace — an infinite canvas with terminals, notes and agent coordination",
   "type": "module",
   "main": "./out/main/index.js",
@@ -26,7 +26,7 @@
     "start": "electron-vite preview",
     "start:native": "npm run native:start",
     "reset": "node scripts/reset.mjs",
-    "test": "node --test --test-concurrency=1 \"src/main/**/*.test.ts\"",
+    "test": "node --test --test-concurrency=1 \"src/main/**/*.test.ts\" \"src/renderer/src/lib/*.test.ts\"",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
@@ -51,8 +51,13 @@
     "productName": "OrcSpace",
     "npmRebuild": false,
     "afterSign": "scripts/notarize.mjs",
+    "afterPack": "scripts/release-security.cjs",
+    "asar": true,
     "files": [
       "out/**/*",
+      "!**/*.{map,ts,mts,cts,tsx,rs,pdb,pem,key,p12,pfx}",
+      "!**/.env*",
+      "!**/.git/**/*",
       "!**/node_modules/@homebridge/node-pty-prebuilt-multiarch/prebuilds/{linux-arm,linux-arm64,linux-ia32,linux-x64}/**/*",
       "!**/node_modules/@homebridge/node-pty-prebuilt-multiarch/third_party/conpty/*/win10-arm64/**/*",
       "!**/node_modules/@homebridge/node-pty-prebuilt-multiarch/build/**/*.{iobj,ipdb,tlog,pdb,exp,lib,lastbuildstate}",
@@ -72,7 +77,10 @@
         "from": "cli",
         "to": "cli",
         "filter": [
-          "**/*"
+          "orc",
+          "orc.mjs",
+          "orc.cmd",
+          "orc.bat"
         ]
       },
       {
@@ -81,7 +89,6 @@
         "filter": [
           "loader.cjs",
           "package.json",
-          "*.d.ts",
           "*.node"
         ]
       },
@@ -91,7 +98,6 @@
         "filter": [
           "loader.cjs",
           "package.json",
-          "*.d.ts",
           "*.node"
         ]
       }
@@ -197,6 +203,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@electron/fuses": "1.8.0",
     "@napi-rs/cli": "^3.4.0",
     "@playwright/test": "^1.62.1",
     "@types/node": "^22.10.0",
@@ -215,5 +222,8 @@
     "xterm": "^5.3.0",
     "xterm-addon-fit": "^0.8.0",
     "xterm-addon-webgl": "^0.16.0"
+  },
+  "overrides": {
+    "js-yaml": "^4.3.2"
   }
 }

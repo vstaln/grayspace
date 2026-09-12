@@ -1,5 +1,5 @@
 import * as fs from 'fs'
-import { basename, dirname, extname, join, parse, resolve } from 'path'
+import { basename, dirname, extname, join, parse } from 'path'
 import * as media from '../media.ts'
 import { ipcMain, shell } from './shims.ts'
 import { makeSend, unwrap } from './shared.ts'
@@ -11,29 +11,24 @@ const MAX_FS_READ_BYTES = 5 * 1024 * 1024
 
 
 
-const resolveTarget = (input: unknown): string | null => {
+/**
+ * IPC jail: resolve `input` inside `workspaceDir` via realpath.
+ * Deny-by-default — missing workspace, non-local path, or anything
+ * escaping the workspace returns null.
+ */
+const resolveTargetIn = (input: unknown, workspaceDir: string | undefined): string | null => {
   if (typeof input !== 'string' || !input.trim()) return null
-  const target = resolve(input.trim())
-
-
-  if (!media.isLocalPath(target)) return null
-  return target
+  return media.resolveInWorkspaceSync(input.trim(), workspaceDir)
 }
-
-
-
-
-
-
-
 
 async function sendFileCommand(
   send: ReturnType<typeof makeSend>,
   type: string,
   filePath: string,
-  payload: Record<string, string>
+  payload: Record<string, string>,
+  workspaceDir: string | undefined
 ): Promise<{ ok: boolean; error?: string; code?: string }> {
-  const target = resolveTarget(filePath)
+  const target = resolveTargetIn(filePath, workspaceDir)
   if (!target) return { ok: false, error: 'Invalid path' }
   const data = unwrap(await send<Record<string, never>>(type, `file:${target}`, { ...payload, path: target }))
   if (!('error' in data)) return { ok: true }
@@ -42,13 +37,32 @@ async function sendFileCommand(
 
 export function registerFilesystemIpc(deps: IpcDeps): void {
   const send = makeSend(deps.core)
+  const ws = (): string | undefined => {
+    try {
+      return deps.getWorkspaceDir()
+    } catch {
+      return undefined
+    }
+  }
 
   ipcMain.handle('fs:list', async (_e, dirPath?: string, options?: { showHidden?: boolean }) => {
     try {
-      const requested = dirPath && dirPath.trim() ? dirPath.trim() : (deps.getWorkspaceDir() ?? process.cwd())
-      const targetDir = resolveTarget(requested)
+      const workspaceDir = ws()
+      if (!workspaceDir) return { error: 'Folder does not exist or workspace is not selected' }
+      const requested = dirPath && dirPath.trim() ? dirPath.trim() : workspaceDir
+      const targetDir = resolveTargetIn(requested, workspaceDir)
       if (!targetDir || !fs.existsSync(targetDir)) {
         return { error: 'Folder does not exist or workspace is not selected' }
+      }
+      // lstat first so a symlink is not blindly followed outside the jail;
+      // resolveTargetIn already realpath-checked containment, but a TOCTOU
+      // swap between check and use must not turn list into an escape.
+      const dirLstat = await fs.promises.lstat(targetDir)
+      if (dirLstat.isSymbolicLink()) {
+        const real = await fs.promises.realpath(targetDir).catch(() => null)
+        if (!real || !media.isPathWithinRoot(real, await fs.promises.realpath(workspaceDir).catch(() => workspaceDir))) {
+          return { error: 'Folder does not exist or workspace is not selected' }
+        }
       }
       const dirStat = await fs.promises.stat(targetDir)
       if (!dirStat.isDirectory()) {
@@ -71,18 +85,48 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
         const batch = await Promise.all(
           slice.slice(i, i + 100).map(async (entry) => {
             const fullPath = join(targetDir, entry.name)
+            const isSymbolicLink = entry.isSymbolicLink()
             const base = {
               name: entry.name,
               path: fullPath,
-              isDirectory: entry.isDirectory(),
-              isFile: entry.isFile(),
-              isSymbolicLink: entry.isSymbolicLink(),
-              ext: entry.isFile() ? extname(entry.name).toLowerCase() : ''
+              // Dirent.isDirectory()/isFile() describe the link itself, not
+              // what it points to — both are false for every symlink. The
+              // resolved stat() below already fetches the target's type; for
+              // a symlink that's the only place a directory link can be told
+              // apart from a file link, so use it here instead of letting
+              // every symlink read as a plain file.
+              isDirectory: isSymbolicLink ? false : entry.isDirectory(),
+              isFile: isSymbolicLink ? false : entry.isFile(),
+              isSymbolicLink,
+              ext: !isSymbolicLink && entry.isFile() ? extname(entry.name).toLowerCase() : ''
             }
             try {
+              // lstat first: never follow a symlink outside the workspace
+              // just to render size/mtime. Only stat when the realpath is
+              // still inside the workspace jail.
+              const lst = await fs.promises.lstat(fullPath)
+              if (lst.isSymbolicLink()) {
+                const real = await fs.promises.realpath(fullPath).catch(() => null)
+                if (!real) return { ...base, size: 0, mtime: 0 }
+                const rootReal = await fs.promises.realpath(workspaceDir).catch(() => null)
+                if (!rootReal || !media.isPathWithinRoot(real, rootReal)) {
+                  return { ...base, size: 0, mtime: 0 }
+                }
+                const itemStat = await fs.promises.stat(fullPath)
+                return {
+                  ...base,
+                  isDirectory: itemStat.isDirectory(),
+                  isFile: itemStat.isFile(),
+                  ext: itemStat.isFile() ? extname(entry.name).toLowerCase() : '',
+                  size: itemStat.size,
+                  mtime: itemStat.mtimeMs
+                }
+              }
               const itemStat = await fs.promises.stat(fullPath)
               return { ...base, size: itemStat.size, mtime: itemStat.mtimeMs }
             } catch {
+              // A broken symlink (target gone) or an unreadable entry: keep
+              // it visible but untyped rather than pretending it's a file.
               return { ...base, size: 0, mtime: 0 }
             }
           })
@@ -112,9 +156,21 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
 
   ipcMain.handle('fs:read-file', async (_e, filePath: string, maxBytes = MAX_FS_READ_BYTES) => {
     try {
-      const target = resolveTarget(filePath)
+      const workspaceDir = ws()
+      if (!workspaceDir) return { error: 'File does not exist' }
+      const target = resolveTargetIn(filePath, workspaceDir)
       if (!target || !fs.existsSync(target)) return { error: 'File does not exist' }
       const cap = Math.min(MAX_FS_READ_BYTES, Math.max(1, Number(maxBytes) || MAX_FS_READ_BYTES))
+      // lstat + realpath: refuse symlinks escaping the workspace before stat.
+      const lst = await fs.promises.lstat(target).catch(() => null)
+      if (!lst) return { error: 'File does not exist' }
+      if (lst.isSymbolicLink()) {
+        const real = await fs.promises.realpath(target).catch(() => null)
+        const rootReal = await fs.promises.realpath(workspaceDir).catch(() => null)
+        if (!real || !rootReal || !media.isPathWithinRoot(real, rootReal)) {
+          return { error: 'File does not exist' }
+        }
+      }
       const stat = await fs.promises.stat(target)
       if (!stat.isFile()) return { error: 'Path is not a regular file' }
       const ext = extname(target).toLowerCase()
@@ -186,18 +242,19 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
   ipcMain.handle('fs:write-file', async (_e, filePath: string, content: string) => {
     const text = String(content ?? '')
     if (Buffer.byteLength(text, 'utf8') > 50 * 1024 * 1024) return { error: 'content exceeds 50 MB' }
-    return sendFileCommand(send, 'file.write', filePath, { content: text })
+    return sendFileCommand(send, 'file.write', filePath, { content: text }, ws())
   })
 
-  ipcMain.handle('fs:create-file', async (_e, filePath: string) => sendFileCommand(send, 'file.create', filePath, {}))
+  ipcMain.handle('fs:create-file', async (_e, filePath: string) => sendFileCommand(send, 'file.create', filePath, {}, ws()))
 
-  ipcMain.handle('fs:create-dir', async (_e, dirPath: string) => sendFileCommand(send, 'file.mkdir', dirPath, {}))
+  ipcMain.handle('fs:create-dir', async (_e, dirPath: string) => sendFileCommand(send, 'file.mkdir', dirPath, {}, ws()))
 
-  ipcMain.handle('fs:delete', async (_e, targetPath: string) => sendFileCommand(send, 'file.delete', targetPath, {}))
+  ipcMain.handle('fs:delete', async (_e, targetPath: string) => sendFileCommand(send, 'file.delete', targetPath, {}, ws()))
 
   ipcMain.handle('fs:rename', async (_e, oldPath: string, newPath: string) => {
-    const source = resolveTarget(oldPath)
-    const destination = resolveTarget(newPath)
+    const workspaceDir = ws()
+    const source = resolveTargetIn(oldPath, workspaceDir)
+    const destination = resolveTargetIn(newPath, workspaceDir)
     if (!source || !destination) return { ok: false, error: 'Invalid path' }
     const data = unwrap(
       await send<Record<string, never>>('file.rename', `file:${source}`, { path: source, to: destination })
@@ -208,7 +265,7 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
 
   ipcMain.handle('fs:reveal', async (_e, targetPath: string) => {
     try {
-      const target = resolveTarget(targetPath)
+      const target = resolveTargetIn(targetPath, ws())
       if (!target) return { error: 'Invalid path' }
       if (fs.existsSync(target)) {
         shell.showItemInFolder(target)
@@ -229,7 +286,7 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
 
   ipcMain.handle('fs:open-path', async (_e, targetPath: string) => {
     try {
-      const target = resolveTarget(targetPath)
+      const target = resolveTargetIn(targetPath, ws())
       if (!target) return { error: 'Invalid path' }
 
       const candidates = new Set([target, target.replace(/[. ]+$/, '')])

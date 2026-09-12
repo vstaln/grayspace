@@ -20,9 +20,8 @@ test('the shell starts and renders the canvas chrome', async () => {
   const { page } = ctx
 
 
-  for (const id of ['rail-folders', 'rail-settings']) {
-    await expect(page.getByTestId(id)).toBeVisible()
-  }
+  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Change directory', exact: true })).toBeVisible()
 
   await expect(page.getByTestId('tool-select')).toBeVisible()
   await expect(page.getByTestId('tool-draw')).toBeVisible()
@@ -69,6 +68,7 @@ test('ctrl+wheel zooms the world layer, plain wheel pans it', async () => {
 
 test('keyboard zoom: Ctrl++ zooms in, Ctrl+- zooms out, Ctrl+0 resets', async () => {
   const { page } = ctx
+  await page.getByTestId('canvas').focus()
   const world = page.getByTestId('canvas').locator(':scope > div').first()
   const transform = (): Promise<string> => world.evaluate((el) => (el as HTMLElement).style.transform)
 
@@ -104,6 +104,42 @@ test('minimum window size: no horizontal overflow at 800x560', async () => {
   } finally {
     await closeOrcSpace(minCtx)
   }
+})
+
+test('Code navigation keeps the sidebar expanded and tabs outside drag regions', async () => {
+  const { page } = ctx
+  await expect(page.getByRole('button', { name: /sidebar/i })).toHaveCount(0)
+
+  // Native Electron hit testing can consume clicks even when Playwright can click the tab.
+  const expectTabsOutsideDragRegions = async (): Promise<void> => {
+    const overlaps = await page.locator('.title-bar-shell').evaluate((shell) => {
+      const dragRects = Array.from(shell.querySelectorAll('*'))
+        .filter((el) => getComputedStyle(el).getPropertyValue('-webkit-app-region') === 'drag')
+        .map((el) => el.getBoundingClientRect())
+      return Array.from(shell.querySelectorAll('[role="tab"]'))
+        .some((tab) => {
+          const rect = tab.getBoundingClientRect()
+          return dragRects.some((drag) => drag.width > 0 && drag.height > 0 &&
+            drag.left < rect.right && drag.right > rect.left &&
+            drag.top < rect.bottom && drag.bottom > rect.top)
+        })
+    })
+    expect(overlaps).toBe(false)
+  }
+  await expectTabsOutsideDragRegions()
+  await page.getByRole('tab', { name: 'Code', exact: true }).click()
+  // The Code view owns a sidebar toggle (see code-sidebar.spec.ts, which
+  // covers its behaviour). This spec only cares that it starts in the
+  // expanded state and that adding it did not push the tabs under a drag
+  // region; asserting the button away entirely contradicted the toggle the
+  // title bar actually renders here.
+  await expect(page.getByRole('button', { name: 'Collapse sidebar', exact: true })).toBeVisible()
+  await expectTabsOutsideDragRegions()
+  await expect(page.locator('.rail-shell')).toBeVisible()
+  await expect(page.locator('.rail-shell')).toHaveCSS('width', '200px')
+  await expect(page.getByTestId('code-view')).toHaveCSS('left', '200px')
+  await page.getByRole('tab', { name: 'Canvas', exact: true }).click()
+  await expect(page.getByRole('button', { name: /sidebar/i })).toHaveCount(0)
 })
 
 test('2x HiDPI ink: canvas renders at 2x device scale (skip if no canvas)', async () => {

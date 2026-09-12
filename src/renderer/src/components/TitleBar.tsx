@@ -79,7 +79,7 @@ function shortAgentName(id: string, name: string): string {
     case 'kimi':
       return 'Kimi Code'
     case 'grok':
-      return 'Grok'
+      return 'Grok Build'
     default:
       return name.slice(0, 4).toUpperCase()
   }
@@ -136,15 +136,15 @@ const ON = 'bg-bg-hover text-text border-transparent'
 interface Props {
   activeView: WorkView
   onViewChange: (view: WorkView) => void
-  sidebarCollapsed?: boolean
-  onToggleSidebar?: () => void
+  codeSidebarCollapsed: boolean
+  onToggleCodeSidebar: () => void
 }
 
 export default React.memo(function TitleBar({
   activeView,
   onViewChange,
-  sidebarCollapsed = false,
-  onToggleSidebar
+  codeSidebarCollapsed,
+  onToggleCodeSidebar
 }: Props): React.JSX.Element {
   const [maximized, setMaximized] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
@@ -317,27 +317,12 @@ export default React.memo(function TitleBar({
 
   const noDrag = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
 
-  const sidebarOpen = activeView === 'code' && !sidebarCollapsed
-
-  const handleToggleSidebar = useCallback((): void => {
-    if (activeView !== 'code') {
-      onViewChange('code')
-      if (sidebarCollapsed && onToggleSidebar) {
-        onToggleSidebar()
-      }
-    } else if (onToggleSidebar) {
-      onToggleSidebar()
-    } else {
-      window.dispatchEvent(new CustomEvent('orcspace:toggle-left-panel'))
-    }
-  }, [activeView, onViewChange, sidebarCollapsed, onToggleSidebar])
-
   return (
     <div
-      className="title-bar-shell pointer-events-auto fixed inset-x-0 top-0 z-[50000] flex h-10 w-full min-w-full items-center pl-2 pr-0 select-none"
+      className="title-bar-shell pointer-events-auto fixed inset-x-0 top-0 z-[50000] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-10 w-full min-w-full items-center pl-2 pr-0 select-none"
       style={
         {
-          WebkitAppRegion: 'drag',
+          WebkitAppRegion: 'no-drag',
 
 
 
@@ -346,28 +331,35 @@ export default React.memo(function TitleBar({
       }
     >
       {}
-      <div className="flex h-10 min-w-0 max-w-[340px] flex-none items-center gap-3" style={noDrag}>
-        <div className={`${VIEW_SWITCH} title-bar-left-switch`}>
+      <div className="flex h-10 min-w-0 items-center gap-3 overflow-hidden" style={noDrag}>
+        {activeView === 'code' && (
+          <div
+            className={`${VIEW_SWITCH} title-bar-view-switch relative z-10 flex-none`}
+            style={{ ...noDrag, marginLeft: codeSidebarCollapsed ? 0 : 204 - (IS_MAC ? 78 : 8) }}
+          >
           <button
             type="button"
-            className={`${VIEW_TAB} title-bar-left-btn gap-1.5 ${sidebarOpen ? VIEW_TAB_ACTIVE : VIEW_TAB_INACTIVE}`}
-            title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-            aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-            aria-pressed={sidebarOpen}
-            onClick={handleToggleSidebar}
+            className={`${VIEW_TAB} title-bar-view-tab ${codeSidebarCollapsed ? VIEW_TAB_INACTIVE : VIEW_TAB_ACTIVE} justify-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent`}
+            style={noDrag}
+            title={codeSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={codeSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!codeSidebarCollapsed}
+            onClick={onToggleCodeSidebar}
           >
-            <PanelLeft size={14} className="flex-none" />
+            <PanelLeft size={14} />
           </button>
-        </div>
+          </div>
+        )}
         {flash && (
           <div role="status" className={`${ISLAND} min-w-0 px-3`}>
             <span className="truncate text-[13px] font-medium text-text">{flash}</span>
           </div>
         )}
+        <div className="h-full flex-1" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
       </div>
 
       {}
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+      <div style={noDrag}>
         <div
           className={`${VIEW_SWITCH} title-bar-view-switch pointer-events-auto`}
           style={noDrag}
@@ -410,10 +402,9 @@ export default React.memo(function TitleBar({
         </div>
       </div>
 
-      <div className="flex-1" />
-
       {}
-      <div className="flex h-10 flex-none items-center" style={noDrag}>
+      <div className="flex h-10 min-w-0 items-center justify-end" style={noDrag}>
+        <div className="h-full flex-1" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
         <div ref={rightIslandRef} className={`${ISLAND} relative gap-0`}>
           {}
           <button
@@ -843,7 +834,7 @@ export default React.memo(function TitleBar({
           >
             <GitBranch
               size={14}
-              className={`flex-none ${gitStatus?.repo ? (dirtyCount > 0 ? 'text-accent' : 'text-text-dim') : 'text-text-faint'}`}
+              className={`flex-none ${gitOpen ? 'text-white' : gitStatus?.repo ? (dirtyCount > 0 ? 'text-accent' : 'text-text-dim') : 'text-text-faint'}`}
             />
             {
 
@@ -915,9 +906,10 @@ export default React.memo(function TitleBar({
                 <Minus size={14} strokeWidth={2.2} />
               </button>
               <button
-                className={`${ICON} ${QUIET}`}
+                className={`${ICON} ${maximized ? ON : QUIET}`}
                 title={maximized ? 'Restore' : 'Maximize'}
                 aria-label={maximized ? 'Restore' : 'Maximize'}
+                aria-pressed={maximized}
                 onClick={() => void Promise.resolve(window.api.window.toggleMaximize()).catch(() => {})}
               >
                 {maximized ? <Copy size={13} strokeWidth={2} /> : <Square size={13} strokeWidth={2} />}

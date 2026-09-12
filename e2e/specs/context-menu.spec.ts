@@ -50,7 +50,7 @@ test('right-click offers every canvas action and places widgets on the canvas', 
   await openContextMenu()
 
 
-  await expect(page.getByRole('menu', { name: 'Context Menu' }).getByRole('menuitem')).toHaveCount(10)
+  await expect(page.getByRole('menu', { name: 'Context Menu' }).getByRole('menuitem')).toHaveCount(9)
 
 
   await page.getByTestId('cm-timer').click()
@@ -87,12 +87,30 @@ test('widgets maximize and rename', async () => {
 
   const newTitle = `renamed-${Date.now()}`
   await frame.getByTestId('widget-title').dblclick()
+  await expect(frame.getByTestId('widget-title-input')).toBeFocused()
   await page.keyboard.press('Control+A')
   await page.keyboard.type(newTitle)
   await page.keyboard.press('Enter')
   await expect(frame.getByTestId('widget-title')).toHaveText(newTitle)
 
   void id
+})
+
+test('maximizing a browser keeps its webview mounted', async () => {
+  const { page } = ctx
+
+  await openContextMenu()
+  await page.getByTestId('cm-browser').click()
+  const frame = page.locator('[data-testid^="widget-browser-"]').last()
+  const webview = frame.locator('webview')
+  await expect(webview).toHaveCount(1)
+  await webview.evaluate((element) => element.setAttribute('data-mount-marker', 'kept'))
+
+  await frame.getByTestId('widget-maximize').click()
+  await expect(webview).toHaveAttribute('data-mount-marker', 'kept')
+
+  await frame.getByTestId('widget-maximize').click()
+  await expect(webview).toHaveAttribute('data-mount-marker', 'kept')
 })
 
 test('maximizing a widget keeps the state it holds', async () => {

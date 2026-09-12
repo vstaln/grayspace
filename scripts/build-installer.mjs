@@ -147,6 +147,7 @@ try {
     throw new Error('--skip-ci requires --dirty: building on unpinned node_modules is not reproducible.')
   }
   runNpm(['run', 'typecheck'])
+  run(process.execPath, ['--test', 'scripts/release-security.test.cjs'])
   if (!skipTests) runNpm(['test'])
   // Build once, then package only the NSIS installer. The old `dist` script
   // produced both NSIS and portable artifacts, which doubled the work and
@@ -158,6 +159,7 @@ try {
   runLocalBin('electron-builder', ['--win', 'nsis', '--x64', '--publish', 'never'])
 
   verifyUnpackedRelease(packageJson)
+  run(process.execPath, ['scripts/smoke-packaged.cjs', join(dist, 'win-unpacked')])
 
   if (!existsSync(installer) || statSync(installer).size < 10 * 1024 * 1024) {
     throw new Error(`Expected release artifact is missing or suspiciously small: ${installer}`)

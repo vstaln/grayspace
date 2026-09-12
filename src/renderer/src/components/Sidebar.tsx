@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Code2, FolderOpen, FolderPlus, Palette, Pencil, Pin, Plus, Settings, Trash2, UserRound, X, PanelLeftOpen } from 'lucide-react'
+import { Code2, FolderOpen, FolderPlus, Palette, Pencil, Pin, Plus, Settings, Trash2, UserRound, X } from 'lucide-react'
 import type { CodeWorkspaceState, RecentDir } from '../../../preload/index.d'
 import type { WorkView } from './TitleBar'
 import { useFocusTrap } from '../hooks/useFocusTrap'
@@ -8,13 +8,12 @@ import { THEMES, useTheme, wallpaperBackgroundImage } from '../theme'
 import { useSettings } from '../hooks/useSettings'
 import { VerifiedBadge } from './VerifiedBadge'
 import { useConfirm } from './ConfirmDialog'
+import { MAX_FAVORITE_TERMINAL_NAMES, normalizeTerminalName, normalizeTerminalNameList } from '../../../main/terminalNames'
 
 interface Props {
   workspaceDir: string | null
   activeView?: WorkView
   onPickDir(): void
-  sidebarCollapsed?: boolean
-  onToggleSidebar?(): void
 }
 
 function IconButton({
@@ -97,11 +96,11 @@ const FAVORITE_WIDGETS = [
 
 
 
-const CAPTION = 'text-[10px] font-medium tracking-[0.09em] text-text-faint uppercase'
+const CAPTION = 'text-[11px] font-medium tracking-[0.08em] text-text-faint uppercase'
 const BTN_QUIET =
-  'rounded-[8px] border border-line-soft px-3 py-1.5 text-[11px] text-text-dim transition-colors duration-150 hover:border-line hover:bg-bg-hover hover:text-text'
+  'min-h-9 rounded-[8px] border border-line-soft px-3 py-1.5 text-[11px] text-text-dim outline-none transition-colors duration-150 hover:border-line hover:bg-bg-hover hover:text-text focus-visible:ring-1 focus-visible:ring-line disabled:cursor-not-allowed disabled:opacity-35'
 const BTN_PRIMARY =
-  'rounded-[8px] bg-accent px-3.5 py-1.5 text-[11px] font-medium text-bg transition-opacity duration-150 hover:opacity-90 disabled:opacity-35'
+  'min-h-9 rounded-[8px] bg-accent px-3.5 py-1.5 text-[11px] font-medium text-bg outline-none transition-opacity duration-150 hover:opacity-90 focus-visible:ring-1 focus-visible:ring-line focus-visible:ring-offset-2 focus-visible:ring-offset-bg-panel disabled:cursor-not-allowed disabled:opacity-35'
 
 function Section({
   title,
@@ -142,16 +141,22 @@ function Choice({
   return (
     <button
       type="button"
-      aria-pressed={selected}
+      role="radio"
+      aria-checked={selected}
       disabled={disabled}
       onClick={onClick}
-      className={`flex flex-col gap-1.5 rounded-[10px] border p-3.5 text-left transition-colors duration-150 ${
-        selected ? 'border-line bg-bg-hover' : 'border-line-soft hover:border-line'
+      className={`flex min-h-9 flex-col gap-1.5 rounded-[10px] border p-3.5 text-left outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-line ${
+        selected ? 'border-line bg-bg-hover' : 'border-line-soft bg-transparent hover:border-line hover:bg-bg-hover'
       } ${disabled ? 'pointer-events-none opacity-50' : ''}`}
     >
       <span className="flex items-center justify-between gap-2">
         <span className={`text-xs ${selected ? 'text-text' : 'text-text-dim'}`}>{label}</span>
-        {selected && <span className="flex-none text-[10px] text-text-faint">Active</span>}
+        <span className="flex items-center gap-2">
+          {selected && <span className="flex-none text-[10px] text-text-faint">Active</span>}
+          <span aria-hidden="true" className={`grid h-4 w-4 place-items-center rounded-full border ${selected ? 'border-text' : 'border-line'}`}>
+            {selected && <span className="h-1.5 w-1.5 rounded-full bg-text" />}
+          </span>
+        </span>
       </span>
       {hint && (
         <span className={`text-[10px] leading-relaxed text-text-faint ${mono ? 'font-mono' : ''}`}>{hint}</span>
@@ -199,11 +204,42 @@ export function SettingsModal({
   const { settings, update, error: settingsError } = useSettings()
   const [tab, setTab] = useState<'appearance' | 'account'>('account')
   const [userName, setUserName] = useState('')
+  const [favoriteNamesText, setFavoriteNamesText] = useState('')
+  const nameEntries = favoriteNamesText.split(/[\n,]+/).map((name) => name.trim()).filter(Boolean)
+  const favoriteNames = normalizeTerminalNameList(nameEntries)
+  const namesError = nameEntries.some((name) => !normalizeTerminalName(name))
+    ? 'Use 1–32 characters per name: English letters, numbers, - or _. Start with a letter.'
+    : new Set(nameEntries.map((name) => name.toLowerCase())).size > MAX_FAVORITE_TERMINAL_NAMES
+      ? `Add up to ${MAX_FAVORITE_TERMINAL_NAMES} names.`
+      : null
+  const namesChanged = JSON.stringify(favoriteNames) !== JSON.stringify(settings.favoriteTerminalNames ?? [])
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
   const dialogRef = useRef<HTMLDivElement>(null)
+  const mainRef = useRef<HTMLElement>(null)
   useFocusTrap(dialogRef, open)
+
+  useEffect(() => {
+    if (open) setFavoriteNamesText((settings.favoriteTerminalNames ?? []).join('\n'))
+  }, [open, settings.favoriteTerminalNames])
+
+  const saveFavoriteNames = async (): Promise<void> => {
+    if (namesError || busy) return
+    setBusy(true)
+    try {
+      const saved = await update({ favoriteTerminalNames: favoriteNames })
+      setNotice(saved ? 'Favorite terminal names saved.' : 'Failed to save terminal names.')
+    } catch {
+      setNotice('Failed to save terminal names.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    mainRef.current?.scrollTo({ top: 0 })
+  }, [tab])
 
   useEffect(() => {
     if (!open) return
@@ -247,8 +283,11 @@ export function SettingsModal({
 
   useEffect(() => {
     if (!listenForToolbar) return
-    const openSettings = (): void => {
-      setTab('account')
+    // Callers that know which panel they mean can name it; anything that
+    // just wants "open settings" keeps landing on Account as before.
+    const openSettings = (event: Event): void => {
+      const requested = (event as CustomEvent<{ tab?: string } | undefined>).detail?.tab
+      setTab(requested === 'appearance' ? 'appearance' : 'account')
       setOpen(true)
     }
     window.addEventListener('orcspace:open-settings', openSettings)
@@ -278,10 +317,10 @@ export function SettingsModal({
 
     createPortal(
       <div
-        className="fixed inset-x-0 top-10 bottom-0 z-[50000] flex items-center justify-center bg-bg/80 p-6 backdrop-blur-[2px]"
+        className="fixed inset-x-0 top-10 bottom-0 z-[50000] flex items-center justify-center bg-bg/80 px-7 py-6 backdrop-blur-[2px]"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         role="presentation"
-        onMouseDown={(event) => {
+        onClick={(event) => {
           if (event.target === event.currentTarget) setOpen(false)
         }}
       >
@@ -291,17 +330,18 @@ export function SettingsModal({
           aria-modal="true"
           aria-label="Settings"
           data-testid="settings-modal"
-          className="pop-in flex max-h-[min(720px,calc(100vh-80px))] w-[min(820px,calc(100vw-48px))] flex-col overflow-hidden rounded-[12px] border border-line bg-bg-panel shadow-[0_24px_80px_rgba(0,0,0,0.36)] sm:flex-row"
+          className="pop-in flex max-h-[calc(100vh-40px)] w-[min(820px,calc(100vw-56px))] flex-col overflow-hidden rounded-[12px] border border-line bg-bg-panel shadow-[0_24px_80px_rgba(0,0,0,0.36)] sm:flex-row"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
-          <nav className="flex flex-none gap-1 overflow-x-auto border-b border-line bg-bg-raise p-2.5 sm:w-[172px] sm:flex-col sm:border-r sm:border-b-0 sm:p-3">
+          <nav className="flex flex-none gap-1 overflow-x-auto border-b border-line bg-bg-raise p-2.5 sm:w-[160px] sm:flex-col sm:border-r sm:border-b-0 sm:p-3">
             <div className={`${CAPTION} hidden px-2.5 pt-1 pb-3.5 sm:block`}>Settings</div>
             {SETTINGS_TABS.map(({ id, label, Icon }) => (
               <button
+                type="button"
                 key={id}
                 data-testid={`settings-tab-${id}`}
                 aria-current={tab === id ? 'true' : undefined}
-                className={`flex flex-none items-center gap-2.5 rounded-[8px] px-2.5 py-1.5 text-left text-xs transition-colors duration-150 sm:w-full ${
+                className={`flex min-h-9 flex-none items-center gap-2.5 rounded-[8px] px-2.5 py-1.5 text-left text-xs outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-line sm:w-full ${
                   tab === id ? 'border border-line bg-bg-hover text-text' : 'border border-transparent text-text-dim hover:bg-bg-hover hover:text-text'
                 }`}
                 onClick={() => setTab(id)}
@@ -311,13 +351,14 @@ export function SettingsModal({
               </button>
             ))}
           </nav>
-          <main className="flex min-w-0 flex-1 flex-col gap-7 overflow-auto bg-bg-panel px-7 py-6 min-h-0">
+          <main ref={mainRef} className="flex min-w-0 flex-1 flex-col gap-7 overflow-auto bg-bg-panel px-7 py-6 min-h-0">
             <header className="flex flex-none items-center justify-between">
-              <h2 className="text-[15px] font-medium text-text">
+              <h2 className="text-[20px] font-semibold text-text">
                 {tab === 'appearance' ? 'Appearance' : 'Account'}
               </h2>
               <button
-                className="grid h-7 w-7 place-items-center rounded-[8px] text-text-faint transition-colors duration-150 hover:bg-bg-hover hover:text-text"
+                type="button"
+                className="grid h-9 w-9 place-items-center rounded-[8px] text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus-visible:ring-1 focus-visible:ring-line"
                 onClick={() => setOpen(false)}
                 aria-label="Close settings"
               >
@@ -328,7 +369,7 @@ export function SettingsModal({
             {tab === 'appearance' && (
               <div className="flex max-w-xl flex-col gap-8">
                 <Section title="Theme">
-                  <div className="grid grid-cols-2 gap-2.5">
+                  <div role="radiogroup" aria-label="Theme" className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                     {THEMES.map((item) => (
                       <Choice
                         key={item.id}
@@ -346,7 +387,7 @@ export function SettingsModal({
                 </Section>
 
                 <Section title="Terminal shell" hint="Shell used when opening new terminal widgets on Windows.">
-                  <div className="grid grid-cols-2 gap-2.5">
+                  <div role="radiogroup" aria-label="Terminal shell" className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                     <Choice
                       selected={settings.windowsShell === 'cmd'}
                       label="Command Prompt (CMD)"
@@ -373,7 +414,7 @@ export function SettingsModal({
                       return (
                         <label
                           key={id}
-                          className="flex cursor-pointer items-center gap-3 rounded-[8px] px-2 py-2 text-xs text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text"
+                          className="flex min-h-9 cursor-pointer items-center gap-3 rounded-[8px] px-2 py-2 text-xs text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text focus-within:bg-bg-hover focus-within:ring-1 focus-within:ring-line"
                         >
                           <input
                             type="checkbox"
@@ -385,7 +426,7 @@ export function SettingsModal({
                                   : [...(settings.favoriteWidgets ?? []), id]
                               })
                             }
-                            className="h-3 w-3 flex-none accent-white"
+                            className="h-4 w-4 flex-none accent-white outline-none focus-visible:ring-1 focus-visible:ring-line"
                           />
                           {
 }
@@ -409,11 +450,11 @@ export function SettingsModal({
                     </div>
                   )}
                   <div className="flex gap-2">
-                    <button className={BTN_QUIET} onClick={() => void pickBackground()}>
+                    <button type="button" className={BTN_QUIET} onClick={() => void pickBackground()}>
                       Choose…
                     </button>
                     {background && (
-                      <button className={BTN_QUIET} onClick={clearBackground}>
+                      <button type="button" className={BTN_QUIET} onClick={clearBackground}>
                         Remove
                       </button>
                     )}
@@ -430,8 +471,8 @@ export function SettingsModal({
 
             {tab === 'account' && (
               <div className="flex max-w-xl flex-col gap-8">
-                {}
-                <div className="flex items-center gap-3.5">
+                <p className="-mt-5 text-[11px] leading-relaxed text-text-dim">Manage the local profile used throughout this workspace.</p>
+                <div className="flex items-center gap-3.5 rounded-[12px] border border-line-soft bg-bg-raise p-4">
                   <div className="grid h-11 w-11 flex-none place-items-center rounded-full border border-line-soft bg-bg-raise text-[13px] font-medium text-text select-none">
                     {(userName.trim() || settings.userName || 'you').slice(0, 2).toUpperCase()}
                   </div>
@@ -463,12 +504,34 @@ export function SettingsModal({
                   />
                   <div>
                     <button
+                      type="button"
                       className={BTN_PRIMARY}
                       disabled={busy || !userName.trim() || userName.trim() === settings.userName}
                       onClick={() => void saveAccount()}
                     >
                       Save
                     </button>
+                  </div>
+                </Section>
+
+                <Section title="Favorite terminal names"
+                  hint="One name per line, or separated by commas. New terminals use the first available name from your list, then an English male name. Remove all names to use defaults.">
+                  <textarea
+                    aria-label="Favorite terminal names"
+                    aria-invalid={Boolean(namesError)}
+                    aria-describedby={namesError ? 'favorite-terminal-names-error' : undefined}
+                    rows={5}
+                    maxLength={4096}
+                    value={favoriteNamesText}
+                    onChange={(event) => setFavoriteNamesText(event.target.value)}
+                    placeholder={'James\nHenry\nOliver'}
+                    className="w-full resize-y rounded-[8px] border border-line-soft bg-transparent px-3 py-2.5 text-xs text-text outline-none focus:border-line"
+                  />
+                  {namesError && <p id="favorite-terminal-names-error" role="alert" className="text-[11px] text-danger">{namesError}</p>}
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-[11px] text-text-faint">{favoriteNames.length} / {MAX_FAVORITE_TERMINAL_NAMES} names</span>
+                    <button type="button" className={BTN_PRIMARY} disabled={busy || Boolean(namesError) || !namesChanged}
+                      onClick={() => void saveFavoriteNames()}>Save names</button>
                   </div>
                 </Section>
 
@@ -489,7 +552,7 @@ export function SettingsModal({
 
             {(notice || settingsError) && (
               <div className="flex flex-col gap-1.5">
-                {notice && <p className="text-[11px] text-text-faint">{notice}</p>}
+                {notice && <p role="status" aria-live="polite" className="text-[11px] text-text-faint">{notice}</p>}
                 {settingsError && (
                   <p role="alert" className="text-[11px] text-danger">
                     Failed to save settings: {settingsError}
@@ -505,9 +568,17 @@ export function SettingsModal({
 
   return (
     <>
-      <IconButton label="Settings" testId="rail-settings" onClick={() => setOpen(true)}>
-        <Settings size={17} />
-      </IconButton>
+      {/* The toolbar already renders its own visible trigger and dispatches
+          orcspace:open-settings (handled above) when listenForToolbar is set
+          — this instance only needs to own the dialog. Rendering the default
+          IconButton too used to add a second, invisible trigger sitting at
+          the top of the page under the fixed title bar: unreachable by
+          click, but still present in the DOM and tab order. */}
+      {!listenForToolbar && (
+        <IconButton label="Settings" testId="rail-settings" onClick={() => setOpen(true)}>
+          <Settings size={17} />
+        </IconButton>
+      )}
       {dialog}
     </>
   )
@@ -522,9 +593,7 @@ export function SettingsModal({
 export default React.memo(function Sidebar({
   workspaceDir,
   activeView = 'canvas',
-  onPickDir,
-  sidebarCollapsed = false,
-  onToggleSidebar
+  onPickDir
 }: Props): React.JSX.Element {
   const { settings } = useSettings()
   const confirm = useConfirm()
@@ -538,7 +607,7 @@ export default React.memo(function Sidebar({
   const dirName = workspaceDir ? workspaceDir.split(/[\\/]/).filter(Boolean).pop() : null
   const avatarName = settings.userName?.trim() || 'you'
   const avatarInitials = avatarName.slice(0, 2).toUpperCase()
-  const expanded = activeView !== 'canvas' && !(activeView === 'code' && sidebarCollapsed)
+  const expanded = activeView !== 'canvas'
 
 
   useEffect(() => {
@@ -855,61 +924,70 @@ export default React.memo(function Sidebar({
   const renderExpanded = (): React.JSX.Element => {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex h-8 flex-none items-center justify-between border-b border-line-soft px-2.5">
-          <span className="text-[10px] font-semibold tracking-[0.08em] text-text-faint uppercase">Workspace</span>
+        <div className="flex h-11 flex-none items-center justify-between border-b border-line px-3">
+          <span className="text-[11px] font-semibold tracking-[0.08em] text-text-faint uppercase">Workspaces</span>
           <button
             type="button"
             aria-label="Create workspace"
             title="Create workspace"
             data-testid="workspace-create"
             onClick={openCreateWorkspace}
-            className="grid h-6 w-6 place-items-center rounded text-text-faint transition hover:bg-bg-hover hover:text-text"
+            className="grid h-9 w-9 place-items-center rounded-[8px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
           >
-            <Plus size={13} />
+            <Plus size={15} />
           </button>
         </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
-          <div className="mb-0.5 px-1.5 text-[9px] font-semibold tracking-[0.1em] text-text-faint uppercase">Workspaces</div>
-          <div className="mb-2">
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+          <div className="mb-1 px-2 text-[10px] font-semibold tracking-[0.08em] text-text-faint uppercase">Saved</div>
+          <div className="space-y-1">
             {codeWorkspaceState.workspaces.map((workspace) => {
               const current = workspace.id === codeWorkspaceState.activeId
               return (
-                <div key={workspace.id} className={`group flex min-w-0 items-center rounded-[8px] ${current ? 'bg-bg-hover' : 'hover:bg-bg-hover/60'}`}>
+                <div key={workspace.id} className={`group flex min-w-0 items-center rounded-[8px] border transition-colors ${current ? 'border-line bg-bg-hover' : 'border-transparent hover:bg-bg-hover'}`}>
                   <button
                     type="button"
                     data-testid={current ? 'current-workspace' : undefined}
-                    className="flex min-w-0 flex-1 items-center gap-1.5 px-2 py-1.5 text-left text-[11px] text-text-dim"
+                    aria-current={current ? 'page' : undefined}
+                    className={`flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[8px] px-2 text-left text-[11px] outline-none focus-visible:ring-1 focus-visible:ring-line ${current ? 'text-text' : 'text-text-dim'}`}
                     onClick={() => void selectCodeWorkspace(workspace.id)}
                   >
-                    <Code2 size={12} className="flex-none text-text-faint" />
-                    <span className={`min-w-0 truncate ${current ? 'text-text' : ''}`}>{workspace.name}</span>
+                    <Code2 size={13} className="flex-none" />
+                    <span className="min-w-0 truncate">{workspace.name}</span>
                   </button>
                   <button
                     type="button"
                     aria-label={`Rename ${workspace.name}`}
                     title="Rename workspace"
-                    className="mr-0.5 grid h-6 w-6 flex-none place-items-center rounded text-text-faint opacity-0 transition group-hover:opacity-100 hover:bg-bg-raise hover:text-text"
+                    className="grid h-9 w-9 flex-none place-items-center rounded-[8px] text-text-faint opacity-0 transition-colors group-hover:opacity-100 hover:bg-bg-raise hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
                     onClick={() => void renameCodeWorkspace(workspace.id, workspace.name)}
                   >
-                    <Pencil size={10} />
+                    <Pencil size={12} />
                   </button>
                   <button
                     type="button"
                     aria-label={`Delete ${workspace.name}`}
                     title="Delete workspace"
-                    className="mr-1 grid h-6 w-6 flex-none place-items-center rounded-md text-text-faint/70 opacity-0 transition duration-150 group-hover:opacity-100 hover:bg-danger/10 hover:text-danger active:scale-95 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-danger/40"
+                    className="mr-0.5 grid h-9 w-9 flex-none place-items-center rounded-[8px] text-text-faint opacity-0 transition-colors group-hover:opacity-100 hover:bg-bg-raise hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
                     onClick={() => void deleteCodeWorkspace(workspace.id, workspace.name)}
                   >
-                    <Trash2 size={11} strokeWidth={1.8} />
+                    <Trash2 size={12} strokeWidth={1.8} />
                   </button>
                 </div>
               )
             })}
-            {!codeWorkspaceState.workspaces.length && <div className="px-2 py-1 text-[10px] text-text-faint">No workspaces</div>}
+            {!codeWorkspaceState.workspaces.length && (
+              <div className="rounded-[8px] border border-line bg-bg-panel px-3 py-4 text-center text-[11px] text-text-faint">
+                No saved workspaces
+              </div>
+            )}
           </div>
-          {workspaceDir && <div className="mb-2 px-2 text-[10px] text-text-faint" title={workspaceDir}>Project folder: {dirName}</div>}
+          {workspaceDir && (
+            <div className="mt-3 rounded-[8px] border border-line bg-bg-panel px-3 py-2.5" title={workspaceDir}>
+              <div className="text-[9px] font-semibold tracking-[0.08em] text-text-faint uppercase">Project folder</div>
+              <div className="mt-1 truncate text-[11px] text-text-dim">{dirName}</div>
+            </div>
+          )}
           {foldersError && <div className="px-2 pt-3 text-[10px] leading-snug text-danger">{foldersError}</div>}
-
         </div>
         <button
           type="button"
@@ -917,9 +995,9 @@ export default React.memo(function Sidebar({
             window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
             onPickDir()
           }}
-          className="mx-1.5 mb-1.5 flex flex-none items-center justify-center gap-1.5 rounded-[7px] bg-bg-hover px-1.5 py-1 text-[10px] font-medium text-text-dim transition hover:bg-bg-raise hover:text-text"
+          className="mx-2 mb-2 flex h-9 flex-none items-center justify-center gap-2 rounded-[8px] border border-line bg-bg-hover px-3 text-[11px] font-medium text-text-dim transition-colors hover:bg-bg-raise hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
         >
-          <FolderPlus size={12} /> Open folder
+          <FolderPlus size={14} /> Open folder
         </button>
       </div>
     )
@@ -990,31 +1068,20 @@ export default React.memo(function Sidebar({
       className={`rail-shell rail relative z-[45000] flex flex-none flex-col gap-1 border-r border-line pt-10 pb-2 select-none bg-[#121212] ${expanded ? 'is-expanded w-[200px] items-stretch' : 'w-rail items-center'}`}
       style={{ WebkitAppRegion: 'drag', backgroundColor: '#121212' } as React.CSSProperties}
     >
-      <button
+      {!expanded && <button
         type="button"
         aria-label="Account"
         title={`${avatarName} · Account`}
-        className={`group absolute bottom-[52px] grid h-9 w-9 place-items-center rounded-full border border-line bg-bg-raise p-[2px] transition-transform hover:scale-105 ${expanded ? 'left-3' : 'left-1/2 -translate-x-1/2'}`}
+        className="group absolute bottom-[52px] left-1/2 grid h-9 w-9 -translate-x-1/2 place-items-center rounded-full border border-line bg-bg-raise p-[2px] transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-account'))}
       >
         <span className="grid h-full w-full place-items-center rounded-full bg-bg-panel text-[10px] font-bold text-text">
           {avatarInitials}
         </span>
-      </button>
+      </button>}
       {expanded ? renderExpanded() : (
         <>
-          {activeView === 'code' && sidebarCollapsed && onToggleSidebar && (
-            <button
-              type="button"
-              aria-label="Expand sidebar"
-              title="Expand sidebar"
-              onClick={onToggleSidebar}
-              className="mx-auto grid h-8 w-8 place-items-center rounded text-text-faint transition hover:bg-bg-hover hover:text-text"
-            >
-              <PanelLeftOpen size={14} />
-            </button>
-          )}
           <div className="flex-1" />
           <div className="flex flex-col gap-1.5">
             {order.map((id) => (
@@ -1041,9 +1108,35 @@ export default React.memo(function Sidebar({
           <div className="flex-1" />
         </>
       )}
-      <div className={expanded ? 'px-2' : ''}>
-        <SettingsModal workspaceDir={workspaceDir} />
-      </div>
+      {expanded ? (
+        <div className="flex flex-col gap-1 border-t border-line px-2 pt-2">
+          <button
+            type="button"
+            className="flex h-10 items-center gap-2.5 rounded-[8px] px-2 text-left text-text-dim transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+            onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-account'))}
+            aria-label="Account"
+          >
+            <span className="grid h-7 w-7 flex-none place-items-center rounded-full border border-line bg-bg-panel text-[9px] font-bold text-text">{avatarInitials}</span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[11px] font-medium text-text">{avatarName}</span>
+              <span className="block text-[9px] text-text-faint">Account</span>
+            </span>
+          </button>
+          <button
+            type="button"
+            data-testid="rail-settings"
+            className="flex h-9 items-center gap-2.5 rounded-[8px] px-2 text-[11px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+            onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-settings'))}
+          >
+            <Settings size={15} />
+            <span>Settings</span>
+          </button>
+        </div>
+      ) : (
+        <IconButton label="Settings" testId="rail-settings" onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-settings'))}>
+          <Settings size={17} />
+        </IconButton>
+      )}
     </aside>
     </>
   )

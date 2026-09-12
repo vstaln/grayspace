@@ -332,7 +332,7 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
       terminals.emit('spawned', term.id)
     }
     const tellRes = await runOrc(['tell', 'worker-2', 'echo hello'])
-    assert.equal(tellRes.status, 0)
+    assert.equal(tellRes.status, 0, tellRes.stdout || tellRes.stderr)
     assert.equal((tellRes.json as { delivery?: { status?: string } }).delivery?.status, 'delivered')
     terminals.dispose(term.id)
   })
@@ -402,5 +402,14 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     const json = res.json as { agentId: string; busy: boolean }
     assert.equal(json.agentId, agentId)
     assert.equal(json.busy, false)
+  })
+
+  test('uses the terminal socket when an inherited HTTP address is unavailable', async () => {
+    const res = await runOrc(['whoami'], {
+      ORCSPACE_URL: 'http://127.0.0.1:1',
+      ORCSPACE_SOCKET_PATH: getIpcSocketPath()
+    })
+    assert.equal(res.status, 0, res.stderr)
+    assert.equal((res.json as { agentId: string }).agentId, agentId)
   })
 })

@@ -158,6 +158,7 @@ describe('CanvasStore.reduce purity', () => {
     widgets: new Map([['a', widget('a')]]),
     camera: { x: 0, y: 0, zoom: 1 },
     strokes: [{ id: 's', color: '#fff', points: [point(0, 0), point(1, 1)] }],
+    connections: [],
     version: 1
   })
 
@@ -197,5 +198,57 @@ describe('CanvasStore.reduce purity', () => {
     const state = baseState()
     const pending = { ...event('widget.remove', 'widget:a'), phase: 'pending' } as unknown as JournalEntry
     assert.equal(CanvasStore.reduce(state, pending), state)
+  })
+
+  const linked = (): CanvasDataState => ({
+    ...baseState(),
+    widgets: new Map([['a', widget('a')], ['b', widget('b')]]),
+    connections: [{ id: 'c1', from: 'a', to: 'b', bornAt: 1 }]
+  })
+
+  test('removing a widget takes its arcs with it', () => {
+    const state = linked()
+    const next = CanvasStore.reduce(state, event('widget.remove', 'widget:b'))
+    assert.deepStrictEqual(next.connections, [], 'an arc to a widget that is gone has nothing to draw between')
+    assert.equal(state.connections.length, 1, 'the input state must be untouched')
+  })
+
+  test('an arc naming a widget that does not exist is refused', () => {
+    const state = linked()
+    const next = CanvasStore.reduce(
+      state,
+      event('canvas.connections', 'canvas:main', {
+        connections: [
+          { id: 'c1', from: 'a', to: 'b', bornAt: 1 },
+          { id: 'c2', from: 'a', to: 'ghost', bornAt: 1 }
+        ]
+      })
+    )
+    assert.deepStrictEqual(next.connections.map((c) => c.id), ['c1'])
+  })
+
+  test('the same pair twice collapses to one arc', () => {
+    const state = linked()
+    const next = CanvasStore.reduce(
+      state,
+      event('canvas.connections', 'canvas:main', {
+        connections: [
+          { id: 'c1', from: 'a', to: 'b', bornAt: 1 },
+          { id: 'c2', from: 'a', to: 'b', bornAt: 2 }
+        ]
+      })
+    )
+    assert.equal(next.connections.length, 1)
+  })
+
+  test('an arc from a widget to itself is refused', () => {
+    const state = linked()
+    const next = CanvasStore.reduce(
+      state,
+      event('canvas.connections', 'canvas:main', {
+        connections: [{ id: 'c1', from: 'a', to: 'a', bornAt: 1 }]
+      })
+    )
+    assert.deepStrictEqual(next.connections, [])
   })
 })

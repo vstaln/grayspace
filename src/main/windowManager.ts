@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
 import * as fs from 'fs'
 import { dirname, join } from 'path'
 import { APP_TITLE, CONTROL_PORT } from './config.ts'
@@ -6,6 +6,8 @@ import { getPreloadPath, IS_MAC } from './bootstrap.ts'
 import { isLocalPath } from './media.ts'
 import { syncOrcGuide } from './orchestration/guide.ts'
 import type { AppState } from './appState.ts'
+import { isTrustedAppNavigation } from './navigationGuard.ts'
+import { clearMountedTerminals, setFocusedTerminal } from './ipc/terminalFocus.ts'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -70,6 +72,7 @@ export function createWindow(): BrowserWindow {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      devTools: !app.isPackaged,
       webviewTag: true,
       spellcheck: false,
       backgroundThrottling: true
@@ -97,8 +100,11 @@ export function createWindow(): BrowserWindow {
     }
   }, 1200)
   win.once('show', () => clearTimeout(showTimer))
+  let recoveryTimer: ReturnType<typeof setTimeout> | undefined
+  let rendererCrashes: number[] = []
   win.on('closed', () => {
     clearTimeout(showTimer)
+    clearTimeout(recoveryTimer)
     if (mainWindow === win) mainWindow = null
   })
   try {
@@ -134,6 +140,21 @@ export function createWindow(): BrowserWindow {
 
   win.webContents.on('render-process-gone', (_event, details) => {
     console.error('Renderer process gone:', details)
+    if (details.reason === 'clean-exit' || win.isDestroyed()) return
+    clearMountedTerminals()
+    setFocusedTerminal(null)
+    const now = Date.now()
+    rendererCrashes = rendererCrashes.filter((at) => now - at < 60_000)
+    if (rendererCrashes.length >= 2) {
+      dialog.showErrorBox('OrcSpace display stopped',
+        'The display crashed repeatedly. Terminal processes are still running. Restart OrcSpace to restore the interface.')
+      return
+    }
+    rendererCrashes.push(now)
+    clearTimeout(recoveryTimer)
+    recoveryTimer = setTimeout(() => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.reload()
+    }, 500)
   })
 
   win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
@@ -141,33 +162,11 @@ export function createWindow(): BrowserWindow {
   })
 
   win.webContents.on('will-navigate', (e, url) => {
-
-
-
-
     const devUrl = process.env['ELECTRON_RENDERER_URL']
     const controlOrigin = `http://127.0.0.1:${CONTROL_PORT}/`
-    let isAppUrl =
-      Boolean(devUrl && (url.startsWith(devUrl) || url.startsWith('http://localhost:20222') || url.startsWith('http://127.0.0.1:20222'))) ||
-      url.startsWith('orc://app') ||
-      url === controlOrigin ||
-      url.startsWith(controlOrigin)
-    if (!isAppUrl) {
-      try {
-        const parsed = new URL(url)
-        if (parsed.protocol === 'file:') {
-          const expected = join(__dirname, '../renderer/index.html').replace(/\\/g, '/').toLowerCase()
-          isAppUrl = decodeURIComponent(parsed.pathname).replace(/\\/g, '/').toLowerCase() === expected
-        }
-      } catch {
-        isAppUrl = false
-      }
-    }
-    if (!isAppUrl) {
+    const rendererFile = join(__dirname, '../renderer/index.html')
+    if (!isTrustedAppNavigation(url, { devUrl, controlOrigin, rendererFile })) {
       e.preventDefault()
-      if (url.startsWith('https:') || url.startsWith('http:')) {
-        import('electron').then(({ shell }) => shell.openExternal(url)).catch(() => {})
-      }
     }
   })
 

@@ -9,6 +9,20 @@ import type { CodeStore } from './codeState.ts'
 import type { OrchestrationStore } from './orchestration/store.ts'
 import type { Core } from './core/index.ts'
 
+/**
+ * How much scrollback the shutdown snapshot reads per terminal.
+ *
+ * TerminalSnapshots.prepare() strips the text and then keeps only its last
+ * 64KB, so reading the whole ring buffer here was work whose result was
+ * immediately thrown away — and it happened inside `before-quit`, where the
+ * window is already unresponsive and every millisecond is visible as the app
+ * refusing to close. With a full buffer per terminal that is up to half a
+ * megabyte joined and character-scanned, times every open terminal, on the
+ * main thread. The margin over 64KB covers text that is mostly escape
+ * sequences, where stripping shrinks the tail a lot.
+ */
+const SHUTDOWN_SNAPSHOT_TAIL_BYTES = 256 * 1024
+
 export function snapshotTerminals(
   terminals: TerminalManager,
   snapshots: TerminalSnapshots,
@@ -20,7 +34,7 @@ export function snapshotTerminals(
     for (const info of terminals.list()) {
       try {
         live.add(info.id)
-        const scrollback = terminals.fullOutput(info.id) ?? ''
+        const scrollback = terminals.tailOutput(info.id, SHUTDOWN_SNAPSHOT_TAIL_BYTES) ?? ''
         if (scrollback || !snapshots.get(info.id)) {
           snapshots.save({
             id: info.id,

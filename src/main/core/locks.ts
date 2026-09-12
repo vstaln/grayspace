@@ -141,7 +141,12 @@ export class LockManager extends EventEmitter {
   }
 
   release(resource: ResourceId, actorId: string): void {
-    const current = this.locks.get(resource)
+    // `live`, not a raw map read: every other method here treats an expired
+    // lock as absent. Reading the map directly made this the one place where a
+    // lock nobody holds any more still reported "held by <the dead actor>",
+    // so a cleanup path releasing a resource it had every right to release got
+    // a spurious `forbidden` until the sweeper happened to run.
+    const current = this.live(resource)
     if (!current) return
     if (current.actorId !== actorId) {
       throw new CommandError('forbidden', `${resource} is held by ${current.actorId}`, { lock: current })
