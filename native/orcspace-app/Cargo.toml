@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Native Rust OrcSpace desktop application"
 
+[lib]
+name = "orcspace_app"
+path = "src/lib.rs"
+
 [[bin]]
 name = "orcspace"
 path = "src/main.rs"
@@ -20,7 +24,18 @@ egui = "0.36.1"
 portable-pty = "0.9"
 rodio = { version = "0.22.2", features = ["playback"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order is load-bearing, not a preference: the command journal hashes
+# JSON.stringify's output, and JavaScript writes object keys in insertion order.
+# With serde_json's default BTreeMap every multi-key payload would serialize in
+# sorted order and every hash in the chain would differ from the one TypeScript
+# wrote. See src/journal.rs.
+# float_roundtrip is equally load-bearing. serde_json's default float parser is
+# fast but not always correctly rounded: it read a real canvas coordinate,
+# 3844.7897983016796, as the double one ULP above it, which then printed back as
+# 3844.78979830168 and broke the hash. Reading state the app already wrote has
+# to be exact, so the slower correctly-rounded parser is the right trade.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
 uuid = { version = "1", features = ["v4"] }
 
