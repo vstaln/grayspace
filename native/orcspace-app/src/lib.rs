@@ -7,6 +7,7 @@
 pub mod actors;
 pub mod command;
 pub mod flow;
+pub mod http;
 pub mod idempotency;
 pub mod journal;
 pub mod jsjson;

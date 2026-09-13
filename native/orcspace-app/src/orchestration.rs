@@ -643,6 +643,33 @@ impl OrchestrationStore {
             .collect()
     }
 
+    pub fn message_by_id(&self, id: &str) -> Option<&Message> {
+        self.messages.get(id)
+    }
+
+    pub fn require_gate(&self, id: &str) -> CommandResult<&Gate> {
+        self.gates
+            .get(id)
+            .ok_or_else(|| CommandError::new(ErrorCode::NotFound, format!("no gate \"{id}\"")))
+    }
+
+    /// The answer to an `ask`, if one has been sent.
+    pub fn reply_to(&self, ask_id: &str) -> Option<&Message> {
+        self.messages
+            .values()
+            .find(|m| m.message_type == "reply" && m.reply_to.as_deref() == Some(ask_id))
+    }
+
+    /// A run id for a caller that did not name one: the newest open run.
+    pub fn resolve_run_id(&self, given: Option<&str>) -> CommandResult<String> {
+        if let Some(given) = given.filter(|id| !id.is_empty()) {
+            return Ok(self.require_run(given)?.id.clone());
+        }
+        self.active_run().map(|run| run.id.clone()).ok_or_else(|| {
+            CommandError::new(ErrorCode::NotFound, "no open run — call run-create first")
+        })
+    }
+
     pub fn list_messages(&self, run_id: Option<&str>) -> Vec<Message> {
         self.messages
             .values()
@@ -982,4 +1009,22 @@ impl OrchestrationStore {
         );
         serde_json::Value::Object(map)
     }
+}
+
+// Record serialization is shared with the HTTP layer: the API returns the same
+// shapes that are persisted, so spelling them out twice would let the two drift.
+pub fn json_for_run(run: &Run) -> serde_json::Value {
+    serialize::run(run)
+}
+pub fn json_for_task(task: &OrcTask) -> serde_json::Value {
+    serialize::task(task)
+}
+pub fn json_for_dispatch(dispatch: &Dispatch) -> serde_json::Value {
+    serialize::dispatch(dispatch)
+}
+pub fn json_for_message(message: &Message) -> serde_json::Value {
+    serialize::message(message)
+}
+pub fn json_for_gate(gate: &Gate) -> serde_json::Value {
+    serialize::gate(gate)
 }
