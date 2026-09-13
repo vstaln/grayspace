@@ -143,6 +143,23 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
     })
     termRef.current = term
     let mounted = true
+
+    // No renderer addon: these run on xterm's DOM renderer deliberately.
+    //
+    // The WebGL addon is the usual answer to slow terminals and it was in
+    // package.json for a long time, never imported. Switching it on here is
+    // not the free win it looks like, because it takes one GL context *per
+    // terminal* and a browser process keeps only a limited number alive —
+    // around sixteen in Chromium — evicting the oldest when that is passed.
+    // This app's whole premise is a canvas holding many terminals at once, so
+    // the eviction is not an edge case, it is the normal state: the terminals
+    // you scrolled away from quietly stop painting.
+    //
+    // If it is revisited, it has to be selective — the focused terminal, or a
+    // capped pool — with an onContextLoss handler that falls back to the DOM
+    // renderer, and it has to be measured against a baseline first. The
+    // dependency is gone until then rather than sitting there implying it is
+    // in use.
     const fit = new FitAddon()
     term.loadAddon(fit)
 

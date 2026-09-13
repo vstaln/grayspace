@@ -220,8 +220,7 @@
     "unocss": "^66.8.1",
     "vite": "^6.0.0",
     "xterm": "^5.3.0",
-    "xterm-addon-fit": "^0.8.0",
-    "xterm-addon-webgl": "^0.16.0"
+    "xterm-addon-fit": "^0.8.0"
   },
   "overrides": {
     "js-yaml": "^4.3.2"
