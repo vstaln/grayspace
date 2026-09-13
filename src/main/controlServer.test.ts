@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
 import { ActorRateLimiter } from './core/queue.ts'
-import { rateLimitKey } from './controlServer.ts'
+import { apiRateLimiter, isApiRateLimited, rateLimitKey } from './controlServer.ts'
 
 /**
  * These exercise the real limiter the control server uses.
@@ -33,21 +33,26 @@ describe('control server rate limiting', () => {
    * The reason this limiter is per caller at all. One agent in a retry loop
    * used to exhaust a single global window and take every other agent — and
    * the coordinator trying to unblock it — down with it.
+   *
+   * This drives the server's own decision function, not a token bucket built
+   * for the test. The bug was never in the bucket; it was in what the request
+   * was charged to, and a test that constructs its own limiter cannot see
+   * that. The first version of this test did exactly that and passed with the
+   * global behaviour reintroduced.
    */
   test('one caller exhausting its budget does not affect another', () => {
-    let clock = 0
-    const limiter = apiLimiter(() => clock)
+    apiRateLimiter.reset()
 
-    while (limiter.tryConsume('agent:runaway')) {
-      // drain it
+    let refused = 0
+    for (let i = 0; i < 500; i += 1) {
+      if (isApiRateLimited('runaway')) refused += 1
     }
-    assert.equal(limiter.tryConsume('agent:runaway'), false, 'guard: it is drained')
+    assert.ok(refused > 0, 'guard: the runaway must have been throttled')
 
-    assert.ok(
-      limiter.tryConsume('agent:bystander'),
-      'a second agent must still be served'
-    )
-    assert.ok(limiter.tryConsume('anonymous'), 'and so must the app itself')
+    assert.equal(isApiRateLimited('bystander'), false, 'a second agent must still be served')
+    assert.equal(isApiRateLimited(undefined), false, 'and so must the app itself')
+
+    apiRateLimiter.reset()
   })
 
   test('a bucket refills over time rather than staying dead', () => {

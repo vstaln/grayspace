@@ -81,7 +81,14 @@ export function rateLimitKey(agentIdRaw: unknown): string {
   return agentId ? `agent:${agentId}` : 'anonymous'
 }
 
-function rateLimitedApi(agentIdRaw: unknown): boolean {
+/**
+ * Whether this caller has spent its budget.
+ *
+ * Exported so a test can drive the decision that was actually wrong — which
+ * bucket a request is charged to — rather than the token bucket underneath it,
+ * which was never broken.
+ */
+export function isApiRateLimited(agentIdRaw: unknown): boolean {
   return !apiRateLimiter.tryConsume(rateLimitKey(agentIdRaw))
 }
 
@@ -371,7 +378,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
 
   // Charged to the caller that named itself, so one agent's runaway loop can
   // only throttle that agent.
-  if (rateLimitedApi(url.searchParams.get('agentId') ?? req.headers['x-agent-id'])) {
+  if (isApiRateLimited(url.searchParams.get('agentId') ?? req.headers['x-agent-id'])) {
     return sendJson(res, 429, { error: 'too many requests', code: 'rate_limited' })
   }
 

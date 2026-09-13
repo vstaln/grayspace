@@ -72,6 +72,23 @@ interface LogCacheEntry {
   requests5h: number
   oldest5h: number | null
 }
+/**
+ * Parsed totals per history file.
+ *
+ * Read by concurrent callers since parseJsonlHistory became async and its
+ * caller runs the agents through Promise.all. That is safe, and the reasons
+ * are worth stating because the `await` between the cache read and the cache
+ * write looks like a race:
+ *
+ * - agents have distinct history paths, so concurrent callers write distinct
+ *   keys; two callers on the *same* path would both miss and both read, which
+ *   wastes a read and stores identical results;
+ * - the eviction below and the `set` that follows it are consecutive
+ *   synchronous statements, so no caller can observe the map between them.
+ *
+ * The worst case is one extra eviction under pressure, which is what a cache
+ * is for.
+ */
 const logCache = new Map<string, LogCacheEntry>()
 
 /**
