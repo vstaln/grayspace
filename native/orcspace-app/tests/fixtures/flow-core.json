@@ -1,0 +1,374 @@
+{
+  "lockSteps": [
+    {
+      "at": 1000000,
+      "call": "acquire widget:w1 by alice",
+      "ok": true,
+      "result": {
+        "resource": "widget:w1",
+        "actorId": "alice",
+        "acquiredAt": 1000000,
+        "expiresAt": 1005000,
+        "implicit": false
+      }
+    },
+    {
+      "at": 1000000,
+      "call": "acquire widget:w1 by bob",
+      "ok": false,
+      "code": "locked",
+      "message": "widget:w1 is locked by alice"
+    },
+    {
+      "at": 1001000,
+      "call": "re-acquire widget:w1 by alice",
+      "ok": true,
+      "result": {
+        "resource": "widget:w1",
+        "actorId": "alice",
+        "acquiredAt": 1000000,
+        "expiresAt": 1006000,
+        "implicit": false
+      }
+    },
+    {
+      "at": 1001000,
+      "call": "acquire nonsense",
+      "ok": false,
+      "code": "invalid",
+      "message": "\"not-a-resource\" is not a resource id (expected scheme:id)"
+    },
+    {
+      "at": 1001000,
+      "call": "acquire empty actor",
+      "ok": false,
+      "code": "invalid",
+      "message": "actorId is required to take a lock"
+    },
+    {
+      "at": 1001000,
+      "call": "acquire widget:w3 ttl 10ms",
+      "ok": true,
+      "result": {
+        "resource": "widget:w3",
+        "actorId": "alice",
+        "acquiredAt": 1001000,
+        "expiresAt": 1002000,
+        "implicit": false
+      }
+    },
+    {
+      "at": 1001000,
+      "call": "acquire widget:w4 ttl 1h",
+      "ok": true,
+      "result": {
+        "resource": "widget:w4",
+        "actorId": "alice",
+        "acquiredAt": 1001000,
+        "expiresAt": 1601000,
+        "implicit": false
+      }
+    },
+    {
+      "at": 1001000,
+      "call": "acquire terminal:t1 implicitly by alice",
+      "ok": true,
+      "result": {
+        "resource": "terminal:t1",
+        "actorId": "alice",
+        "acquiredAt": 1001000,
+        "expiresAt": 1006000,
+        "implicit": true
+      }
+    },
+    {
+      "at": 1001000,
+      "call": "heartbeat alice",
+      "ok": true,
+      "result": 3
+    },
+    {
+      "at": 1001000,
+      "call": "acquire terminal:t1 explicitly by alice",
+      "ok": true,
+      "result": {
+        "resource": "terminal:t1",
+        "actorId": "alice",
+        "acquiredAt": 1001000,
+        "expiresAt": 1006000,
+        "implicit": false
+      }
+    },
+    {
+      "at": 1001000,
+      "call": "heartbeat alice again",
+      "ok": true,
+      "result": 4
+    },
+    {
+      "at": 1001000,
+      "call": "release widget:w1 by bob",
+      "ok": false,
+      "code": "forbidden",
+      "message": "widget:w1 is held by alice"
+    },
+    {
+      "at": 1001000,
+      "call": "release widget:w1 by alice",
+      "ok": true,
+      "result": null
+    },
+    {
+      "at": 1001000,
+      "call": "release widget:w1 again",
+      "ok": true,
+      "result": null
+    },
+    {
+      "at": 1001000,
+      "call": "renew widget:w3 by bob",
+      "ok": false,
+      "code": "forbidden",
+      "message": "widget:w3 is held by alice"
+    },
+    {
+      "at": 1001000,
+      "call": "renew missing",
+      "ok": false,
+      "code": "not_found",
+      "message": "widget:nope is not locked"
+    },
+    {
+      "at": 1001000,
+      "call": "acquire note:short by alice ttl 10ms",
+      "ok": true,
+      "result": {
+        "resource": "note:short",
+        "actorId": "alice",
+        "acquiredAt": 1001000,
+        "expiresAt": 1002000,
+        "implicit": false
+      }
+    },
+    {
+      "at": 1003000,
+      "call": "holder note:short after expiry",
+      "ok": true,
+      "result": null
+    },
+    {
+      "at": 1003000,
+      "call": "release expired note:short by bob",
+      "ok": true,
+      "result": null
+    },
+    {
+      "at": 1003000,
+      "call": "list after expiry",
+      "ok": true,
+      "result": [
+        {
+          "resource": "widget:w3",
+          "actorId": "alice",
+          "acquiredAt": 1001000,
+          "expiresAt": 1010000,
+          "implicit": false
+        },
+        {
+          "resource": "widget:w4",
+          "actorId": "alice",
+          "acquiredAt": 1001000,
+          "expiresAt": 1010000,
+          "implicit": false
+        },
+        {
+          "resource": "terminal:t1",
+          "actorId": "alice",
+          "acquiredAt": 1001000,
+          "expiresAt": 1010000,
+          "implicit": false
+        }
+      ]
+    },
+    {
+      "at": 1003000,
+      "call": "releaseAllFor alice",
+      "ok": true,
+      "result": [
+        {
+          "resource": "widget:w3",
+          "actorId": "alice",
+          "acquiredAt": 1001000,
+          "expiresAt": 1010000,
+          "implicit": false
+        },
+        {
+          "resource": "widget:w4",
+          "actorId": "alice",
+          "acquiredAt": 1001000,
+          "expiresAt": 1010000,
+          "implicit": false
+        },
+        {
+          "resource": "terminal:t1",
+          "actorId": "alice",
+          "acquiredAt": 1001000,
+          "expiresAt": 1010000,
+          "implicit": false
+        }
+      ]
+    },
+    {
+      "at": 1003000,
+      "call": "list after releaseAllFor",
+      "ok": true,
+      "result": []
+    }
+  ],
+  "versionSteps": [
+    {
+      "call": "current unknown",
+      "result": 0
+    },
+    {
+      "call": "bump a",
+      "result": 1
+    },
+    {
+      "call": "bump a again",
+      "result": 2
+    },
+    {
+      "call": "current a",
+      "result": 2
+    },
+    {
+      "call": "target a",
+      "result": "widget:a"
+    },
+    {
+      "call": "seeded b",
+      "result": 7
+    },
+    {
+      "call": "seeded c floors at 1",
+      "result": 1
+    },
+    {
+      "call": "seeded d defaults to 1",
+      "result": 1
+    },
+    {
+      "call": "size",
+      "result": 4
+    },
+    {
+      "call": "overlay sees base",
+      "result": 2
+    },
+    {
+      "call": "bump in overlay",
+      "result": 3
+    },
+    {
+      "call": "base untouched",
+      "result": 2
+    },
+    {
+      "call": "overlay size",
+      "result": 4
+    },
+    {
+      "call": "after discard, overlay falls back to base",
+      "result": 2
+    },
+    {
+      "call": "committed a",
+      "result": 3
+    },
+    {
+      "call": "committed e",
+      "result": 1
+    },
+    {
+      "call": "hasOverlay after commit",
+      "result": false
+    },
+    {
+      "call": "forget through a missing overlay hits the base",
+      "result": 0
+    }
+  ],
+  "resourceCases": [
+    {
+      "raw": "widget:w1",
+      "parsed": {
+        "scheme": "widget",
+        "id": "w1"
+      },
+      "isResourceId": true
+    },
+    {
+      "raw": "file:C:/Users/x",
+      "parsed": {
+        "scheme": "file",
+        "id": "C:/Users/x"
+      },
+      "isResourceId": true
+    },
+    {
+      "raw": "nope:1",
+      "parsed": null,
+      "isResourceId": false
+    },
+    {
+      "raw": "widget:",
+      "parsed": null,
+      "isResourceId": false
+    },
+    {
+      "raw": ":w1",
+      "parsed": null,
+      "isResourceId": false
+    },
+    {
+      "raw": "widgetw1",
+      "parsed": null,
+      "isResourceId": false
+    },
+    {
+      "raw": "terminal:a:b",
+      "parsed": {
+        "scheme": "terminal",
+        "id": "a:b"
+      },
+      "isResourceId": true
+    }
+  ],
+  "fileCases": [
+    {
+      "raw": "C:\\Users\\User\\Desktop\\Project",
+      "id": "file:C:/users/user/desktop/project"
+    },
+    {
+      "raw": "c:/Users/User/Desktop/Project/",
+      "id": "file:C:/users/user/desktop/project"
+    },
+    {
+      "raw": "/home/User/Project",
+      "id": "file:/home/user/project"
+    },
+    {
+      "raw": "relative/Path",
+      "id": "file:relative/path"
+    },
+    {
+      "raw": "D:\\",
+      "id": "file:d:"
+    },
+    {
+      "raw": "NoSlashHere",
+      "id": "file:noslashhere"
+    }
+  ]
+}

@@ -4,8 +4,12 @@
 //! integration tests and reused by both binaries. The eframe UI and the engine
 //! still live in the binary targets.
 
+pub mod command;
 pub mod journal;
 pub mod jsjson;
+pub mod locks;
 pub mod planner;
 pub mod projection;
+pub mod resources;
 pub mod state;
+pub mod versioned;
