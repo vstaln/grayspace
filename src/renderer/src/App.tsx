@@ -1357,7 +1357,7 @@ function OrcSpaceCanvas({
           >
             <div className="rounded-[14px] border border-line-soft bg-bg-panel/80 px-6 py-5 text-center shadow-xl backdrop-blur-md">
               <div className="mb-1 text-sm font-medium text-text">Your canvas is clear</div>
-              <div className="mb-3 text-[11px] text-text-faint">Use the command bar below: /terminal, .files, @planner, or plain terminal</div>
+              <div className="mb-3 text-[11px] text-text-faint">Use the command bar below: /terminal, /chat, .files, @planner, or plain terminal</div>
               <button
                 type="button"
                 className="pointer-events-auto rounded-[8px] bg-accent px-3 py-1.5 text-[11px] font-medium text-bg hover:opacity-90"
@@ -1424,6 +1424,7 @@ function OrcSpaceCanvas({
             onPickBrowser={() => { placeWidget('browser', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickLinks={() => { placeWidget('links', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickMusicPlayer={() => { placeWidget('music-player', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onPickChat={() => { placeWidget('chat', toWorld(menu.x, menu.y)); setMenu(null) }}
             favoriteWidgets={settings.favoriteWidgets ?? []}
             onClose={() => setMenu(null)}
           />

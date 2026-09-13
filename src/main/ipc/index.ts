@@ -1,5 +1,6 @@
 import type { Core } from '../core/index.ts'
 import { registerBrowserIpc } from './browser.ts'
+import { registerChatIpc } from './chat.ts'
 import { registerCanvasIpc } from './canvas.ts'
 import { registerCodeIpc } from './code.ts'
 import { registerFilesystemIpc } from './filesystem.ts'
@@ -48,6 +49,7 @@ export function registerIpc(deps: IpcDeps): void {
   registerPlannerIpc(deps)
   registerOrchestrationIpc(deps)
   registerBrowserIpc(deps)
+  registerChatIpc(deps)
 }
 
 export type { Core }

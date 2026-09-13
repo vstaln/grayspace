@@ -19,6 +19,7 @@ import SysMonitorWidget from './SysMonitorWidget'
 import BrowserWidget from './BrowserWidget'
 import LinksWidget from './LinksWidget'
 import MusicPlayerWidget from './MusicPlayerWidget'
+import ChatWidget from './ChatWidget'
 import ErrorBoundary from './ErrorBoundary'
 import { NON_MAXIMIZABLE, RESIZE_HANDLES, ResizeDir, Widget, WidgetKind } from '../types'
 
@@ -662,6 +663,8 @@ function WidgetBody({
       return <LinksWidget widgetId={widget.id} />
     case 'music-player':
       return <MusicPlayerWidget widgetId={widget.id} />
+    case 'chat':
+      return <ChatWidget widgetId={widget.id} workspaceDir={workspaceDir} />
     default:
       return <TerminalWidget id={widget.id} surface="canvas" attachmentMode={attachmentMode} agentId={agentId} onProcessExit={onProcessExit} />
   }

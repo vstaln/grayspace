@@ -113,6 +113,10 @@ export interface AppSettings {
 
   openRouterApiKey?: string
   openRouterModel?: string
+  aiProvider?: 'chatgpt' | 'claude' | 'grok'
+  aiModel?: string
+  aiReasoningEffort?: 'low' | 'medium' | 'high'
+  aiConnectedProviders?: string[]
   localModel: LocalModelSettings
   favoriteWidgets?: string[]
   favoriteTerminalNames?: string[]
@@ -153,6 +157,63 @@ export interface SettingsApi {
   pickBackground(): Promise<{ dataUrl?: string | null; error?: string }>
   clearBackground(): Promise<null>
   onChange(cb: (settings: AppSettings) => void): () => void
+}
+
+export type ChatProvider = 'chatgpt' | 'claude' | 'grok'
+export type ChatReasoningEffort = 'low' | 'medium' | 'high'
+
+export interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  createdAt: number
+}
+
+export interface ChatRequest {
+  widgetId: string
+  workspaceDir?: string | null
+  provider: ChatProvider
+  model: string
+  reasoningEffort: ChatReasoningEffort
+  message: string
+  history: ChatMessage[]
+}
+
+export interface ChatEvent {
+  widgetId: string
+  requestId: string
+  type: 'status' | 'complete' | 'error'
+  text?: string
+  provider?: ChatProvider
+}
+
+export interface ChatProviderStatus {
+  id: ChatProvider
+  label: string
+  available?: boolean
+  connected: boolean
+  connecting?: boolean
+  detail: string
+  installCommand?: string
+}
+
+export interface ChatAuthEvent {
+  provider: ChatProvider
+  type: 'started' | 'instructions' | 'complete' | 'error'
+  message: string
+  url?: string
+  userCode?: string
+  requiresInput?: boolean
+}
+
+export interface ChatApi {
+  providers(): Promise<ChatProviderStatus[]>
+  connect(provider: ChatProvider): Promise<{ ok: boolean; error?: string }>
+  submitAuthCode(provider: ChatProvider, code: string): Promise<{ ok: boolean; error?: string }>
+  send(request: ChatRequest): Promise<{ ok: boolean; requestId?: string; error?: string }>
+  cancel(widgetId: string): Promise<{ ok: boolean }>
+  onEvent(cb: (event: ChatEvent) => void): () => void
+  onAuthEvent(cb: (event: ChatAuthEvent) => void): () => void
 }
 
 
@@ -355,7 +416,7 @@ export interface PlannerApi {
 export interface CanvasWidget {
   id: string
   title: string
-  kind?: 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration'
+  kind?: 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration' | 'chat'
   x: number
   y: number
   w: number

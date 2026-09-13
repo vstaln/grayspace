@@ -58,6 +58,7 @@ describe('command input', () => {
     assert.equal(parseWidgetInvocation('/terminal')?.kind, 'terminal')
     assert.equal(parseWidgetInvocation('.files')?.kind, 'files')
     assert.equal(parseWidgetInvocation('@planner')?.kind, 'planner')
+    assert.equal(parseWidgetInvocation('/chat')?.kind, 'chat')
     assert.equal(parseWidgetInvocation('terminal')?.kind, 'terminal')
   })
 

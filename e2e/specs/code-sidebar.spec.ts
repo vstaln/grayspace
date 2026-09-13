@@ -38,3 +38,22 @@ test('Code sidebar toggle stays outside window drag regions and expands the work
     await closeOrcSpace(ctx)
   }
 })
+
+test('Code sidebar shows an existing workspace before the first session', async () => {
+  const ctx = await launchOrcSpace()
+  try {
+    const { page } = ctx
+    await waitForCanvas(page)
+    await page.evaluate(async () => {
+      const result = await window.api.workspace.create(`code-sidebar-${Date.now()}`)
+      if (typeof result !== 'string') throw new Error('failed to create test workspace')
+    })
+
+    await page.getByRole('tab', { name: 'Code', exact: true }).click()
+    const sidebar = page.locator('.rail-shell')
+    await expect(sidebar).toBeVisible()
+    await expect(sidebar.getByRole('button', { name: 'Workspace 1', exact: true })).toBeVisible()
+  } finally {
+    await closeOrcSpace(ctx)
+  }
+})

@@ -15,7 +15,8 @@ const WIDGET_ALIASES: Record<string, WidgetKind> = {
   browser: 'browser',
   links: 'links',
   music: 'music-player',
-  'music-player': 'music-player'
+  'music-player': 'music-player',
+  chat: 'chat'
 }
 
 export interface WidgetInvocation {

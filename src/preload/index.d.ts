@@ -7,6 +7,7 @@
 export * from './api'
 import type {
   BrowserApi,
+  ChatApi,
   CanvasApi,
   CodeApi,
   ControlApi,
@@ -29,6 +30,7 @@ declare global {
       control: ControlApi
       workspace: WorkspaceApi
       settings: SettingsApi
+      chat: ChatApi
       media: MediaApi
       orchestration: OrchestrationApi
       planner: PlannerApi

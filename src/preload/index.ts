@@ -7,6 +7,12 @@ import type { IpcRendererEvent } from 'electron'
 
 import type {
   AppSettings,
+  ChatApi,
+  ChatAuthEvent,
+  ChatEvent,
+  ChatProvider,
+  ChatProviderStatus,
+  ChatRequest,
   BrowserApi,
   CanvasApi,
   CanvasSnapshot,
@@ -198,6 +204,16 @@ const settings: SettingsApi = {
   onChange: (cb: (settings: AppSettings) => void): (() => void) => onBroadcast('settings:onChange', cb)
 }
 
+const chat: ChatApi = {
+  providers: (): Promise<ChatProviderStatus[]> => ipcRenderer.invoke('chat:providers'),
+  connect: (provider: ChatProvider): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('chat:connect', provider),
+  submitAuthCode: (provider: ChatProvider, code: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('chat:auth-submit', provider, code),
+  send: (request: ChatRequest): Promise<{ ok: boolean; requestId?: string; error?: string }> => ipcRenderer.invoke('chat:send', request),
+  cancel: (widgetId: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('chat:cancel', widgetId),
+  onEvent: (cb: (event: ChatEvent) => void): (() => void) => onBroadcast('chat:event', cb),
+  onAuthEvent: (cb: (event: ChatAuthEvent) => void): (() => void) => onBroadcast('chat:auth-event', cb)
+}
+
 const orchestration: OrchestrationApi = {
   snapshot: (runId?: string): Promise<OrcSnapshot> => ipcRenderer.invoke('orchestration:snapshot', runId),
   inbox: (runId?: string): Promise<OrcMessage[]> => ipcRenderer.invoke('orchestration:inbox', runId),
@@ -298,6 +314,7 @@ contextBridge.exposeInMainWorld('api', {
   control,
   workspace,
   settings,
+  chat,
   media,
   orchestration,
   planner,

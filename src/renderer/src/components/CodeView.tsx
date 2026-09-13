@@ -25,6 +25,13 @@ function makeSessionId(): string {
 }
 
 function agentForPersisted(agentId: string, label: string, command: string): CodeAgent {
+  // The command is what the terminal actually starts. Prefer its executable
+  // over stale metadata so a session cannot display Codex while launching
+  // Claude (or the other way around) after a migration or hand-edited state.
+  const commandAgentId = attachmentAgent(command)
+  const fromCommand = commandAgentId && CODE_AGENTS.find((a) => a.id === commandAgentId)
+  if (fromCommand) return fromCommand
+
   const found = CODE_AGENTS.find((a) => a.id === agentId)
   if (found && found.command === command) return found
   if (found && agentId !== 'custom') return found
@@ -34,6 +41,15 @@ function agentForPersisted(agentId: string, label: string, command: string): Cod
 
 function isBrowserSession(session: Pick<Session, 'agent'>): boolean {
   return session.agent.id === 'browser'
+}
+
+function terminalAgentId(session: Pick<Session, 'agent'>): string {
+  // Custom launch commands can still point at a known CLI (including a
+  // quoted Windows wrapper). Keep that useful detection, while built-in
+  // selections remain authoritative and cannot be replaced by prompt text.
+  return session.agent.id === 'custom'
+    ? (attachmentAgent(session.agent.command) ?? session.agent.id)
+    : session.agent.id
 }
 
 function extractCounter(id: string): number | null {
@@ -277,7 +293,7 @@ const SessionCard = React.memo(function SessionCard({
         </div>
       </div>
       <div className="min-h-0 flex-1 bg-[#080808]">
-        {isBrowserSession(session) ? <BrowserWidget /> : <TerminalWidget id={session.id} surface="code" attachmentMode agentId={attachmentAgent(session.agent.command) ?? attachmentAgent(session.agent.id)} onProcessExit={onProcessExit} />}
+        {isBrowserSession(session) ? <BrowserWidget /> : <TerminalWidget id={session.id} surface="code" attachmentMode agentId={terminalAgentId(session)} onProcessExit={onProcessExit} />}
       </div>
     </div>
   )

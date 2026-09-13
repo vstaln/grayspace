@@ -91,6 +91,89 @@ const baseLayer: Sheet = {
 
 
 
+// Keep native controls inside the OrcSpace palette. This sheet is unlayered so
+// it can override Uno's unlayered preflight while utility classes still win.
+const controlSheet: Sheet = {
+  'button, input, select, optgroup, textarea': { backgroundColor: 'transparent' },
+  select: {
+    appearance: 'none',
+    WebkitAppearance: 'none',
+    colorScheme: 'dark',
+    backgroundColor: monochrome.surface,
+    backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2714%27 height=%2714%27 viewBox=%270 0 24 24%27 fill=%27none%27 stroke=%27%23A9A9B0%27 stroke-width=%272%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27%3E%3Cpath d=%27m6 9 6 6 6-6%27/%3E%3C/svg%3E")',
+    backgroundRepeat: 'no-repeat',
+    backgroundPosition: 'right 9px center',
+    backgroundSize: '14px',
+    paddingRight: '30px'
+  },
+  'select option, select optgroup': {
+    color: palette.white,
+    backgroundColor: monochrome.elevated,
+    colorScheme: 'dark'
+  },
+  'select option:checked': { color: palette.white, backgroundColor: monochrome.raised },
+  'select:disabled': { cursor: 'not-allowed', opacity: 0.4 },
+  'input[type="checkbox"]': {
+    appearance: 'none',
+    WebkitAppearance: 'none',
+    width: '16px',
+    height: '16px',
+    flex: 'none',
+    display: 'inline-grid',
+    placeItems: 'center',
+    border: `1px solid ${monochrome.raised}`,
+    borderRadius: '4px',
+    backgroundColor: monochrome.surface,
+    colorScheme: 'dark',
+    cursor: 'pointer'
+  },
+  'input[type="checkbox"]::after': {
+    content: "''",
+    width: '8px',
+    height: '5px',
+    borderLeft: `2px solid ${monochrome.base}`,
+    borderBottom: `2px solid ${monochrome.base}`,
+    transform: 'rotate(-45deg) scale(0)',
+    transition: 'transform 120ms ease'
+  },
+  'input[type="checkbox"]:checked': { borderColor: palette.white, backgroundColor: palette.white },
+  'input[type="checkbox"]:checked::after': { transform: 'rotate(-45deg) scale(1)' },
+  'input[type="checkbox"]:disabled': { cursor: 'not-allowed', opacity: 0.4 },
+  'input[type="range"]': {
+    appearance: 'none',
+    WebkitAppearance: 'none',
+    height: '16px',
+    colorScheme: 'dark',
+    accentColor: palette.white,
+    background: 'transparent',
+    cursor: 'pointer'
+  },
+  'input[type="range"]::-webkit-slider-runnable-track': {
+    height: '4px', borderRadius: geometry.radiusPill, background: monochrome.raised
+  },
+  'input[type="range"]::-webkit-slider-thumb': {
+    appearance: 'none',
+    WebkitAppearance: 'none',
+    width: '14px',
+    height: '14px',
+    marginTop: '-5px',
+    border: `2px solid ${monochrome.raised}`,
+    borderRadius: geometry.radiusPill,
+    background: palette.white
+  },
+  'input[type="file"]': { color: darkTokens.colorTextDim },
+  'input[type="file"]::file-selector-button': {
+    minHeight: '36px',
+    marginRight: '8px',
+    padding: '6px 12px',
+    border: `1px solid ${monochrome.raised}`,
+    borderRadius: '8px',
+    color: palette.white,
+    background: monochrome.raised,
+    cursor: 'pointer'
+  }
+}
+
 const componentsLayer: Sheet = {
 
   '.title-bar-shell': {
@@ -195,8 +278,10 @@ const componentsLayer: Sheet = {
   },
 
   "html[data-theme='dark'] .canvas-area": {
-    background: `linear-gradient(135deg, ${monochrome.base} 0%, ${monochrome.surface} 52%, ${monochrome.raised} 100%)`
+    background: monochrome.base
   },
+
+  
 
 
 
@@ -332,9 +417,12 @@ const componentsLayer: Sheet = {
     '*, *::before, *::after': {
       animationDuration: '0.01ms !important',
       animationIterationCount: '1 !important',
-      transitionDuration: '0.01ms !important'
+      transitionDuration: '0.01ms !important',
+      backdropFilter: 'none !important',
+      WebkitBackdropFilter: 'none !important'
     },
-    '.conn-flare-dot, .conn-idle-dot': { display: 'none' }
+    '.conn-flare-dot, .conn-idle-dot': { display: 'none' },
+    'input[type="checkbox"]::after': { transition: 'none' }
   },
 
 
@@ -506,6 +594,7 @@ const componentsLayer: Sheet = {
 
 export const appStylesheet: Sheet = {
   ...tokenSheet,
+  ...controlSheet,
   '@layer base': baseLayer,
 
 

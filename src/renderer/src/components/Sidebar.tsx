@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Code2, FolderOpen, FolderPlus, Palette, Pencil, Pin, Plus, Settings, Trash2, UserRound, X } from 'lucide-react'
+import { Bot, Code2, FolderOpen, FolderPlus, Palette, Pencil, Pin, Plus, Settings, Trash2, UserRound, X } from 'lucide-react'
 import type { CodeWorkspaceGroup, RecentDir } from '../../../preload/index.d'
+import type { ChatAuthEvent, ChatProvider, ChatProviderStatus } from '../../../preload/api'
 import type { WorkView } from './TitleBar'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { THEMES, useTheme, wallpaperBackgroundImage } from '../theme'
@@ -10,7 +11,9 @@ import { VerifiedBadge } from './VerifiedBadge'
 import { AppUpdates } from './AppUpdates'
 import { useConfirm } from './ConfirmDialog'
 import { MAX_FAVORITE_TERMINAL_NAMES, normalizeTerminalName, normalizeTerminalNameList } from '../../../main/terminalNames'
-import { getCodeSessionCount, onCodeSessionCount } from '../lib/codeSessions'
+import ClaudeIcon from './ClaudeIcon'
+import CodexIcon from './CodexIcon'
+import GrokIcon from './GrokIcon'
 
 interface Props {
   workspaceDir: string | null
@@ -72,7 +75,8 @@ function IconButton({
 
 const SETTINGS_TABS = [
   { id: 'account' as const, label: 'Account', Icon: UserRound },
-  { id: 'appearance' as const, label: 'Appearance', Icon: Palette }
+  { id: 'appearance' as const, label: 'Appearance', Icon: Palette },
+  { id: 'ai' as const, label: 'AI', Icon: Bot }
 ]
 
 const FAVORITE_WIDGETS = [
@@ -84,8 +88,21 @@ const FAVORITE_WIDGETS = [
   ['orchestration', 'Orchestration', 'The agent fleet: tasks, workers and their questions'],
   ['browser', 'Browser', 'Embedded web page'],
   ['links', 'Links', 'Saved links'],
-  ['music-player', 'Music Player', 'Stream YouTube, Yandex Music, Spotify or MP3 links']
+  ['music-player', 'Music Player', 'Stream YouTube, Yandex Music, Spotify or MP3 links'],
+  ['chat', 'AI Chat', 'Chat with an authenticated model']
 ] as const
+
+const AI_PROVIDERS: Array<{ id: ChatProvider; label: string; hint: string; Icon: React.ComponentType<{ size?: number }> }> = [
+  { id: 'chatgpt', label: 'ChatGPT', hint: 'Codex account and subscription', Icon: CodexIcon },
+  { id: 'claude', label: 'Claude', hint: 'Claude Code account and subscription', Icon: ClaudeIcon },
+  { id: 'grok', label: 'Grok', hint: 'Grok CLI account and subscription', Icon: GrokIcon }
+]
+
+const AI_MODELS: Record<ChatProvider, string[]> = {
+  chatgpt: ['gpt-5.6-sol', 'gpt-6-astra', 'gpt-5.6-luna'],
+  claude: ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+  grok: ['grok-4.6', 'grok-4.5', 'grok-4.3', 'grok-build-0.1']
+}
 
 
 
@@ -204,7 +221,7 @@ export function SettingsModal({
 }): React.JSX.Element {
   const { theme, setTheme, background, dim, setDim, blur, setBlur, pickBackground, clearBackground, error } = useTheme()
   const { settings, update, error: settingsError } = useSettings()
-  const [tab, setTab] = useState<'appearance' | 'account'>('account')
+  const [tab, setTab] = useState<'appearance' | 'account' | 'ai'>('account')
   const [userName, setUserName] = useState('')
   const [favoriteNamesText, setFavoriteNamesText] = useState('')
   const nameEntries = favoriteNamesText.split(/[\n,]+/).map((name) => name.trim()).filter(Boolean)
@@ -217,6 +234,9 @@ export function SettingsModal({
   const namesChanged = JSON.stringify(favoriteNames) !== JSON.stringify(settings.favoriteTerminalNames ?? [])
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const [providerStatuses, setProviderStatuses] = useState<ChatProviderStatus[]>([])
+  const [authPrompt, setAuthPrompt] = useState<ChatAuthEvent | null>(null)
+  const [authCode, setAuthCode] = useState('')
   const [open, setOpen] = useState(false)
   const dialogRef = useRef<HTMLDivElement>(null)
   const mainRef = useRef<HTMLElement>(null)
@@ -255,6 +275,23 @@ export function SettingsModal({
   }, [open, settings.userName])
 
   useEffect(() => {
+    if (!open || tab !== 'ai') return
+    void window.api.chat.providers().then(setProviderStatuses).catch(() => setProviderStatuses([]))
+  }, [open, tab])
+
+  useEffect(() => window.api.chat.onAuthEvent((auth) => {
+    setAuthPrompt(auth.type === 'complete' ? null : auth)
+    setNotice(auth.message)
+    if (auth.type === 'complete' || auth.type === 'error') {
+      void window.api.chat.providers().then(setProviderStatuses).catch(() => {})
+    } else {
+      setProviderStatuses((current) => current.map((provider) => provider.id === auth.provider
+        ? { ...provider, connecting: true, detail: 'Waiting for OAuth sign-in' }
+        : provider))
+    }
+  }), [])
+
+  useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
@@ -289,7 +326,7 @@ export function SettingsModal({
     // just wants "open settings" keeps landing on Account as before.
     const openSettings = (event: Event): void => {
       const requested = (event as CustomEvent<{ tab?: string } | undefined>).detail?.tab
-      setTab(requested === 'appearance' ? 'appearance' : 'account')
+      setTab(requested === 'appearance' ? 'appearance' : requested === 'ai' ? 'ai' : 'account')
       setOpen(true)
     }
     window.addEventListener('orcspace:open-settings', openSettings)
@@ -307,6 +344,37 @@ export function SettingsModal({
       setNotice(saved ? 'Account settings saved.' : 'Failed to save account settings.')
     } catch (err) {
       setNotice(`Failed to save account: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const connectProvider = async (provider: ChatProvider): Promise<void> => {
+    if (busy) return
+    setBusy(true)
+    setNotice(null)
+    setAuthPrompt(null)
+    setAuthCode('')
+    try {
+      const result = await window.api.chat.connect(provider)
+      setNotice(result.ok ? 'Starting OAuth sign-in…' : (result.error || 'Could not start sign-in.'))
+      void window.api.chat.providers().then(setProviderStatuses).catch(() => {})
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not start sign-in.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const submitAuthCode = async (): Promise<void> => {
+    if (!authPrompt?.requiresInput || !authCode.trim() || busy) return
+    setBusy(true)
+    try {
+      const result = await window.api.chat.submitAuthCode(authPrompt.provider, authCode)
+      setNotice(result.ok ? 'Finishing OAuth sign-in…' : (result.error || 'Could not submit the OAuth code.'))
+      if (result.ok) setAuthCode('')
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not submit the OAuth code.')
     } finally {
       setBusy(false)
     }
@@ -356,7 +424,7 @@ export function SettingsModal({
           <main ref={mainRef} className="flex min-w-0 flex-1 flex-col gap-7 overflow-auto bg-bg-panel px-7 py-6 min-h-0">
             <header className="flex flex-none items-center justify-between">
               <h2 className="text-[20px] font-semibold text-text">
-                {tab === 'appearance' ? 'Appearance' : 'Account'}
+                {tab === 'appearance' ? 'Appearance' : tab === 'ai' ? 'AI' : 'Account'}
               </h2>
               <button
                 type="button"
@@ -552,6 +620,63 @@ export function SettingsModal({
               </div>
             )}
 
+            {tab === 'ai' && (
+              <div className="flex max-w-xl flex-col gap-8">
+                <p className="-mt-5 text-[11px] leading-relaxed text-text-dim">Connect an AI account once, then use its subscription in every AI Chat widget.</p>
+
+                <Section title="Provider accounts" hint="Sign-in opens the provider's official OAuth flow. Credentials stay with the provider CLI on this device.">
+                  <div className="flex flex-col gap-2.5">
+                    {AI_PROVIDERS.map((provider) => {
+                      const state = providerStatuses.find((item) => item.id === provider.id)
+                      const connected = state?.connected === true
+                      const connecting = state?.connecting === true
+                      const unavailable = state?.available === false
+                      return (
+                        <div key={provider.id} className="flex items-center gap-3 rounded-[10px] border border-line-soft bg-bg-raise p-3.5">
+                          <div className="grid h-8 w-8 flex-none place-items-center rounded-[8px] border border-line text-text" aria-label={`${provider.label} icon`}><provider.Icon size={16} /></div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 text-xs text-text"><span>{provider.label}</span>{connected && <span className="text-[10px] text-text-faint">Connected</span>}</div>
+                            <p className="mt-1 truncate text-[10px] text-text-faint">{state?.detail || provider.hint}</p>
+                            {unavailable && state?.installCommand && <code className="mt-1 block select-all truncate font-mono text-[9px] text-text-faint">{state.installCommand}</code>}
+                          </div>
+                          <button type="button" className={connected ? BTN_QUIET : BTN_PRIMARY} disabled={busy || connecting || unavailable} onClick={() => void connectProvider(provider.id)}>{unavailable ? 'CLI required' : connecting ? 'Waiting…' : connected ? 'Reconnect' : 'Connect via OAuth'}</button>
+                        </div>
+                      )
+                    })}
+                    {authPrompt && (
+                      <div role={authPrompt.type === 'error' ? 'alert' : 'status'} className="flex flex-wrap items-center gap-2 rounded-[9px] border border-line-soft bg-bg-raise px-3 py-2 text-[11px] text-text-dim">
+                        <span className="min-w-0 flex-1">{authPrompt.message}</span>
+                        {authPrompt.userCode && <code className="select-all rounded border border-line px-2 py-1 font-mono text-xs text-text">{authPrompt.userCode}</code>}
+                        {authPrompt.url && <a href={authPrompt.url} target="_blank" rel="noreferrer" className="text-text underline underline-offset-2">Open sign-in page</a>}
+                        {authPrompt.requiresInput && (
+                          <form className="flex w-full items-center gap-2" onSubmit={(event) => { event.preventDefault(); void submitAuthCode() }}>
+                            <input aria-label="OAuth code" value={authCode} onChange={(event) => setAuthCode(event.target.value)} placeholder="Paste OAuth code" autoComplete="off" className="h-8 min-w-0 flex-1 rounded-[7px] border border-line bg-transparent px-2 font-mono text-[10px] text-text outline-none focus:border-text-faint" />
+                            <button type="submit" className={BTN_PRIMARY} disabled={busy || !authCode.trim()}>Continue</button>
+                          </form>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </Section>
+
+                <Section title="Chat defaults" hint="These defaults are used for new chat widgets. You can override them directly in each chat.">
+                  <label className="flex flex-col gap-1.5 text-[11px] text-text-dim">Provider
+                    <select aria-label="Default AI provider" value={settings.aiProvider ?? 'chatgpt'} onChange={(event) => { const next = event.target.value as ChatProvider; void update({ aiProvider: next, aiModel: AI_MODELS[next][0] }) }} className="h-9 rounded-[8px] border border-line-soft bg-transparent px-2.5 text-xs text-text outline-none focus:border-line">
+                      {AI_PROVIDERS.map((provider) => <option key={provider.id} value={provider.id}>{provider.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-[11px] text-text-dim">Model
+                    <select aria-label="Default AI model" value={AI_MODELS[settings.aiProvider ?? 'chatgpt'].includes(settings.aiModel ?? '') ? settings.aiModel : AI_MODELS[settings.aiProvider ?? 'chatgpt'][0]} onChange={(event) => void update({ aiModel: event.target.value })} className="h-9 rounded-[8px] border border-line-soft bg-transparent px-2.5 text-xs text-text outline-none focus:border-line">
+                      {AI_MODELS[settings.aiProvider ?? 'chatgpt'].map((model) => <option key={model} value={model}>{model}</option>)}
+                    </select>
+                  </label>
+                  <div role="radiogroup" aria-label="Default reasoning effort" className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+                    {(['low', 'medium', 'high'] as const).map((value) => <Choice key={value} selected={(settings.aiReasoningEffort ?? 'medium') === value} label={`${value[0].toUpperCase()}${value.slice(1)}`} hint={value === 'low' ? 'Fast replies' : value === 'medium' ? 'Balanced' : 'Deeper reasoning'} disabled={busy} onClick={() => void update({ aiReasoningEffort: value })} />)}
+                  </div>
+                </Section>
+              </div>
+            )}
+
             <AppUpdates />
             {(notice || settingsError) && (
               <div className="flex flex-col gap-1.5">
@@ -611,21 +736,6 @@ export default React.memo(function Sidebar({
   const avatarName = settings.userName?.trim() || 'you'
   const avatarInitials = avatarName.slice(0, 2).toUpperCase()
   const expanded = activeView !== 'canvas'
-
-  /**
-   * Whether Code has anything running.
-   *
-   * The workspace panel is hidden until the first session: before that there
-   * is nothing to save a workspace *of*, and it repeats the folder line the
-   * launcher already shows, so the same choice appears twice in two places.
-   * CodeView owns the count and the sidebar subscribes, rather than App
-   * passing it down: App's `codeStarted` means "Code was opened", which is a
-   * different thing. A subscription rather than an event, because the two
-   * components do not mount in a fixed order — see lib/codeSessions.
-   */
-  const [hasCodeSessions, setHasCodeSessions] = useState(getCodeSessionCount() > 0)
-  useEffect(() => onCodeSessionCount((count) => setHasCodeSessions(count > 0)), [])
-
 
   const refreshCodeWorkspaceGroups = useCallback((): void => {
     void window.api.workspace.codeWorkspaceGroups().then(setCodeWorkspaceGroups).catch(() => {})
@@ -1154,7 +1264,7 @@ export default React.memo(function Sidebar({
           {avatarInitials}
         </span>
       </button>}
-      {expanded ? (hasCodeSessions ? renderExpanded() : <div className="min-h-0 flex-1" />) : (
+      {expanded ? renderExpanded() : (
         <>
           <div className="flex-1" />
           <div className="flex flex-col gap-1.5">

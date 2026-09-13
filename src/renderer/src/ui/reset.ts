@@ -81,7 +81,9 @@ export const resetSheet: Sheet = {
     maxWidth: '100%',
     height: 'auto'
   },
-  'button, input, select, optgroup, textarea': {
+  // Keep this reset deliberately low-specificity so component utility classes
+  // (for example bg-bg-hover and bg-accent) can style form controls.
+  ':where(button, input, select, optgroup, textarea)': {
     font: 'inherit',
     fontFeatureSettings: 'inherit',
     fontVariationSettings: 'inherit',

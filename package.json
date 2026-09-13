@@ -1,13 +1,13 @@
 {
   "name": "orcspace",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "OrcSpace — an infinite canvas with terminals, notes and agent coordination",
   "type": "module",
   "main": "./out/main/index.js",
   "license": "MIT",
   "author": "OrcSpace",
   "engines": {
-    "node": "20.x || 22.x || 24.x"
+    "node": "20.x || 22.x || 24.x || 26.x"
   },
   "scripts": {
     "setup": "node scripts/setup.mjs",
@@ -34,7 +34,7 @@
     "dist": "npm run build && electron-builder --win --publish never",
     "dist:native": "npm run native:build",
     "dist:electron": "npm run dist",
-    "installer:win": "node scripts/build-installer.mjs",
+    "installer:win": "node scripts/build-installer.mjs --skip-ci --dirty",
     "dist:mac": "npm run build:electron && electron-builder --mac --publish never",
     "dist:mac:arm": "npm run build:electron && electron-builder --mac dmg zip --arm64 --publish never",
     "dist:mac:intel": "npm run build:electron && electron-builder --mac dmg zip --x64 --publish never",

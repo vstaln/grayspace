@@ -21,6 +21,7 @@ const COMMAND_ITEMS = [
   ['timer', 'Timer', 'Start a timer'],
   ['planner', 'Planner', 'Open your checklist'],
   ['orchestration', 'Orchestration', 'Open agent coordination'],
+  ['chat', 'AI Chat', 'Chat with an authenticated model'],
   ['browser', 'Browser', 'Open a web page'],
   ['links', 'Links', 'Open saved links'],
   ['music-player', 'Music Player', 'Open the music player']

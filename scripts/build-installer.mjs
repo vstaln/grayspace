@@ -105,7 +105,7 @@ function verifyUnpackedRelease(packageJson) {
   const asar = readFileSync(join(resources, 'app.asar'))
 
 
-  for (const marker of ['music-player', 'youtube.com/iframe_api', 'Orchestration']) {
+  for (const marker of ['music-player', 'youtube.com/iframe_api', 'Orchestration', 'AI Chat']) {
     if (!asar.includes(marker)) throw new Error(`Renderer bundle is missing required feature marker: ${marker}`)
   }
 
@@ -132,8 +132,8 @@ try {
   if (process.platform !== 'win32') {
     throw new Error('The Windows installer must be built on Windows (electron-builder cannot cross-build NSIS reliably).')
   }
-  if (nodeMajor < 20 || nodeMajor >= 25) {
-    throw new Error(`Node.js 20–24 is required for the native dependencies (detected ${process.versions.node}).`)
+  if (nodeMajor < 20 || nodeMajor >= 28) {
+    throw new Error(`Node.js 20–26 is required for the native dependencies (detected ${process.versions.node}).`)
   }
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   if (!packageJson.version || !packageJson.name) throw new Error('package.json has no valid name/version.')

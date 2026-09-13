@@ -61,6 +61,10 @@ export interface AppSettings {
   openRouterApiKeyEnc?: string
 
   openRouterModel?: string
+  aiProvider?: 'chatgpt' | 'claude' | 'grok'
+  aiModel?: string
+  aiReasoningEffort?: 'low' | 'medium' | 'high'
+  aiConnectedProviders?: string[]
   localModel: LocalModelSettings
 
   favoriteWidgets?: string[]
@@ -133,7 +137,11 @@ const DEFAULT_SETTINGS: AppSettings = {
     idleTimeoutMs: 5 * 60_000,
     offloadVision: false
   },
-  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player'],
+  aiProvider: 'chatgpt',
+  aiModel: 'gpt-5.6-sol',
+  aiReasoningEffort: 'medium',
+  aiConnectedProviders: [],
+  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player', 'chat'],
   favoriteTerminalNames: []
 }
 
@@ -372,6 +380,14 @@ export class AppState extends EventEmitter {
       this.setSecret('openRouterApiKey', 'openRouterApiKeyEnc', patch.openRouterApiKey)
     if (typeof patch.openRouterModel === 'string')
       this.state.settings.openRouterModel = patch.openRouterModel.trim().slice(0, 200) || undefined
+    if (patch.aiProvider && ['chatgpt', 'claude', 'grok'].includes(patch.aiProvider))
+      this.state.settings.aiProvider = patch.aiProvider
+    if (typeof patch.aiModel === 'string')
+      this.state.settings.aiModel = patch.aiModel.trim().slice(0, 200) || undefined
+    if (patch.aiReasoningEffort && ['low', 'medium', 'high'].includes(patch.aiReasoningEffort))
+      this.state.settings.aiReasoningEffort = patch.aiReasoningEffort
+    if (Array.isArray(patch.aiConnectedProviders))
+      this.state.settings.aiConnectedProviders = [...new Set(patch.aiConnectedProviders.filter((provider): provider is string => ['chatgpt', 'claude', 'grok'].includes(provider)))].slice(0, 3)
     if ('targetTerminalId' in patch) this.state.settings.targetTerminalId = cleanId(patch.targetTerminalId)
     if (patch.localModel && typeof patch.localModel === 'object') {
 
@@ -402,7 +418,7 @@ export class AppState extends EventEmitter {
       this.state.settings.localModel = merged
     }
     if (Array.isArray(patch.favoriteWidgets)) {
-      const allowed = new Set(['terminal', 'timer', 'planner', 'orchestration', 'files', 'sys-monitor', 'browser', 'links', 'music-player'])
+      const allowed = new Set(['terminal', 'timer', 'planner', 'orchestration', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'chat'])
       this.state.settings.favoriteWidgets = [...new Set(patch.favoriteWidgets.filter((kind): kind is string => typeof kind === 'string' && allowed.has(kind)))].slice(0, 32)
     }
     if (Array.isArray(patch.favoriteTerminalNames)) {
@@ -529,6 +545,15 @@ export class AppState extends EventEmitter {
       this.state.settings.windowsShell = DEFAULT_SETTINGS.windowsShell
     if (!['/', '.', '@', 'any'].includes(this.state.settings.commandPrefix))
       this.state.settings.commandPrefix = DEFAULT_SETTINGS.commandPrefix
+    if (!['chatgpt', 'claude', 'grok'].includes(this.state.settings.aiProvider ?? ''))
+      this.state.settings.aiProvider = DEFAULT_SETTINGS.aiProvider
+    if (!['low', 'medium', 'high'].includes(this.state.settings.aiReasoningEffort ?? ''))
+      this.state.settings.aiReasoningEffort = DEFAULT_SETTINGS.aiReasoningEffort
+    if (typeof this.state.settings.aiModel !== 'string' || !this.state.settings.aiModel.trim())
+      this.state.settings.aiModel = DEFAULT_SETTINGS.aiModel
+    this.state.settings.aiConnectedProviders = Array.isArray(this.state.settings.aiConnectedProviders)
+      ? [...new Set(this.state.settings.aiConnectedProviders.filter((provider): provider is string => ['chatgpt', 'claude', 'grok'].includes(provider)))].slice(0, 3)
+      : []
 
 
     if (!Number.isFinite(this.state.settings.backgroundDim))

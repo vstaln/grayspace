@@ -21,7 +21,7 @@ export const CANVAS_SCHEMA_VERSION = 3
 
 export const CANVAS_SNAPSHOT_INTERVAL = 50
 
-export type WidgetKind = 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration'
+export type WidgetKind = 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration' | 'chat'
 
 export interface CanvasWidget {
   id: string
@@ -124,7 +124,7 @@ const isNum = (value: unknown): value is number => typeof value === 'number' && 
 
 
 
-const WIDGET_KINDS = new Set<string>(['terminal', 'timer', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'orchestration'])
+const WIDGET_KINDS = new Set<string>(['terminal', 'timer', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'orchestration', 'chat'])
 
 export function sanitizeWidget(value: unknown): CanvasWidget | null {
   const w = value as Record<string, unknown>

@@ -29,7 +29,7 @@ pub const MAX_STROKE_POINTS: usize = 200_000;
 pub const MAX_POINTS_PER_STROKE: usize = 10_000;
 pub const MAX_CONNECTIONS: usize = 2_000;
 
-const WIDGET_KINDS: [&str; 9] = [
+const WIDGET_KINDS: [&str; 10] = [
     "terminal",
     "timer",
     "planner",
@@ -39,6 +39,7 @@ const WIDGET_KINDS: [&str; 9] = [
     "links",
     "music-player",
     "orchestration",
+    "chat",
 ];
 
 #[derive(Debug, Clone, PartialEq)]

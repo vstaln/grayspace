@@ -8,6 +8,10 @@ const DEFAULTS: AppSettings = {
   userName: 'you',
   backgroundDim: 45,
   backgroundBlur: 40,
+  aiProvider: 'chatgpt',
+  aiModel: 'gpt-5.6-sol',
+  aiReasoningEffort: 'medium',
+  aiConnectedProviders: [],
   localModel: {
     enabled: false,
     serverBin: '',
@@ -17,16 +21,26 @@ const DEFAULTS: AppSettings = {
     idleTimeoutMs: 5 * 60_000,
     offloadVision: false
   },
-  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player'],
+  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player', 'chat'],
   favoriteTerminalNames: []
 }
 
 const FAVORITES_ALL_MIGRATION_KEY = 'orcspace-favorites-all-enabled'
+const CHAT_FAVORITE_MIGRATION_KEY = 'orcspace-chat-favorite-enabled'
+const AI_MODEL_MIGRATIONS: Record<string, string> = {
+  'claude-sonnet-4-5': 'claude-sonnet-5',
+  'claude-opus-4-1': 'claude-opus-5',
+  'claude-haiku-4-5': 'claude-haiku-4-5-20251001',
+  'grok-4': 'grok-4.6',
+  'grok-4-fast': 'grok-4.6',
+  'grok-3-mini': 'grok-4.3'
+}
 
 function mergeDefaults(s: AppSettings): AppSettings {
   return {
     ...DEFAULTS,
     ...s,
+    aiModel: typeof s.aiModel === 'string' ? AI_MODEL_MIGRATIONS[s.aiModel] ?? s.aiModel : DEFAULTS.aiModel,
     favoriteWidgets: (s.favoriteWidgets ?? DEFAULTS.favoriteWidgets ?? []).filter(
       (kind) => kind !== 'translator' && kind !== 'id-generator' && kind !== 'note'
     ),
@@ -74,6 +88,16 @@ export function useSettings(): {
                 setSettings((prev) => ({ ...prev, favoriteWidgets: merged }))
               }
             }
+          }
+          if (!localStorage.getItem(CHAT_FAVORITE_MIGRATION_KEY) && !(s.favoriteWidgets ?? []).includes('chat')) {
+            localStorage.setItem(CHAT_FAVORITE_MIGRATION_KEY, '1')
+            const merged = [...(s.favoriteWidgets ?? []), 'chat']
+            void window.api.settings.set({ favoriteWidgets: merged }).catch((err) => {
+              if (seq === initSeqRef.current) setError(err instanceof Error ? err.message : String(err))
+            })
+            if (seq === initSeqRef.current) setSettings((prev) => ({ ...prev, favoriteWidgets: merged }))
+          } else if (!localStorage.getItem(CHAT_FAVORITE_MIGRATION_KEY)) {
+            localStorage.setItem(CHAT_FAVORITE_MIGRATION_KEY, '1')
           }
         } catch {}
       })

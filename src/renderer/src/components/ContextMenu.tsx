@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Clipboard, Cpu, FolderOpen, Globe, ListTodo, Music2, Network, Terminal, Timer } from 'lucide-react'
+import { Clipboard, Cpu, FolderOpen, Globe, ListTodo, MessageCircle, Music2, Network, Terminal, Timer } from 'lucide-react'
 import { Point } from '../types'
 
 interface Props {
@@ -14,6 +14,7 @@ interface Props {
   onPickLinks: () => void
   onPickMusicPlayer: () => void
   onPickOrchestration: () => void
+  onPickChat: () => void
   favoriteWidgets: string[]
   onClose: () => void
 }
@@ -40,6 +41,7 @@ export default function ContextMenu({
   onPickLinks,
   onPickMusicPlayer,
   onPickOrchestration,
+  onPickChat,
   favoriteWidgets,
   onClose
 }: Props): React.JSX.Element {
@@ -117,6 +119,13 @@ export default function ContextMenu({
         hint: 'Watch the agent fleet: tasks, workers and their questions',
         icon: <Network size={15} className="text-accent" />,
         onSelect: onPickOrchestration
+      },
+      {
+        id: 'chat',
+        label: 'AI Chat',
+        hint: 'Chat with an authenticated model',
+        icon: <MessageCircle size={15} className="text-accent" />,
+        onSelect: onPickChat
       }
     ].filter((item) => (favoriteWidgets ? favoriteWidgets.includes(item.id) : true)),
     [
@@ -129,6 +138,7 @@ export default function ContextMenu({
       onPickLinks,
       onPickMusicPlayer,
       onPickOrchestration,
+      onPickChat,
       favoriteWidgets
     ]
   )

@@ -82,6 +82,8 @@ describe('Regression — end-to-end invariants', () => {
     const ok = sanitizeWidget({ id: 'w1', title: 't', x: 0, y: 0, w: 100, h: 100, z: 1, kind: 'orchestration' })
     assert.ok(ok, 'orchestration widget must be accepted')
     assert.equal(ok?.kind, 'orchestration')
+    const chat = sanitizeWidget({ id: 'w-chat', title: 'AI Chat', x: 0, y: 0, w: 100, h: 100, z: 1, kind: 'chat' })
+    assert.equal(chat?.kind, 'chat')
     const removedNote = sanitizeWidget({ id: 'w2', title: 't', x: 0, y: 0, w: 100, h: 100, z: 1, kind: 'note' })
     assert.equal(removedNote, null, 'removed note widget must be rejected')
     const bad = sanitizeWidget({ id: 'w3', title: 't', x: 0, y: 0, w: 100, h: 100, z: 1, kind: 'invalid_kind' as never })

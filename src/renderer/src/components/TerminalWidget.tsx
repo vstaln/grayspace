@@ -102,9 +102,14 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const agentIdRef = useRef(attachmentAgent(agentId ?? ''))
+  // An explicit launcher selection is authoritative. Without this guard a
+  // prompt such as "explain codex" typed into Claude could be mistaken for a
+  // shell command and change the attachment shortcut mid-session.
+  const agentIdentityLockedRef = useRef(Boolean(agentId?.trim()))
   const isCodexRef = useRef(agentId === 'codex')
   useEffect(() => {
     agentIdRef.current = attachmentAgent(agentId ?? '')
+    agentIdentityLockedRef.current = Boolean(agentId?.trim())
     isCodexRef.current = agentIdRef.current === 'codex'
   }, [agentId])
 
@@ -495,15 +500,19 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       })
     }
     let typedCommand = ''
+    const learnAgentFromCommand = (command: string): void => {
+      if (agentIdentityLockedRef.current) return
+      const detected = attachmentAgent(command)
+      if (!detected) return
+      agentIdRef.current = detected
+      agentIdentityLockedRef.current = true
+      isCodexRef.current = detected === 'codex'
+    }
     term.onData((data) => {
       // Replayed device queries must not send historical replies to a live shell.
       if (restoreInFlight) return
       if (data === '\r' || data === '\n') {
-        const detected = attachmentAgent(typedCommand)
-        if (detected) {
-          agentIdRef.current = detected
-          isCodexRef.current = detected === 'codex'
-        }
+        learnAgentFromCommand(typedCommand)
         typedCommand = ''
       } else if (data === '\x7f' || data === '\b') {
         typedCommand = typedCommand.slice(0, -1)
@@ -1066,8 +1075,7 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       // bare prompt with the agent never started.
       const queued = peekInitialCommand(id)
       if (queued) {
-        const detected = attachmentAgent(queued)
-        if (detected) agentIdRef.current = detected
+        learnAgentFromCommand(queued)
         initialCmdTimer = setTimeout(() => {
           if (!mounted) return
           // Cleared only now, at the point it actually goes to the pty.

@@ -109,4 +109,10 @@ export function registerBuiltinWidgets(): void {
     defaultSize: { w: 460, h: 330 },
     commands: ['widget.update', 'widget.remove']
   })
+  registerWidgetType({
+    kind: 'chat',
+    label: 'AI Chat',
+    defaultSize: { w: 560, h: 560 },
+    commands: ['chat.send', 'chat.cancel', 'widget.update', 'widget.remove']
+  })
 }
