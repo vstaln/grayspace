@@ -905,8 +905,17 @@ export default React.memo(function TitleBar({
               >
                 <Minus size={14} strokeWidth={2.2} />
               </button>
+              {/*
+                QUIET whether or not the window is maximized, unlike the panel
+                toggles above. ON is the hover fill, so wearing it at rest made
+                this button look stuck under the cursor next to a plain
+                minimise and close — which is what it is, a window control, not
+                a toggle you read the state of. That state is already carried
+                three times over: the icon swaps, the label swaps, and
+                aria-pressed says it outright.
+              */}
               <button
-                className={`${ICON} ${maximized ? ON : QUIET}`}
+                className={`${ICON} ${QUIET}`}
                 title={maximized ? 'Restore' : 'Maximize'}
                 aria-label={maximized ? 'Restore' : 'Maximize'}
                 aria-pressed={maximized}
