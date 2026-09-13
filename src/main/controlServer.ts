@@ -135,7 +135,8 @@ export function startControlServer(deps: ControlDeps): http.Server {
   const socketPath = deps.socketPath ?? getIpcSocketPath()
   prepareSocketPath(socketPath)
 
-  const handleRequest = (req: http.IncomingMessage, res: http.ServerResponse): void => {
+  // Returns whether the request was answered, mirroring the route handlers.
+  const handleRequest = (req: http.IncomingMessage, res: http.ServerResponse): unknown => {
     applyLoopbackCors(req, res, `Content-Type, ${CONTROL_TOKEN_HEADER}`)
     const url = new URL(req.url || '/', 'http://localhost')
     const parts = url.pathname.split('/').filter(Boolean)
@@ -362,11 +363,11 @@ function registerHttpAgent(
   return { ok: true, agentId }
 }
 
-async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: ControlDeps): Promise<void> {
+async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: ControlDeps): Promise<unknown> {
   const url = new URL(req.url || '/', 'http://localhost')
   const parts = url.pathname.split('/').filter(Boolean)
   const method = req.method || 'GET'
-  const { terminals, planner, canvas, core, orchestration } = deps
+  const { terminals, planner, canvas, core } = deps
 
   // Charged to the caller that named itself, so one agent's runaway loop can
   // only throttle that agent.
@@ -391,7 +392,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     return core.flow.submit<T>({ actorId: registered.agentId, type, target, payload, baseVersion })
   }
 
-  const reply = <T>(result: CommandResult<T>, okStatus = 200): void => {
+  const reply = <T>(result: CommandResult<T>, okStatus = 200): true => {
     if (result.ok) return sendJson(res, okStatus, { ok: true, version: result.version, seq: result.seq, data: result.data })
     return sendJson(res, STATUS_BY_CODE[result.code] ?? 400, {
       error: result.message,
@@ -503,6 +504,52 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
   }
 
 
+  const ctx: DomainContext = { req, res, url, parts, method, deps, submit, reply }
+
+  if (await routeOrchestration(ctx)) return true
+
+  if (await routePlanner(ctx)) return true
+
+  if (await routeCanvas(ctx)) return true
+
+
+  sendJson(res, 404, { error: 'not found' })
+}
+
+/**
+ * Image paths on a request body, from either `image` or `images`.
+ *
+ * The control API is local — the CLI and the app share a filesystem — so an
+ * attachment travels as a path rather than as bytes on the wire.
+ */
+/**
+ * One domain's routes.
+ *
+ * `route()` had grown to 621 lines matching thirteen domains in sequence, so
+ * the three largest are functions now. Each returns whether it answered the
+ * request; falling out of the bottom means "not mine", and the next domain
+ * gets a look.
+ *
+ * The bodies are the originals, unchanged. They keep working because
+ * `sendJson` and `reply` report `true`, so every branch that already ended in
+ * `return sendJson(...)` now also reports that it handled the request — the
+ * handled/not-handled signal cannot drift out of step with the response,
+ * because it *is* the response.
+ */
+interface DomainContext {
+  req: http.IncomingMessage
+  res: http.ServerResponse
+  url: URL
+  parts: string[]
+  method: string
+  deps: ControlDeps
+  submit<T>(body: Json, type: string, target: string, payload: unknown): Promise<CommandResult<T>>
+  reply<T>(result: CommandResult<T>, okStatus?: number): true
+}
+
+async function routeOrchestration(ctx: DomainContext): Promise<boolean> {
+  const { req, res, url, parts, method, deps, submit, reply } = ctx
+  const { terminals, canvas, core, orchestration } = ctx.deps
   if (parts[0] === 'orchestration') {
     const runIdParam = url.searchParams.get('runId') || undefined
     const callerId = (): { ok: true; agentId: string } | { ok: false; status: number; error: string; code: CommandErrorCode } =>
@@ -780,8 +827,12 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       return sendJson(res, 200, { ok: true })
     }
   }
+  return false
+}
 
-
+async function routePlanner(ctx: DomainContext): Promise<boolean> {
+  const { req, res, parts, method, submit, reply } = ctx
+  const { planner } = ctx.deps
   if (parts[0] === 'planner') {
     if (method === 'GET' && parts.length === 1) {
       const items = planner.list()
@@ -826,8 +877,12 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       return reply(await submit(body, 'plan.delete', `plan:${decodeURIComponent(parts[1])}`, {}))
     }
   }
+  return false
+}
 
-
+async function routeCanvas(ctx: DomainContext): Promise<boolean> {
+  const { req, res, url, parts, method, deps, submit, reply } = ctx
+  const { terminals, canvas, orchestration } = ctx.deps
   if (method === 'GET' && parts[0] === 'widgets' && parts.length === 1) {
     const others = canvas
       .listWidgets()
@@ -980,16 +1035,9 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     if (output === null) return sendJson(res, 404, { error: 'terminal not found' })
     return sendJson(res, 200, { output })
   }
-
-  sendJson(res, 404, { error: 'not found' })
+  return false
 }
 
-/**
- * Image paths on a request body, from either `image` or `images`.
- *
- * The control API is local — the CLI and the app share a filesystem — so an
- * attachment travels as a path rather than as bytes on the wire.
- */
 function imageList(body: Json): string[] {
   const raw = Array.isArray(body.images) ? body.images : []
   const single = typeof body.image === 'string' ? [body.image] : []
@@ -1189,8 +1237,16 @@ function normalizeLockResource(raw: unknown): string {
   return text
 }
 
-function sendJson(res: http.ServerResponse, status: number, data: unknown): void {
-  if (res.headersSent || res.destroyed || res.writableEnded) return
+/**
+ * Writes a JSON response and reports that the request was handled.
+ *
+ * The `true` is what lets each route domain be a function that returns whether
+ * it answered: every branch already ends in `return sendJson(...)`, so the
+ * handled/not-handled decision needs no extra bookkeeping and cannot drift out
+ * of step with the response.
+ */
+function sendJson(res: http.ServerResponse, status: number, data: unknown): true {
+  if (res.headersSent || res.destroyed || res.writableEnded) return true
   const body = JSON.stringify(data)
   try {
     res.writeHead(status, {
@@ -1203,6 +1259,7 @@ function sendJson(res: http.ServerResponse, status: number, data: unknown): void
   } catch {
 
   }
+  return true
 }
 
 function localDayKey(d = new Date()): string {
