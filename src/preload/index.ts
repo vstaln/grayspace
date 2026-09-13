@@ -168,6 +168,7 @@ const workspace: WorkspaceApi = {
   create: (name: string): Promise<string | { error: string } | null> => ipcRenderer.invoke('workspace:create', name),
   rename: (path: string, name: string): Promise<RecentDir[] | { error: string }> => ipcRenderer.invoke('workspace:rename', path, name),
   codeWorkspaces: () => ipcRenderer.invoke('workspace:code-workspaces'),
+  codeWorkspaceGroups: () => ipcRenderer.invoke('workspace:code-workspace-groups'),
   createCodeWorkspace: (name?: string) => ipcRenderer.invoke('workspace:create-code', name),
   renameCodeWorkspace: (id: string, name: string) => ipcRenderer.invoke('workspace:rename-code', id, name),
   deleteCodeWorkspace: (id: string) => ipcRenderer.invoke('workspace:delete-code', id),
@@ -185,6 +186,9 @@ const workspace: WorkspaceApi = {
 }
 
 const settings: SettingsApi = {
+  updateState: () => ipcRenderer.invoke('updates:state'),
+  checkUpdates: () => ipcRenderer.invoke('updates:check'),
+  installUpdate: () => ipcRenderer.invoke('updates:install'),
   get: (): Promise<AppSettings> => ipcRenderer.invoke('settings:get'),
   set: (patch: unknown): Promise<AppSettings> => ipcRenderer.invoke('settings:set', patch),
   getBackground: (): Promise<string | null> => ipcRenderer.invoke('settings:get-background'),

@@ -46,6 +46,7 @@ export default function App(): React.JSX.Element {
 
   const [codeStarted, setCodeStarted] = useState(false)
   const codeWorkspaceIdRef = useRef('code-default')
+  const codeWorkspaceFolderRef = useRef<string | null>(null)
   const workspaceViewLoadRef = useRef(0)
 
 
@@ -74,11 +75,17 @@ export default function App(): React.JSX.Element {
     void window.api.workspace.codeWorkspaces().then((state) => {
       if (!mounted) return
       codeWorkspaceIdRef.current = state?.activeId ?? 'code-default'
+      codeWorkspaceFolderRef.current = state?.folder ?? null
       restoreWorkspaceView(codeWorkspaceIdRef.current)
     }).catch(() => {})
     const offWorkspace = window.api.workspace.onCodeWorkspaceChange((state) => {
+      const scopeChanged =
+        codeWorkspaceIdRef.current !== (state?.activeId ?? 'code-default') ||
+        codeWorkspaceFolderRef.current !== (state?.folder ?? null)
       codeWorkspaceIdRef.current = state?.activeId ?? 'code-default'
-      restoreWorkspaceView(codeWorkspaceIdRef.current)
+      codeWorkspaceFolderRef.current = state?.folder ?? null
+      // Renaming a workspace changes its label, not the saved view slot.
+      if (scopeChanged) restoreWorkspaceView(codeWorkspaceIdRef.current)
     })
     const offCode = window.api.code.onChange((snap) => {
       if ((snap?.sessions ?? []).length > 0) setCodeStarted((prev) => prev || true)
@@ -1216,22 +1223,15 @@ function OrcSpaceCanvas({
 
 
 
-  const maximizedWidgets = useMemo(
-    () => widgets.filter((w) => w.maximized && w.kind !== 'browser'),
-    [widgets]
-  )
-  // Keep browser webviews under one React parent while maximizing. Moving a
-  // webview between the world and overlay trees destroys its guest contents,
-  // which makes an actively playing video disappear.
-  const inWorldWidgets = useMemo(
-    () => renderableWidgets.filter((w) => !w.maximized || w.kind === 'browser'),
-    [renderableWidgets]
-  )
-
+  // Keep every widget under one React parent while maximizing. Moving a
+  // terminal between the world and overlay trees destroys xterm and forces a
+  // PTY reconnect; moving a webview does the same to its guest process. The
+  // maximized geometry below is expressed in world coordinates so the
+  // existing camera transform still lands it on the app viewport.
   const widgetStyles = useMemo(() => {
     const styles = new Map<string, React.CSSProperties>()
-    for (const widget of inWorldWidgets) {
-      if (widget.maximized && widget.kind === 'browser') {
+    for (const widget of renderableWidgets) {
+      if (widget.maximized) {
         const zoom = camera.zoom || 1
         styles.set(widget.id, {
           left: -camera.x / zoom,
@@ -1251,7 +1251,7 @@ function OrcSpaceCanvas({
       })
     }
     return styles
-  }, [inWorldWidgets, camera.x, camera.y, camera.zoom, mainSize.w, mainSize.h])
+  }, [renderableWidgets, camera.x, camera.y, camera.zoom, mainSize.w, mainSize.h])
 
 
 
@@ -1390,7 +1390,7 @@ function OrcSpaceCanvas({
         {
 }
         <div className="absolute inset-0 h-px w-px origin-top-left" style={worldTransform}>
-          {inWorldWidgets.map((w) => (
+          {renderableWidgets.map((w) => (
             <WidgetFrame
               key={w.id}
               widget={w}
@@ -1404,17 +1404,6 @@ function OrcSpaceCanvas({
         </div>
         {
 }
-        {maximizedWidgets.map((w) => (
-          <WidgetFrame
-            key={w.id}
-            widget={w}
-            active={w.z === topZ.current}
-            editing={editingId === w.id}
-            style={MAXIMIZED_STYLE}
-            {...widgetHandlers(w.id)}
-            workspaceDir={workspaceDir}
-          />
-        ))}
         {canvasNotice && (
           <div role="status" className="pointer-events-none absolute bottom-20 left-1/2 z-[300] -translate-x-1/2 rounded-[10px] border border-line bg-bg-panel/95 px-3 py-1.5 text-[11px] text-text shadow-lg">
             {canvasNotice}
@@ -1514,4 +1503,3 @@ function clamp(value: number, min: number, max: number): number {
 
 
 
-const MAXIMIZED_STYLE: React.CSSProperties = { left: 0, top: TITLE_BAR_HEIGHT, right: 0, bottom: 0, zIndex: 200 }

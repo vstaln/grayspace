@@ -44,6 +44,18 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
   })
 
   ipcMain.handle('workspace:code-workspaces', () => deps.state.codeWorkspaceState(deps.getWorkspaceDir()))
+  ipcMain.handle('workspace:code-workspace-groups', () => {
+    const current = deps.getWorkspaceDir()
+    const recent = deps.state.get().recent
+    const folders = current && !recent.some((entry) => entry.path === current)
+      ? [{ path: current, name: pathModule.basename(current) || current }, ...recent]
+      : recent
+    return folders.map((entry) => ({
+      ...deps.state.codeWorkspaceState(entry.path),
+      folder: entry.path,
+      name: entry.name
+    }))
+  })
   ipcMain.handle('workspace:create-code', (_e, rawName: unknown) => {
     const folder = deps.getWorkspaceDir()
     const result = deps.state.createCodeWorkspace(folder, typeof rawName === 'string' ? rawName : undefined)

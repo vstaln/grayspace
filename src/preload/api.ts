@@ -58,6 +58,11 @@ export interface CodeWorkspaceState {
   folder: string | null
 }
 
+export interface CodeWorkspaceGroup extends CodeWorkspaceState {
+  folder: string
+  name: string
+}
+
 export interface WorkspaceApi {
   getDir(): Promise<string | null>
   pickDir(): Promise<string | null>
@@ -65,6 +70,7 @@ export interface WorkspaceApi {
   create(name: string): Promise<string | { error: string } | null>
   rename(path: string, name: string): Promise<RecentDir[] | { error: string }>
   codeWorkspaces(): Promise<CodeWorkspaceState>
+  codeWorkspaceGroups(): Promise<CodeWorkspaceGroup[]>
   createCodeWorkspace(name?: string): Promise<CodeWorkspace | { error: string }>
   renameCodeWorkspace(id: string, name: string): Promise<CodeWorkspaceState | { error: string }>
   deleteCodeWorkspace(id: string): Promise<CodeWorkspaceState | { error: string }>
@@ -112,7 +118,18 @@ export interface AppSettings {
   favoriteTerminalNames?: string[]
 }
 
+export interface AppUpdateState {
+  status: 'idle' | 'disabled' | 'checking' | 'current' | 'downloading' | 'ready' | 'installing' | 'error'
+  currentVersion: string
+  version?: string
+  percent?: number
+  message?: string
+}
+
 export interface SettingsApi {
+  updateState(): Promise<AppUpdateState>
+  checkUpdates(): Promise<AppUpdateState>
+  installUpdate(): Promise<boolean>
   get(): Promise<AppSettings>
   set(
     patch: Partial<

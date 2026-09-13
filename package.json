@@ -49,6 +49,12 @@
   "build": {
     "appId": "com.orcspace.app",
     "productName": "OrcSpace",
+    "publish": {
+      "provider": "github",
+      "owner": "orcspace",
+      "repo": "Orcspace-Uptade",
+      "releaseType": "release"
+    },
     "npmRebuild": false,
     "afterSign": "scripts/notarize.mjs",
     "afterPack": "scripts/release-security.cjs",

@@ -1,6 +1,7 @@
 import { app, protocol } from 'electron'
 import * as fs from 'fs'
 import { join } from 'path'
+import { registerUpdater } from './updater.ts'
 
 
 export const IS_MAC = process.platform === 'darwin'
@@ -102,15 +103,6 @@ export function requestInstanceLock(): boolean {
 }
 
 export function initAutoUpdater(): void {
-  if (!app.isPackaged) return
-  import('electron-updater')
-    .then(({ autoUpdater }) => {
-      autoUpdater.logger = console
-      autoUpdater.autoDownload = true
-      autoUpdater.autoInstallOnAppQuit = true
-      autoUpdater.checkForUpdatesAndNotify().catch((err: unknown) => {
-        console.warn('Auto-updater check failed:', err)
-      })
-    })
-    .catch(() => {})
+  // Checks are initiated from Settings; register IPC in development too.
+  registerUpdater()
 }

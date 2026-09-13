@@ -75,12 +75,15 @@ test('widgets maximize and rename', async () => {
   const id = await waitForTerminalShell(ctx, page)
   const frame = terminalFrame(page)
   const fullHeight = await frame.evaluate((el) => (el as HTMLElement).offsetHeight)
+  const terminal = frame.getByTestId('terminal-xterm')
+  await terminal.evaluate((element) => element.setAttribute('data-mount-marker', 'kept'))
 
 
   await frame.getByTestId('widget-maximize').click()
   await expect
     .poll(() => frame.evaluate((el) => (el as HTMLElement).offsetHeight))
     .toBeGreaterThan(fullHeight)
+  await expect(terminal).toHaveAttribute('data-mount-marker', 'kept')
   await frame.getByTestId('widget-maximize').click()
   await expect.poll(() => frame.evaluate((el) => (el as HTMLElement).offsetHeight)).toBeCloseTo(fullHeight, 0)
 
@@ -105,8 +108,15 @@ test('maximizing a browser keeps its webview mounted', async () => {
   const webview = frame.locator('webview')
   await expect(webview).toHaveCount(1)
   await webview.evaluate((element) => element.setAttribute('data-mount-marker', 'kept'))
+  const before = await frame.boundingBox()
+  expect(before).not.toBeNull()
 
   await frame.getByTestId('widget-maximize').click()
+  await expect.poll(async () => (await frame.boundingBox())?.width ?? 0).toBeGreaterThan((before?.width ?? 0) * 1.5)
+  await expect.poll(async () => (await frame.boundingBox())?.height ?? 0).toBeGreaterThan((before?.height ?? 0) * 1.5)
+  const after = await frame.boundingBox()
+  expect(after?.width ?? 0).toBeGreaterThan((before?.width ?? 0) * 1.5)
+  expect(after?.height ?? 0).toBeGreaterThan((before?.height ?? 0) * 1.5)
   await expect(webview).toHaveAttribute('data-mount-marker', 'kept')
 
   await frame.getByTestId('widget-maximize').click()

@@ -1,14 +1,16 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Code2, FolderOpen, FolderPlus, Palette, Pencil, Pin, Plus, Settings, Trash2, UserRound, X } from 'lucide-react'
-import type { CodeWorkspaceState, RecentDir } from '../../../preload/index.d'
+import type { CodeWorkspaceGroup, RecentDir } from '../../../preload/index.d'
 import type { WorkView } from './TitleBar'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { THEMES, useTheme, wallpaperBackgroundImage } from '../theme'
 import { useSettings } from '../hooks/useSettings'
 import { VerifiedBadge } from './VerifiedBadge'
+import { AppUpdates } from './AppUpdates'
 import { useConfirm } from './ConfirmDialog'
 import { MAX_FAVORITE_TERMINAL_NAMES, normalizeTerminalName, normalizeTerminalNameList } from '../../../main/terminalNames'
+import { getCodeSessionCount, onCodeSessionCount } from '../lib/codeSessions'
 
 interface Props {
   workspaceDir: string | null
@@ -550,6 +552,7 @@ export function SettingsModal({
               </div>
             )}
 
+            <AppUpdates />
             {(notice || settingsError) && (
               <div className="flex flex-col gap-1.5">
                 {notice && <p role="status" aria-live="polite" className="text-[11px] text-text-faint">{notice}</p>}
@@ -598,7 +601,7 @@ export default React.memo(function Sidebar({
   const { settings } = useSettings()
   const confirm = useConfirm()
   const [recent, setRecent] = useState<RecentDir[]>([])
-  const [codeWorkspaceState, setCodeWorkspaceState] = useState<CodeWorkspaceState>({ workspaces: [], activeId: 'code-default', folder: null })
+  const [codeWorkspaceGroups, setCodeWorkspaceGroups] = useState<CodeWorkspaceGroup[]>([])
   const [foldersOpen, setFoldersOpen] = useState(false)
   const [foldersError, setFoldersError] = useState<string | null>(null)
   const [creatingWorkspace, setCreatingWorkspace] = useState(false)
@@ -609,19 +612,43 @@ export default React.memo(function Sidebar({
   const avatarInitials = avatarName.slice(0, 2).toUpperCase()
   const expanded = activeView !== 'canvas'
 
+  /**
+   * Whether Code has anything running.
+   *
+   * The workspace panel is hidden until the first session: before that there
+   * is nothing to save a workspace *of*, and it repeats the folder line the
+   * launcher already shows, so the same choice appears twice in two places.
+   * CodeView owns the count and the sidebar subscribes, rather than App
+   * passing it down: App's `codeStarted` means "Code was opened", which is a
+   * different thing. A subscription rather than an event, because the two
+   * components do not mount in a fixed order — see lib/codeSessions.
+   */
+  const [hasCodeSessions, setHasCodeSessions] = useState(getCodeSessionCount() > 0)
+  useEffect(() => onCodeSessionCount((count) => setHasCodeSessions(count > 0)), [])
+
+
+  const refreshCodeWorkspaceGroups = useCallback((): void => {
+    void window.api.workspace.codeWorkspaceGroups().then(setCodeWorkspaceGroups).catch(() => {})
+  }, [])
 
   useEffect(() => {
     void window.api.workspace
       .recent()
       .then(setRecent)
       .catch((err) => console.warn('workspace:recent failed', err))
-    return window.api.workspace.onRecentChange(setRecent)
-  }, [])
+    return window.api.workspace.onRecentChange((next) => {
+      setRecent(next)
+      refreshCodeWorkspaceGroups()
+    })
+  }, [refreshCodeWorkspaceGroups])
 
   useEffect(() => {
-    void window.api.workspace.codeWorkspaces().then(setCodeWorkspaceState).catch(() => {})
-    return window.api.workspace.onCodeWorkspaceChange(setCodeWorkspaceState)
-  }, [])
+    void window.api.workspace.codeWorkspaces().catch(() => {})
+    refreshCodeWorkspaceGroups()
+    return window.api.workspace.onCodeWorkspaceChange(() => {
+      refreshCodeWorkspaceGroups()
+    })
+  }, [refreshCodeWorkspaceGroups])
 
   useEffect(() => {
     if (!foldersOpen) return
@@ -689,17 +716,24 @@ export default React.memo(function Sidebar({
     }
   }
 
-  const openCreateWorkspace = (): void => {
+  const openCreateWorkspace = (folder = workspaceDir): void => {
     setFoldersOpen(false)
     setFoldersError(null)
-    void createWorkspace()
+    void createWorkspace(folder)
   }
 
-  const createWorkspace = async (): Promise<void> => {
+  const createWorkspace = async (folder: string | null): Promise<void> => {
     if (creatingWorkspace) return
     setCreatingWorkspace(true)
     try {
       window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
+      if (folder && folder !== workspaceDir) {
+        const opened = await window.api.workspace.openRecent(folder)
+        if (opened && typeof opened === 'object' && 'error' in opened) {
+          setFoldersError(opened.error)
+          return
+        }
+      }
       const result = await window.api.workspace.createCodeWorkspace()
       if (result && typeof result === 'object' && 'error' in result) {
         setFoldersError(result.error)
@@ -715,13 +749,13 @@ export default React.memo(function Sidebar({
     }
   }
 
-  const [renameTarget, setRenameTarget] = useState<null | { kind: 'folder' | 'code'; id: string; current: string }>(null)
+  const [renameTarget, setRenameTarget] = useState<null | { kind: 'folder' | 'code'; id: string; current: string; folder?: string }>(null)
   const [renameValue, setRenameValue] = useState('')
   const renameRef = useRef<HTMLFormElement>(null)
   useFocusTrap(renameRef, !!renameTarget)
 
-  const openRename = (kind: 'folder' | 'code', id: string, currentName: string): void => {
-    setRenameTarget({ kind, id, current: currentName })
+  const openRename = (kind: 'folder' | 'code', id: string, currentName: string, folder?: string): void => {
+    setRenameTarget({ kind, id, current: currentName, folder })
     setRenameValue(currentName)
   }
 
@@ -742,6 +776,17 @@ export default React.memo(function Sidebar({
         }
         setFoldersError(null)
       } else {
+        // Switch folders only on save, not when the dialog opens: opening
+        // rename on another folder must not move the user there if they cancel.
+        const targetFolder = renameTarget.folder
+        if (targetFolder && targetFolder !== workspaceDir) {
+          window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
+          const opened = await window.api.workspace.openRecent(targetFolder)
+          if (opened && typeof opened === 'object' && 'error' in opened) {
+            setFoldersError(opened.error)
+            return
+          }
+        }
         const result = await window.api.workspace.renameCodeWorkspace(renameTarget.id, nextName)
         if ('error' in result) {
           setFoldersError(result.error)
@@ -757,19 +802,31 @@ export default React.memo(function Sidebar({
     }
   }
 
-  const renameCodeWorkspace = (id: string, currentName: string): void => {
-    openRename('code', id, currentName)
+  const renameCodeWorkspace = (folder: string, id: string, currentName: string): void => {
+    openRename('code', id, currentName, folder)
   }
 
-  const deleteCodeWorkspace = async (id: string, name: string): Promise<void> => {
+  const deleteCodeWorkspace = async (folder: string, id: string, name: string): Promise<void> => {
     const ok = await confirm(`Delete workspace “${name}”? Its saved sessions will no longer be available.`, {
       title: 'Delete workspace',
       danger: true,
       confirmLabel: 'Delete'
     })
     if (!ok) return
-    if (id === codeWorkspaceState.activeId) window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
+    // Flushing saves the mounted sessions before the scope moves. Deleting a
+    // workspace that is neither in this folder nor active changes neither, so
+    // there is nothing to flush — skip the save and the reload it would cause.
+    const activeId = codeWorkspaceGroups.find((group) => group.folder === folder)?.activeId
+    const scopeMoves = folder !== workspaceDir || id === activeId
+    if (scopeMoves) window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
     try {
+      if (folder !== workspaceDir) {
+        const opened = await window.api.workspace.openRecent(folder)
+        if (opened && typeof opened === 'object' && 'error' in opened) {
+          setFoldersError(opened.error)
+          return
+        }
+      }
       const result = await window.api.workspace.deleteCodeWorkspace(id)
       if ('error' in result) setFoldersError(result.error)
     } catch (err) {
@@ -777,10 +834,18 @@ export default React.memo(function Sidebar({
     }
   }
 
-  const selectCodeWorkspace = async (id: string): Promise<void> => {
-    if (id === codeWorkspaceState.activeId) return
+  const selectCodeWorkspace = async (folder: string, id: string): Promise<void> => {
+    const activeId = codeWorkspaceGroups.find((group) => group.folder === folder)?.activeId
+    if (folder === workspaceDir && id === activeId) return
     window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
     try {
+      if (folder !== workspaceDir) {
+        const opened = await window.api.workspace.openRecent(folder)
+        if (opened && typeof opened === 'object' && 'error' in opened) {
+          setFoldersError(opened.error)
+          return
+        }
+      }
       const result = await window.api.workspace.selectCodeWorkspace(id)
       if ('error' in result) setFoldersError(result.error)
     } catch (err) {
@@ -924,69 +989,78 @@ export default React.memo(function Sidebar({
   const renderExpanded = (): React.JSX.Element => {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex h-11 flex-none items-center justify-between border-b border-line px-3">
-          <span className="text-[11px] font-semibold tracking-[0.08em] text-text-faint uppercase">Workspaces</span>
-          <button
-            type="button"
-            aria-label="Create workspace"
-            title="Create workspace"
-            data-testid="workspace-create"
-            onClick={openCreateWorkspace}
-            className="grid h-9 w-9 place-items-center rounded-[8px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
-          >
-            <Plus size={15} />
-          </button>
+        <div className="flex h-11 flex-none items-center border-b border-line px-3">
+          <span className="text-[11px] font-semibold tracking-[0.08em] text-text-faint uppercase">Code</span>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-          <div className="mb-1 px-2 text-[10px] font-semibold tracking-[0.08em] text-text-faint uppercase">Saved</div>
-          <div className="space-y-1">
-            {codeWorkspaceState.workspaces.map((workspace) => {
-              const current = workspace.id === codeWorkspaceState.activeId
+          <div className="space-y-3">
+            {codeWorkspaceGroups.map((group) => {
+              const currentFolder = group.folder === workspaceDir
               return (
-                <div key={workspace.id} className={`group flex min-w-0 items-center rounded-[8px] border transition-colors ${current ? 'border-line bg-bg-hover' : 'border-transparent hover:bg-bg-hover'}`}>
-                  <button
-                    type="button"
-                    data-testid={current ? 'current-workspace' : undefined}
-                    aria-current={current ? 'page' : undefined}
-                    className={`flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[8px] px-2 text-left text-[11px] outline-none focus-visible:ring-1 focus-visible:ring-line ${current ? 'text-text' : 'text-text-dim'}`}
-                    onClick={() => void selectCodeWorkspace(workspace.id)}
-                  >
-                    <Code2 size={13} className="flex-none" />
-                    <span className="min-w-0 truncate">{workspace.name}</span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`Rename ${workspace.name}`}
-                    title="Rename workspace"
-                    className="grid h-9 w-9 flex-none place-items-center rounded-[8px] text-text-faint opacity-0 transition-colors group-hover:opacity-100 hover:bg-bg-raise hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
-                    onClick={() => void renameCodeWorkspace(workspace.id, workspace.name)}
-                  >
-                    <Pencil size={12} />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`Delete ${workspace.name}`}
-                    title="Delete workspace"
-                    className="mr-0.5 grid h-9 w-9 flex-none place-items-center rounded-[8px] text-text-faint opacity-0 transition-colors group-hover:opacity-100 hover:bg-bg-raise hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
-                    onClick={() => void deleteCodeWorkspace(workspace.id, workspace.name)}
-                  >
-                    <Trash2 size={12} strokeWidth={1.8} />
-                  </button>
+                <div key={group.folder} className="min-w-0">
+                  <div className="group/folder flex h-9 items-center gap-1 rounded-[8px] px-2" title={group.folder}>
+                    <FolderOpen size={13} className={`flex-none ${currentFolder ? 'text-text' : 'text-text-faint'}`} />
+                    <span className={`min-w-0 flex-1 truncate text-[11px] font-semibold ${currentFolder ? 'text-text' : 'text-text-dim'}`}>
+                      {group.name}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={`Add workspace to ${group.name}`}
+                      title="Add workspace"
+                      data-testid={currentFolder ? 'workspace-create' : undefined}
+                      disabled={creatingWorkspace}
+                      onClick={() => openCreateWorkspace(group.folder)}
+                      className="grid h-7 w-7 flex-none place-items-center rounded-[7px] text-text-faint transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line disabled:opacity-40"
+                    >
+                      <Plus size={13} />
+                    </button>
+                  </div>
+                  <div className="ml-[13px] border-l border-line-soft pl-2">
+                    {group.workspaces.map((workspace) => {
+                      const current = currentFolder && workspace.id === group.activeId
+                      return (
+                        <div key={workspace.id} className={`group flex min-w-0 items-center rounded-[8px] transition-colors ${current ? 'bg-bg-hover' : 'hover:bg-bg-hover'}`}>
+                          <button
+                            type="button"
+                            data-testid={current ? 'current-workspace' : undefined}
+                            aria-current={current ? 'page' : undefined}
+                            className={`flex h-8 min-w-0 flex-1 items-center gap-2 rounded-[8px] px-2 text-left text-[11px] outline-none focus-visible:ring-1 focus-visible:ring-line ${current ? 'text-text' : 'text-text-dim'}`}
+                            onClick={() => void selectCodeWorkspace(group.folder, workspace.id)}
+                          >
+                            <Code2 size={12} className="flex-none" />
+                            <span className="min-w-0 truncate">{workspace.name}</span>
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`Rename ${workspace.name}`}
+                            title="Rename workspace"
+                            className="grid h-8 w-7 flex-none place-items-center rounded-[7px] text-text-faint opacity-0 transition-colors group-hover:opacity-100 hover:bg-bg-raise hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+                            onClick={() => void renameCodeWorkspace(group.folder, workspace.id, workspace.name)}
+                          >
+                            <Pencil size={11} />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`Delete ${workspace.name}`}
+                            title="Delete workspace"
+                            className="mr-0.5 grid h-8 w-7 flex-none place-items-center rounded-[7px] text-text-faint opacity-0 transition-colors group-hover:opacity-100 hover:bg-bg-raise hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+                            onClick={() => void deleteCodeWorkspace(group.folder, workspace.id, workspace.name)}
+                          >
+                            <Trash2 size={11} strokeWidth={1.8} />
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
               )
             })}
-            {!codeWorkspaceState.workspaces.length && (
+            {!codeWorkspaceGroups.length && (
               <div className="rounded-[8px] border border-line bg-bg-panel px-3 py-4 text-center text-[11px] text-text-faint">
-                No saved workspaces
+                Open a folder to create your first workspace
               </div>
             )}
           </div>
-          {workspaceDir && (
-            <div className="mt-3 rounded-[8px] border border-line bg-bg-panel px-3 py-2.5" title={workspaceDir}>
-              <div className="text-[9px] font-semibold tracking-[0.08em] text-text-faint uppercase">Project folder</div>
-              <div className="mt-1 truncate text-[11px] text-text-dim">{dirName}</div>
-            </div>
-          )}
           {foldersError && <div className="px-2 pt-3 text-[10px] leading-snug text-danger">{foldersError}</div>}
         </div>
         <button
@@ -997,7 +1071,7 @@ export default React.memo(function Sidebar({
           }}
           className="mx-2 mb-2 flex h-9 flex-none items-center justify-center gap-2 rounded-[8px] border border-line bg-bg-hover px-3 text-[11px] font-medium text-text-dim transition-colors hover:bg-bg-raise hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
         >
-          <FolderPlus size={14} /> Open folder
+          <FolderPlus size={14} /> New folder
         </button>
       </div>
     )
@@ -1080,7 +1154,7 @@ export default React.memo(function Sidebar({
           {avatarInitials}
         </span>
       </button>}
-      {expanded ? renderExpanded() : (
+      {expanded ? (hasCodeSessions ? renderExpanded() : <div className="min-h-0 flex-1" />) : (
         <>
           <div className="flex-1" />
           <div className="flex flex-col gap-1.5">
@@ -1118,7 +1192,10 @@ export default React.memo(function Sidebar({
           >
             <span className="grid h-7 w-7 flex-none place-items-center rounded-full border border-line bg-bg-panel text-[9px] font-bold text-text">{avatarInitials}</span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[11px] font-medium text-text">{avatarName}</span>
+              <span className="flex items-center gap-1 min-w-0">
+                <span className="truncate text-[11px] font-medium text-text">{avatarName}</span>
+                <VerifiedBadge size={12} />
+              </span>
               <span className="block text-[9px] text-text-faint">Account</span>
             </span>
           </button>

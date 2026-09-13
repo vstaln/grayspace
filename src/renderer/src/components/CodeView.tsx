@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Maximize2, Minimize2, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
+import { FolderOpen, Maximize2, Minimize2, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
 import TerminalWidget, { forgetTerminalViewport } from './TerminalWidget'
 import BrowserWidget from './BrowserWidget'
 import CodeLauncher, { CODE_AGENTS, CODE_LAUNCH_COUNTS, CodeAgent } from './CodeLauncher'
 import { clearInitialCommand, queueInitialCommand, queueInitialCommandOnce } from '../lib/pendingTerminalCommands'
 import { forgetAgentSelection } from './WidgetFrame'
 import { attachmentAgent } from '../lib/terminalAttachments'
+import { setCodeSessionCount } from '../lib/codeSessions'
 
 interface Session {
   id: string
@@ -287,6 +288,14 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
   const sessionsRef = useRef<Session[]>(sessions)
   sessionsRef.current = sessions
   const [launcherOpen, setLauncherOpen] = useState(false)
+  /**
+   * The folder sessions run in. `null` while it is still being read, so the
+   * launcher is not shown for a frame and then replaced by the folder picker —
+   * which reads as a flash of the wrong screen on every open.
+   */
+  const [workspaceDir, setWorkspaceDir] = useState<string | null | undefined>(undefined)
+  const [recentDirs, setRecentDirs] = useState<{ path: string; name?: string }[]>([])
+  const [pickingDir, setPickingDir] = useState(false)
   const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([])
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null)
   const [agentCounts, setAgentCounts] = useState<Record<string, number>>({})
@@ -420,6 +429,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
   const hydrationRunRef = useRef(0)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const codeWorkspaceIdRef = useRef('code-default')
+  const codeWorkspaceFolderRef = useRef<string | null>(null)
   const codeChangeSeqRef = useRef(0)
   const dirtyRef = useRef(false)
 
@@ -522,12 +532,20 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
       .then((state) => {
         if (!mounted) return
         codeWorkspaceIdRef.current = state.activeId
+        codeWorkspaceFolderRef.current = state.folder
         hydrate()
       })
       .catch(() => { if (mounted) hydrate() })
     const unbindWorkspace = window.api.workspace.onCodeWorkspaceChange((state) => {
+      const scopeChanged =
+        codeWorkspaceIdRef.current !== state.activeId ||
+        codeWorkspaceFolderRef.current !== state.folder
       codeWorkspaceIdRef.current = state.activeId
-      hydrate()
+      codeWorkspaceFolderRef.current = state.folder
+      // A rename also broadcasts the workspace state. Keep mounted sessions
+      // alive for metadata-only changes; hydrate only when the saved slot
+      // actually changes.
+      if (scopeChanged) hydrate()
     })
     return () => {
       mounted = false
@@ -669,6 +687,63 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
       return [...current, ...created.slice(0, room)]
     })
   }, [markLocalChange])
+
+  // The folder, and anything the user has opened before. Both are read once
+  // and kept current, because the picker below is the only way into Code when
+  // no folder is set and a stale list there is a dead end.
+  useEffect(() => {
+    let alive = true
+    void window.api.workspace.getDir().then((dir) => {
+      if (alive) setWorkspaceDir(dir)
+    }).catch(() => {
+      if (alive) setWorkspaceDir(null)
+    })
+    void window.api.workspace.recent().then((dirs) => {
+      if (alive) setRecentDirs(dirs)
+    }).catch(() => {})
+    const offDir = window.api.workspace.onDirChange((dir) => setWorkspaceDir(dir))
+    const offRecent = window.api.workspace.onRecentChange((dirs) => setRecentDirs(dirs))
+    return () => {
+      alive = false
+      offDir()
+      offRecent()
+    }
+  }, [])
+
+  /**
+   * Tells the sidebar whether Code has anything running.
+   *
+   * The workspace panel is meaningless before the first session — there is
+   * nothing to save a workspace *of*, and it repeats the folder line the
+   * launcher already shows. An event rather than a prop because App tracks
+   * "Code was opened", not "Code has sessions", and threading a second meaning
+   * through it would make both harder to read.
+   */
+  useEffect(() => {
+    setCodeSessionCount(sessions.length)
+  }, [sessions.length])
+
+  const chooseWorkspace = useCallback(async (): Promise<void> => {
+    if (pickingDir) return
+    setPickingDir(true)
+    try {
+      const dir = await window.api.workspace.pickDir()
+      if (dir) setWorkspaceDir(dir)
+    } catch {
+      // Cancelling the OS dialog is the common case and is not an error.
+    } finally {
+      setPickingDir(false)
+    }
+  }, [pickingDir])
+
+  const openRecentWorkspace = useCallback(async (path: string): Promise<void> => {
+    try {
+      const result = await window.api.workspace.openRecent(path)
+      if (typeof result === 'string') setWorkspaceDir(result)
+    } catch {
+      // The folder may have been moved or deleted; the list refreshes itself.
+    }
+  }, [])
 
   const launchWorkspace = useCallback((): void => {
     let remaining = Math.max(0, MAX_CODE_SESSIONS - sessionsRef.current.length)
@@ -876,78 +951,181 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
                 role="separator" aria-label="Resize rows" />
             </>}
             {sessions.length === 0 && (
-              <div className="flex min-h-full flex-1 justify-center overflow-auto bg-[#121212] px-6 pb-10">
-                <div className="w-full max-w-[760px] translate-y-4 pt-[78px]">
-                  <h1 className="text-[22px] font-semibold tracking-[-0.02em] text-text">Launch your workspace</h1>
-                  <p className="mt-1.5 text-[13px] text-text-faint">Choose the CLIs you want to run together.</p>
-                  <button type="button" onClick={openLauncher}
-                    className="mt-3 rounded-[7px] border border-line px-3 py-2 text-xs text-text-dim hover:bg-bg-hover hover:text-text">
-                    Other CLI
-                  </button>
-
-                  <div className="mb-1.5 mt-8 text-[10px] font-semibold tracking-[0.12em] text-text-faint uppercase">CLI</div>
-                  <div className="mb-5 grid grid-cols-3 gap-1.5">
-                    {INLINE_AGENTS.map((agent) => {
-                      const selected = selectedAgentIds.includes(agent.id)
-                      const Icon = agent.Icon
-                      return (
-                        <button
-                          key={agent.id}
-                          type="button"
-                          aria-pressed={selected}
-                          title={agent.label}
-                          onClick={() => {
-                            setSelectedAgentIds((current) => selected
-                              ? current.filter((id) => id !== agent.id)
-                              : [...current, agent.id])
-                            if (!selected) setActiveAgentId(agent.id)
-                            setAgentCounts((current) => ({ ...current, [agent.id]: current[agent.id] ?? 1 }))
-                          }}
-                          className={`flex h-[52px] items-center gap-3 rounded-[8px] border px-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 hover:border-line hover:bg-bg-hover hover:text-text ${selected ? 'border-accent bg-bg-raise text-text' : 'border-line-soft bg-bg-panel text-text-dim'}`}
-                        >
-                          <span className="grid h-8 w-8 flex-none place-items-center rounded-[6px] bg-[#111] text-text">
-                            <Icon size={16} />
-                          </span>
-                          <span className="truncate text-[12px] font-medium">{agent.label}</span>
-                        </button>
-                      )
-                    })}
-                  </div>
-
-                  {selectedAgentIds.length > 0 ? (
+              <div className="flex min-h-full flex-1 items-center justify-center overflow-auto bg-bg-raise px-6 py-12">
+                <div className="w-full max-w-[640px]">
+                  {workspaceDir === undefined ? null : !workspaceDir ? (
+                    /*
+                      No folder yet, so there is nothing to launch into and the
+                      agent grid would be a decision the user cannot act on.
+                      The folder comes first, and it is the only thing on screen.
+                    */
                     <>
-                      <div className="mb-1 flex items-center justify-between">
-                        <div className="text-[10px] font-semibold tracking-[0.12em] text-text-faint uppercase">
-                          How many for {INLINE_AGENTS.find((agent) => agent.id === activeAgentId)?.label ?? 'CLI'}
-                        </div>
-                        <span className="text-[11px] text-text-faint">{selectedSessionCount} sessions</span>
-                      </div>
-                      <div className="mb-5 flex flex-wrap gap-1.5">
-                        {CODE_LAUNCH_COUNTS.map((count) => (
-                          <button
-                            key={count}
-                            type="button"
-                            aria-pressed={(agentCounts[activeAgentId ?? ''] ?? 1) === count}
-                            onClick={() => activeAgentId && setAgentCounts((current) => ({ ...current, [activeAgentId]: count }))}
-                            className={`grid h-10 w-11 place-items-center rounded-[7px] border text-[13px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${(agentCounts[activeAgentId ?? ''] ?? 1) === count ? 'border-accent bg-bg-raise text-text' : 'border-line-soft bg-bg-panel text-text-dim hover:border-line hover:text-text'}`}
-                          >
-                            {count}
-                          </button>
-                        ))}
-                      </div>
+                      <h1 className="text-[20px] font-semibold tracking-[-0.01em] text-text">
+                        Choose a folder
+                      </h1>
+                      <p className="mt-1.5 text-[13px] text-text-faint">
+                        Code sessions open inside it.
+                      </p>
+
+                      <button
+                        type="button"
+                        onClick={() => void chooseWorkspace()}
+                        disabled={pickingDir}
+                        data-testid="code-choose-folder"
+                        className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-[11px] bg-text text-[14px] font-medium text-bg transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line disabled:opacity-40"
+                      >
+                        <FolderOpen size={16} />
+                        {pickingDir ? 'Choosing…' : 'Choose folder'}
+                      </button>
+
+                      {recentDirs.length > 0 && (
+                        <>
+                          <div className="mt-9 mb-2.5 text-[11px] font-semibold tracking-[0.08em] text-text-faint uppercase">
+                            Recent
+                          </div>
+                          <div className="space-y-1">
+                            {recentDirs.slice(0, 5).map((dir) => (
+                              <button
+                                key={dir.path}
+                                type="button"
+                                title={dir.path}
+                                onClick={() => void openRecentWorkspace(dir.path)}
+                                className="flex h-11 w-full items-center gap-3 rounded-[9px] border border-line-soft bg-bg-panel px-3.5 text-left transition-colors hover:border-line hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+                              >
+                                <FolderOpen size={15} className="flex-none text-text-faint" />
+                                <span className="truncate text-[13px] text-text">
+                                  {dir.name || dir.path.split(/[\\/]/).filter(Boolean).pop() || dir.path}
+                                </span>
+                                <span className="ml-auto truncate pl-4 text-[12px] text-text-faint">
+                                  {dir.path}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
                     </>
                   ) : (
-                    <div className="mb-5 rounded-[7px] border border-line-soft bg-bg-panel px-3 py-3 text-[12px] text-text-faint">Choose a CLI first.</div>
-                  )}
+                    <>
+                      {/*
+                        The folder is settled, so it reads as a quiet line
+                        rather than a control competing with the agent grid.
+                      */}
+                      <div className="mb-8 flex items-center gap-2.5">
+                        <FolderOpen size={15} className="flex-none text-text-faint" />
+                        <span className="min-w-0 truncate text-[13px] text-text-dim" title={workspaceDir}>
+                          {workspaceDir.split(/[\\/]/).filter(Boolean).pop() || workspaceDir}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void chooseWorkspace()}
+                          className="ml-auto flex-none rounded-[7px] px-2.5 py-1.5 text-[12px] text-text-faint transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+                        >
+                          Change
+                        </button>
+                      </div>
 
-                  <button
-                    type="button"
-                    disabled={selectedAgentIds.length === 0 || selectedSessionCount === 0}
-                    onClick={launchWorkspace}
-                    className="flex h-12 w-full items-center justify-center gap-1.5 rounded-[9px] bg-white text-[14px] font-medium text-black transition hover:bg-white/90 active:scale-[.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:cursor-not-allowed disabled:bg-[#666] disabled:text-black/80"
-                  >
-                    <Plus size={15} /> Launch {selectedSessionCount} sessions
-                  </button>
+                      <div className="mb-2 text-[11px] font-semibold tracking-[0.08em] text-text-faint uppercase">
+                        Agent
+                      </div>
+                      <div className="mb-8 grid grid-cols-3 gap-2">
+                        {INLINE_AGENTS.map((agent) => {
+                          const selected = selectedAgentIds.includes(agent.id)
+                          const Icon = agent.Icon
+                          return (
+                            <button
+                              key={agent.id}
+                              type="button"
+                              aria-pressed={selected}
+                              title={agent.label}
+                              onClick={() => {
+                                setSelectedAgentIds((current) => selected
+                                  ? current.filter((id) => id !== agent.id)
+                                  : [...current, agent.id])
+                                if (!selected) setActiveAgentId(agent.id)
+                                setAgentCounts((current) => ({ ...current, [agent.id]: current[agent.id] ?? 1 }))
+                              }}
+                              className={`flex h-11 items-center gap-2.5 rounded-[9px] border px-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line ${
+                                selected
+                                  ? 'border-line bg-bg-hover text-text'
+                                  : 'border-line-soft bg-bg-panel text-text-dim hover:bg-bg-hover hover:text-text'
+                              }`}
+                            >
+                              <span className="flex-none"><Icon size={15} /></span>
+                              <span className="truncate text-[13px]">{agent.label}</span>
+                              {selected && (
+                                <span className="ml-auto h-[7px] w-[7px] flex-none rounded-full bg-text" />
+                              )}
+                            </button>
+                          )
+                        })}
+                      </div>
+
+                      {selectedAgentIds.length > 0 && (
+                        <>
+                          <div className="mb-2 text-[11px] font-semibold tracking-[0.08em] text-text-faint uppercase">
+                            How many
+                          </div>
+                          <div className="mb-8 flex items-center gap-2">
+                            {CODE_LAUNCH_COUNTS.map((count) => {
+                              const current = (agentCounts[activeAgentId ?? ''] ?? 1) === count
+                              return (
+                                <button
+                                  key={count}
+                                  type="button"
+                                  aria-pressed={current}
+                                  onClick={() => activeAgentId && setAgentCounts((c) => ({ ...c, [activeAgentId]: count }))}
+                                  className={`grid h-10 w-10 place-items-center rounded-[8px] border text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line ${
+                                    current
+                                      ? 'border-line bg-bg-hover text-text'
+                                      : 'border-line-soft bg-bg-panel text-text-dim hover:bg-bg-hover hover:text-text'
+                                  }`}
+                                >
+                                  {count}
+                                </button>
+                              )
+                            })}
+                            <span className="ml-2 text-[12px] text-text-faint">
+                              for {INLINE_AGENTS.find((a) => a.id === activeAgentId)?.label ?? 'CLI'}
+                            </span>
+                          </div>
+
+                          <div className="mb-2 text-[11px] font-semibold tracking-[0.08em] text-text-faint uppercase">
+                            Will launch
+                          </div>
+                          <div className="mb-8 space-y-1.5">
+                            {selectedAgentIds.map((id) => {
+                              const agent = INLINE_AGENTS.find((a) => a.id === id)
+                              if (!agent) return null
+                              const Icon = agent.Icon
+                              return (
+                                <div key={id} className="flex h-9 items-center gap-3 px-0.5 text-[13px]">
+                                  <span className="w-5 flex-none text-right text-text-faint">
+                                    {agentCounts[id] ?? 1}
+                                  </span>
+                                  <span className="flex-none text-text-dim"><Icon size={15} /></span>
+                                  <span className="truncate text-text-dim">{agent.label}</span>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </>
+                      )}
+
+                      <button
+                        type="button"
+                        disabled={selectedAgentIds.length === 0 || selectedSessionCount === 0}
+                        onClick={launchWorkspace}
+                        data-testid="code-launch"
+                        className="flex h-12 w-full items-center justify-center gap-2 rounded-[11px] bg-text text-[14px] font-medium text-bg transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line disabled:cursor-not-allowed disabled:opacity-30"
+                      >
+                        <Plus size={16} />
+                        {selectedAgentIds.length === 0
+                          ? 'Choose an agent'
+                          : `Launch ${selectedSessionCount} session${selectedSessionCount === 1 ? '' : 's'}`}
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             )}
