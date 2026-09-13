@@ -11,6 +11,7 @@ pub mod idempotency;
 pub mod journal;
 pub mod jsjson;
 pub mod locks;
+pub mod orchestration;
 pub mod planner;
 pub mod projection;
 pub mod queue;

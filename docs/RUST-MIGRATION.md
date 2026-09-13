@@ -34,7 +34,7 @@ compiles.
 | 1 | State file readers | Rust parses every `workspace-canvas-*.json`, `workspace-code-*.json`, `workspace-board.json`, `orchestration.json` and re-serializes byte-identically | **done** — 88/88 documents |
 | 2 | Projections | Folding the same journal in Rust and TypeScript yields identical canvas and planner snapshots | **done** — canvas on 2244 real entries, planner on a generated fixture |
 | 3 | Command flow | Same command sequence produces the same journal entries, versions, lock decisions and error codes | **done** — speculative overlays (dry run) deliberately deferred |
-| 4 | Control server + `orc` | All 13 route domains answer identically; all ~60 CLI commands produce identical `--json` output | not started |
+| 4 | Control server + `orc` | All 13 route domains answer identically; all ~60 CLI commands produce identical `--json` output | **store done** — orchestration model ported and reading real files; routes and CLI outstanding |
 | 5 | Terminals | Spawn, write, resize, dispose, scrollback persist, UTF-8 and ANSI correctness match; PTY children reaped on crash | partial — `engine.rs` runs under Electron on Windows |
 | 6 | UI | Canvas, 9 widget kinds, CodeView at parity, measured against the stable-60 criterion | not started |
 | 7 | Packaging | Installer, update channel, signing and notarization on Windows and macOS | not started |
@@ -194,3 +194,30 @@ feature rather than an unfinished edge, and nothing in blocks 4-7 depends on
 it. The bus runs commands synchronously — the TypeScript handlers are async
 because they reach the filesystem through Electron, while the migrated stores
 do their own I/O outside the bus.
+
+## Step 4 — the orchestration store (in progress)
+
+Most of `orc` is orchestration, so the store came before the routes. Runs,
+tasks, dispatches, messages and gates are ported, and a real
+`orchestration.json` loads: 5 runs, 8 tasks, 6 dispatches, with every task
+pointing at a run that exists and every dispatch at a task that exists.
+
+The invariants are the reason this block is not mechanical:
+
+- a task is `ready` only when every dependency has **completed**, and settling
+  a dispatch promotes what it unblocked *in the same operation* — a coordinator
+  polling `task-list --ready` must never miss a promotion
+- a task may have one running dispatch and a terminal may run one; both are
+  refused as `conflict`, because two workers on one task is the failure this
+  exists to prevent
+- settling is one-way, so a duplicated `orc done` cannot flip an outcome
+- a settled dispatch stays "unaccounted" until it is explicitly released or
+  retained, which is what makes a coordinator account for finished work
+
+Reading the real file corrected the port twice: runs are `run-N`, not
+`orun-N`, and the id counter is **shared across every kind** — one sequence
+produces `run-1`, `otask-2`, `disp-7`. Restarting it at zero on load would mint
+ids that collide with existing records and overwrite them.
+
+Outstanding in block 4: the 13 control-server route domains and the ~60 `orc`
+commands on top of this store.
