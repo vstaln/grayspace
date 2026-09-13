@@ -29,7 +29,7 @@ fn main() -> Result<()> {
         return run_engine(manager);
     }
     let control = ControlServer::start(manager.clone(), token).map_err(anyhow::Error::msg)?;
-    manager.set_control_url(control.url());
+    manager.set_control_socket(control.socket_path());
     manager.spawn("terminal-1").map_err(anyhow::Error::msg)?;
 
     let options = eframe::NativeOptions {

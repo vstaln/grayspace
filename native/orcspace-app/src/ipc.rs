@@ -18,6 +18,14 @@
 
 use std::path::PathBuf;
 
+/// The environment variable every spawned terminal is told the socket through.
+///
+/// It is not `ORCSPACE_URL`: `cli/orc.mjs` checks the socket path first and
+/// treats `ORCSPACE_URL` as an http address. Putting a pipe path in the URL
+/// variable makes every agent try to reach the control server over HTTP at a
+/// name that is not one — which fails silently, per agent, at spawn time.
+pub const SOCKET_PATH_ENV: &str = "ORCSPACE_SOCKET_PATH";
+
 /// Matches `isDevEnvironment()`: a dev run is anything started by the dev
 /// tooling, so its socket never collides with an installed app's.
 pub fn is_dev_environment() -> bool {
@@ -85,6 +93,36 @@ mod tests {
             assert_eq!(path, r"\\.\pipe\orcspace");
         } else {
             assert!(path.ends_with("orcspace.sock"), "got {path}");
+        }
+    }
+
+    /// Regression: the native app first advertised its socket through
+    /// `ORCSPACE_URL`, which `orc` treats as an http address — so every agent
+    /// it spawned would have failed to reach the control server. Both sides of
+    /// that contract are checked here, against the real CLI, so a rename on
+    /// either side fails a test instead of a fleet.
+    #[test]
+    fn the_cli_reads_the_variable_the_engine_writes() {
+        let cli = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../cli/orc.mjs")
+            .canonicalize();
+        let Ok(cli) = cli else {
+            // Checked out without the CLI: nothing to contradict.
+            return;
+        };
+        let source = std::fs::read_to_string(cli).expect("orc.mjs is readable");
+        assert!(
+            source.contains(SOCKET_PATH_ENV),
+            "cli/orc.mjs no longer reads {SOCKET_PATH_ENV}"
+        );
+        // And it must be preferred over the http fallback, or a stale
+        // ORCSPACE_URL in the environment would win.
+        let socket_at = source.find(SOCKET_PATH_ENV).expect("checked above");
+        if let Some(url_at) = source.find("ORCSPACE_URL") {
+            assert!(
+                socket_at < url_at,
+                "orc.mjs must check the socket path before falling back to a URL"
+            );
         }
     }
 

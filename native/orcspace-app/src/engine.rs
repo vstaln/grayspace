@@ -96,7 +96,7 @@ struct Inner {
     /// immediately instead of polling on a fixed tick.
     events_ready: Condvar,
     token: String,
-    control_url: Mutex<Option<String>>,
+    control_socket: Mutex<Option<String>>,
 }
 
 #[derive(Debug, Default)]
@@ -187,17 +187,19 @@ impl TerminalManager {
                 events: Mutex::new(EventQueue::default()),
                 events_ready: Condvar::new(),
                 token,
-                control_url: Mutex::new(None),
+                control_socket: Mutex::new(None),
             }),
         }
     }
 
-    pub fn set_control_url(&self, url: String) {
-        *lock_recover(&self.inner.control_url) = Some(url);
+    /// Records where the control server is listening, so every terminal this
+    /// manager spawns can be told how to reach it.
+    pub fn set_control_socket(&self, path: String) {
+        *lock_recover(&self.inner.control_socket) = Some(path);
     }
 
-    pub fn control_url(&self) -> Option<String> {
-        lock_recover(&self.inner.control_url).clone()
+    pub fn control_socket(&self) -> Option<String> {
+        lock_recover(&self.inner.control_socket).clone()
     }
 
     pub fn spawn(&self, id: impl Into<String>) -> Result<(), String> {
@@ -251,8 +253,10 @@ impl TerminalManager {
         command.env("ORCSPACE_AGENT_ID", &id);
         command.env("ORCSPACE_TOKEN", &self.inner.token);
         command.env("ORCSPACE_NATIVE", "1");
-        if let Some(url) = self.control_url() {
-            command.env("ORCSPACE_URL", url);
+        // See SOCKET_PATH_ENV: this is deliberately not ORCSPACE_URL, and a
+        // test pins both sides of that contract against the real orc.mjs.
+        if let Some(path) = self.control_socket() {
+            command.env(orcspace_app::ipc::SOCKET_PATH_ENV, path);
         }
         if let Ok(executable) = std::env::current_exe() {
             if let Some(parent) = executable.parent() {
@@ -1136,7 +1140,7 @@ fn encode_terminal_input(text: &str, press_enter: bool) -> Result<Vec<u8>, Strin
 
 #[derive(Clone)]
 pub struct ControlServer {
-    url: String,
+    socket_path: String,
 }
 
 impl ControlServer {
@@ -1217,13 +1221,13 @@ impl ControlServer {
             .recv_timeout(Duration::from_secs(10))
             .map_err(|_| "control server did not start".to_owned())??;
 
-        Ok(Self { url: path })
+        Ok(Self { socket_path: path })
     }
 
-    /// The pipe or socket path the server is listening on. Named `url` for the
-    /// callers that already read it; it is a path, not an http address.
-    pub fn url(&self) -> String {
-        self.url.clone()
+    /// The pipe or socket path the server is listening on. Not an http address:
+    /// there is no port, by design.
+    pub fn socket_path(&self) -> String {
+        self.socket_path.clone()
     }
 }
 
@@ -1544,7 +1548,7 @@ mod tests {
             events: std::sync::Mutex::new(EventQueue::default()),
             events_ready: std::sync::Condvar::new(),
             token: "t".to_owned(),
-            control_url: std::sync::Mutex::new(None),
+            control_socket: std::sync::Mutex::new(None),
         });
 
         super::push_event(&inner, output("term-1", "oldest"));
@@ -1786,8 +1790,12 @@ mod transport_tests {
 
         // The reported address is the socket path, not an http:// URL — there
         // is no port to report.
-        assert_eq!(server.url(), path);
-        assert!(!server.url().starts_with("http"), "got {}", server.url());
+        assert_eq!(server.socket_path(), path);
+        assert!(
+            !server.socket_path().starts_with("http"),
+            "got {}",
+            server.socket_path()
+        );
 
         let response = request(&path, "GET", "/health", "tok", None);
         assert!(response.starts_with("HTTP/1.1 200"), "got {response}");

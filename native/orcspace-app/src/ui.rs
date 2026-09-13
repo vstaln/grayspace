@@ -49,7 +49,7 @@ impl OrcSpaceApp {
             ui.selectable_value(&mut self.tab, Tab::Code, "Code");
             ui.separator();
             ui.label("Rust native runtime");
-            if let Some(url) = self.manager.control_url() {
+            if let Some(url) = self.manager.control_socket() {
                 ui.small(url);
             }
         });
