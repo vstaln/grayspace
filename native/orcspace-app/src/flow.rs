@@ -14,13 +14,15 @@
 //! Handlers are synchronous here. The TypeScript ones are async because they
 //! touch the filesystem through Electron; the migrated stores do their own I/O
 //! outside the bus, so nothing in this port needs to await mid-command. The
-//! queue, rate limiter and speculative overlays of the TypeScript flow are not
-//! ported yet — see docs/RUST-MIGRATION.md.
+//! speculative overlay / dry-run path is not ported yet — see
+//! docs/RUST-MIGRATION.md.
 
 use crate::actors::ActorRegistry;
 use crate::command::{CommandError, CommandResult, ErrorCode};
+use crate::idempotency::IdempotencyCache;
 use crate::journal::JournalEntry;
 use crate::locks::{AcquireInput, LockManager};
+use crate::queue::ActorRateLimiter;
 use crate::resources::{file_resource, parse_resource};
 use crate::schema::{validate_payload, CommandPayloadSchema};
 use crate::versioned::VersionRegistry;
@@ -38,6 +40,9 @@ pub struct Command {
     /// The version the caller believes the target is at. A mismatch is a
     /// conflict — this is what stops a stale reader overwriting a newer write.
     pub base_version: Option<u64>,
+    /// Set by a caller that may retry. A second submission with the same key
+    /// is answered from the cache instead of running the command again.
+    pub idempotency_key: Option<String>,
 }
 
 pub struct HandlerContext<'a> {
@@ -126,6 +131,9 @@ pub struct CommandFlow {
     pub locks: LockManager,
     pub journal: FlowJournal,
     pub versions: VersionRegistry,
+    pub rate_limiter: ActorRateLimiter,
+    pub idempotency: IdempotencyCache,
+    command_counter: u64,
 }
 
 impl CommandFlow {
@@ -136,6 +144,9 @@ impl CommandFlow {
             locks: LockManager::new(None),
             journal: FlowJournal::new(start_seq),
             versions: VersionRegistry::new(versions_scheme),
+            rate_limiter: ActorRateLimiter::default(),
+            idempotency: IdempotencyCache::default(),
+            command_counter: 0,
         }
     }
 
@@ -148,7 +159,73 @@ impl CommandFlow {
         self.definitions.keys().cloned().collect()
     }
 
-    /// Runs one command to completion.
+    /// The public entry point: idempotency, admission control, then `apply`.
+    ///
+    /// The order matters. A retry carrying a known `idempotency_key` is answered
+    /// from the cache *before* the rate limiter sees it — charging a retry for
+    /// work that already happened would punish exactly the caller that behaved
+    /// correctly after a dropped connection.
+    pub fn submit_command(&mut self, mut command: Command, now: i64) -> Outcome {
+        self.command_counter += 1;
+        if command.id.is_none() {
+            command.id = Some(format!("cmd-{now}-{}", self.command_counter));
+        }
+
+        if let Some(key) = command.idempotency_key.clone() {
+            if let Some(crate::idempotency::Entry::Done(result)) = self.idempotency.get(&key, now) {
+                return Outcome {
+                    result: Ok(Accepted {
+                        seq: result["seq"].as_u64().unwrap_or(0),
+                        version: result["version"].as_u64().unwrap_or(0),
+                        data: result["data"].clone(),
+                        command_id: command.id.clone(),
+                    }),
+                };
+            }
+        }
+
+        // The person at the keyboard and the app itself are never throttled;
+        // nor is an unregistered id, which fails as `unknown_actor` a moment
+        // later anyway. The limiter exists to bound a runaway agent loop.
+        let privileged = match self.actors.get(&command.actor_id) {
+            None => true,
+            Some(actor) => matches!(
+                actor.actor_type,
+                crate::actors::ActorType::User | crate::actors::ActorType::System
+            ),
+        };
+        if !privileged && !self.rate_limiter.try_consume(&command.actor_id, 1.0, now) {
+            return Outcome {
+                result: Err(CommandError::new(
+                    ErrorCode::RateLimited,
+                    "429 Rate limit exceeded for actor",
+                )),
+            };
+        }
+
+        let key = command.idempotency_key.clone();
+        let outcome = self.submit(command, now);
+
+        if let Some(key) = key {
+            match &outcome.result {
+                Ok(accepted) => self.idempotency.set(
+                    &key,
+                    json!({
+                        "ok": true,
+                        "seq": accepted.seq,
+                        "version": accepted.version,
+                        "data": accepted.data,
+                    }),
+                    now,
+                ),
+                // A failure is not remembered: the retry should actually retry.
+                Err(_) => self.idempotency.forget(&key),
+            }
+        }
+        outcome
+    }
+
+    /// Runs one command to completion, past admission control.
     ///
     /// Gate order, which callers depend on: unknown command, payload shape,
     /// malformed target, unknown actor, lock held by someone else, stale

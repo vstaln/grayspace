@@ -13,6 +13,7 @@ pub mod jsjson;
 pub mod locks;
 pub mod planner;
 pub mod projection;
+pub mod queue;
 pub mod resources;
 pub mod schema;
 pub mod state;

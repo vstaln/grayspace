@@ -33,7 +33,7 @@ compiles.
 | 0 | Journal hash chain | Rust recomputes every hash in a real `command-journal.ndjson` and matches the recorded value | **done** — 2244/2244 entries |
 | 1 | State file readers | Rust parses every `workspace-canvas-*.json`, `workspace-code-*.json`, `workspace-board.json`, `orchestration.json` and re-serializes byte-identically | **done** — 88/88 documents |
 | 2 | Projections | Folding the same journal in Rust and TypeScript yields identical canvas and planner snapshots | **done** — canvas on 2244 real entries, planner on a generated fixture |
-| 3 | Command flow | Same command sequence produces the same journal entries, versions, lock decisions and error codes | **core done** — locks, versions, actors, schema, idempotency, the apply path; queue, rate limiter and speculative overlays outstanding |
+| 3 | Command flow | Same command sequence produces the same journal entries, versions, lock decisions and error codes | **done** — speculative overlays (dry run) deliberately deferred |
 | 4 | Control server + `orc` | All 13 route domains answer identically; all ~60 CLI commands produce identical `--json` output | not started |
 | 5 | Terminals | Spawn, write, resize, dispose, scrollback persist, UTF-8 and ANSI correctness match; PTY children reaped on crash | partial — `engine.rs` runs under Electron on Windows |
 | 6 | UI | Canvas, 9 widget kinds, CodeView at parity, measured against the stable-60 criterion | not started |
@@ -176,7 +176,21 @@ implementation: `LockManager` renews by mutating `expiresAt` in place, so
 recording a result by reference captured the state at serialization time and
 would have pinned expectations that were never true.
 
-Outstanding in block 3: the priority queue, the per-actor rate limiter and the
-speculative overlay/dry-run path. The bus runs commands synchronously here —
-the TypeScript handlers are async because they reach the filesystem through
-Electron, while the migrated stores do their own I/O outside the bus.
+Admission control completes the block: the per-actor token bucket and the
+queue's scheduling policy — priority bands, age promotion so a stream of
+high-priority work cannot starve low work forever, lane exclusion, FIFO
+tie-break. The limiter exempts `user` and `system` actors: it exists to bound a
+runaway agent loop, not to throttle the person at the keyboard. A retry
+carrying a known idempotency key is answered from the cache *before* the
+limiter sees it, so a caller that behaved correctly after a dropped connection
+is not charged for work that already happened.
+
+Of `PriorityCommandQueue` only the decision is ported — which task runs next.
+The surrounding machinery is promise-driven and specific to the JavaScript
+runtime, while the policy is what determines observable ordering.
+
+Deferred from block 3: the speculative overlay / dry-run path. It is a distinct
+feature rather than an unfinished edge, and nothing in blocks 4-7 depends on
+it. The bus runs commands synchronously — the TypeScript handlers are async
+because they reach the filesystem through Electron, while the migrated stores
+do their own I/O outside the bus.

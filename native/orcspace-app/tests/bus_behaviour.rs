@@ -36,6 +36,7 @@ fn command(actor: &str, command_type: &str, target: &str, payload: Value) -> Com
         target: target.to_owned(),
         payload,
         base_version: None,
+        idempotency_key: None,
     }
 }
 
@@ -324,4 +325,93 @@ fn file_targets_are_normalised_before_the_lock_is_taken() {
         ErrorCode::Locked,
         "a differently spelled path must hit the same lock"
     );
+}
+
+// --- admission control ------------------------------------------------------
+
+fn agent_command(command_type: &str, target: &str) -> Command {
+    command("bob", command_type, target, json!({}))
+}
+
+/// The limiter bounds a runaway agent loop. It must not bound the person at
+/// the keyboard, whose commands are driven by their own hands.
+#[test]
+fn a_user_is_never_rate_limited_but_an_agent_is() {
+    let mut flow = flow();
+    flow.register(CommandDefinition::new("widget.update", ok_handler()).without_lock());
+
+    // Far past the 30-token default bucket.
+    for i in 0..60 {
+        let outcome = flow.submit_command(
+            command("alice", "widget.update", "widget:w1", json!({ "i": i })),
+            NOW,
+        );
+        assert!(outcome.result.is_ok(), "the user was throttled at {i}");
+    }
+
+    let mut refused = 0;
+    for i in 0..60 {
+        let outcome = flow.submit_command(agent_command("widget.update", "widget:w2"), NOW + i);
+        if let Err(error) = outcome.result {
+            assert_eq!(error.code, ErrorCode::RateLimited);
+            refused += 1;
+        }
+    }
+    assert!(refused > 0, "a runaway agent must eventually be refused");
+}
+
+/// A retry after a dropped connection must get the first answer back rather
+/// than run the command a second time.
+#[test]
+fn a_retry_with_the_same_idempotency_key_is_answered_from_the_cache() {
+    let mut flow = flow();
+    flow.register(CommandDefinition::new("widget.update", ok_handler()));
+
+    let mut first = command("alice", "widget.update", "widget:w1", json!({ "x": 1 }));
+    first.idempotency_key = Some("k1".to_owned());
+    let first = flow.submit_command(first, NOW).result.expect("accepted");
+
+    let journal_len = flow.journal.entries.len();
+
+    let mut retry = command("alice", "widget.update", "widget:w1", json!({ "x": 1 }));
+    retry.idempotency_key = Some("k1".to_owned());
+    let replay = flow.submit_command(retry, NOW).result.expect("replayed");
+
+    assert_eq!(replay.seq, first.seq, "the retry gets the original answer");
+    assert_eq!(replay.version, first.version);
+    assert_eq!(
+        flow.journal.entries.len(),
+        journal_len,
+        "the retry must not run the command again"
+    );
+}
+
+/// A failed command leaves no cache entry, so the retry actually retries.
+#[test]
+fn a_failed_command_is_not_remembered_by_its_idempotency_key() {
+    let mut flow = flow();
+    flow.register(CommandDefinition::new("widget.update", ok_handler()));
+
+    let mut doomed = command("alice", "widget.update", "not-a-target", json!({}));
+    doomed.idempotency_key = Some("k2".to_owned());
+    assert!(flow.submit_command(doomed, NOW).result.is_err());
+
+    let mut retry = command("alice", "widget.update", "widget:w1", json!({}));
+    retry.idempotency_key = Some("k2".to_owned());
+    assert!(
+        flow.submit_command(retry, NOW).result.is_ok(),
+        "the key of a failed command must not answer for a new one"
+    );
+}
+
+#[test]
+fn a_command_without_an_id_is_given_one() {
+    let mut flow = flow();
+    flow.register(CommandDefinition::new("widget.update", ok_handler()));
+    let accepted = flow
+        .submit_command(command("alice", "widget.update", "widget:w1", json!({})), NOW)
+        .result
+        .unwrap();
+    let id = accepted.command_id.expect("an id is minted");
+    assert!(id.starts_with("cmd-"), "got {id}");
 }

@@ -1,0 +1,114 @@
+{
+  "capacity": 5,
+  "refillPerSec": 10,
+  "bucketSteps": [
+    {
+      "at": 0,
+      "actor": "alice",
+      "tokens": 1,
+      "allowed": true
+    },
+    {
+      "at": 0,
+      "actor": "alice",
+      "tokens": 1,
+      "allowed": true
+    },
+    {
+      "at": 0,
+      "actor": "alice",
+      "tokens": 1,
+      "allowed": true
+    },
+    {
+      "at": 0,
+      "actor": "alice",
+      "tokens": 1,
+      "allowed": true
+    },
+    {
+      "at": 0,
+      "actor": "alice",
+      "tokens": 1,
+      "allowed": true
+    },
+    {
+      "at": 0,
+      "actor": "alice",
+      "tokens": 1,
+      "allowed": false
+    },
+    {
+      "at": 0,
+      "actor": "bob",
+      "tokens": 1,
+      "allowed": true
+    },
+    {
+      "at": 100,
+      "actor": "alice",
+      "tokens": 1,
+      "allowed": true
+    },
+    {
+      "at": 100,
+      "actor": "alice",
+      "tokens": 1,
+      "allowed": false
+    },
+    {
+      "at": 1100,
+      "actor": "alice",
+      "tokens": 1,
+      "allowed": true
+    },
+    {
+      "at": 1100,
+      "actor": "alice",
+      "tokens": 1,
+      "allowed": true
+    },
+    {
+      "at": 1100,
+      "actor": "alice",
+      "tokens": 1,
+      "allowed": true
+    },
+    {
+      "at": 1100,
+      "actor": "alice",
+      "tokens": 1,
+      "allowed": true
+    },
+    {
+      "at": 1100,
+      "actor": "alice",
+      "tokens": 1,
+      "allowed": true
+    },
+    {
+      "at": 1100,
+      "actor": "alice",
+      "tokens": 1,
+      "allowed": false
+    },
+    {
+      "at": 2100,
+      "actor": "alice",
+      "tokens": 20,
+      "allowed": false
+    },
+    {
+      "at": 2100,
+      "actor": "alice",
+      "tokens": 5,
+      "allowed": true
+    },
+    {
+      "at": 2101,
+      "actor": "alice",
+      "tokens": 1,
+      "allowed": true
+    }
+  ]
+}
