@@ -17,7 +17,7 @@ import { NEW } from './commands/index.ts'
 import { applyLoopbackCors, isLoopbackRequest, secretsEqual } from './netGuard.ts'
 import { APP_VERSION, buildPresence, buildSnapshot } from './linkSnapshot.ts'
 import type { AppState } from './appState.ts'
-import { fileResource, parseResource, type ActorType, type CommandErrorCode, type CommandResult, type Core } from './core/index.ts'
+import { ActorRateLimiter, fileResource, parseResource, type ActorType, type CommandErrorCode, type CommandResult, type Core } from './core/index.ts'
 import { resolveImage } from './imageAttachments.ts'
 import { hasImageExtension, hasAudioExtension, hasVideoExtension, hasDocExtension, importFile, isLocalPath } from './media.ts'
 
@@ -31,9 +31,38 @@ const BODY_TIMEOUT_MS = 30_000
 
 const RATE_LIMIT_WINDOW_MS = 10_000
 const RATE_LIMIT_MAX_PRESENCE = 120
-const RATE_LIMIT_MAX_API = 600
+
+/**
+ * Per-caller budget for the authenticated API.
+ *
+ * This used to be one global window — 600 requests per 10s shared by every
+ * agent, the CLI and the app's own polling. A fleet is exactly the load this
+ * server is for, and when the shared budget tripped *everyone* got 429,
+ * including the coordinator trying to unblock the agent that caused it. The
+ * app took itself down under its intended workload.
+ *
+ * A bucket per caller is strictly more permissive than the old ceiling and
+ * still bounds a runaway loop, because the loop can now only starve itself.
+ * The sustained rate matches what the old global allowed in total, so a single
+ * well-behaved agent is no more restricted than before.
+ */
+const API_BUCKET_CAPACITY = 120
+const API_REFILL_PER_SEC = 60
+
+export const apiRateLimiter = new ActorRateLimiter({
+  capacity: API_BUCKET_CAPACITY,
+  refillPerSec: API_REFILL_PER_SEC
+})
+
+/**
+ * Presence stays a single global window, and that is deliberate rather than an
+ * oversight: it is answered *before* the token check, so its callers are
+ * unauthenticated and indistinguishable — every one of them is loopback with an
+ * ephemeral port, and there is nothing to key a bucket on. The blast radius is
+ * also different: presence is a discovery read, so exhausting it degrades
+ * discovery rather than breaking the command bus.
+ */
 let presenceTimes: number[] = []
-let apiTimes: number[] = []
 
 function rateLimitedPresence(): boolean {
   const now = Date.now()
@@ -43,12 +72,17 @@ function rateLimitedPresence(): boolean {
   return false
 }
 
-function rateLimitedApi(): boolean {
-  const now = Date.now()
-  apiTimes = apiTimes.filter((t) => now - t < RATE_LIMIT_WINDOW_MS)
-  if (apiTimes.length >= RATE_LIMIT_MAX_API) return true
-  apiTimes.push(now)
-  return false
+/** The bucket a request is charged to. */
+export function rateLimitKey(agentIdRaw: unknown): string {
+  const agentId = String(agentIdRaw ?? '').trim()
+  // A caller that names no agent shares one bucket. It has already passed the
+  // token check, so it is trusted; it just cannot be told apart from other
+  // unnamed callers, and lumping them together is safer than exempting them.
+  return agentId ? `agent:${agentId}` : 'anonymous'
+}
+
+function rateLimitedApi(agentIdRaw: unknown): boolean {
+  return !apiRateLimiter.tryConsume(rateLimitKey(agentIdRaw))
 }
 
 type Json = Record<string, unknown>
@@ -326,8 +360,10 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
   const method = req.method || 'GET'
   const { terminals, planner, canvas, core, orchestration } = deps
 
-  if (rateLimitedApi()) {
-    return sendJson(res, 429, { error: 'too many requests' })
+  // Charged to the caller that named itself, so one agent's runaway loop can
+  // only throttle that agent.
+  if (rateLimitedApi(url.searchParams.get('agentId') ?? req.headers['x-agent-id'])) {
+    return sendJson(res, 429, { error: 'too many requests', code: 'rate_limited' })
   }
 
   const submit = async <T>(
