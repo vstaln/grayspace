@@ -1,0 +1,178 @@
+{
+  "cases": [
+    {
+      "name": "valid minimal",
+      "schema": "strict",
+      "payload": {
+        "title": "ok"
+      },
+      "error": null
+    },
+    {
+      "name": "valid full",
+      "schema": "strict",
+      "payload": {
+        "title": "ok",
+        "count": 1,
+        "flag": true,
+        "tags": [],
+        "meta": {},
+        "mode": "fast",
+        "anything": "x"
+      },
+      "error": null
+    },
+    {
+      "name": "not an object",
+      "schema": "strict",
+      "payload": "nope",
+      "error": "payload must be a JSON object"
+    },
+    {
+      "name": "null payload",
+      "schema": "strict",
+      "payload": null,
+      "error": "payload must be a JSON object"
+    },
+    {
+      "name": "array payload",
+      "schema": "strict",
+      "payload": [],
+      "error": "payload must be a JSON object"
+    },
+    {
+      "name": "missing required",
+      "schema": "strict",
+      "payload": {
+        "count": 1
+      },
+      "error": "missing required field \"title\""
+    },
+    {
+      "name": "required present but null",
+      "schema": "strict",
+      "payload": {
+        "title": null
+      },
+      "error": "missing required field \"title\""
+    },
+    {
+      "name": "unexpected field",
+      "schema": "strict",
+      "payload": {
+        "title": "ok",
+        "extra": 1
+      },
+      "error": "unexpected field \"extra\""
+    },
+    {
+      "name": "unexpected allowed when open",
+      "schema": "open",
+      "payload": {
+        "title": "ok",
+        "extra": 1
+      },
+      "error": null
+    },
+    {
+      "name": "wrong string",
+      "schema": "strict",
+      "payload": {
+        "title": 5
+      },
+      "error": "field \"title\" must be a string"
+    },
+    {
+      "name": "wrong number",
+      "schema": "strict",
+      "payload": {
+        "title": "ok",
+        "count": "five"
+      },
+      "error": "field \"count\" must be a finite number"
+    },
+    {
+      "name": "wrong boolean",
+      "schema": "strict",
+      "payload": {
+        "title": "ok",
+        "flag": "yes"
+      },
+      "error": "field \"flag\" must be a boolean"
+    },
+    {
+      "name": "wrong array",
+      "schema": "strict",
+      "payload": {
+        "title": "ok",
+        "tags": {}
+      },
+      "error": "field \"tags\" must be an array"
+    },
+    {
+      "name": "wrong object",
+      "schema": "strict",
+      "payload": {
+        "title": "ok",
+        "meta": []
+      },
+      "error": "field \"meta\" must be an object"
+    },
+    {
+      "name": "any accepts anything",
+      "schema": "strict",
+      "payload": {
+        "title": "ok",
+        "anything": [
+          1,
+          2
+        ]
+      },
+      "error": null
+    },
+    {
+      "name": "bad enum",
+      "schema": "strict",
+      "payload": {
+        "title": "ok",
+        "mode": "medium"
+      },
+      "error": "field \"mode\" must be one of [fast, slow]"
+    },
+    {
+      "name": "enum beats type",
+      "schema": "strict",
+      "payload": {
+        "title": "ok",
+        "mode": 7
+      },
+      "error": "field \"mode\" must be one of [fast, slow]"
+    },
+    {
+      "name": "missing required beats unexpected",
+      "schema": "strict",
+      "payload": {
+        "extra": 1
+      },
+      "error": "missing required field \"title\""
+    },
+    {
+      "name": "unexpected beats wrong type",
+      "schema": "strict",
+      "payload": {
+        "title": 5,
+        "extra": 1
+      },
+      "error": "unexpected field \"extra\""
+    },
+    {
+      "name": "null field is skipped",
+      "schema": "strict",
+      "payload": {
+        "title": "ok",
+        "count": null
+      },
+      "error": null
+    }
+  ]
+}

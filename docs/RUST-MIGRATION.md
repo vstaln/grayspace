@@ -33,7 +33,7 @@ compiles.
 | 0 | Journal hash chain | Rust recomputes every hash in a real `command-journal.ndjson` and matches the recorded value | **done** — 2244/2244 entries |
 | 1 | State file readers | Rust parses every `workspace-canvas-*.json`, `workspace-code-*.json`, `workspace-board.json`, `orchestration.json` and re-serializes byte-identically | **done** — 88/88 documents |
 | 2 | Projections | Folding the same journal in Rust and TypeScript yields identical canvas and planner snapshots | **done** — canvas on 2244 real entries, planner on a generated fixture |
-| 3 | Command flow | Same command sequence produces the same journal entries, versions, lock decisions and error codes | not started |
+| 3 | Command flow | Same command sequence produces the same journal entries, versions, lock decisions and error codes | **core done** — locks, versions, actors, schema, idempotency, the apply path; queue, rate limiter and speculative overlays outstanding |
 | 4 | Control server + `orc` | All 13 route domains answer identically; all ~60 CLI commands produce identical `--json` output | not started |
 | 5 | Terminals | Spawn, write, resize, dispose, scrollback persist, UTF-8 and ANSI correctness match; PTY children reaped on crash | partial — `engine.rs` runs under Electron on Windows |
 | 6 | UI | Canvas, 9 widget kinds, CodeView at parity, measured against the stable-60 criterion | not started |
@@ -151,3 +151,32 @@ It does not: neither `OrchestrationStore` nor `CodeStore` folds the journal —
 both are plain stores persisted to JSON, and block 1 already covers them by
 round-tripping `orchestration.json` and `workspace-code-*.json`. Block 2 is
 canvas and planner.
+
+## Step 3 — what it proved (core done)
+
+Locks, versions, resource ids, actors, payload validation, the idempotency
+cache and the `apply` path are ported, each pinned against a fixture recorded
+from the real TypeScript implementation.
+
+The gate order is the part worth stating, because agents key on it: unknown
+command, payload shape, malformed target, unknown actor, **lock**, **version**,
+handler. A command that is both locked by someone else and carrying a stale
+`baseVersion` reports `locked`, not `conflict` — the two call for different
+responses from the caller, back off and retry versus re-read and rebase.
+
+Other behaviours now pinned: an implicit lock is released whether the handler
+succeeded or failed, so a failure never wedges a resource; a failing handler
+appends an `abort` entry rather than leaving a dangling `intent`; a transient
+command answers without journalling at all; and a `file:` target is normalised
+*before* the lock is taken, so two spellings of one path contend for the same
+lock instead of both appearing free.
+
+Writing the lock fixture exposed a bug in the generator rather than in either
+implementation: `LockManager` renews by mutating `expiresAt` in place, so
+recording a result by reference captured the state at serialization time and
+would have pinned expectations that were never true.
+
+Outstanding in block 3: the priority queue, the per-actor rate limiter and the
+speculative overlay/dry-run path. The bus runs commands synchronously here —
+the TypeScript handlers are async because they reach the filesystem through
+Electron, while the migrated stores do their own I/O outside the bus.
