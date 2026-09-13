@@ -31,8 +31,8 @@ compiles.
 | # | Block | Parity criterion | Status |
 |---|-------|------------------|--------|
 | 0 | Journal hash chain | Rust recomputes every hash in a real `command-journal.ndjson` and matches the recorded value | **done** — 2244/2244 entries |
-| 1 | State file readers | Rust parses every `workspace-canvas-*.json`, `workspace-code-*.json`, `workspace-board.json`, `orchestration.json` and re-serializes byte-identically | not started |
-| 2 | Projections | Folding the same journal in Rust and TypeScript yields identical canvas / planner / orchestration snapshots | not started |
+| 1 | State file readers | Rust parses every `workspace-canvas-*.json`, `workspace-code-*.json`, `workspace-board.json`, `orchestration.json` and re-serializes byte-identically | **done** — 88/88 documents |
+| 2 | Projections | Folding the same journal in Rust and TypeScript yields identical canvas / planner / orchestration snapshots | **canvas done** — 2244 real entries; planner and orchestration outstanding |
 | 3 | Command flow | Same command sequence produces the same journal entries, versions, lock decisions and error codes | not started |
 | 4 | Control server + `orc` | All 13 route domains answer identically; all ~60 CLI commands produce identical `--json` output | not started |
 | 5 | Terminals | Spawn, write, resize, dispose, scrollback persist, UTF-8 and ANSI correctness match; PTY children reaped on crash | partial — `engine.rs` runs under Electron on Windows |
@@ -111,3 +111,26 @@ change. The existing e2e harness cannot produce it — it launches with
 
 Every step is a commit on a branch off `main`; `main` itself is untouched.
 `pre-migration-checkpoint` holds the state before any of this work began.
+
+## Steps 1 and 2 — what they proved (done)
+
+**Block 1.** 88/88 JSON documents in a real profile round-trip byte for byte.
+The pretty writer had to match JavaScript's indented form, which differs from
+its compact one by more than whitespace: a space after each colon, and empty
+objects and arrays left as `{}` and `[]` instead of opened into blocks. State
+documents are held as parsed JSON rather than mapped onto structs — typing them
+would normalise away the historical shapes the block exists to detect.
+
+**Block 2, canvas.** Folding a real 2244-entry journal produces the same 16
+widgets, in the same order, with the same versions, camera, strokes and
+connections as `CanvasStore.reduce`. The port is deliberately literal; three
+behaviours that look incidental are load-bearing and now pinned by tests:
+an unknown widget `kind` is rejected rather than defaulted, connections
+de-duplicate by the `from`→`to` pair rather than by id, and orphaned
+connections are pruned only in the branches that can orphan one.
+
+`Date.now()` is injected rather than read. The TypeScript sanitizers fall back
+to it for missing `updatedAt`/`bornAt`, which makes replay non-deterministic;
+the fixtures pin it so a parity test compares like with like.
+
+Still outstanding in block 2: the planner and orchestration projections.

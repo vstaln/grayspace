@@ -1,0 +1,476 @@
+{
+  "fixedNow": 1789000000000,
+  "entries": [
+    {
+      "seq": 1,
+      "at": 1789061001000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "widget.create",
+      "target": "widget:w1",
+      "payload": {
+        "id": "ignored-id",
+        "title": "Widget ignored-id",
+        "kind": "terminal",
+        "x": 100.5,
+        "y": -200.25,
+        "w": 620,
+        "h": 380,
+        "z": 1
+      },
+      "version": 1,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 2,
+      "at": 1789061002000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "widget.create",
+      "target": "widget:new",
+      "payload": {
+        "id": "w2",
+        "title": "Widget w2",
+        "kind": "terminal",
+        "x": 100.5,
+        "y": -200.25,
+        "w": 620,
+        "h": 380,
+        "z": 1
+      },
+      "version": 1,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 3,
+      "at": 1789061003000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "widget.create",
+      "target": "widget:new",
+      "payload": {
+        "title": "Widget x",
+        "kind": "terminal",
+        "x": 100.5,
+        "y": -200.25,
+        "w": 620,
+        "h": 380,
+        "z": 1
+      },
+      "version": 1,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 4,
+      "at": 1789061004000,
+      "phase": "intent",
+      "actorId": "user",
+      "type": "widget.create",
+      "target": "widget:never",
+      "payload": {
+        "id": "never",
+        "title": "Widget never",
+        "kind": "terminal",
+        "x": 100.5,
+        "y": -200.25,
+        "w": 620,
+        "h": 380,
+        "z": 1
+      },
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 5,
+      "at": 1789061005000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "widget.create",
+      "target": "widget:w4",
+      "payload": {
+        "id": "w4",
+        "title": "Widget w4",
+        "kind": "hologram",
+        "x": 100.5,
+        "y": -200.25,
+        "w": 620,
+        "h": 380,
+        "z": 1
+      },
+      "version": 1,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 6,
+      "at": 1789061006000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "widget.create",
+      "target": "widget:w5",
+      "payload": {
+        "id": "w5",
+        "title": "No geometry"
+      },
+      "version": 1,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 7,
+      "at": 1789061007000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "widget.update",
+      "target": "widget:w1",
+      "payload": {
+        "x": 999.125,
+        "title": "Renamed"
+      },
+      "version": 5,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 8,
+      "at": 1789061008000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "widget.update",
+      "target": "widget:w1",
+      "payload": {
+        "y": 42
+      },
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 9,
+      "at": 1789061009000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "widget.update",
+      "target": "widget:ghost",
+      "payload": {
+        "x": 1
+      },
+      "version": 2,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 10,
+      "at": 1789061010000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "widget.update",
+      "target": "widget:w1",
+      "payload": {
+        "maximized": true
+      },
+      "version": 7,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 11,
+      "at": 1789061011000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "canvas.camera",
+      "target": "canvas:main",
+      "payload": {
+        "x": -4617.767343849823,
+        "y": -758.4946652788749,
+        "zoom": 9
+      },
+      "version": 2,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 12,
+      "at": 1789061012000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "canvas.camera",
+      "target": "canvas:main",
+      "payload": {
+        "x": 1,
+        "y": 2,
+        "zoom": 0.01
+      },
+      "version": 3,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 13,
+      "at": 1789061013000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "canvas.camera",
+      "target": "canvas:main",
+      "payload": {
+        "x": "nope",
+        "y": 2,
+        "zoom": 1
+      },
+      "version": 4,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 14,
+      "at": 1789061014000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "canvas.strokes",
+      "target": "canvas:main",
+      "payload": {
+        "strokes": [
+          {
+            "id": "s1",
+            "color": "#ff0000",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 1.5,
+                "y": 2.25
+              },
+              {
+                "x": 3,
+                "y": 4
+              }
+            ]
+          },
+          {
+            "id": "s2",
+            "color": "#00ff00",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              }
+            ]
+          },
+          {
+            "id": "s3",
+            "points": [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 1,
+                "y": 1
+              }
+            ]
+          }
+        ]
+      },
+      "version": 5,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 15,
+      "at": 1789061015000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "canvas.connections",
+      "target": "canvas:main",
+      "payload": {
+        "connections": [
+          {
+            "id": "c1",
+            "from": "w1",
+            "to": "w2",
+            "bornAt": 1789060000000
+          },
+          {
+            "id": "c2",
+            "from": "w1",
+            "to": "w1"
+          },
+          {
+            "id": "c3",
+            "from": "w1",
+            "to": "w2"
+          },
+          {
+            "id": "c4",
+            "from": "w1",
+            "to": "nowhere"
+          }
+        ]
+      },
+      "version": 6,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 16,
+      "at": 1789061016000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "canvas.import",
+      "target": "canvas:main",
+      "payload": {
+        "widgets": [
+          {
+            "id": "w6",
+            "title": "Widget w6",
+            "kind": "terminal",
+            "x": 100.5,
+            "y": -200.25,
+            "w": 620,
+            "h": 380,
+            "z": 3
+          },
+          {
+            "id": "w7",
+            "title": "Widget w7",
+            "kind": "terminal",
+            "x": 100.5,
+            "y": -200.25,
+            "w": 620,
+            "h": 380,
+            "z": 4
+          }
+        ],
+        "camera": {
+          "x": 10,
+          "y": 20,
+          "zoom": 2
+        },
+        "connections": [
+          {
+            "id": "c5",
+            "from": "w6",
+            "to": "w7",
+            "bornAt": 1789060000001
+          }
+        ]
+      },
+      "version": 7,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 17,
+      "at": 1789061017000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "widget.remove",
+      "target": "widget:w7",
+      "payload": {},
+      "version": 8,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 18,
+      "at": 1789061018000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "canvas.teleport",
+      "target": "canvas:main",
+      "payload": {
+        "x": 1
+      },
+      "version": 9,
+      "prevHash": "",
+      "hash": ""
+    }
+  ],
+  "snapshot": {
+    "widgets": [
+      {
+        "id": "w1",
+        "title": "Renamed",
+        "kind": "terminal",
+        "x": 999.125,
+        "y": 42,
+        "w": 620,
+        "h": 380,
+        "z": 1,
+        "maximized": true,
+        "version": 7,
+        "updatedAt": 1789061010000
+      },
+      {
+        "id": "w2",
+        "title": "Widget w2",
+        "kind": "terminal",
+        "x": 100.5,
+        "y": -200.25,
+        "w": 620,
+        "h": 380,
+        "z": 1,
+        "maximized": false,
+        "version": 1,
+        "updatedAt": 1789061002000
+      },
+      {
+        "id": "widget-1789061003000-3",
+        "title": "Widget x",
+        "kind": "terminal",
+        "x": 100.5,
+        "y": -200.25,
+        "w": 620,
+        "h": 380,
+        "z": 1,
+        "maximized": false,
+        "version": 1,
+        "updatedAt": 1789061003000
+      },
+      {
+        "id": "w6",
+        "title": "Widget w6",
+        "kind": "terminal",
+        "x": 100.5,
+        "y": -200.25,
+        "w": 620,
+        "h": 380,
+        "z": 3,
+        "maximized": false,
+        "version": 1,
+        "updatedAt": 1789000000000
+      }
+    ],
+    "camera": {
+      "x": 10,
+      "y": 20,
+      "zoom": 2
+    },
+    "strokes": [
+      {
+        "id": "s1",
+        "points": [
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 1.5,
+            "y": 2.25
+          },
+          {
+            "x": 3,
+            "y": 4
+          }
+        ],
+        "color": "#ff0000"
+      }
+    ],
+    "connections": [],
+    "version": 7
+  }
+}

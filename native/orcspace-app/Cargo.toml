@@ -36,6 +36,10 @@ serde = { version = "1", features = ["derive"] }
 # to be exact, so the slower correctly-rounded parser is the right trade.
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 sha2 = "0.10"
+# Widget insertion order is part of the snapshot: listWidgets() returns the
+# JavaScript Map in insertion order, so a sorted map would produce a different
+# snapshot that no longer matches what Electron wrote.
+indexmap = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
 uuid = { version = "1", features = ["v4"] }
 

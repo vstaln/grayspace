@@ -2729,6 +2729,7 @@ dependencies = [
  "axum",
  "eframe",
  "egui",
+ "indexmap",
  "libc",
  "portable-pty",
  "rodio",
