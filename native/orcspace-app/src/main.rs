@@ -43,7 +43,12 @@ fn main() -> Result<()> {
     eframe::run_native(
         "OrcSpace",
         options,
-        Box::new(move |_cc| Ok(Box::new(OrcSpaceApp::new(manager, control)))),
+        Box::new(move |cc| {
+            // Applied before the first frame so nothing flashes in egui's
+            // default palette on the way to OrcSpace's.
+            orcspace_app::theme::apply(&cc.egui_ctx);
+            Ok(Box::new(OrcSpaceApp::new(manager, control)))
+        }),
     )?;
 
     Ok(())

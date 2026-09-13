@@ -5,6 +5,7 @@
 //! still live in the binary targets.
 
 pub mod actors;
+pub mod canvas;
 pub mod cli;
 pub mod command;
 pub mod flow;
@@ -22,4 +23,5 @@ pub mod queue;
 pub mod resources;
 pub mod schema;
 pub mod state;
+pub mod theme;
 pub mod versioned;

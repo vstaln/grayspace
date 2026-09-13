@@ -1,5 +1,11 @@
 # Migrating OrcSpace to Rust
 
+> **PARKED.** Work stopped deliberately after block 4's orchestration slice, to
+> go back to the Electron app. Nothing here is abandoned or broken: every block
+> below that says "done" is done with evidence, all 184 Rust tests pass, and the
+> Electron app is untouched and still the product. Resume at "Where to pick it
+> up" at the end.
+
 Working document. Updated as steps land.
 
 ## Decision
@@ -36,7 +42,7 @@ compiles.
 | 3 | Command flow | Same command sequence produces the same journal entries, versions, lock decisions and error codes | **done** — speculative overlays (dry run) deliberately deferred |
 | 4 | Control server + `orc` | All 13 route domains answer identically; all ~60 CLI commands produce identical `--json` output | **orchestration done** — store, routes and CLI, wired end to end; the other 12 domains need their stores first |
 | 5 | Terminals | Spawn, write, resize, dispose, scrollback persist, UTF-8 and ANSI correctness match; PTY children reaped on crash | partial — `engine.rs` runs under Electron on Windows |
-| 6 | UI | Canvas, 9 widget kinds, CodeView at parity, measured against the stable-60 criterion | not started |
+| 6 | UI | Canvas, 9 widget kinds, CodeView at parity, measured against the stable-60 criterion | **design system + canvas chrome only** — palette, widget frame, camera; no widget content, no CodeView |
 | 7 | Packaging | Installer, update channel, signing and notarization on Windows and macOS | not started |
 
 Blocks 1–3 are strictly ordered. Block 4 depends on 3. Block 5 is independent
@@ -259,3 +265,46 @@ Outstanding in block 4: the other 12 route domains — canvas, planner, terminal
 git, files, code, workspace, locks, journal, snapshot, presence, screenshot.
 Each needs its store ported first, so they follow the same order blocks 1-3
 did.
+
+## Step 6 — the design system (started, then parked)
+
+The native UI was a placeholder: a grid and one drawn card, in colours that had
+nothing to do with OrcSpace. That is now the real chrome.
+
+`theme.rs` carries the tokens from `src/renderer/src/ui/tokens.ts` — the
+near-black monochrome ladder (#080808 → #1F1F1F), the #2A2A2E hairline, the
+white/dim/faint text ramp, the two status colours. `canvas.rs` draws what
+`WidgetFrame.tsx` builds: a 10px-rounded body, a 34px header divided by a
+hairline, a one-pixel ring that brightens when the widget is active, and a
+terminal body in canvas black rather than widget surface.
+
+Two contract tests read the renderer's own files — `tokens.ts` and
+`WidgetFrame.tsx` — and fail if either side drifts, so the two apps cannot
+quietly diverge into different-looking OrcSpaces.
+
+The camera matches too: translate-then-scale, zoom clamped to the 0.2–4 range
+`sanitizeCamera` enforces, and three screens of cull margin rather than
+viewport-edge culling.
+
+**What is not there:** widget *content*. A terminal draws as a frame with a
+title, not as a terminal — xterm has no egui equivalent and the terminal
+renderer is its own project. CodeView, the sidebar, the title bar, the context
+menu, connections and strokes are all untouched. This is the shell, not the UI.
+
+## Where to pick it up
+
+In order:
+
+1. **Finish block 4** — the other 12 route domains. Each needs its store ported
+   first, so they follow the order blocks 1–3 did. The router is a pure
+   function; adding a domain to `http::route` serves it without touching the
+   axum adapter.
+2. **Block 5** — terminals already run under Electron on Windows; what is
+   missing is macOS packaging of the engine and scrollback persistence.
+3. **Block 6** — widget content, starting with a terminal renderer. This is the
+   largest remaining piece by a wide margin.
+4. **Before any of block 6 lands:** measure the Electron FPS baseline. Without
+   it there is no evidence the Rust UI is an improvement rather than a change.
+
+Nothing in the Electron app depends on any of this. `git checkout main` returns
+to the pre-migration state; `pre-migration-checkpoint` holds the branch.

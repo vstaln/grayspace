@@ -1,5 +1,5 @@
 use crate::engine::{ControlServer, TerminalEvent, TerminalManager};
-use eframe::egui::{self, Color32, FontId, Pos2, Rect, Sense, Stroke, TextStyle, Vec2};
+use eframe::egui::{self, Color32, FontId, Sense, TextStyle, Vec2};
 use egui::containers::{CentralPanel, Panel};
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player};
 use std::{fs::File, io::BufReader, time::Duration};
@@ -17,8 +17,7 @@ pub struct OrcSpaceApp {
     selected_terminal: Option<String>,
     new_terminal_id: String,
     input: String,
-    canvas_offset: Vec2,
-    canvas_zoom: f32,
+    canvas: orcspace_app::projection::CanvasState,
     music: MusicPlayer,
     last_error: Option<String>,
 }
@@ -36,8 +35,7 @@ impl OrcSpaceApp {
             selected_terminal,
             new_terminal_id: "terminal-1".to_owned(),
             input: String::new(),
-            canvas_offset: Vec2::ZERO,
-            canvas_zoom: 1.0,
+            canvas: orcspace_app::projection::CanvasState::default(),
             music: MusicPlayer::default(),
             last_error: None,
         }
@@ -55,76 +53,88 @@ impl OrcSpaceApp {
         });
     }
 
+    /// The canvas, drawn with OrcSpace's own chrome (see `canvas.rs`).
+    ///
+    /// Widgets are mirrored from the terminals the manager actually holds, so
+    /// this shows the running session rather than a mock-up. Their geometry is
+    /// the renderer's default terminal size, laid out in a row until real
+    /// placement is migrated with the canvas store.
     fn show_canvas(&mut self, ui: &mut egui::Ui) {
+        self.sync_widgets_from_terminals();
+
         let available = ui.available_rect_before_wrap();
-        let response = ui.allocate_rect(available, Sense::drag());
-        if response.dragged() {
-            self.canvas_offset += response.drag_delta();
-        }
+        let response = ui.allocate_rect(available, Sense::click_and_drag());
         let zoom_delta = ui.input(|input| input.zoom_delta());
-        if zoom_delta != 1.0 {
-            self.canvas_zoom = (self.canvas_zoom * zoom_delta).clamp(0.35, 3.0);
+        orcspace_app::canvas::handle_pan_zoom(&mut self.canvas.camera, &response, zoom_delta);
+
+        let view = orcspace_app::canvas::View::new(&self.canvas.camera, available.min);
+
+        // Clicking a widget selects it, which is also how the renderer decides
+        // which one draws its active ring.
+        if response.clicked() {
+            if let Some(pointer) = response.interact_pointer_pos() {
+                self.selected_terminal = self
+                    .canvas
+                    .widgets
+                    .values()
+                    .find(|widget| view.widget_rect(widget).contains(pointer))
+                    .map(|widget| widget.id.clone());
+            }
         }
 
-        let painter = ui.painter_at(available);
-        painter.rect_filled(available, 0.0, Color32::from_rgb(18, 21, 27));
-        let spacing = 48.0 * self.canvas_zoom;
-        let origin = available.center() + self.canvas_offset;
-        let mut x = origin.x.rem_euclid(spacing);
-        while x < available.right() {
-            painter.line_segment(
-                [
-                    Pos2::new(x, available.top()),
-                    Pos2::new(x, available.bottom()),
-                ],
-                Stroke::new(1.0, Color32::from_rgb(31, 36, 45)),
-            );
-            x += spacing;
-        }
-        let mut y = origin.y.rem_euclid(spacing);
-        while y < available.bottom() {
-            painter.line_segment(
-                [
-                    Pos2::new(available.left(), y),
-                    Pos2::new(available.right(), y),
-                ],
-                Stroke::new(1.0, Color32::from_rgb(31, 36, 45)),
-            );
-            y += spacing;
-        }
+        let painted = orcspace_app::canvas::draw(
+            ui,
+            &orcspace_app::canvas::CanvasFrame {
+                state: &self.canvas,
+                active_widget: self.selected_terminal.as_deref(),
+            },
+            &view,
+        );
 
-        let card = Rect::from_center_size(
-            origin + Vec2::new(-170.0 * self.canvas_zoom, -90.0 * self.canvas_zoom),
-            Vec2::new(320.0 * self.canvas_zoom, 150.0 * self.canvas_zoom),
-        );
-        painter.rect_filled(card, 10.0, Color32::from_rgb(35, 41, 52));
-        painter.rect_stroke(
-            card,
-            10.0,
-            Stroke::new(1.0, Color32::from_rgb(72, 91, 119)),
-            egui::StrokeKind::Outside,
-        );
-        painter.text(
-            card.left_top() + Vec2::new(18.0, 18.0),
-            egui::Align2::LEFT_TOP,
-            "Canvas",
-            FontId::proportional(18.0 * self.canvas_zoom),
-            Color32::WHITE,
-        );
-        painter.text(
-            card.left_top() + Vec2::new(18.0, 53.0),
-            egui::Align2::LEFT_TOP,
-            "Rust-owned scene state",
-            FontId::proportional(14.0 * self.canvas_zoom),
-            Color32::from_rgb(173, 184, 201),
-        );
-        painter.text(
-            available.right_bottom() - Vec2::new(18.0, 18.0),
+        ui.painter_at(available).text(
+            available.right_bottom() - Vec2::new(14.0, 12.0),
             egui::Align2::RIGHT_BOTTOM,
-            format!("zoom {:.0}% · drag to pan", self.canvas_zoom * 100.0),
-            FontId::proportional(12.0),
-            Color32::from_rgb(145, 154, 170),
+            format!(
+                "{painted} widget{} · {}",
+                if painted == 1 { "" } else { "s" },
+                orcspace_app::canvas::zoom_label(&view)
+            ),
+            FontId::proportional(11.0),
+            orcspace_app::theme::text::FAINT,
         );
+    }
+
+    /// Mirrors live terminals onto the canvas.
+    ///
+    /// Terminals that have gone are dropped, and ones already present keep the
+    /// position they were given — re-laying out every frame would make a widget
+    /// jump the moment another terminal opened.
+    fn sync_widgets_from_terminals(&mut self) {
+        let snapshots = self.manager.snapshots();
+        let live: std::collections::HashSet<String> =
+            snapshots.iter().map(|s| s.id.clone()).collect();
+        self.canvas.widgets.retain(|id, _| live.contains(id));
+
+        for (index, snapshot) in snapshots.iter().enumerate() {
+            let next_z = self.canvas.widgets.len() as f64 + 1.0;
+            self.canvas
+                .widgets
+                .entry(snapshot.id.clone())
+                .or_insert_with(|| orcspace_app::projection::Widget {
+                    id: snapshot.id.clone(),
+                    title: snapshot.id.clone(),
+                    kind: Some("terminal".to_owned()),
+                    // WIDGET_DEFAULTS.terminal in the renderer.
+                    x: 80.0 + (index as f64) * 660.0,
+                    y: 80.0,
+                    w: 620.0,
+                    h: 380.0,
+                    z: next_z,
+                    maximized: false,
+                    version: 1.0,
+                    updated_at: 0.0,
+                });
+        }
     }
 
     fn show_code(&mut self, ui: &mut egui::Ui) {
