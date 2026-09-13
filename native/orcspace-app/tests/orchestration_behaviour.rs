@@ -399,3 +399,37 @@ fn loads_a_real_orchestration_file() {
         store.counter()
     );
 }
+
+/// Closes the loop: the store must be able to write back the file it read,
+/// byte for byte. Until it can, Rust cannot own orchestration.json — every
+/// load would rewrite it and turn a no-op into a diff.
+///
+///   ORCSPACE_ORCHESTRATION=<path> cargo test --test orchestration_behaviour -- --ignored --nocapture
+#[test]
+#[ignore = "needs a real file: set ORCSPACE_ORCHESTRATION"]
+fn a_real_orchestration_file_survives_a_load_and_save() {
+    use orcspace_app::jsjson::to_js_json_pretty;
+
+    let path = std::env::var("ORCSPACE_ORCHESTRATION").expect("ORCSPACE_ORCHESTRATION");
+    let raw = std::fs::read_to_string(&path).expect("file is readable");
+    let original = raw.trim_start_matches('\u{feff}').trim_end_matches(['\n', '\r']);
+
+    let value: serde_json::Value = serde_json::from_str(original).expect("parses");
+    let rendered = to_js_json_pretty(&OrchestrationStore::load(&value).to_json(), 2);
+
+    if original != rendered {
+        let at = original
+            .char_indices()
+            .zip(rendered.char_indices())
+            .find(|((_, a), (_, b))| a != b)
+            .map(|((i, _), _)| i)
+            .unwrap_or_else(|| original.len().min(rendered.len()));
+        let from = at.saturating_sub(120);
+        panic!(
+            "load/save is not byte-identical at char {at}\n  original: {:?}\n  rendered: {:?}",
+            &original[from..(at + 120).min(original.len())],
+            &rendered[from..(at + 120).min(rendered.len())]
+        );
+    }
+    println!("load/save round-tripped {} bytes byte-for-byte", original.len());
+}

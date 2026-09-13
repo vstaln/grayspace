@@ -219,5 +219,16 @@ Reading the real file corrected the port twice: runs are `run-N`, not
 produces `run-1`, `otask-2`, `disp-7`. Restarting it at zero on load would mint
 ids that collide with existing records and overwrite them.
 
+The store can now also **write** the file it read: a real `orchestration.json`
+loads and re-serializes byte for byte, all 32,451 bytes of it. That is what
+lets Rust own the file rather than only read it — a writer that reformatted
+would turn every load into a spurious diff.
+
+Two JavaScript object rules had to be reproduced for that to hold. An absent
+optional field is omitted rather than written as `null`. And field order is
+*insertion* order, so fields a later mutation adds — `closedAt`, `outcome`,
+`settledAt`, `filesModified` — are appended after `version`, not slotted in
+where a struct would put them.
+
 Outstanding in block 4: the 13 control-server route domains and the ~60 `orc`
 commands on top of this store.

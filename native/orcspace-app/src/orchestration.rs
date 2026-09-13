@@ -809,3 +809,177 @@ impl OrchestrationStore {
         self.counter
     }
 }
+
+/// Serialization back to the shape `orchestration.json` holds.
+///
+/// Two rules, both from JavaScript object semantics rather than from taste:
+///
+/// * an absent optional field is **omitted**, not written as `null` — the
+///   TypeScript builds these objects with conditional spreads and by assigning
+///   properties, so a field that was never set has no key at all;
+/// * field order is *insertion* order. Fields set at creation come first, and
+///   fields a later mutation adds — `closedAt`, `outcome`, `settledAt`,
+///   `filesModified` — are appended after `version`, because that is where
+///   assigning a new property in JavaScript puts it.
+///
+/// Getting either wrong produces a file the TypeScript still reads but rewrites
+/// on its next save, turning every load into a spurious diff.
+mod serialize {
+    use super::*;
+    use serde_json::{Map, Value};
+
+    fn object(pairs: Vec<(&str, Value)>) -> Value {
+        let mut map = Map::new();
+        for (key, value) in pairs {
+            map.insert(key.to_owned(), value);
+        }
+        Value::Object(map)
+    }
+
+    pub fn run(run: &Run) -> Value {
+        let mut pairs = vec![
+            ("id", Value::from(run.id.clone())),
+            ("objective", Value::from(run.objective.clone())),
+            ("coordinator", Value::from(run.coordinator.clone())),
+            ("createdAt", Value::from(run.created_at)),
+            ("version", Value::from(run.version)),
+        ];
+        if let Some(closed_at) = run.closed_at {
+            pairs.push(("closedAt", Value::from(closed_at)));
+        }
+        object(pairs)
+    }
+
+    pub fn task(task: &OrcTask) -> Value {
+        let mut pairs = vec![
+            ("id", Value::from(task.id.clone())),
+            ("runId", Value::from(task.run_id.clone())),
+            ("title", Value::from(task.title.clone())),
+            ("spec", Value::from(task.spec.clone())),
+            ("deps", Value::from(task.deps.clone())),
+        ];
+        if !task.images.is_empty() {
+            pairs.push(("images", Value::from(task.images.clone())));
+        }
+        pairs.extend([
+            ("status", Value::from(task.status.clone())),
+            ("createdBy", Value::from(task.created_by.clone())),
+            ("createdAt", Value::from(task.created_at)),
+            ("updatedAt", Value::from(task.updated_at)),
+            ("version", Value::from(task.version)),
+        ]);
+        if let Some(outcome) = &task.outcome {
+            pairs.push(("outcome", Value::from(outcome.clone())));
+        }
+        object(pairs)
+    }
+
+    pub fn dispatch(dispatch: &Dispatch) -> Value {
+        let mut pairs = vec![
+            ("id", Value::from(dispatch.id.clone())),
+            ("runId", Value::from(dispatch.run_id.clone())),
+            ("taskId", Value::from(dispatch.task_id.clone())),
+            ("terminalId", Value::from(dispatch.terminal_id.clone())),
+            ("agent", Value::from(dispatch.agent.clone())),
+            ("state", Value::from(dispatch.state.clone())),
+            ("preamble", Value::from(dispatch.preamble.clone())),
+            ("startedAt", Value::from(dispatch.started_at)),
+            ("version", Value::from(dispatch.version)),
+        ];
+        if let Some(outcome) = &dispatch.outcome {
+            pairs.push(("outcome", Value::from(outcome.clone())));
+        }
+        if let Some(settled_at) = dispatch.settled_at {
+            pairs.push(("settledAt", Value::from(settled_at)));
+        }
+        if !dispatch.files_modified.is_empty() {
+            pairs.push(("filesModified", Value::from(dispatch.files_modified.clone())));
+        }
+        object(pairs)
+    }
+
+    pub fn message(message: &Message) -> Value {
+        let mut pairs = vec![
+            ("id", Value::from(message.id.clone())),
+            ("runId", Value::from(message.run_id.clone())),
+            ("type", Value::from(message.message_type.clone())),
+            ("from", Value::from(message.from.clone())),
+            ("to", Value::from(message.to.clone())),
+            ("subject", Value::from(message.subject.clone())),
+            ("body", Value::from(message.body.clone())),
+        ];
+        if let Some(task_id) = &message.task_id {
+            pairs.push(("taskId", Value::from(task_id.clone())));
+        }
+        if let Some(dispatch_id) = &message.dispatch_id {
+            pairs.push(("dispatchId", Value::from(dispatch_id.clone())));
+        }
+        if let Some(outcome) = &message.outcome {
+            pairs.push(("outcome", Value::from(outcome.clone())));
+        }
+        if let Some(reply_to) = &message.reply_to {
+            pairs.push(("replyTo", Value::from(reply_to.clone())));
+        }
+        pairs.push(("createdAt", Value::from(message.created_at)));
+        pairs.push(("ackedBy", Value::from(message.acked_by.clone())));
+        object(pairs)
+    }
+
+    pub fn gate(gate: &Gate) -> Value {
+        let mut pairs = vec![
+            ("id", Value::from(gate.id.clone())),
+            ("runId", Value::from(gate.run_id.clone())),
+        ];
+        if let Some(task_id) = &gate.task_id {
+            pairs.push(("taskId", Value::from(task_id.clone())));
+        }
+        pairs.extend([
+            ("question", Value::from(gate.question.clone())),
+            ("options", Value::from(gate.options.clone())),
+            ("createdBy", Value::from(gate.created_by.clone())),
+            ("createdAt", Value::from(gate.created_at)),
+            ("version", Value::from(gate.version)),
+        ]);
+        if let Some(resolution) = &gate.resolution {
+            pairs.push(("resolution", Value::from(resolution.clone())));
+        }
+        if let Some(resolved_at) = gate.resolved_at {
+            pairs.push(("resolvedAt", Value::from(resolved_at)));
+        }
+        object(pairs)
+    }
+}
+
+pub const ORCHESTRATION_SCHEMA_VERSION: u64 = 1;
+
+impl OrchestrationStore {
+    /// The document this store would write.
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "schemaVersion".into(),
+            serde_json::Value::from(ORCHESTRATION_SCHEMA_VERSION),
+        );
+        map.insert(
+            "runs".into(),
+            self.runs.values().map(serialize::run).collect(),
+        );
+        map.insert(
+            "tasks".into(),
+            self.tasks.values().map(serialize::task).collect(),
+        );
+        map.insert(
+            "dispatches".into(),
+            self.dispatches.values().map(serialize::dispatch).collect(),
+        );
+        map.insert(
+            "messages".into(),
+            self.messages.values().map(serialize::message).collect(),
+        );
+        map.insert(
+            "gates".into(),
+            self.gates.values().map(serialize::gate).collect(),
+        );
+        serde_json::Value::Object(map)
+    }
+}
