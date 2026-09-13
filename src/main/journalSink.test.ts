@@ -62,4 +62,39 @@ describe('FileJournalSink', () => {
     const text = readFileSync(file, 'utf8')
     assert.match(text, /"seq":1/)
   })
+
+  /**
+   * Compaction runs off the main thread now, so this drives it the way the app
+   * does — appends arriving while a rotation is in flight — and checks nothing
+   * is dropped.
+   *
+   * The journal is pre-seeded to several megabytes so the rotation's read is
+   * slow enough for appends to land during it; with a small file the whole
+   * rotation finishes inside one tick and the interleaving never happens.
+   */
+  test('a rotation under a steady stream of appends loses nothing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orcspace-journal-rotate-'))
+    dirs.push(dir)
+    const file = join(dir, 'command-journal.ndjson')
+
+    const filler = Array.from({ length: 30_000 }, (_, i) => JSON.stringify(entry(-i - 1))).join('\n')
+    writeFileSync(file, filler + '\n', 'utf8')
+
+    const sink = new FileJournalSink({ file, flushMs: 1, maxBytes: 1024 })
+
+    for (let seq = 1; seq <= 400; seq += 1) {
+      sink.append(entry(seq))
+      if (seq % 10 === 0) await new Promise((resolve) => setTimeout(resolve, 2))
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    sink.flush()
+
+    const tail = readJournalTail(file, 10_000)
+    const seqs = new Set(tail.entries.map((e) => e.seq))
+    const missing: number[] = []
+    for (let seq = 1; seq <= 400; seq += 1) {
+      if (!seqs.has(seq)) missing.push(seq)
+    }
+    assert.deepEqual(missing, [], 'no entry may be swallowed by a rotation')
+  })
 })

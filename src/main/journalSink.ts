@@ -130,7 +130,7 @@ export class FileJournalSink implements JournalSink {
       this.scheduleRetry()
       return
     }
-    if (this.bytes > this.maxBytes) this.rotate()
+    if (this.bytes > this.maxBytes) await this.rotateAsync()
 
 
 
@@ -257,6 +257,49 @@ export class FileJournalSink implements JournalSink {
    */
   private rotateFloorBytes = 0
 
+  /**
+   * Compaction on the normal path, off the main thread.
+   *
+   * `rotate()` below reads the whole multi-megabyte journal with readFileSync,
+   * on the thread that pumps every PTY. `rotateFloorBytes` made that rare;
+   * it did not make it non-blocking, so every rotation still stopped every
+   * terminal at once. The scheduled flush now awaits instead.
+   *
+   * `writing` is held for the whole rotation, not just the write. An append
+   * that landed between the read and the rename would be dropped: appendFile
+   * opens by path, so it would write into the file the rename is about to
+   * replace. The synchronous version cannot interleave, which is why it does
+   * not need this.
+   */
+  private async rotateAsync(): Promise<void> {
+    if (this.writing) return
+    if (this.bytes <= this.rotateFloorBytes) return
+    this.writing = true
+    const temp = `${this.file}.${randomBytes(8).toString('hex')}.tmp`
+    try {
+      const text = await fsp.readFile(this.file, 'utf8')
+      const keep = text.split('\n').filter(Boolean).slice(-2_000)
+      const handle = await fsp.open(temp, 'w')
+      try {
+        await handle.writeFile(keep.join('\n') + '\n', 'utf8')
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+      await fsp.rename(temp, this.file)
+      this.bytes = (await fsp.stat(this.file)).size
+      this.rotateFloorBytes = 0
+    } catch (err) {
+      this.rotateFloorBytes = this.bytes + this.maxBytes
+      console.error('failed to compact the command journal', err)
+    } finally {
+      // The rename consumes the temp on success; on failure it may remain.
+      await fsp.unlink(temp).catch(() => {})
+      this.writing = false
+    }
+  }
+
+  /** Compaction on the shutdown paths, where blocking is the point. */
   private rotate(): void {
     if (this.writing) return
     if (this.bytes <= this.rotateFloorBytes) return

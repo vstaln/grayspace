@@ -196,7 +196,20 @@ function formatTimeRemaining(ms: number): string {
   return `Resets in ${mins}m`
 }
 
-export function parseJsonlHistory(filePaths: string[], isSec = false): {
+/**
+ * Reads agent history logs off the main thread.
+ *
+ * This was synchronous, and the stall it caused is documented on
+ * MIN_REREAD_MS above: up to 4MB read and JSON.parsed line by line, on the
+ * thread that pumps every PTY. The cache added there cut how *often* that
+ * happened — from every System Monitor poll to once per 30s per file — but a
+ * cache miss was still a hard stop for every terminal at once.
+ *
+ * Making it rarer was the wrong axis. The read is now awaited, so a miss costs
+ * latency on the widget that asked rather than a frame drop everywhere. The
+ * only caller was already async.
+ */
+export async function parseJsonlHistory(filePaths: string[], isSec = false): Promise<{
   requests5h: number
   requestsWeekly: number
   requestsMonthly: number
@@ -206,7 +219,7 @@ export function parseJsonlHistory(filePaths: string[], isSec = false): {
   lastTs: number
   oldest5h: number
   fileModifiedRecently: boolean
-} {
+}> {
   let requests5h = 0
   let requestsWeekly = 0
   let requestsMonthly = 0
@@ -224,8 +237,8 @@ export function parseJsonlHistory(filePaths: string[], isSec = false): {
 
   for (const filePath of filePaths) {
     try {
-      if (!fs.existsSync(filePath)) continue
-      const stat = fs.statSync(filePath)
+      const stat = await fs.promises.stat(filePath).catch(() => null)
+      if (!stat) continue
       if (now - stat.mtimeMs < 15 * 60 * 1000) {
         fileModifiedRecently = true
       }
@@ -256,16 +269,18 @@ export function parseJsonlHistory(filePaths: string[], isSec = false): {
         let content = ''
         const maxBytes = 4 * 1024 * 1024
         if (stat.size > maxBytes) {
+          // Only the tail matters: the windows are 5 hours, 7 days and 30
+          // days, and the file is append-ordered.
           const buf = Buffer.alloc(maxBytes)
-          const fd = fs.openSync(filePath, 'r')
+          const handle = await fs.promises.open(filePath, 'r')
           try {
-            fs.readSync(fd, buf, 0, maxBytes, stat.size - maxBytes)
+            await handle.read(buf, 0, maxBytes, stat.size - maxBytes)
           } finally {
-            fs.closeSync(fd)
+            await handle.close()
           }
           content = buf.toString('utf8')
         } else {
-          content = fs.readFileSync(filePath, 'utf8')
+          content = await fs.promises.readFile(filePath, 'utf8')
         }
 
         const lines = content.split('\n')
@@ -548,7 +563,10 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
     ? activeTerminals.map((t) => (t.alive ? readTail(t.id, 8_000).toLowerCase() : ''))
     : activeTerminals.map(() => '')
 
-  return AGENTS.map((agent) => {
+  // Promise.all rather than a sequential loop: the per-agent reads are
+  // independent, so a machine with several agent logs pays the slowest read
+  // rather than their sum.
+  return Promise.all(AGENTS.map(async (agent) => {
 
     let openCount = 0
     const lowerId = agent.id.toLowerCase()
@@ -581,7 +599,7 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
 
 
     const { requests5h, requestsWeekly, requestsMonthly, tokens5h, tokensWeekly, tokensMonthly, lastTs, oldest5h, fileModifiedRecently } =
-      parseJsonlHistory(agent.historyPaths, agent.isSecondTimestamp)
+      await parseJsonlHistory(agent.historyPaths, agent.isSecondTimestamp)
 
 
     const recentActivity = lastTs > 0 && now - lastTs < 10 * 60 * 1000
@@ -679,5 +697,5 @@ export async function getAgentUsageStats(deps?: IpcDeps): Promise<AgentUsageItem
       modelName: exact?.modelName,
       tierName: exact?.tierName
     }
-  })
+  }))
 }
