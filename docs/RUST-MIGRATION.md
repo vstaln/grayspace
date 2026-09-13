@@ -32,7 +32,7 @@ compiles.
 |---|-------|------------------|--------|
 | 0 | Journal hash chain | Rust recomputes every hash in a real `command-journal.ndjson` and matches the recorded value | **done** — 2244/2244 entries |
 | 1 | State file readers | Rust parses every `workspace-canvas-*.json`, `workspace-code-*.json`, `workspace-board.json`, `orchestration.json` and re-serializes byte-identically | **done** — 88/88 documents |
-| 2 | Projections | Folding the same journal in Rust and TypeScript yields identical canvas / planner / orchestration snapshots | **canvas done** — 2244 real entries; planner and orchestration outstanding |
+| 2 | Projections | Folding the same journal in Rust and TypeScript yields identical canvas and planner snapshots | **done** — canvas on 2244 real entries, planner on a generated fixture |
 | 3 | Command flow | Same command sequence produces the same journal entries, versions, lock decisions and error codes | not started |
 | 4 | Control server + `orc` | All 13 route domains answer identically; all ~60 CLI commands produce identical `--json` output | not started |
 | 5 | Terminals | Spawn, write, resize, dispose, scrollback persist, UTF-8 and ANSI correctness match; PTY children reaped on crash | partial — `engine.rs` runs under Electron on Windows |
@@ -133,4 +133,21 @@ connections are pruned only in the branches that can orphan one.
 to it for missing `updatedAt`/`bornAt`, which makes replay non-deterministic;
 the fixtures pin it so a parity test compares like with like.
 
-Still outstanding in block 2: the planner and orchestration projections.
+**Block 2, planner.** The `PlannerStore.reduce` port reproduces the fixture
+item list. One divergence was only visible because the fixture ran the real
+reducer: `order` is read differently by the two paths. `plan.create` uses
+`Number(payload.order) || 0`, which coerces, so `order: "5"` stores 5;
+`plan.update` uses `typeof === 'number' && Number.isFinite(...)`, which does
+not, so the same payload leaves the previous value alone. Reading both strictly
+passed every other case.
+
+`plan.update` also normalises `day` with the *throwing* validator. A malformed
+day aborts the fold rather than being ignored, so `reduce` returns a `Result`
+instead of swallowing it — a replay must not quietly disagree with the live
+store about which items exist.
+
+**Correction to this plan.** Block 2 was written as covering orchestration too.
+It does not: neither `OrchestrationStore` nor `CodeStore` folds the journal —
+both are plain stores persisted to JSON, and block 1 already covers them by
+round-tripping `orchestration.json` and `workspace-code-*.json`. Block 2 is
+canvas and planner.

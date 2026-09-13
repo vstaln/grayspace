@@ -1,0 +1,440 @@
+{
+  "today": "2026-09-13",
+  "entries": [
+    {
+      "seq": 1,
+      "at": 1789061001000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.create",
+      "target": "plan:p1",
+      "payload": {
+        "title": "Write the report",
+        "order": 1
+      },
+      "version": 1,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 2,
+      "at": 1789061002000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.create",
+      "target": "plan:new",
+      "payload": {
+        "id": "p2",
+        "title": "Review the diff",
+        "note": "careful"
+      },
+      "version": 1,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 3,
+      "at": 1789061003000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.create",
+      "target": "plan:new",
+      "payload": {
+        "title": "Minted id"
+      },
+      "version": 1,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 4,
+      "at": 1789061004000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.create",
+      "target": "plan:p4",
+      "payload": {
+        "note": "orphan"
+      },
+      "version": 1,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 5,
+      "at": 1789061005000,
+      "phase": "intent",
+      "actorId": "user",
+      "type": "plan.create",
+      "target": "plan:p5",
+      "payload": {
+        "title": "Never"
+      },
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 6,
+      "at": 1789061006000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.create",
+      "target": "plan:p6",
+      "payload": {
+        "title": "Due today",
+        "day": "today",
+        "time": "09:30"
+      },
+      "version": 1,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 7,
+      "at": 1789061007000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.create",
+      "target": "plan:p7",
+      "payload": {
+        "title": "Due tomorrow",
+        "day": "tomorrow"
+      },
+      "version": 1,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 8,
+      "at": 1789061008000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.create",
+      "target": "plan:p8",
+      "payload": {
+        "title": "Bad day",
+        "day": "not-a-date"
+      },
+      "version": 1,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 9,
+      "at": 1789061009000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.create",
+      "target": "plan:p9",
+      "payload": {
+        "title": "Bad time",
+        "time": "99:99"
+      },
+      "version": 1,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 10,
+      "at": 1789061010000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.create",
+      "target": "plan:p10",
+      "payload": {
+        "title": "String order",
+        "order": "5"
+      },
+      "version": 1,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 11,
+      "at": 1789061011000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.update",
+      "target": "plan:p1",
+      "payload": {
+        "title": "  Renamed  ",
+        "note": "now with a note"
+      },
+      "version": 4,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 12,
+      "at": 1789061012000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.update",
+      "target": "plan:p1",
+      "payload": {
+        "done": true
+      },
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 13,
+      "at": 1789061013000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.update",
+      "target": "plan:p1",
+      "payload": {
+        "project": "  work  "
+      },
+      "version": 6,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 14,
+      "at": 1789061014000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.update",
+      "target": "plan:p1",
+      "payload": {
+        "project": null
+      },
+      "version": 7,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 15,
+      "at": 1789061015000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.update",
+      "target": "plan:p1",
+      "payload": {
+        "day": "2026-1-5"
+      },
+      "version": 8,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 16,
+      "at": 1789061016000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.update",
+      "target": "plan:missing",
+      "payload": {
+        "title": "nobody"
+      },
+      "version": 9,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 17,
+      "at": 1789061017000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.update",
+      "target": "plan:p2",
+      "payload": {
+        "title": "   "
+      },
+      "version": 3,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 18,
+      "at": 1789061018000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.update",
+      "target": "plan:p2",
+      "payload": {
+        "attachments": [
+          "a.png",
+          " b.png ",
+          "",
+          "c.png"
+        ]
+      },
+      "version": 4,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 19,
+      "at": 1789061019000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.update",
+      "target": "plan:p2",
+      "payload": {
+        "attachments": []
+      },
+      "version": 5,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 20,
+      "at": 1789061020000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.toggle",
+      "target": "plan:p6",
+      "payload": {
+        "done": true
+      },
+      "version": 2,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 21,
+      "at": 1789061021000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.toggle",
+      "target": "plan:p6",
+      "payload": {},
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 22,
+      "at": 1789061022000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.toggle",
+      "target": "plan:gone",
+      "payload": {},
+      "version": 3,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 23,
+      "at": 1789061023000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.delete",
+      "target": "plan:p9",
+      "payload": {},
+      "version": 2,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 24,
+      "at": 1789061024000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.delete",
+      "target": "plan:never-existed",
+      "payload": {},
+      "version": 2,
+      "prevHash": "",
+      "hash": ""
+    },
+    {
+      "seq": 25,
+      "at": 1789061025000,
+      "phase": "commit",
+      "actorId": "user",
+      "type": "plan.teleport",
+      "target": "plan:p1",
+      "payload": {},
+      "version": 99,
+      "prevHash": "",
+      "hash": ""
+    }
+  ],
+  "items": [
+    {
+      "id": "p1",
+      "title": "Renamed",
+      "note": "now with a note",
+      "day": "2026-01-05",
+      "done": true,
+      "createdBy": "user",
+      "order": 1,
+      "createdAt": 1789061001000,
+      "updatedAt": 1789061015000,
+      "version": 8
+    },
+    {
+      "id": "p2",
+      "title": "Review the diff",
+      "note": "careful",
+      "done": false,
+      "createdBy": "user",
+      "order": 0,
+      "createdAt": 1789061002000,
+      "updatedAt": 1789061019000,
+      "version": 5
+    },
+    {
+      "id": "plan-1789061003000-3",
+      "title": "Minted id",
+      "note": "",
+      "done": false,
+      "createdBy": "user",
+      "order": 0,
+      "createdAt": 1789061003000,
+      "updatedAt": 1789061003000,
+      "version": 1
+    },
+    {
+      "id": "p6",
+      "title": "Due today",
+      "note": "",
+      "day": "2026-09-13",
+      "time": "09:30",
+      "done": false,
+      "createdBy": "user",
+      "order": 0,
+      "createdAt": 1789061006000,
+      "updatedAt": 1789061021000,
+      "version": 3
+    },
+    {
+      "id": "p7",
+      "title": "Due tomorrow",
+      "note": "",
+      "day": "2026-09-14",
+      "done": false,
+      "createdBy": "user",
+      "order": 0,
+      "createdAt": 1789061007000,
+      "updatedAt": 1789061007000,
+      "version": 1
+    },
+    {
+      "id": "p8",
+      "title": "Bad day",
+      "note": "",
+      "done": false,
+      "createdBy": "user",
+      "order": 0,
+      "createdAt": 1789061008000,
+      "updatedAt": 1789061008000,
+      "version": 1
+    },
+    {
+      "id": "p10",
+      "title": "String order",
+      "note": "",
+      "done": false,
+      "createdBy": "user",
+      "order": 5,
+      "createdAt": 1789061010000,
+      "updatedAt": 1789061010000,
+      "version": 1
+    }
+  ]
+}

@@ -6,5 +6,6 @@
 
 pub mod journal;
 pub mod jsjson;
+pub mod planner;
 pub mod projection;
 pub mod state;
