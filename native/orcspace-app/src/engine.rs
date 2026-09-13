@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
     io::{Read, Write},
-    net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener},
+
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         mpsc, Arc, Condvar, Mutex, Weak,
@@ -1140,50 +1140,88 @@ pub struct ControlServer {
 }
 
 impl ControlServer {
+    /// Starts the control server on a named pipe (Windows) or unix domain
+    /// socket, never on a TCP port.
+    ///
+    /// This matches what the Electron app does, and the reason is not
+    /// aesthetic: no port is occupied so nothing can collide, access is
+    /// governed by the operating system's permissions on the pipe rather than
+    /// by "we only bound to loopback", and the command bus is not reachable
+    /// from the network even in principle. `orc` finds either implementation at
+    /// the same path without being told which is running.
     pub fn start(manager: TerminalManager, token: String) -> Result<Self, String> {
-        let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-            .map_err(|error| format!("bind control server: {error}"))?;
-        let address = listener
-            .local_addr()
-            .map_err(|error| format!("read control server address: {error}"))?;
-        listener
-            .set_nonblocking(true)
-            .map_err(|error| format!("configure control server: {error}"))?;
-        let state = HttpState { manager, token };
+        Self::start_at(manager, token, orcspace_app::listener::default_path())
+    }
+
+    /// Starts on an explicit path. A test — or a second instance — uses this to
+    /// stay off the real socket.
+    pub fn start_at(
+        manager: TerminalManager,
+        token: String,
+        path: String,
+    ) -> Result<Self, String> {
+        let state = HttpState {
+            manager,
+            token,
+            orchestration: Arc::new(Mutex::new(
+                orcspace_app::orchestration::OrchestrationStore::new(),
+            )),
+        };
+
+        // The listener is opened on this thread, before the server thread is
+        // spawned, so a name already in use is reported to the caller rather
+        // than printed into the void from a background thread.
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
+        let listen_path = path.clone();
+
         thread::Builder::new()
             .name("orcspace-control-server".to_owned())
             .spawn(move || {
                 let runtime = match tokio::runtime::Runtime::new() {
                     Ok(runtime) => runtime,
                     Err(error) => {
-                        eprintln!("control server runtime: {error}");
+                        let _ = ready_tx.send(Err(format!("control server runtime: {error}")));
                         return;
                     }
                 };
                 runtime.block_on(async move {
-                    let socket = match tokio::net::TcpListener::from_std(listener) {
-                        Ok(socket) => socket,
+                    let listener = match orcspace_app::listener::bind(&listen_path).await {
+                        Ok(listener) => listener,
                         Err(error) => {
-                            eprintln!("control server listener: {error}");
+                            let _ = ready_tx
+                                .send(Err(format!("bind control server at {listen_path}: {error}")));
                             return;
                         }
                     };
+                    let _ = ready_tx.send(Ok(()));
+
                     let app = Router::new()
                         .route("/orchestration/workers", get(list_workers))
                         .route("/orchestration/workers/tell", post(tell_worker))
                         .route("/terminal/{id}/write", post(write_terminal))
+                        // Everything the ported router knows is served here, so
+                        // adding a domain to `http::route` serves it without
+                        // touching this file. The three routes above stay
+                        // explicit because they reach the terminal manager,
+                        // which the pure router deliberately does not see.
+                        .fallback(handle_routed)
                         .with_state(state);
-                    if let Err(error) = axum::serve(socket, app).await {
+                    if let Err(error) = axum::serve(listener, app).await {
                         eprintln!("control server stopped: {error}");
                     }
                 });
             })
             .map_err(|error| format!("spawn control server: {error}"))?;
-        Ok(Self {
-            url: format!("http://{address}"),
-        })
+
+        ready_rx
+            .recv_timeout(Duration::from_secs(10))
+            .map_err(|_| "control server did not start".to_owned())??;
+
+        Ok(Self { url: path })
     }
 
+    /// The pipe or socket path the server is listening on. Named `url` for the
+    /// callers that already read it; it is a path, not an http address.
     pub fn url(&self) -> String {
         self.url.clone()
     }
@@ -1193,6 +1231,9 @@ impl ControlServer {
 struct HttpState {
     manager: TerminalManager,
     token: String,
+    /// Shared because the fallback handler mutates it and axum hands each
+    /// request its own clone of the state.
+    orchestration: Arc<Mutex<orcspace_app::orchestration::OrchestrationStore>>,
 }
 
 #[derive(Serialize)]
@@ -1302,6 +1343,94 @@ async fn write_terminal(
         text,
         delivery: Some(receipt),
     }))
+}
+
+/// Bridges the pure router to axum: authenticate, translate, answer.
+///
+/// The authorization check happens here, once, before anything is routed —
+/// exactly as `isTrustedCaller` gates `route()` in the TypeScript. The router
+/// itself never sees a token, so no route can forget to check one.
+async fn handle_routed(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    body: axum::body::Bytes,
+) -> (StatusCode, Json<serde_json::Value>) {
+    if authenticate(&headers, &state.token).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "a valid control token is required" })),
+        );
+    }
+
+    let mut query = indexmap::IndexMap::new();
+    for pair in uri.query().unwrap_or_default().split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        query.insert(key.to_owned(), percent_decode_query(value));
+    }
+
+    let request = orcspace_app::http::Request {
+        method: method.as_str().to_owned(),
+        path: uri.path().to_owned(),
+        query,
+        // A body that is absent or unparseable is null, which every route
+        // treats as "no fields given" rather than as an error — the same as a
+        // GET with no body at all.
+        body: serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null),
+        agent_id: headers
+            .get("x-agent-id")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned),
+    };
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    let mut store = lock_recover(&state.orchestration);
+    let mut deps = orcspace_app::http::RouteDeps {
+        orchestration: &mut store,
+        app_version: env!("CARGO_PKG_VERSION"),
+        workspace_dir: None,
+        now,
+    };
+
+    match orcspace_app::http::route(&request, &mut deps) {
+        Some(response) => (
+            StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            Json(response.body),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "no such route", "code": "not_found" })),
+        ),
+    }
+}
+
+/// Query values arrive percent-encoded, with `+` for a space.
+fn percent_decode_query(raw: &str) -> String {
+    let bytes = raw.replace('+', " ").into_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn authenticate(headers: &HeaderMap, token: &str) -> Result<(), (StatusCode, String)> {
@@ -1570,5 +1699,173 @@ mod tests {
         // only: on unix this now sends a real signal, and no pid is
         // guaranteed to be free, so a live process could be caught.
         assert!(!super::kill_process_tree(4_194_303));
+    }
+}
+
+/// End-to-end checks that the control server really answers over the pipe or
+/// socket it claims to — not over a port, and not only in the pure router.
+#[cfg(test)]
+mod transport_tests {
+    use super::{ControlServer, TerminalManager, TOKEN_HEADER};
+    use std::io::{Read, Write};
+
+    /// A test path, so a run never touches the real OrcSpace socket.
+    fn test_path(name: &str) -> String {
+        let unique = std::process::id();
+        if cfg!(windows) {
+            format!(r"\\.\pipe\orcspace-test-{name}-{unique}")
+        } else {
+            std::env::temp_dir()
+                .join(format!("orcspace-test-{name}-{unique}.sock"))
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
+
+    /// Minimal HTTP/1.1 over the transport, so the test exercises the real
+    /// socket rather than calling the router directly.
+    fn request(path_to_socket: &str, method: &str, target: &str, token: &str, body: Option<&str>) -> String {
+        let mut stream = open(path_to_socket);
+        let body = body.unwrap_or("");
+        let request = format!(
+            "{method} {target} HTTP/1.1\r\nHost: orcspace\r\n{TOKEN_HEADER}: {token}\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(request.as_bytes()).expect("write request");
+        stream.flush().expect("flush");
+        let mut response = Vec::new();
+        let _ = stream.read_to_end(&mut response);
+        String::from_utf8_lossy(&response).into_owned()
+    }
+
+    #[cfg(windows)]
+    fn open(path: &str) -> std::fs::File {
+        use std::os::windows::fs::OpenOptionsExt;
+        // A pipe instance may be momentarily busy between accepts; a short
+        // retry is normal client behaviour, not a workaround.
+        for _ in 0..40 {
+            match std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .attributes(0)
+                .open(path)
+            {
+                Ok(file) => return file,
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            }
+        }
+        panic!("could not open {path}");
+    }
+
+    #[cfg(unix)]
+    fn open(path: &str) -> std::os::unix::net::UnixStream {
+        for _ in 0..40 {
+            match std::os::unix::net::UnixStream::connect(path) {
+                Ok(stream) => return stream,
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            }
+        }
+        panic!("could not connect to {path}");
+    }
+
+    fn body_of(response: &str) -> serde_json::Value {
+        let body = response
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body)
+            .unwrap_or("");
+        serde_json::from_str(body.trim()).unwrap_or(serde_json::Value::Null)
+    }
+
+    #[test]
+    fn the_server_answers_over_the_pipe_and_reports_its_path() {
+        let path = test_path("health");
+        let manager = TerminalManager::new("token-for-tests-0123456789abcdef".to_owned());
+        let server = ControlServer::start_at(manager, "tok".to_owned(), path.clone())
+            .expect("server starts");
+
+        // The reported address is the socket path, not an http:// URL — there
+        // is no port to report.
+        assert_eq!(server.url(), path);
+        assert!(!server.url().starts_with("http"), "got {}", server.url());
+
+        let response = request(&path, "GET", "/health", "tok", None);
+        assert!(response.starts_with("HTTP/1.1 200"), "got {response}");
+        let body = body_of(&response);
+        assert_eq!(body["app"], serde_json::json!("orcspace"));
+        assert_eq!(body["server"], serde_json::json!("orcspace-control"));
+    }
+
+    /// The token is checked once, before routing. A caller without it gets
+    /// nothing, not even a 404 that would confirm which routes exist.
+    #[test]
+    fn a_request_without_the_token_is_refused() {
+        let path = test_path("auth");
+        let manager = TerminalManager::new("token-for-tests-0123456789abcdef".to_owned());
+        let _server = ControlServer::start_at(manager, "right".to_owned(), path.clone())
+            .expect("server starts");
+
+        let refused = request(&path, "GET", "/health", "wrong", None);
+        assert!(refused.starts_with("HTTP/1.1 401"), "got {refused}");
+        assert_eq!(
+            body_of(&refused)["error"],
+            serde_json::json!("a valid control token is required")
+        );
+    }
+
+    /// The whole stack: a real socket, the axum adapter, the ported router and
+    /// the orchestration store, answering two requests that depend on each
+    /// other.
+    #[test]
+    fn state_persists_across_requests_on_one_server() {
+        let path = test_path("state");
+        let manager = TerminalManager::new("token-for-tests-0123456789abcdef".to_owned());
+        let _server = ControlServer::start_at(manager, "tok".to_owned(), path.clone())
+            .expect("server starts");
+
+        let created = request(
+            &path,
+            "POST",
+            "/orchestration/runs",
+            "tok",
+            Some(r#"{"objective":"ship it"}"#),
+        );
+        assert!(created.starts_with("HTTP/1.1 201"), "got {created}");
+        let run_id = body_of(&created)["data"]["id"].as_str().unwrap().to_owned();
+
+        let listed = request(&path, "GET", "/orchestration/runs", "tok", None);
+        assert!(listed.starts_with("HTTP/1.1 200"), "got {listed}");
+        let body = body_of(&listed);
+        assert_eq!(body["runs"].as_array().unwrap().len(), 1);
+        assert_eq!(body["active"]["id"], serde_json::json!(run_id));
+    }
+
+    #[test]
+    fn an_unknown_route_is_a_404_rather_than_a_hang() {
+        let path = test_path("404");
+        let manager = TerminalManager::new("token-for-tests-0123456789abcdef".to_owned());
+        let _server = ControlServer::start_at(manager, "tok".to_owned(), path.clone())
+            .expect("server starts");
+
+        let response = request(&path, "GET", "/nothing/here", "tok", None);
+        assert!(response.starts_with("HTTP/1.1 404"), "got {response}");
+        assert_eq!(body_of(&response)["code"], serde_json::json!("not_found"));
+    }
+
+    /// A second server on a name already in use must fail loudly on the
+    /// caller's thread rather than print into the void from a background one.
+    #[test]
+    fn a_second_server_on_the_same_path_is_refused() {
+        let path = test_path("collision");
+        let first_manager = TerminalManager::new("token-for-tests-0123456789abcdef".to_owned());
+        let _first = ControlServer::start_at(first_manager, "tok".to_owned(), path.clone())
+            .expect("the first server starts");
+
+        let second_manager = TerminalManager::new("token-for-tests-0123456789abcdef".to_owned());
+        let second = ControlServer::start_at(second_manager, "tok".to_owned(), path.clone());
+        assert!(
+            second.is_err(),
+            "a second instance must not silently steal the first one's clients"
+        );
     }
 }
