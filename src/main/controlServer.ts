@@ -10,7 +10,7 @@ import type { PlannerStore } from './plannerStore.ts'
 import type { OrchestrationStore } from './orchestration/store.ts'
 import { MESSAGE_TYPES, TASK_STATUSES, type MessageType } from './orchestration/types.ts'
 import { listWorkers, resolveWorker } from './orchestration/workers.ts'
-import { CONTROL_TOKEN_HEADER, controlToken } from './controlToken.ts'
+import { CONTROL_TOKEN_HEADER, controlToken, controlTokenPersistError } from './controlToken.ts'
 import { CANVAS_TARGET } from './commands/canvas.ts'
 import { GIT_TARGET } from './commands/git.ts'
 import { NEW } from './commands/index.ts'
@@ -163,7 +163,15 @@ export function startControlServer(deps: ControlDeps): http.Server {
     }
 
     if (!isTrustedCaller(req, token)) {
-      return sendJson(res, 401, { error: 'a valid control token is required' })
+      // When the token could not be written, every caller that reads it from
+      // disk lands here, and "a valid control token is required" is a dead
+      // end. Name the real cause instead.
+      const unwritable = controlTokenPersistError()
+      return sendJson(res, 401, {
+        error: unwritable
+          ? `the control token could not be written to disk, so no client can read it: ${unwritable}`
+          : 'a valid control token is required'
+      })
     }
     void route(req, res, deps).catch((err) => {
       console.error('control request failed', err)
