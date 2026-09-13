@@ -445,6 +445,8 @@ fn orchestration_route(
                     request.text("body").unwrap_or(""),
                     request.text("taskId"),
                     request.text("dispatchId"),
+                    request.text("replyTo"),
+                    request.text("outcome"),
                     deps.now,
                 ) {
                     Ok(message) => Response::accepted(201, 1, 0, message_json(&message)),

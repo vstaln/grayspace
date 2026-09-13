@@ -5,6 +5,7 @@
 //! still live in the binary targets.
 
 pub mod actors;
+pub mod cli;
 pub mod command;
 pub mod flow;
 pub mod http;

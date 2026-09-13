@@ -34,7 +34,7 @@ compiles.
 | 1 | State file readers | Rust parses every `workspace-canvas-*.json`, `workspace-code-*.json`, `workspace-board.json`, `orchestration.json` and re-serializes byte-identically | **done** — 88/88 documents |
 | 2 | Projections | Folding the same journal in Rust and TypeScript yields identical canvas and planner snapshots | **done** — canvas on 2244 real entries, planner on a generated fixture |
 | 3 | Command flow | Same command sequence produces the same journal entries, versions, lock decisions and error codes | **done** — speculative overlays (dry run) deliberately deferred |
-| 4 | Control server + `orc` | All 13 route domains answer identically; all ~60 CLI commands produce identical `--json` output | **store done** — orchestration model ported and reading real files; routes and CLI outstanding |
+| 4 | Control server + `orc` | All 13 route domains answer identically; all ~60 CLI commands produce identical `--json` output | **orchestration done** — store, routes and CLI, wired end to end; the other 12 domains need their stores first |
 | 5 | Terminals | Spawn, write, resize, dispose, scrollback persist, UTF-8 and ANSI correctness match; PTY children reaped on crash | partial — `engine.rs` runs under Electron on Windows |
 | 6 | UI | Canvas, 9 widget kinds, CodeView at parity, measured against the stable-60 criterion | not started |
 | 7 | Packaging | Installer, update channel, signing and notarization on Windows and macOS | not started |
@@ -230,5 +230,32 @@ optional field is omitted rather than written as `null`. And field order is
 `settledAt`, `filesModified` — are appended after `version`, not slotted in
 where a struct would put them.
 
-Outstanding in block 4: the 13 control-server route domains and the ~60 `orc`
-commands on top of this store.
+### Routes and CLI
+
+`http::route` maps a request to a response without touching a socket, and
+`cli::plan` maps an argument vector to a request. Both are pure, so the whole
+surface is testable without a server — the only practical way to keep ~60
+commands from drifting.
+
+The authorization decision stays *outside* the router, as it does in the
+TypeScript (`isTrustedCaller` gates `route`). Repeating it per route is the
+duplication that makes an auth bug possible. Long-polling is outside too:
+`/inbox` and `/replies` answer immediately and report `waited: false` rather
+than claiming to have blocked, because waiting belongs to the transport.
+
+CLI conventions are copied rather than tidied. Every value flag has aliases and
+the first present one wins — `--spec`, `--brief` and `--body` all name a task's
+brief, because agents have been told all three and breaking any of them breaks
+a running fleet. `allow`/`approve`/`permit` and `deny`/`reject`/`refuse` are
+interchangeable for the same reason.
+
+Feeding a CLI plan straight into the router caught a real gap the two halves
+hid separately: `POST /orchestration/messages` dropped `replyTo`, so `orc
+reply` and every permission verb sent a message that could never be matched
+back to the ask it answered — and `orc ask` would have waited forever on an
+answer that had already arrived.
+
+Outstanding in block 4: the other 12 route domains — canvas, planner, terminal,
+git, files, code, workspace, locks, journal, snapshot, presence, screenshot.
+Each needs its store ported first, so they follow the same order blocks 1-3
+did.

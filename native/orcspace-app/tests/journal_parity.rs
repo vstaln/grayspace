@@ -166,9 +166,18 @@ fn non_finite_numbers_become_null_like_json_stringify() {
 #[test]
 #[ignore = "debug helper"]
 fn dumps_canonical_form() {
-    let path = std::env::var("ORCSPACE_JOURNAL").expect("ORCSPACE_JOURNAL");
-    let seq: u64 = std::env::var("ORCSPACE_SEQ").expect("ORCSPACE_SEQ").parse().unwrap();
-    let out = std::env::var("ORCSPACE_CANON_OUT").expect("ORCSPACE_CANON_OUT");
+    // Skips rather than fails when its inputs are absent: it is a tool, not an
+    // assertion, and running the suite with --include-ignored should not go red
+    // because nobody asked it to dump anything.
+    let (Ok(path), Ok(seq), Ok(out)) = (
+        std::env::var("ORCSPACE_JOURNAL"),
+        std::env::var("ORCSPACE_SEQ"),
+        std::env::var("ORCSPACE_CANON_OUT"),
+    ) else {
+        println!("set ORCSPACE_JOURNAL, ORCSPACE_SEQ and ORCSPACE_CANON_OUT to dump a canonical form");
+        return;
+    };
+    let seq: u64 = seq.parse().expect("ORCSPACE_SEQ is a number");
     let raw = std::fs::read_to_string(&path).unwrap();
     let entry = raw
         .lines()

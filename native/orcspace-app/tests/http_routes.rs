@@ -437,3 +437,134 @@ fn a_percent_encoded_id_is_decoded() {
     assert_eq!(response.status, 200);
     assert_eq!(response.body["run"]["id"], json!(id));
 }
+
+// --- end to end: CLI plan into the router -----------------------------------
+
+/// The two halves of block 4 must actually fit. A plan the CLI produces is fed
+/// straight into the router, so a path or field the two disagree about shows up
+/// here rather than in a running fleet.
+mod cli_to_router {
+    use super::*;
+    use orcspace_app::cli::{plan, Args};
+
+    fn run_cli(server: &mut Server, line: &str, agent: &str) -> Response {
+        let tokens: Vec<String> = line.split_whitespace().map(str::to_owned).collect();
+        let parsed = Args::parse(&tokens);
+        let planned = plan(&tokens[0], &parsed).unwrap_or_else(|e| panic!("{line}: {}", e.message));
+
+        let mut request = Request::get(&planned.method, &planned.path).as_agent(agent);
+        for (key, value) in &planned.query {
+            request = request.with_query(key, value);
+        }
+        if !planned.body.is_null() {
+            request = request.with_body(planned.body.clone());
+        }
+        server.call(request)
+    }
+
+    #[test]
+    fn a_whole_coordination_cycle_runs_through_both_halves() {
+        let mut server = Server::new();
+
+        let run = run_cli(&mut server, "run-create --objective ship-it", "alice");
+        assert_eq!(run.status, 201, "{:?}", run.body);
+        let run_id = run.body["data"]["id"].as_str().unwrap().to_owned();
+
+        let first = run_cli(&mut server, "task-create --spec build", "alice");
+        assert_eq!(first.status, 201, "{:?}", first.body);
+        let first_id = first.body["data"]["id"].as_str().unwrap().to_owned();
+
+        let second = run_cli(
+            &mut server,
+            &format!("task-create --spec test --deps {first_id}"),
+            "alice",
+        );
+        assert_eq!(second.status, 201);
+        let second_id = second.body["data"]["id"].as_str().unwrap().to_owned();
+
+        // Only the independent task is dispatchable.
+        let ready = run_cli(&mut server, "task-list --ready", "alice");
+        let ids: Vec<&str> = ready.body["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec![first_id.as_str()]);
+
+        let dispatched = run_cli(
+            &mut server,
+            &format!("worker-start --task {first_id} --terminal term-1 --agent claude"),
+            "alice",
+        );
+        assert_eq!(dispatched.status, 201, "{:?}", dispatched.body);
+        let dispatch_id = dispatched.body["data"]["id"].as_str().unwrap().to_owned();
+
+        // A second worker on the same task is refused with the code orc reports.
+        let clash = run_cli(
+            &mut server,
+            &format!("worker-start --task {first_id} --terminal term-2 --agent codex"),
+            "alice",
+        );
+        assert_eq!(clash.status, 409);
+        assert_eq!(clash.body["code"], json!("conflict"));
+
+        // The worker reports, which completes the task and unblocks the next.
+        let settled = server.call(
+            Request::get("POST", &format!("/orchestration/dispatches/{dispatch_id}/settle"))
+                .with_body(json!({ "outcome": "succeeded" })),
+        );
+        assert_eq!(settled.status, 200);
+        assert_eq!(settled.body["data"]["promoted"], json!([second_id]));
+
+        // The coordinator accounts for the finished worker.
+        let released = run_cli(&mut server, &format!("worker-release {dispatch_id}"), "alice");
+        assert_eq!(released.status, 200);
+        assert_eq!(released.body["data"]["state"], json!("released"));
+
+        let status = run_cli(&mut server, &format!("status --run {run_id}"), "alice");
+        assert_eq!(status.status, 200);
+        assert_eq!(status.body["tasks"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn ask_and_reply_travel_through_the_inbox() {
+        let mut server = Server::new();
+        run_cli(&mut server, "run-create --objective ship", "alice");
+
+        let asked = run_cli(&mut server, "ask --question which-way?", "worker");
+        assert_eq!(asked.status, 201, "{:?}", asked.body);
+        let ask_id = asked.body["data"]["id"].as_str().unwrap().to_owned();
+
+        // The ask went to nobody in particular, so it is not in alice's inbox;
+        // a reply to it is still findable by id.
+        let pending = server.call(Request::get("GET", &format!("/orchestration/replies/{ask_id}")));
+        assert_eq!(pending.body["reply"], Value::Null);
+
+        let replied = run_cli(&mut server, &format!("reply {ask_id} left"), "alice");
+        assert_eq!(replied.status, 201, "{:?}", replied.body);
+
+        let answered = server.call(Request::get("GET", &format!("/orchestration/replies/{ask_id}")));
+        assert_eq!(answered.body["reply"]["body"], json!("left"));
+        assert_eq!(answered.body["reply"]["replyTo"], json!(ask_id));
+    }
+
+    #[test]
+    fn a_permission_verb_answers_the_request_it_names() {
+        let mut server = Server::new();
+        run_cli(&mut server, "run-create --objective ship", "alice");
+
+        let asked = run_cli(
+            &mut server,
+            "ask --question may-i-delete? --type permission",
+            "worker",
+        );
+        let id = asked.body["data"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(asked.body["data"]["subject"], json!("permission_request"));
+
+        let denied = run_cli(&mut server, &format!("deny {id} --reason too-risky"), "alice");
+        assert_eq!(denied.status, 201);
+        assert_eq!(denied.body["data"]["body"], json!("too-risky"));
+        assert_eq!(denied.body["data"]["replyTo"], json!(id));
+    }
+}

@@ -264,7 +264,7 @@ fn ready_filter_excludes_dispatched_and_finished_tasks() {
 fn the_inbox_hides_what_the_recipient_already_acked() {
     let (mut store, run) = store_with_run();
     let message = store
-        .send(&run, "ask", "worker", "alice", "question", "which way?", None, None, T0)
+        .send(&run, "ask", "worker", "alice", "question", "which way?", None, None, None, None, T0)
         .unwrap();
     assert_eq!(store.inbox("alice", None).len(), 1);
 
@@ -278,7 +278,7 @@ fn the_inbox_hides_what_the_recipient_already_acked() {
 fn a_broadcast_is_acked_per_recipient() {
     let (mut store, run) = store_with_run();
     let message = store
-        .send(&run, "note", "alice", "*", "heads up", "body", None, None, T0)
+        .send(&run, "note", "alice", "*", "heads up", "body", None, None, None, None, T0)
         .unwrap();
     assert_eq!(store.inbox("bob", None).len(), 1);
     assert_eq!(store.inbox("carol", None).len(), 1);
@@ -292,7 +292,7 @@ fn a_broadcast_is_acked_per_recipient() {
 fn an_unknown_message_type_is_refused() {
     let (mut store, run) = store_with_run();
     let error = store
-        .send(&run, "telepathy", "a", "b", "s", "b", None, None, T0)
+        .send(&run, "telepathy", "a", "b", "s", "b", None, None, None, None, T0)
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::Invalid);
 }

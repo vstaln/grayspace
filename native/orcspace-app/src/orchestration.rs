@@ -531,6 +531,8 @@ impl OrchestrationStore {
         body: &str,
         task_id: Option<&str>,
         dispatch_id: Option<&str>,
+        reply_to: Option<&str>,
+        outcome: Option<&str>,
         now: i64,
     ) -> CommandResult<Message> {
         self.require_run(run_id)?;
@@ -551,8 +553,10 @@ impl OrchestrationStore {
             body: body.to_owned(),
             task_id: task_id.map(str::to_owned),
             dispatch_id: dispatch_id.map(str::to_owned),
-            outcome: None,
-            reply_to: None,
+            outcome: outcome.map(str::to_owned),
+            // Without this a reply cannot be matched back to the ask it
+            // answers, and `orc ask` waits forever on an answer that arrived.
+            reply_to: reply_to.map(str::to_owned),
             created_at: now,
             acked_by: Vec::new(),
         };
