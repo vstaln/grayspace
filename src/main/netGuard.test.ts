@@ -38,6 +38,18 @@ describe('netGuard - Loopback host detection', () => {
     assert.ok(!isLoopbackHost('google.com'))
   })
 
+  test('decimal/hex/octal loopback equivalents return true', () => {
+    assert.ok(isLoopbackHost('2130706433'))
+    assert.ok(isLoopbackHost('0x7f.0.0.1'))
+    assert.ok(isLoopbackHost('0x7f000001'))
+    assert.ok(isLoopbackHost('::ffff:127.0.0.1'))
+  })
+
+  test('non-loopback numeric forms return false', () => {
+    assert.ok(!isLoopbackHost('3232235777'))
+    assert.ok(!isLoopbackHost('0x08080808'))
+  })
+
   test('empty string returns false', () => {
     assert.ok(!isLoopbackHost(''))
   })
@@ -110,6 +122,22 @@ describe('netGuard - isLoopbackRequest', () => {
 
   test('rejects Origin null (file:// / sandboxed iframe)', () => {
     assert.ok(!isLoopbackRequest({ headers: { host: '127.0.0.1:20220', origin: 'null' } }))
+  })
+
+  test('rejects non-loopback Host on pipe transport', () => {
+    assert.ok(
+      !isLoopbackRequest({
+        headers: { host: 'example.com', origin: 'https://example.com/' },
+        socket: { remoteAddress: undefined }
+      })
+    )
+    // Decimal loopback Host is still loopback when origin is loopback.
+    assert.ok(
+      isLoopbackRequest({
+        headers: { host: '2130706433', origin: 'http://127.0.0.1:5174' },
+        socket: { remoteAddress: undefined }
+      })
+    )
   })
 })
 

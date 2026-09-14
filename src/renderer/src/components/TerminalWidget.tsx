@@ -5,7 +5,7 @@ import { Unicode11Addon } from 'xterm-addon-unicode11'
 import 'xterm/css/xterm.css'
 import { ThemeName, useTheme } from '../theme'
 import { attachmentAgent, imagePasteShortcut, insertAttachments, isTerminalPasteShortcut } from '../lib/terminalAttachments'
-import { markInitialCommandDelivered, peekInitialCommand } from '../lib/pendingTerminalCommands'
+import { clearInitialCommand, markInitialCommandDelivered, peekInitialCommand } from '../lib/pendingTerminalCommands'
 import { IS_MAC } from '../lib/platform'
 import { TerminalRenderQueue } from '../lib/terminalRenderQueue'
 import { palette } from '../ui/tokens'
@@ -500,6 +500,7 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
     const exitUnsub = window.api.terminal.onExit(id, (code) => {
       if (exitReported) return
       exitReported = true
+      clearInitialCommand(id)
       isCodexRef.current = agentId === 'codex'
       if (agentIdRef.current === 'codex' && agentId !== 'codex') agentIdRef.current = undefined
       term.write(`\r\n\x1b[90m[Process exited${typeof code === 'number' ? ` (code ${code})` : ''}]\x1b[0m\r\n`)

@@ -124,3 +124,18 @@ test('fs:open-path blocks executable and script extensions', async () => {
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('fs:open-path blocks active markup that can carry script', async () => {
+  const dir = fs.mkdtempSync(join(os.tmpdir(), 'orcspace-fs-'))
+  try {
+    for (const name of ['page.html', 'page.htm', 'image.svg']) {
+      const target = join(dir, name)
+      fs.writeFileSync(target, '<script>alert(1)</script>')
+      const res = (await harness(dir).call('fs:open-path', target)) as { error?: string; ok?: boolean }
+      assert.equal(res.ok, undefined)
+      assert.match(String(res.error), /Web pages cannot be opened/, 'the refusal must name the real reason')
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})

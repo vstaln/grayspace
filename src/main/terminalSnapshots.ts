@@ -48,6 +48,7 @@ export class TerminalSnapshots {
 
 
   private readonly generations = new Map<string, number>()
+  private readonly saveChains = new Map<string, Promise<void>>()
 
   private get dir(): string {
     return join(getUserDataDir(), 'terminals')
@@ -139,35 +140,40 @@ export class TerminalSnapshots {
     const gen = (this.generations.get(input.id) ?? 0) + 1
     this.generations.set(input.id, gen)
     this.index[input.id] = entry
-    void (async () => {
-      try {
-        await fsp.mkdir(this.dir, { recursive: true })
+    // Serialize writes per terminal id: without this, a superseded save can
+    // finish after its replacement and leave stale scrollback on disk while
+    // the index points at the newer entry.
+    const previous = this.saveChains.get(input.id) ?? Promise.resolve()
+    const current = previous
+      .catch(() => undefined)
+      .then(async () => {
+        // forget() drops the generation: an in-flight save for a closed
+        // terminal must not resurrect its file.
         if ((this.generations.get(input.id) ?? 0) !== gen) return
-
-
-
-        await writeTextAtomicAsync(this.scrollbackFile(input.id), text)
-
-
-        if ((this.generations.get(input.id) ?? 0) !== gen) {
-          if (this.index[input.id] === entry) delete this.index[input.id]
-          this.scheduleFlush()
-          if (this.index[input.id] === undefined || this.index[input.id] === entry) {
-            await fsp.rm(this.scrollbackFile(input.id), { force: true }).catch(() => {})
+        try {
+          await fsp.mkdir(this.dir, { recursive: true })
+          if ((this.generations.get(input.id) ?? 0) !== gen) return
+          await writeTextAtomicAsync(this.scrollbackFile(input.id), text)
+          if ((this.generations.get(input.id) ?? 0) !== gen) {
+            // Superseded between mkdir and write completion: the replacement
+            // is already chained behind us and will write the newer text.
+            if (this.index[input.id] === entry) delete this.index[input.id]
+            this.scheduleFlush()
+          }
+        } catch (err) {
+          console.error(`failed to persist scrollback for ${input.id}`, err)
+          if (this.index[input.id] === entry) {
+            delete this.index[input.id]
+            this.scheduleFlush()
           }
         }
-      } catch (err) {
-
-
-        console.error(`failed to persist scrollback for ${input.id}`, err)
-        if (this.index[input.id] === entry) {
-          delete this.index[input.id]
-
-
-          this.scheduleFlush()
-        }
-      }
-    })()
+      })
+    this.saveChains.set(input.id, current)
+    void current
+      .catch(() => undefined)
+      .then(() => {
+        if (this.saveChains.get(input.id) === current) this.saveChains.delete(input.id)
+      })
     this.scheduleFlush()
   }
 

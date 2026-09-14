@@ -1,6 +1,7 @@
 import * as fs from 'fs'
 import { join } from 'path'
 import { getUserDataDir } from './userData.ts'
+import { writeFileAtomicSync } from './atomicFile.ts'
 import { buildPresence } from './linkSnapshot.ts'
 
 export const RUNTIME_FILE_NAME = 'runtime.json'
@@ -20,10 +21,14 @@ export function writeRuntimePresence(input: {
     ...buildPresence({ workspaceDir: input.workspaceDir }),
     writtenAt: Date.now()
   }
-  const dir = getUserDataDir()
-  fs.mkdirSync(dir, { recursive: true })
   const file = runtimeFile()
-  fs.writeFileSync(file, JSON.stringify(payload, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
+  // Atomic + fsynced: a torn runtime.json makes the CLI report "offline"
+  // while the app is running (cli/orc.mjs JSON.parse path). 0600 keeps the
+  // socket path and port readable only by the user who owns the session.
+  writeFileAtomicSync(file, JSON.stringify(payload, null, 2) + '\n', {
+    mode: 0o600,
+    ensureDir: getUserDataDir()
+  })
   return file
 }
 

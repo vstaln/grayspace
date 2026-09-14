@@ -485,8 +485,17 @@ export interface CodeSnapshot {
   version: number
 }
 
+export interface AgentConversation {
+  id: string
+  agentId: 'claude' | 'codex' | 'antigravity'
+  title: string
+  updatedAt: number
+  command: string
+}
+
 export interface CodeApi {
   load(): Promise<CodeSnapshot>
+  conversations(dir?: string): Promise<AgentConversation[]>
   save(snapshot: { sessions?: CodeSession[]; featuredId?: string | null; maximizedId?: string | null; activeView?: WorkView | null; workspaceDir?: string | null; codeWorkspaceId?: string }): Promise<{ ok: boolean; snapshot?: CodeSnapshot; discarded?: boolean } | { error: string }>
   saveSync?(snapshot: { sessions?: CodeSession[]; featuredId?: string | null; maximizedId?: string | null; activeView?: WorkView | null; workspaceDir?: string | null; codeWorkspaceId?: string }): { ok: boolean } | { error: string }
   onChange(cb: (snapshot: CodeSnapshot) => void): () => void

@@ -157,6 +157,10 @@ export class CodeStore extends EventEmitter {
       }
     }
     this.loaded = true
+    const codeSchemaVersion = Number((source as Record<string, unknown>)?.schemaVersion)
+    if (Number.isFinite(codeSchemaVersion) && codeSchemaVersion > CODE_SCHEMA_VERSION) {
+      console.warn(`code store schema v${codeSchemaVersion} is newer than supported v${CODE_SCHEMA_VERSION}; loading best-effort`)
+    }
     const data = sanitizeSnapshot(source)
     for (const s of data.sessions) this.sessions.set(s.id, s)
     this.featuredId = data.featuredId

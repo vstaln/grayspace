@@ -227,7 +227,13 @@ export function sweepTempFiles(dir: string, maxAgeMs = 3_600_000): void {
   }
   const now = Date.now()
   for (const name of names) {
-    if (!/^\.\d+-\d+-[0-9a-f]+\.tmp$/.test(name)) continue
+    // Only this app's own temp shapes. A blanket /\.tmp$/ would also delete
+    // whatever else happens to live in the user-data directory.
+    //   atomic writes (JS and Rust storage-core): .<ms|nanos>-<pid>-<hex|dec>.tmp
+    //   journal rotation (journalSink.ts):        <file>.<16 hex>.tmp
+    const isAtomicTemp = /^\.\d+-\d+-[0-9a-f]+\.tmp$/i.test(name)
+    const isJournalTemp = /^.+\.[0-9a-f]{16}\.tmp$/i.test(name)
+    if (!isAtomicTemp && !isJournalTemp) continue
     try {
       const full = join(dir, name)
       const stat = fs.statSync(full)

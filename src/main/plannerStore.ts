@@ -187,6 +187,10 @@ export class PlannerStore extends EventEmitter {
 
     const raw = readStoreJson<Record<string, unknown>>(this.file, {})
     this.loaded = true
+    const schemaVersion = Number(raw.schemaVersion)
+    if (Number.isFinite(schemaVersion) && schemaVersion > PLANNER_SCHEMA_VERSION) {
+      console.warn(`planner store schema v${schemaVersion} is newer than supported v${PLANNER_SCHEMA_VERSION}; loading best-effort`)
+    }
     const items = Array.isArray(raw.items) ? raw.items : []
     for (const entry of items) {
       const item = revive(entry)

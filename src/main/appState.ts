@@ -265,9 +265,14 @@ export class AppState extends EventEmitter {
     this.ensure()
     const key = codeFolderKey(folder)
     const workspaces = this.ensureCodeWorkspaceGroup(key)
-    if (workspaces.length <= 1) return { error: 'A project must keep at least one workspace.' }
     const index = workspaces.findIndex((item) => item.id === id)
     if (index === -1) return { error: 'Workspace not found.' }
+    if (workspaces.length === 1) {
+      delete this.state.codeWorkspaceGroups[key]
+      delete this.state.activeCodeWorkspaceIds[key]
+      this.commit()
+      return { workspaces: [], activeId: '', folder: folder ?? null }
+    }
     workspaces.splice(index, 1)
     if (!workspaces.some((item) => item.id === this.state.activeCodeWorkspaceIds[key])) {
       this.state.activeCodeWorkspaceIds[key] = workspaces[Math.max(0, index - 1)].id
@@ -455,6 +460,16 @@ export class AppState extends EventEmitter {
     this.deleteSecretBackups()
   }
 
+  /**
+   * Drop the rollback and quarantine copies of the state file.
+   *
+   * When OS encryption is unavailable the key lives in `settings` as plain
+   * text, so `workspace-state.json.bak` and any `.corrupt-<ts>` quarantine
+   * keep a readable copy of it. Revoking or re-encrypting the key has to take
+   * those with it, or the old secret outlives the key it replaced. Losing the
+   * rollback copy here is the cheaper failure: it is regenerated on the very
+   * next commit.
+   */
   private deleteSecretBackups(): void {
     try {
       fs.unlinkSync(`${this.file}.bak`)
@@ -496,6 +511,14 @@ export class AppState extends EventEmitter {
   flush(): void {
     this.ensure()
     this.commit()
+  }
+
+  dispose(): void {
+    if (this.commitTimer !== null) {
+      // Flush synchronously: commitSoon() leaves a 400ms durability window
+      // (autocreated workspace groups); quit inside the window must not drop it.
+      this.commit()
+    }
   }
 
   private ensure(): void {

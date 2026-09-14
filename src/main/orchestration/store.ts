@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events'
 import { join } from 'path'
 import { readStoreJson, writeJsonAtomic, writeJsonAtomicAsync } from '../storage.ts'
+import { notifyPersistError } from '../persistNotifier.ts'
 import { getUserDataDir } from '../userData.ts'
 import { CommandError, VersionRegistry } from '../core/index.ts'
 import {
@@ -123,6 +124,9 @@ export class OrchestrationStore extends EventEmitter {
 
   private load(): void {
     const data = readStoreJson<PersistedShape>(this.file, emptyShape())
+    if (typeof data.schemaVersion === 'number' && data.schemaVersion > ORCHESTRATION_SCHEMA_VERSION) {
+      console.warn(`orchestration store schema v${data.schemaVersion} is newer than supported v${ORCHESTRATION_SCHEMA_VERSION}; loading best-effort`)
+    }
     for (const run of data.runs ?? []) this.runs.set(run.id, run)
     for (const task of data.tasks ?? []) this.tasks.set(task.id, task)
     for (const dispatch of data.dispatches ?? []) this.dispatches.set(dispatch.id, dispatch)
@@ -149,7 +153,9 @@ export class OrchestrationStore extends EventEmitter {
       ...this.messages.map((m) => m.id)
     ]
     for (const id of ids) {
-      const n = Number(id.slice(id.lastIndexOf('-') + 1))
+      const match = /-(\d+)$/.exec(id)
+      if (!match) continue
+      const n = Number(match[1])
       if (Number.isFinite(n) && n > this.counter) this.counter = n
     }
   }
@@ -205,10 +211,10 @@ export class OrchestrationStore extends EventEmitter {
         try {
           await writeJsonAtomicAsync(this.file, snapshot)
         } catch (err) {
-          console.error('failed to persist orchestration state', err)
+          notifyPersistError('orchestration', err)
         }
       })
-      .catch((err) => console.error('orchestration flushAsync chain broke', err))
+      .catch((err) => notifyPersistError('orchestration', err))
   }
 
 
@@ -221,13 +227,26 @@ export class OrchestrationStore extends EventEmitter {
       writeJsonAtomic(this.file, this.payload())
       this.syncFlushedSeq = this.writeSeq
     } catch (err) {
-      console.error('failed to flush orchestration state', err)
+      notifyPersistError('orchestration', err)
     }
   }
 
   private id(prefix: string): string {
-    this.counter += 1
-    return `${prefix}-${this.counter}`
+    // Belt-and-braces: even if a persisted id dodges the numeric scan above
+    // (manual edits, future id shapes), never hand out a duplicate.
+    for (;;) {
+      this.counter += 1
+      const id = `${prefix}-${this.counter}`
+      if (
+        !this.runs.has(id) &&
+        !this.tasks.has(id) &&
+        !this.dispatches.has(id) &&
+        !this.gates.has(id) &&
+        !this.messageIndex.has(id)
+      ) {
+        return id
+      }
+    }
   }
 
 

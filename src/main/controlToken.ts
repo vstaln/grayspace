@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto'
 import * as fs from 'fs'
 import { join } from 'path'
 import { getUserDataDir } from './userData.ts'
+import { writeFileAtomicSync } from './atomicFile.ts'
 import { notifyPersistError } from './persistNotifier.ts'
 
 
@@ -39,10 +40,12 @@ export function controlToken(): string {
   }
   const token = randomBytes(32).toString('hex')
   try {
-    fs.mkdirSync(join(getUserDataDir()), { recursive: true })
-
-
-    fs.writeFileSync(file, token, { encoding: 'utf8', mode: 0o600 })
+    // Atomic + fsynced: controlToken() runs inside app.whenReady() before the
+    // window exists, and every `orc` client reads this file. A torn write
+    // turns into universal 401s with no window to explain them. 0600 because
+    // this token is the only thing standing between a local process and the
+    // full control API.
+    writeFileAtomicSync(file, token, { mode: 0o600, ensureDir: getUserDataDir() })
   } catch (err) {
     // The token is still cached and returned, so the window and every IPC
     // path keep working — but `orc` reads this file, so nothing that goes

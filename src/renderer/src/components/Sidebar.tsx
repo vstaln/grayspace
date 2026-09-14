@@ -907,8 +907,11 @@ export default React.memo(function Sidebar({
     openRename('code', id, currentName, folder)
   }
 
-  const deleteCodeWorkspace = async (folder: string, id: string, name: string): Promise<void> => {
-    const ok = await confirm(`Delete workspace “${name}”? Its saved sessions will no longer be available.`, {
+  const deleteCodeWorkspace = async (folder: string, id: string, name: string, isLast: boolean): Promise<void> => {
+    const message = isLast
+      ? `Delete workspace “${name}” and close this folder? Its saved sessions will no longer be available.`
+      : `Delete workspace “${name}”? Its saved sessions will no longer be available.`
+    const ok = await confirm(message, {
       title: 'Delete workspace',
       danger: true,
       confirmLabel: 'Delete'
@@ -1139,7 +1142,7 @@ export default React.memo(function Sidebar({
                             aria-label={`Delete ${workspace.name}`}
                             title="Delete workspace"
                             className="mr-0.5 grid h-8 w-7 flex-none place-items-center rounded-[7px] text-text-faint opacity-0 transition-colors group-hover:opacity-100 hover:bg-bg-raise hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
-                            onClick={() => void deleteCodeWorkspace(group.folder, workspace.id, workspace.name)}
+                            onClick={() => void deleteCodeWorkspace(group.folder, workspace.id, workspace.name, group.workspaces.length === 1)}
                           >
                             <Trash2 size={11} strokeWidth={1.8} />
                           </button>

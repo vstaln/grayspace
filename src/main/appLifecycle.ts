@@ -7,6 +7,7 @@ import type { PlannerStore } from './plannerStore.ts'
 import type { CanvasStore } from './canvasState.ts'
 import type { CodeStore } from './codeState.ts'
 import type { OrchestrationStore } from './orchestration/store.ts'
+import type { AppState } from './appState.ts'
 import type { Core } from './core/index.ts'
 
 /**
@@ -75,6 +76,7 @@ export function setupLifecycle(deps: {
   code: CodeStore
   core: Core
   orchestration: OrchestrationStore
+  state: AppState
   getControlServer: () => { close(): void; closeAllConnections?(): void } | null
   setControlServer: (v: { close(): void; closeAllConnections?(): void } | null) => void
   getOrchestrationSignal: () => ReturnType<typeof setTimeout> | null
@@ -90,6 +92,7 @@ export function setupLifecycle(deps: {
     code,
     core,
     orchestration,
+    state,
     getControlServer,
     setControlServer,
     getOrchestrationSignal,
@@ -104,7 +107,6 @@ export function setupLifecycle(deps: {
   app.on('before-quit', () => {
     if (deps.isShuttingDown()) return
     deps.setShuttingDown(true)
-    cancelPendingProcessTreeSweeps()
     const sig = getOrchestrationSignal()
     if (sig !== null) {
       clearTimeout(sig)
@@ -112,6 +114,11 @@ export function setupLifecycle(deps: {
     }
     snapshotTerminals(terminals, snapshots, code, canvas)
     snapshots.beginShutdown()
+    try {
+      state.flush()
+    } catch (err) {
+      console.error('failed to flush workspace state', err)
+    }
     try {
       const server = getControlServer()
       server?.close()
@@ -130,6 +137,9 @@ export function setupLifecycle(deps: {
 
 
     terminals.disposeAll()
+    // After disposeAll, not before: killing the ptys is what schedules the
+    // sweeps, so cancelling first leaves a debounced timer and a child process
+    // pending across the quit.
     cancelPendingProcessTreeSweeps()
     planner.dispose()
     orchestration.dispose()

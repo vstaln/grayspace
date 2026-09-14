@@ -2,10 +2,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FolderOpen, Maximize2, Minimize2, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
 import TerminalWidget, { forgetTerminalViewport } from './TerminalWidget'
 import BrowserWidget from './BrowserWidget'
-import CodeLauncher, { CODE_AGENTS, CODE_LAUNCH_COUNTS, CodeAgent } from './CodeLauncher'
+import CodeLauncher, { CODE_AGENTS, CODE_LAUNCH_COUNTS, MAX_CODE_SESSIONS, CodeAgent } from './CodeLauncher'
+import ResumeAgents from './ResumeAgents'
+import { upgradeSessionsToResume, type AgentConversation } from '../lib/agentConversations'
 import { clearInitialCommand, queueInitialCommand, queueInitialCommandOnce } from '../lib/pendingTerminalCommands'
 import { forgetAgentSelection } from './WidgetFrame'
 import { attachmentAgent } from '../lib/terminalAttachments'
+import { resolvePersistedAgent } from '../lib/persistedAgent'
 import { setCodeSessionCount } from '../lib/codeSessions'
 
 interface Session {
@@ -16,7 +19,6 @@ interface Session {
 }
 
 let sessionCounter = 0
-const MAX_CODE_SESSIONS = 32
 const INLINE_AGENTS = CODE_AGENTS.filter((agent) => agent.id !== 'browser' && agent.id !== 'custom')
 
 function makeSessionId(): string {
@@ -25,16 +27,10 @@ function makeSessionId(): string {
 }
 
 function agentForPersisted(agentId: string, label: string, command: string): CodeAgent {
-  // The command is what the terminal actually starts. Prefer its executable
-  // over stale metadata so a session cannot display Codex while launching
-  // Claude (or the other way around) after a migration or hand-edited state.
-  const commandAgentId = attachmentAgent(command)
-  const fromCommand = commandAgentId && CODE_AGENTS.find((a) => a.id === commandAgentId)
-  if (fromCommand) return fromCommand
-
-  const found = CODE_AGENTS.find((a) => a.id === agentId)
-  if (found && found.command === command) return found
-  if (found && agentId !== 'custom') return found
+  // The command is what the terminal actually starts; `resolvePersistedAgent`
+  // owns the rules about which parts of a persisted session to trust.
+  const resolved = resolvePersistedAgent(agentId, command, CODE_AGENTS)
+  if (resolved) return { ...resolved.agent, command: resolved.command }
 
   return { id: agentId || 'custom', label: label || command || 'Other CLI', command, Icon: TerminalIcon }
 }
@@ -310,6 +306,9 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
    * which reads as a flash of the wrong screen on every open.
    */
   const [workspaceDir, setWorkspaceDir] = useState<string | null | undefined>(undefined)
+  const workspaceDirRef = useRef(workspaceDir)
+  workspaceDirRef.current = workspaceDir
+  const autoResumeAllowedRef = useRef(true)
   const [recentDirs, setRecentDirs] = useState<{ path: string; name?: string }[]>([])
   const [pickingDir, setPickingDir] = useState(false)
   const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([])
@@ -455,14 +454,14 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
   }, [])
 
   useEffect(() => {
-    const flushBeforeSwitch = (): void => {
+    const flushSync = (): void => {
       if (!hydratedRef.current) return
       if (saveTimerRef.current !== null) {
         clearTimeout(saveTimerRef.current)
         saveTimerRef.current = null
       }
       dirtyRef.current = false
-      void window.api.code.save({
+      const payload = {
         sessions: sessionsRef.current.map((session) => ({
           id: session.id,
           agentId: session.agent.id,
@@ -474,13 +473,29 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
         featuredId: featuredIdRef.current,
         maximizedId: maximizedIdRef.current,
         codeWorkspaceId: codeWorkspaceIdRef.current
-      }).catch(() => {})
+      }
+      if (typeof window.api.code.saveSync === 'function') {
+        try {
+          window.api.code.saveSync(payload)
+        } catch {}
+      } else {
+        void window.api.code.save(payload).catch(() => {})
+      }
     }
-    window.addEventListener('orcspace:before-code-workspace-switch', flushBeforeSwitch)
-    return () => window.removeEventListener('orcspace:before-code-workspace-switch', flushBeforeSwitch)
+
+    window.addEventListener('orcspace:before-code-workspace-switch', flushSync)
+    window.addEventListener('beforeunload', flushSync)
+    window.addEventListener('pagehide', flushSync)
+    return () => {
+      flushSync()
+      window.removeEventListener('orcspace:before-code-workspace-switch', flushSync)
+      window.removeEventListener('beforeunload', flushSync)
+      window.removeEventListener('pagehide', flushSync)
+    }
   }, [])
 
   const hydrate = useCallback(() => {
+    autoResumeAllowedRef.current = true
     if (saveTimerRef.current !== null) {
       clearTimeout(saveTimerRef.current)
       saveTimerRef.current = null
@@ -490,37 +505,50 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
     const changesAtStart = codeChangeSeqRef.current
     hydratedRef.current = false
 
-
-
-
     skipNextSaveRef.current = false
-
 
     setSessions([])
     setFeaturedId(null)
     setMaximizedId(null)
     void window.api.code
       .load()
-      .then((snapshot) => {
+      .then(async (snapshot) => {
         if (run !== hydrationRunRef.current) return
         if (codeChangeSeqRef.current !== changesAtStart) {
           hydratedRef.current = true
-
 
           skipNextSaveRef.current = false
           setSessions((current) => [...current])
           return
         }
-        const restored: Session[] = (snapshot.sessions ?? []).map((s) => ({
+        let restored: Session[] = (snapshot.sessions ?? []).map((s) => ({
           id: s.id,
           agent: agentForPersisted(s.agentId, s.label, s.command),
           title: s.title ?? s.label,
-          status: s.status === 'finished' ? 'finished' : 'active'
+          status: 'active'
         }))
 
+        // Auto-upgrade bare commands or finished sessions to resume where left off
+        const folder =
+          codeWorkspaceFolderRef.current ||
+          workspaceDirRef.current ||
+          (await window.api.workspace.getDir().catch(() => null))
+        if (folder && restored.length > 0 && window.api.code.conversations) {
+          try {
+            const conversations = await window.api.code.conversations(folder)
+            if (run !== hydrationRunRef.current) return
+            if (Array.isArray(conversations) && conversations.length > 0) {
+              const { sessions: upgradedSessions, upgraded } = upgradeSessionsToResume(restored, conversations)
+              restored = upgradedSessions
+              if (upgraded) dirtyRef.current = true
+            }
+          } catch {}
+        }
 
         for (const session of restored) {
-          if (session.status === 'active' && !isBrowserSession(session)) queueInitialCommandOnce(session.id, session.agent.command)
+          if (session.status === 'active' && !isBrowserSession(session)) {
+            queueInitialCommandOnce(session.id, session.agent.command)
+          }
         }
 
         let maxCounter = 0
@@ -681,7 +709,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
     }
   }, [])
 
-  const launch = useCallback((agent: CodeAgent, count: number): void => {
+  const launch = useCallback((agent: CodeAgent, count: number, title?: string): void => {
     markLocalChange()
 
 
@@ -695,7 +723,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
 
 
       if (agent.id !== 'browser') queueInitialCommand(id, agent.command)
-      created.push({ id, agent, title: agent.label, status: 'active' })
+      created.push({ id, agent, title: title || agent.label, status: 'active' })
     }
     if (created.length === 0) return
     setSessions((current) => {
@@ -773,6 +801,47 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
     }
   }, [agentCounts, launch, selectedAgentIds])
 
+  /**
+   * Reopens a past conversation: the same agent, started with its own resume
+   * command, so the terminal comes up inside that conversation rather than a
+   * new one. The command is persisted with the session, so a later restart
+   * resumes it again instead of starting over.
+   */
+  const resumeConversation = useCallback((conversation: AgentConversation): void => {
+    const base = CODE_AGENTS.find((agent) => agent.id === conversation.agentId)
+    if (!base || !conversation.command.trim()) return
+    // The header shows a truncated title anyway, and the store caps it too;
+    // trimming here keeps what is displayed and what is saved identical.
+    const title = conversation.title.trim().slice(0, 80) || `${base.label} session`
+    launch({ ...base, command: conversation.command }, 1, title)
+  }, [launch])
+
+  const resumeConversations = useCallback((conversations: AgentConversation[]): void => {
+    markLocalChange()
+    let remaining = Math.max(0, MAX_CODE_SESSIONS - sessionsRef.current.length)
+    const created: Session[] = []
+    for (const conversation of conversations) {
+      if (remaining <= 0) break
+      const base = CODE_AGENTS.find((agent) => agent.id === conversation.agentId)
+      if (!base || !conversation.command.trim()) continue
+      const title = conversation.title.trim().slice(0, 80) || `${base.label} session`
+      const id = makeSessionId()
+      queueInitialCommand(id, conversation.command)
+      created.push({
+        id,
+        agent: { ...base, command: conversation.command },
+        title,
+        status: 'active'
+      })
+      remaining -= 1
+    }
+    if (created.length === 0) return
+    setSessions((current) => {
+      const room = Math.max(0, MAX_CODE_SESSIONS - current.length)
+      return [...current, ...created.slice(0, room)]
+    })
+  }, [markLocalChange])
+
   const renameSession = useCallback((id: string, title: string): void => {
     markLocalChange()
     setSessions((current) =>
@@ -782,6 +851,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
   }, [markLocalChange])
 
   const closeSession = useCallback((id: string): void => {
+    autoResumeAllowedRef.current = false
     const session = sessionsRef.current.find((item) => item.id === id)
     if (session && !isBrowserSession(session)) {
       window.api.terminal.dispose(id).then((res: unknown) => {
@@ -801,6 +871,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
   }, [markLocalChange])
 
   const finishSession = useCallback((id: string): void => {
+    clearInitialCommand(id)
     markLocalChange()
     setSessions((current) => current.map((session) =>
       session.id === id ? { ...session, status: 'finished' } : session
@@ -1040,6 +1111,14 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
                           Change
                         </button>
                       </div>
+
+                      <ResumeAgents
+                        dir={workspaceDir}
+                        remainingSlots={availableSessionSlots}
+                        onResume={resumeConversation}
+                        onResumeAll={resumeConversations}
+                        autoResume={autoResumeAllowedRef.current}
+                      />
 
                       <div className="mb-2 text-[11px] font-semibold tracking-[0.08em] text-text-faint uppercase">
                         Agent

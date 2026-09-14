@@ -1,3 +1,5 @@
+import { isLoopbackHost } from './netGuard.ts'
+
 export function isTrustedAppNavigation(
   url: string,
   options: { devUrl?: string; controlOrigin: string; rendererFile: string }
@@ -22,4 +24,21 @@ export function isTrustedAppNavigation(
   } catch {
     return false
   }
+}
+
+// Electron gold standard for window.open / shell.openExternal: pure URL
+// validation without side effects (rate limiting lives in windowManager).
+// Allows https anywhere, http solely for loopback dev servers.
+export function isExternalOpenAllowed(url: string): boolean {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return false
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false
+  if (parsed.username || parsed.password) return false
+  if (!parsed.hostname || url.length > 2048) return false
+  if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.host)) return false
+  return true
 }

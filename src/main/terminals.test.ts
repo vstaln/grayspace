@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert'
 import { EventEmitter } from 'node:events'
 import { describe, test } from 'node:test'
 import * as fs from 'node:fs'
-import { TerminalManager, normalizeDeliveryText, windowsShellArgs } from './terminals.ts'
+import { MAX_TERMINALS, TerminalManager, normalizeDeliveryText, windowsShellArgs } from './terminals.ts'
 import { defaultShell } from './config.ts'
 
 describe('TerminalManager', () => {
@@ -591,20 +591,57 @@ describe('TerminalManager', () => {
   })
 
   test('windowsShellArgs starts cmd without setup commands', () => {
-    // cmd.exe receives no startup command, keeping its prompt on row one.
+    // cmd.exe gets a silent chcp only: output nulled, prompt stays on row one.
     if (process.platform !== 'win32') {
       assert.deepEqual(windowsShellArgs('cmd'), [])
       assert.deepEqual(windowsShellArgs('powershell'), [])
       return
     }
     const cmd = windowsShellArgs('cmd')
-    assert.deepEqual(cmd, ['/K'], 'cmd.exe must open directly on its first prompt row')
+    assert.deepEqual(cmd, ['/K', 'chcp 65001 >nul'], 'cmd.exe must stay UTF-8 without moving its first prompt row')
 
     const ps = windowsShellArgs('powershell')
     assert.ok(ps.includes('-NoExit'), 'the PowerShell session must stay interactive')
     assert.ok(ps.some((arg) => arg.includes('65001')))
     for (const arg of ps) {
       assert.ok(!/[\r\n]/.test(arg), `argv entry must not carry an Enter: ${arg}`)
+    }
+  })
+
+  test('reserve reclaims an exited slot but never a pending reservation', () => {
+    class FakeRustPty extends EventEmitter {
+      spawn(): { ok: true } { return { ok: true } }
+      write(): { ok: true } { return { ok: true } }
+      resize(): { ok: true } { return { ok: true } }
+      dispose(): { ok: true } { return { ok: true } }
+      beginClose(): void {}
+      close(): void {}
+    }
+
+    const sidecar = new FakeRustPty()
+    const manager = new TerminalManager({ rustPty: sidecar as never })
+    try {
+      const reserved = Array.from({ length: MAX_TERMINALS }, () => manager.reserve())
+      assert.equal(manager.list().length, MAX_TERMINALS)
+
+      // Every slot is reserved but unspawned: reclaiming one would destroy a
+      // terminal the renderer is still about to attach to, so refuse instead.
+      assert.throws(() => manager.reserve(), /terminal limit reached/)
+      assert.equal(manager.list().length, MAX_TERMINALS)
+
+      // Spawn two and let the older one exit: that slot is now reclaimable.
+      assert.equal(manager.spawn(reserved[0].id, 80, 24).ok, true)
+      assert.equal(manager.spawn(reserved[1].id, 80, 24).ok, true)
+      sidecar.emit('exit', reserved[0].id, 0)
+
+      const extra = manager.reserve()
+      assert.ok(extra.id.startsWith('term-'))
+      assert.equal(manager.list().length, MAX_TERMINALS)
+      assert.equal(manager.list().some((t) => t.id === reserved[0].id), false, 'the exited slot is the one reclaimed')
+      assert.equal(manager.list().some((t) => t.id === reserved[1].id), true, 'the live slot survives')
+      assert.equal(manager.list().some((t) => t.id === reserved[2].id), true, 'pending reservations survive')
+    } finally {
+      manager.disposeAll()
     }
   })
 })

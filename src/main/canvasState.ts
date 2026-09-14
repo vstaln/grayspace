@@ -95,8 +95,11 @@ type WorkspaceChangeListener = (dir: string | undefined) => void
 const workspaceChangeListeners = new Set<WorkspaceChangeListener>()
 
 
-export function registerCanvasWorkspaceListener(listener: WorkspaceChangeListener): void {
+export function registerCanvasWorkspaceListener(listener: WorkspaceChangeListener): () => void {
   workspaceChangeListeners.add(listener)
+  return () => {
+    workspaceChangeListeners.delete(listener)
+  }
 }
 
 export function notifyCanvasWorkspaceChanged(dir: string | undefined): void {
@@ -250,6 +253,7 @@ export class CanvasStore extends EventEmitter {
   readonly canvasVersions = new VersionRegistry('canvas')
 
   private workspaceDir: string | undefined
+  private unsubscribeWorkspace: (() => void) | null = null
 
   get activeWorkspaceDir(): string | undefined {
     this.ensure()
@@ -258,7 +262,7 @@ export class CanvasStore extends EventEmitter {
 
   constructor() {
     super()
-    registerCanvasWorkspaceListener((dir) => this.switchWorkspace(dir))
+    this.unsubscribeWorkspace = registerCanvasWorkspaceListener((dir) => this.switchWorkspace(dir))
   }
 
   private get file(): string {
@@ -476,9 +480,16 @@ export class CanvasStore extends EventEmitter {
       }
     })()
 
-
-
-    const legacy = Object.keys(raw).length === 0 && !alreadyMigrated
+    // Only consult the legacy file when there is no current file at all: a
+    // corrupt current file quarantines to fallback {} and must not trigger a
+    // spurious migration, and a fresh profile must not touch legacy either.
+    let currentExists = false
+    try {
+      currentExists = fs.existsSync(this.file)
+    } catch {
+      currentExists = false
+    }
+    const legacy = !currentExists && !alreadyMigrated
       ? readStoreJson<Record<string, unknown>>(legacyFile, {})
       : {}
     this.loaded = true
@@ -802,7 +813,10 @@ export class CanvasStore extends EventEmitter {
 
     let removed = 0
     const removedWidgets: Array<{ id: string; kind?: WidgetKind }> = []
-    if (incoming) {
+    // The removal pass assumes a full snapshot. When the import was truncated
+    // to MAX_WIDGETS, `seen` is missing the dropped oldest by construction —
+    // treating them as renderer-deleted would delete the same widgets twice.
+    if (incoming && incoming.length <= MAX_WIDGETS) {
       for (const id of Array.from(this.widgets.keys())) {
         if (seen.has(id) || !this.rendererBaseline.has(id)) continue
         const gone = this.widgets.get(id)
@@ -968,6 +982,12 @@ export class CanvasStore extends EventEmitter {
       clearTimeout(this.changeTimer)
       this.changeTimer = null
     }
+    try {
+      this.unsubscribeWorkspace?.()
+    } catch {
+      // Listener cleanup must never block the shutdown flush.
+    }
+    this.unsubscribeWorkspace = null
     this.flush()
   }
 }

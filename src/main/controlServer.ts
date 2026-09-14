@@ -166,7 +166,10 @@ export function startControlServer(deps: ControlDeps): http.Server {
       return sendJson(
         res,
         200,
-        buildPresence({ workspaceDir: deps.defaultCwd() ?? null, socketPath })
+        // No explicit socketPath: buildPresence reads the active one, which
+        // tracks the pipe fallback. A captured const would advertise a dead
+        // path after EADDRINUSE failover.
+        buildPresence({ workspaceDir: deps.defaultCwd() ?? null })
       )
     }
 
@@ -196,21 +199,27 @@ export function startControlServer(deps: ControlDeps): http.Server {
 
   const pipeServer = http.createServer(handleRequest)
   let activeSocket = socketPath
+  let pipeFallbackAttempts = 0
+  const MAX_PIPE_FALLBACK_ATTEMPTS = 5
   pipeServer.on('error', (err: NodeJS.ErrnoException) => {
-    if (err.code === 'EADDRINUSE' && activeSocket === socketPath) {
+    if (err.code === 'EADDRINUSE' && pipeFallbackAttempts < MAX_PIPE_FALLBACK_ATTEMPTS) {
+      pipeFallbackAttempts += 1
+      // Always includes a random component: the first fallback can itself be
+      // occupied (another OrcSpace instance from the same pid range, or a
+      // leftover socket), so a fixed pid-only suffix would retry the same
+      // losing path forever instead of finding a free one.
+      const suffix = `-${process.pid}-${Math.random().toString(36).slice(2, 8)}`
       const fallback = process.platform === 'win32'
-        ? `\\\\.\\pipe\\orcspace-${process.pid}`
-        : join(os.tmpdir(), `orcspace-${process.pid}.sock`)
-      if (fallback !== socketPath) {
-        console.warn(`control IPC socket ${activeSocket} in use, falling back to ${fallback}`)
-        prepareSocketPath(fallback)
-        activeSocket = fallback
-        pipeServer.listen(fallback, () => {
-          setActiveSocketPath(fallback)
-          deps.onSocketAssigned?.(fallback)
-        })
-        return
-      }
+        ? `\\\\.\\pipe\\orcspace${suffix}`
+        : join(os.tmpdir(), `orcspace${suffix}.sock`)
+      console.warn(`control IPC socket ${activeSocket} in use, falling back to ${fallback}`)
+      prepareSocketPath(fallback)
+      activeSocket = fallback
+      pipeServer.listen(fallback, () => {
+        setActiveSocketPath(fallback)
+        deps.onSocketAssigned?.(fallback)
+      })
+      return
     }
     console.error('control pipe server error', err)
   })
