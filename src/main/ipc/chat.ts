@@ -92,6 +92,9 @@ function resolveWindowsCommand(paths: string[], command: string): ResolvedComman
     if ((extension === '.exe' || extension === '.com') && existsSync(path)) return { file: path, prefixArgs: [] }
     const script = extension ? path.replace(/\.(?:cmd|bat)$/i, '.ps1') : `${path}.ps1`
     if (existsSync(script)) return { file: windowsPowerShell(), prefixArgs: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script] }
+    if (existsSync(path) && (extension === '.cmd' || extension === '.bat')) {
+      return { file: process.env.COMSPEC || 'cmd.exe', prefixArgs: ['/d', '/s', '/c', path] }
+    }
   }
   return undefined
 }
@@ -99,14 +102,20 @@ function resolveWindowsCommand(paths: string[], command: string): ResolvedComman
 function resolveCommand(command: string): Promise<ResolvedCommand | undefined> {
   if (process.platform !== 'win32') return Promise.resolve({ file: command, prefixArgs: [] })
   return new Promise((resolve) => {
+    let settled = false
+    let timeout: NodeJS.Timeout | undefined
     const child = spawn('where.exe', [command], { shell: false, windowsHide: true })
     let stdout = ''
-    let settled = false
     const finish = (paths: string[]): void => {
       if (settled) return
       settled = true
+      clearTimeout(timeout)
       resolve(resolveWindowsCommand(paths, command))
     }
+    timeout = setTimeout(() => {
+      try { child.kill() } catch {}
+      finish([])
+    }, 5000)
     child.stdout?.on('data', (chunk: Buffer | string) => { stdout += String(chunk) })
     child.once('error', () => finish([]))
     child.once('close', (code) => {
@@ -195,10 +204,13 @@ function authErrorText(provider: ProviderInfo, output: string): string {
   return last || `${provider.label} sign-in did not complete.`
 }
 
-function parseOutput(raw: string): string {
+export function parseOutput(raw: string): string {
   const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const itemMap = new Map<string, string>()
   const responses: string[] = []
   const deltas: string[] = []
+  let explicitResult: string | undefined
+
   for (const line of lines) {
     try {
       const value = JSON.parse(line) as unknown
@@ -208,19 +220,60 @@ function parseOutput(raw: string): string {
         const item = object.item
         if (item && typeof item === 'object') {
           const typed = item as Record<string, unknown>
-          if (typed.type === 'agent_message' && typeof typed.text === 'string') responses.push(typed.text)
+          const id = typeof typed.id === 'string' ? typed.id : 'default'
+          if (typed.type === 'agent_message' && typeof typed.text === 'string') {
+            itemMap.set(id, typed.text)
+          }
         }
-        if (object.type === 'agent_message' && typeof object.text === 'string') responses.push(object.text)
-        if (typeof object.delta === 'string' && (object.type === 'response.output_text.delta' || object.type === 'content_block_delta')) deltas.push(object.delta)
-        if (typeof object.result === 'string') responses.push(object.result)
-        if (typeof object.output_text === 'string') responses.push(object.output_text)
+        if (object.type === 'agent_message' && typeof object.text === 'string') {
+          const id = typeof object.id === 'string' ? object.id : 'default'
+          itemMap.set(id, object.text)
+        }
+        if (typeof object.delta === 'string' && (object.type === 'response.output_text.delta' || object.type === 'content_block_delta')) {
+          deltas.push(object.delta)
+        }
+        if (typeof object.result === 'string') {
+          explicitResult = object.result
+        }
+        if (typeof object.output_text === 'string') {
+          responses.push(object.output_text)
+        }
       }
       walk(value)
     } catch {
       // Some provider CLIs print a plain-text answer even with JSON enabled.
     }
   }
-  return (responses.length ? responses.join('') : deltas.length ? deltas.join('') : raw).trim()
+
+  if (explicitResult !== undefined && explicitResult.trim()) {
+    return explicitResult.trim()
+  }
+  if (itemMap.size > 0) {
+    const combined = Array.from(itemMap.values()).filter(Boolean).join('\n\n').trim()
+    if (combined) return combined
+  }
+  if (deltas.length > 0) {
+    return deltas.join('').trim()
+  }
+  if (responses.length > 0) {
+    return responses.join('').trim()
+  }
+  return raw.trim()
+}
+
+export function parseError(stderr: string, stdout: string, providerLabel: string, code: number): string {
+  const err = stderr.trim()
+  const out = parseOutput(stdout)
+  if (err && (!out || err.includes('Error:') || err.includes('error:'))) {
+    return err
+  }
+  if (out && out !== stdout.trim()) {
+    return out
+  }
+  if (err) {
+    return err
+  }
+  return `${providerLabel} returned exit code ${code}. Connect the account in Settings and try again.`
 }
 
 function historyPrompt(history: unknown[], message: string): string {
@@ -240,7 +293,7 @@ function historyPrompt(history: unknown[], message: string): string {
 function commandArgs(provider: Provider, model: string, effort: Effort, prompt: string): string[] {
   if (provider === 'chatgpt') return ['exec', '--json', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', '-m', model, '-c', `model_reasoning_effort="${effort}"`, '-']
   if (provider === 'claude') return ['-p', '--output-format', 'json', '--model', model, '--effort', effort, '--permission-mode', 'plan']
-  return ['--no-auto-update', '-p', prompt.slice(-20_000), '--output-format', 'json', '-m', model, '--effort', effort]
+  return ['--no-auto-update', '-p', prompt.slice(-8_000), '--output-format', 'json', '-m', model, '--effort', effort]
 }
 
 function sendEvent(event: IpcMainInvokeEvent, payload: Record<string, unknown>): void {
@@ -346,7 +399,13 @@ export function registerChatIpc(deps: IpcDeps): void {
     const resolved = await resolveCommand(providerInfo.command)
     if (!resolved) return { ok: false, error: `${providerInfo.label} CLI is not installed. Run: ${providerInfo.installCommand}` }
     const workspaceDir = typeof request?.workspaceDir === 'string' && request.workspaceDir.length < 1024 ? request.workspaceDir : undefined
-    const child = spawnResolved(resolved, commandArgs(provider, model, effort, input), { cwd: workspaceDir || deps.getWorkspaceDir() || process.cwd() })
+    const workingRoot = (workspaceDir && existsSync(workspaceDir)) ? workspaceDir : (deps.getWorkspaceDir() || process.cwd())
+    let child: ChildProcess
+    try {
+      child = spawnResolved(resolved, commandArgs(provider, model, effort, input), { cwd: workingRoot })
+    } catch (spawnError) {
+      return { ok: false, error: spawnError instanceof Error ? spawnError.message : 'Failed to launch provider CLI.' }
+    }
     active.set(widgetId, child)
     sendEvent(event, { widgetId, requestId, type: 'status', text: 'Thinking…', provider })
     let stdout = ''
@@ -362,7 +421,7 @@ export function registerChatIpc(deps: IpcDeps): void {
       if (active.get(widgetId) !== child) return
       active.delete(widgetId)
       if (code !== 0) {
-        sendEvent(event, { widgetId, requestId, type: 'error', text: stderr.trim() || `${providerInfo.label} returned exit code ${code}. Connect the account in Settings and try again.`, provider })
+        sendEvent(event, { widgetId, requestId, type: 'error', text: parseError(stderr, stdout, providerInfo.label, code ?? -1), provider })
         return
       }
       const answer = parseOutput(stdout)
