@@ -534,7 +534,12 @@ const componentsLayer: Sheet = {
     '& .xterm-rows > div': {
       overflow: 'visible !important'
     },
-    '& [data-ghost-cursor]': {
+    // Marked on the row <div>, which survives xterm rebuilding the row's
+    // children — so a cursor span recreated mid-turn is hidden by this rule as
+    // it is painted, instead of by a JS pass that always arrived a frame or
+    // more too late. `!important` is what beats the background-color xterm
+    // injects for `.xterm-focus .xterm-cursor.xterm-cursor-block`.
+    '& [data-ghost-row] .xterm-cursor': {
       backgroundColor: 'transparent !important',
       outline: 'none !important',
       boxShadow: 'none !important',

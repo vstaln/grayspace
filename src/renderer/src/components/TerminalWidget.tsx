@@ -347,88 +347,91 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       requestAnimationFrame(() => restoreResizeAnchor(generation))
       resizeRestoreTimer = setTimeout(() => restoreResizeAnchor(generation), 150)
     }
-    // `cleanGhostCursor` reads the textContent of every rendered row and runs
-    // regexes over it. It used to be called straight from onRender,
-    // onWriteParsed *and* onCursorMove — three of the hottest callbacks xterm
-    // has — so a chatty terminal paid a full-DOM text extraction hundreds of
-    // times a second, on the same thread that has to stay responsive to
-    // typing. It is now coalesced to at most one pass per animation frame,
-    // and for a terminal not yet known to be Codex the detection scan itself
-    // is rate-limited: the artifact only appears once the agent is running,
-    // so probing a few times a second is more than enough to catch it.
-    let isCleaningGhostCursor = false
-    let ghostCursorRaf: number | null = null
-    const scheduleGhostCursorClean = (): void => {
-      if (ghostCursorRaf !== null || !mounted) return
-      ghostCursorRaf = requestAnimationFrame(() => {
-        ghostCursorRaf = null
-        cleanGhostCursor()
-      })
+    // The "ghost cursor" is xterm's *real* cursor. Codex parks it on the blank
+    // line its "Working (…)" status block sits on and never hides it with
+    // DECTCEM, so the DOM renderer paints a solid block over the spinner for
+    // the whole turn.
+    //
+    // The previous defence painted that block out by hand: it looked up the
+    // `.xterm-cursor` span and pushed inline styles onto it. That can never
+    // hold. `DomRenderer.renderRows` rebuilds a dirty row with
+    // `rowElement.replaceChildren(...rowFactory.createRow(...))`, so the span
+    // that was styled is thrown away and recreated clean on every frame Codex
+    // repaints — and the repair was additionally deferred by a RAF and
+    // rate-limited to 4 Hz, so the block came back for up to a quarter of a
+    // second at a time. That race, not any resize, is the flicker.
+    //
+    // What `replaceChildren` does *not* touch is the row <div> itself: only
+    // its children are swapped (row elements are rebuilt solely when the
+    // geometry changes). So the row is marked instead, and CSS hides whatever
+    // cursor span lands inside it, at paint time, with no JS in the loop. The
+    // mark can also be set before that span exists, which covers the
+    // redraw-only refreshes — focus changes, cursor-style changes — that
+    // deliberately do not fire `onRender`.
+    const WORKING_STATUS = /working\s*\(|esc to interrupt/i
+    let ghostRow: HTMLElement | null = null
+    const releaseGhostRow = (): void => {
+      if (!ghostRow) return
+      delete ghostRow.dataset.ghostRow
+      ghostRow = null
     }
-    // The scan reads textContent of every rendered row, which forces a style
-    // and layout flush. Running it once per animation frame — which is what
-    // the RAF coalescing above actually allows — put that cost on the UI
-    // thread 60 times a second for the whole time an agent was streaming. The
-    // artifact it hides is a stationary cursor, so a few passes a second is
-    // indistinguishable and an order of magnitude cheaper.
-    const GHOST_SCAN_INTERVAL_MS = 250
-    let lastGhostScanAt = 0
-    const cleanGhostCursor = (): void => {
-      if (isCleaningGhostCursor || !mounted) return
-      const knownCodex = isCodexRef.current || agentIdRef.current === 'codex'
-      if (!knownCodex) return
-      const now = performance.now()
-      if (now - lastGhostScanAt < GHOST_SCAN_INTERVAL_MS) return
-      lastGhostScanAt = now
-      isCleaningGhostCursor = true
-      try {
-        const rowsEl = container.querySelector<HTMLElement>('.xterm-rows')
-        if (!rowsEl) return
-        const rowsText = rowsEl.textContent ?? ''
-
-        const isWorking = /working\s*\(|esc to interrupt/i.test(rowsText)
-        if (!isWorking) return
-
-        const rowCount = rowsEl.children.length
-        if (rowCount === 0) return
-
-        for (let index = 0; index < rowCount; index++) {
-          const row = rowsEl.children[index] as HTMLElement
-          if (!row) continue
-          const rawText = (row.textContent ?? '').replace(/[\s\u00A0\u200B-\u200D\uFEFF]/g, '')
-          if (rawText !== '') continue
-          const nextText = rowsEl.children[index + 1]?.textContent ?? ''
-          const next2Text = rowsEl.children[index + 2]?.textContent ?? ''
-          if (!/working\s*\(|esc to interrupt/i.test(nextText) && !/working\s*\(|esc to interrupt/i.test(next2Text)) continue
-
-          const cursor = row.querySelector<HTMLElement>('.xterm-cursor, [data-ghost-cursor]')
-          if (cursor) {
-            cursor.classList.remove('xterm-cursor', 'xterm-cursor-blink', 'xterm-cursor-block')
-            cursor.setAttribute('data-ghost-cursor', 'true')
-            cursor.style.setProperty('background-color', 'transparent', 'important')
-            cursor.style.setProperty('outline', 'none', 'important')
-            cursor.style.setProperty('box-shadow', 'none', 'important')
-            cursor.style.setProperty('animation', 'none', 'important')
-            cursor.style.setProperty('opacity', '0', 'important')
-          }
-        }
-      } finally {
-        isCleaningGhostCursor = false
+    const bufferLineText = (absoluteLine: number): string =>
+      term.buffer.active.getLine(absoluteLine)?.translateToString(true) ?? ''
+    // Three buffer lines per call — no textContent extraction and no forced
+    // layout — which is what lets this run on every render instead of behind a
+    // 4 Hz throttle. Reading the buffer rather than the DOM also means the
+    // decision no longer depends on rows having been rendered yet. The old
+    // full-screen "is it working?" gate is gone because the neighbour check it
+    // guarded already implies it.
+    const syncGhostRow = (): void => {
+      if (!mounted) return
+      if (!isCodexRef.current && agentIdRef.current !== 'codex') {
+        releaseGhostRow()
+        return
       }
+      const buffer = term.buffer.active
+      const cursorLine = buffer.baseY + buffer.cursorY
+      const viewportRow = cursorLine - buffer.viewportY
+      if (viewportRow < 0 || viewportRow >= term.rows) {
+        releaseGhostRow()
+        return
+      }
+      // Only the blank line the status block hangs off. A cursor resting on a
+      // line that has content is a real cursor and stays visible.
+      const onBlankLine = bufferLineText(cursorLine).trim() === ''
+      const besideStatus =
+        WORKING_STATUS.test(bufferLineText(cursorLine + 1)) ||
+        WORKING_STATUS.test(bufferLineText(cursorLine + 2))
+      if (!onBlankLine || !besideStatus) {
+        releaseGhostRow()
+        return
+      }
+      const rowsEl = container.querySelector<HTMLElement>('.xterm-rows')
+      const row = rowsEl?.children[viewportRow] as HTMLElement | undefined
+      if (!row) {
+        releaseGhostRow()
+        return
+      }
+      if (row === ghostRow) return
+      releaseGhostRow()
+      row.dataset.ghostRow = 'true'
+      ghostRow = row
     }
     const writeParsedDisposable = term.onWriteParsed(() => {
-      scheduleGhostCursorClean()
+      syncGhostRow()
       if (!resizeAnchor || performance.now() > resizeRestoreUntil) return
       const generation = resizeAnchorGeneration
       requestAnimationFrame(() => restoreResizeAnchor(generation))
     })
     const renderDisposable = term.onRender(() => {
-      scheduleGhostCursorClean()
+      syncGhostRow()
     })
     const cursorMoveDisposable = term.onCursorMove(() => {
-      scheduleGhostCursorClean()
+      syncGhostRow()
     })
     const scrollDisposable = term.onScroll(() => {
+      // Scrolling puts the cursor line on a different row element.
+      syncGhostRow()
       const activeBuffer = term.buffer.active
       rememberViewport(id, {
         line: activeBuffer.viewportY,
@@ -874,7 +877,14 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
 
 
 
-    const onFocusIn = (): void => window.api.terminal.setFocused(true, id)
+    const onFocusIn = (): void => {
+      // Focus is what turns the cursor into a filled block, and xterm repaints
+      // that row through a redraw-only refresh which never fires `onRender`.
+      // Marking the row here happens before the repaint, so the block has no
+      // frame to appear in.
+      syncGhostRow()
+      window.api.terminal.setFocused(true, id)
+    }
     // xterm moves focus between its own helper textarea and the screen
     // element, and each hop fires focusout. Reporting a blur for those made
     // the main process briefly believe no terminal was focused, so an `orc
@@ -1134,10 +1144,7 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
         resizeSendTimer = null
       }
       if (resizeRaf !== null) cancelAnimationFrame(resizeRaf)
-      if (ghostCursorRaf !== null) {
-        cancelAnimationFrame(ghostCursorRaf)
-        ghostCursorRaf = null
-      }
+      releaseGhostRow()
       resizeAnchorGeneration++
       if (resizeRestoreTimer) clearTimeout(resizeRestoreTimer)
       observer.disconnect()
