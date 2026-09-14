@@ -501,6 +501,26 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     if (method === 'POST' && parts[1] === 'commit') {
       return reply(await submit(body, 'git.commit', GIT_TARGET, { message: body.message }))
     }
+    if (method === 'GET' && parts[1] === 'branches') {
+      core.actors.register({ id: 'system', type: 'system', label: 'OrcSpace', transport: 'internal' })
+      return reply(await core.flow.submit({ actorId: 'system', type: 'git.branches', target: GIT_TARGET, payload: {} }))
+    }
+    if (method === 'GET' && parts[1] === 'log') {
+      core.actors.register({ id: 'system', type: 'system', label: 'OrcSpace', transport: 'internal' })
+      const limitRaw = Number(url.searchParams.get('limit'))
+      return reply(await core.flow.submit({
+        actorId: 'system',
+        type: 'git.log',
+        target: GIT_TARGET,
+        payload: { limit: Number.isFinite(limitRaw) ? limitRaw : 100, query: url.searchParams.get('query') ?? '' }
+      }))
+    }
+    if (method === 'POST' && parts[1] === 'checkout') {
+      return reply(await submit(body, 'git.checkout', GIT_TARGET, { ref: body.ref }))
+    }
+    if (method === 'POST' && parts[1] === 'create-branch') {
+      return reply(await submit(body, 'git.create-branch', GIT_TARGET, { name: body.name, startPoint: body.startPoint }))
+    }
   }
 
 

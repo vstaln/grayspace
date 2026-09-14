@@ -1,5 +1,6 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import type { GitBranch, GitCommit } from '../preload/api.ts'
 
 const run = promisify(execFile)
 
@@ -194,6 +195,96 @@ export function parseHeader(header: string): Partial<GitStatus> {
   }
 }
 
+
+function isDirtyStatus(status: GitStatus): boolean {
+  // Untracked files ride along on checkout, so only tracked changes block it.
+  return status.modified + status.staged + status.conflicted > 0
+}
+
+function assertSafeRef(ref: string): void {
+  const value = ref.trim()
+  if (!value) throw new Error('a branch or commit is required')
+  if (value.length > 256) throw new Error('ref is too long')
+  if (value.startsWith('-')) throw new Error('invalid ref')
+  if (/[\0\n\r]/.test(value)) throw new Error('invalid ref')
+}
+
+export async function listBranches(cwd: string | undefined, signal?: AbortSignal): Promise<{ branches: GitBranch[]; current: string }> {
+  if (!cwd) return { branches: [], current: '' }
+  const [headsRaw, currentRaw] = await Promise.all([
+    git(cwd, ['for-each-ref', '--format=%(refname:short)', 'refs/heads'], GIT_READ_TIMEOUT_MS, signal),
+    git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], GIT_READ_TIMEOUT_MS, signal).catch(() => '')
+  ])
+  const current = currentRaw.trim().replace(/\r/g, '')
+  const names = headsRaw.split('\n').map((line) => line.trim().replace(/\r/g, '')).filter(Boolean)
+  const branches = names.map((name) => ({ name, current: name === current }))
+  branches.sort((a, b) => Number(b.current) - Number(a.current) || a.name.localeCompare(b.name))
+  return { branches, current }
+}
+
+export async function listCommits(
+  cwd: string | undefined,
+  opts: { limit?: number; query?: string; signal?: AbortSignal } = {}
+): Promise<{ commits: GitCommit[]; head: string }> {
+  if (!cwd) return { commits: [], head: '' }
+  const requested = Math.min(Math.max(Number(opts.limit) || 100, 1), 500)
+  const query = (opts.query || '').trim().toLowerCase()
+  // --max-count applies before the query filter, so a search must scan deeper.
+  const limit = query ? 500 : requested
+  const [logRaw, headRaw] = await Promise.all([
+    git(cwd, ['log', '--all', `--max-count=${limit}`, '--format=%H%x1f%h%x1f%an%x1f%ct%x1f%D%x1f%s'], GIT_READ_TIMEOUT_MS, opts.signal),
+    git(cwd, ['rev-parse', 'HEAD'], GIT_READ_TIMEOUT_MS, opts.signal).catch(() => '')
+  ])
+  const head = headRaw.trim().replace(/\r/g, '')
+  const commits: GitCommit[] = []
+  for (const line of logRaw.split('\n')) {
+    const clean = line.replace(/\r$/, '')
+    if (!clean) continue
+    const [hash, short, author, at, refsRaw, ...subjectParts] = clean.split('\x1f')
+    if (!hash) continue
+    const subject = subjectParts.join('\x1f')
+    const refs = (refsRaw || '').split(',').map((r) => r.trim()).filter(Boolean)
+    if (query && !`${subject} ${hash} ${short} ${author}`.toLowerCase().includes(query)) continue
+    commits.push({ hash, short, subject, author, at: Number(at) * 1000, refs })
+  }
+  return { commits, head }
+}
+
+export async function checkoutRef(cwd: string, ref: string, signal?: AbortSignal): Promise<{ branch: string; hash: string }> {
+  assertSafeRef(ref)
+  const status = await readGitStatus(cwd, signal)
+  if (!status.repo) throw new Error('not a git repository')
+  if (isDirtyStatus(status)) {
+    throw Object.assign(new Error('uncommitted tracked changes — commit or discard them before switching'), { code: 'dirty' })
+  }
+  await git(cwd, ['checkout', ref.trim()], GIT_WRITE_TIMEOUT_MS, signal)
+  const [branchRaw, hashRaw] = await Promise.all([
+    git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], GIT_READ_TIMEOUT_MS, signal).catch(() => ''),
+    git(cwd, ['rev-parse', 'HEAD'], GIT_READ_TIMEOUT_MS, signal).catch(() => '')
+  ])
+  return { branch: branchRaw.trim().replace(/\r/g, ''), hash: hashRaw.trim().replace(/\r/g, '').slice(0, 8) }
+}
+
+export async function createBranch(cwd: string, name: string, startPoint?: string, signal?: AbortSignal): Promise<{ branch: string; hash: string }> {
+  const branchName = name.trim()
+  if (!branchName) throw new Error('a branch name is required')
+  if (branchName.length > 256) throw new Error('branch name is too long')
+  try {
+    await git(cwd, ['check-ref-format', '--branch', branchName], GIT_READ_TIMEOUT_MS, signal)
+  } catch {
+    throw new Error('invalid branch name')
+  }
+  if (startPoint?.trim()) assertSafeRef(startPoint)
+  const status = await readGitStatus(cwd, signal)
+  if (!status.repo) throw new Error('not a git repository')
+  if (isDirtyStatus(status)) {
+    throw Object.assign(new Error('uncommitted tracked changes — commit or discard them before switching'), { code: 'dirty' })
+  }
+  const args = startPoint?.trim() ? ['checkout', '-b', branchName, startPoint.trim()] : ['checkout', '-b', branchName]
+  await git(cwd, args, GIT_WRITE_TIMEOUT_MS, signal)
+  const hashRaw = await git(cwd, ['rev-parse', 'HEAD'], GIT_READ_TIMEOUT_MS, signal).catch(() => '')
+  return { branch: branchName, hash: hashRaw.trim().replace(/\r/g, '').slice(0, 8) }
+}
 
 export async function commitAll(cwd: string, message: string, signal?: AbortSignal): Promise<{ hash: string }> {
   if (signal?.aborted) throw Object.assign(new Error('aborted'), { code: 'ABORT_ERR', name: 'AbortError' })

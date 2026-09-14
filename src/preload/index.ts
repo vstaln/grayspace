@@ -260,7 +260,11 @@ const planner: PlannerApi = {
 
 const git: GitApi = {
   status: (): Promise<GitStatus | { error: string }> => ipcRenderer.invoke('git:status'),
-  commit: (message: string): Promise<{ hash: string } | { error: string }> => ipcRenderer.invoke('git:commit', message)
+  commit: (message: string): Promise<{ hash: string } | { error: string }> => ipcRenderer.invoke('git:commit', message),
+  branches: () => ipcRenderer.invoke('git:branches'),
+  log: (options?: { limit?: number; query?: string }) => ipcRenderer.invoke('git:log', options ?? {}),
+  checkout: (ref: string) => ipcRenderer.invoke('git:checkout', ref),
+  createBranch: (name: string, startPoint?: string) => ipcRenderer.invoke('git:create-branch', name, startPoint ?? '')
 }
 
 const canvas: CanvasApi = {

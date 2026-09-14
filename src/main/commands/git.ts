@@ -1,5 +1,14 @@
 import { CommandError } from '../core/index.ts'
-import { commitAll, readGitStatus, type GitStatus } from '../git.ts'
+import {
+  checkoutRef,
+  commitAll,
+  createBranch,
+  listBranches,
+  listCommits,
+  readGitStatus,
+  type GitStatus
+} from '../git.ts'
+import type { GitBranch, GitCommit } from '../../preload/api.ts'
 import type { CommandDeps } from './index.ts'
 
 
@@ -95,6 +104,132 @@ export function registerGitCommands({ core, defaultCwd }: CommandDeps): {
           return result
         } catch (err) {
           if (isAbortError(err)) throw new CommandError('cancelled', String((err as Error).message || 'commit cancelled'))
+          throw new CommandError('failed', String((err as { stderr?: string }).stderr || (err as Error).message))
+        }
+      }
+    }
+  })
+
+  flow.registerDefinition<Record<string, never>, { branches: GitBranch[]; current: string }>({
+    type: 'git.branches',
+    description: 'List local branches of the open repository.',
+    targetScheme: 'git',
+    requiresLock: false,
+    ignoreVersion: true,
+    payloadSchema: { type: 'object', properties: {} },
+    handler: {
+      apply: async ({ signal }) => {
+        if (signal?.aborted) throw new CommandError('cancelled', 'git branches cancelled')
+        try {
+          return await listBranches(defaultCwd(), signal)
+        } catch (err) {
+          if (isAbortError(err)) throw new CommandError('cancelled', 'git branches cancelled')
+          throw new CommandError('failed', String((err as Error).message))
+        }
+      }
+    }
+  })
+
+  flow.registerDefinition<{ limit?: number; query?: string }, { commits: GitCommit[]; head: string }>({
+    type: 'git.log',
+    description: 'List recent commits across all refs.',
+    targetScheme: 'git',
+    requiresLock: false,
+    ignoreVersion: true,
+    payloadSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Max commits to return' },
+        query: { type: 'string', description: 'Filter by message, hash or author' }
+      }
+    },
+    handler: {
+      apply: async ({ command, signal }) => {
+        if (signal?.aborted) throw new CommandError('cancelled', 'git log cancelled')
+        try {
+          const limit = Number(command.payload?.limit)
+          return await listCommits(defaultCwd(), {
+            limit: Number.isFinite(limit) ? limit : 100,
+            query: String(command.payload?.query ?? ''),
+            signal
+          })
+        } catch (err) {
+          if (isAbortError(err)) throw new CommandError('cancelled', 'git log cancelled')
+          throw new CommandError('failed', String((err as Error).message))
+        }
+      }
+    }
+  })
+
+  flow.registerDefinition<{ ref?: string }, { branch: string; hash: string }>({
+    type: 'git.checkout',
+    description: 'Checkout a branch or commit. Blocked while the tree has uncommitted changes.',
+    targetScheme: 'git',
+    ignoreVersion: true,
+    payloadSchema: {
+      type: 'object',
+      required: ['ref'],
+      properties: { ref: { type: 'string', description: 'Branch name or commit hash' } }
+    },
+    handler: {
+      apply: async ({ command, signal }) => {
+        const cwd = defaultCwd()
+        if (!cwd) throw new CommandError('invalid', 'no project folder is open')
+        if (signal?.aborted) throw new CommandError('cancelled', 'checkout cancelled before it started')
+        const ref = String(command.payload?.ref ?? '').trim()
+        if (!ref) throw new CommandError('invalid', 'a branch or commit is required')
+        try {
+          const result = await checkoutRef(cwd, ref, signal)
+          if (!signal?.aborted) {
+            try {
+              cached = await readGitStatus(cwd, signal)
+            } catch (err) {
+              if (!isAbortError(err)) throw err
+            }
+          }
+          return result
+        } catch (err) {
+          if (isAbortError(err)) throw new CommandError('cancelled', 'checkout cancelled')
+          if ((err as { code?: string }).code === 'dirty') throw new CommandError('conflict', (err as Error).message)
+          throw new CommandError('failed', String((err as { stderr?: string }).stderr || (err as Error).message))
+        }
+      }
+    }
+  })
+
+  flow.registerDefinition<{ name?: string; startPoint?: string }, { branch: string; hash: string }>({
+    type: 'git.create-branch',
+    description: 'Create and checkout a new branch. Blocked while the tree has uncommitted changes.',
+    targetScheme: 'git',
+    ignoreVersion: true,
+    payloadSchema: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: { type: 'string', description: 'New branch name' },
+        startPoint: { type: 'string', description: 'Branch or commit to start from' }
+      }
+    },
+    handler: {
+      apply: async ({ command, signal }) => {
+        const cwd = defaultCwd()
+        if (!cwd) throw new CommandError('invalid', 'no project folder is open')
+        if (signal?.aborted) throw new CommandError('cancelled', 'create-branch cancelled before it started')
+        const name = String(command.payload?.name ?? '').trim()
+        if (!name) throw new CommandError('invalid', 'a branch name is required')
+        try {
+          const result = await createBranch(cwd, name, String(command.payload?.startPoint ?? ''), signal)
+          if (!signal?.aborted) {
+            try {
+              cached = await readGitStatus(cwd, signal)
+            } catch (err) {
+              if (!isAbortError(err)) throw err
+            }
+          }
+          return result
+        } catch (err) {
+          if (isAbortError(err)) throw new CommandError('cancelled', 'create-branch cancelled')
+          if ((err as { code?: string }).code === 'dirty') throw new CommandError('conflict', (err as Error).message)
           throw new CommandError('failed', String((err as { stderr?: string }).stderr || (err as Error).message))
         }
       }

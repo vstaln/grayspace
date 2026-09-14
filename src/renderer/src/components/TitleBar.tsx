@@ -24,7 +24,7 @@ import GrokIcon from './GrokIcon'
 import OpenCodeIcon from './OpenCodeIcon'
 import CursorIcon from './CursorIcon'
 import KimiIcon from './KimiIcon'
-import type { GitStatus, SystemStats } from '../../../preload/index.d'
+import type { GitBranch as GitBranchInfo, GitCommit as GitCommitInfo, GitStatus, SystemStats } from '../../../preload/index.d'
 import { IS_MAC } from '../lib/platform'
 
 function formatBytes(bytes: number): string {
@@ -152,6 +152,14 @@ export default React.memo(function TitleBar({
   const [flash, setFlash] = useState<string | null>(null)
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null)
   const [gitOpen, setGitOpen] = useState(false)
+  const [gitQuery, setGitQuery] = useState('')
+  const [gitBranches, setGitBranches] = useState<GitBranchInfo[]>([])
+  const [gitCommits, setGitCommits] = useState<GitCommitInfo[]>([])
+  const [gitHead, setGitHead] = useState('')
+  const [gitLoading, setGitLoading] = useState(false)
+  const [gitError, setGitError] = useState<string | null>(null)
+  const [gitNotice, setGitNotice] = useState<string | null>(null)
+  const [gitBusyRef, setGitBusyRef] = useState<string | null>(null)
   const [usageStats, setUsageStats] = useState<SystemStats | null>(null)
   const [usageOpen, setUsageOpen] = useState(false)
   const [usageError, setUsageError] = useState<string | null>(null)
@@ -246,6 +254,105 @@ export default React.memo(function TitleBar({
     }
   }, [refreshGit])
 
+  const dirtyCount = gitStatus
+    ? (gitStatus.modified ?? 0) + (gitStatus.untracked ?? 0) + (gitStatus.staged ?? 0) + (gitStatus.conflicted ?? 0)
+    : 0
+
+  // Untracked files ride along on checkout, so only tracked changes block it.
+  const blockedCount = gitStatus
+    ? (gitStatus.modified ?? 0) + (gitStatus.staged ?? 0) + (gitStatus.conflicted ?? 0)
+    : 0
+
+  const refreshGitRefs = useCallback(async (query: string): Promise<void> => {
+    setGitLoading(true)
+    setGitError(null)
+    try {
+      const [branchesRes, logRes] = await Promise.all([
+        window.api.git.branches(),
+        window.api.git.log({ limit: 100, query: query.trim() })
+      ])
+      if ('error' in branchesRes) {
+        setGitError(branchesRes.error)
+      } else {
+        setGitBranches(branchesRes.branches)
+      }
+      if ('error' in logRes) {
+        setGitError((prev) => prev ?? logRes.error)
+      } else {
+        setGitCommits(logRes.commits)
+        setGitHead(logRes.head)
+      }
+    } catch (err) {
+      setGitError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setGitLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!gitOpen) return
+    setGitNotice(null)
+    void refreshGitRefs('')
+  }, [gitOpen, refreshGitRefs])
+
+  useEffect(() => {
+    if (!gitOpen) return
+    const timer = setTimeout(() => {
+      void refreshGitRefs(gitQuery)
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [gitQuery, gitOpen, refreshGitRefs])
+
+  const checkoutGitRef = useCallback(async (ref: string, isCommit: boolean): Promise<void> => {
+    if (blockedCount > 0) {
+      setGitNotice(`Uncommitted: ${blockedCount} tracked file${blockedCount > 1 ? 's' : ''} — commit or discard changes before switching. Untracked files ride along.`)
+      return
+    }
+    setGitBusyRef(ref)
+    setGitNotice(null)
+    setGitError(null)
+    try {
+      const res = await window.api.git.checkout(ref)
+      if (res && 'error' in res) {
+        setGitError(res.error)
+      } else {
+        await refreshGit()
+        await refreshGitRefs(gitQuery)
+        if (isCommit) setGitNotice(`Detached HEAD at ${(res as { hash: string }).hash}`)
+      }
+    } catch (err) {
+      setGitError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setGitBusyRef(null)
+    }
+  }, [blockedCount, gitQuery, refreshGit, refreshGitRefs])
+
+  const createGitBranch = useCallback(async (): Promise<void> => {
+    const name = gitQuery.trim()
+    if (!name) return
+    if (blockedCount > 0) {
+      setGitNotice(`Uncommitted: ${blockedCount} tracked file${blockedCount > 1 ? 's' : ''} — commit or discard changes before switching. Untracked files ride along.`)
+      return
+    }
+    setGitBusyRef(`new:${name}`)
+    setGitNotice(null)
+    setGitError(null)
+    try {
+      const res = await window.api.git.createBranch(name)
+      if (res && 'error' in res) {
+        setGitError(res.error)
+      } else {
+        setGitQuery('')
+        await refreshGit()
+        await refreshGitRefs('')
+      }
+    } catch (err) {
+      setGitError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setGitBusyRef(null)
+    }
+  }, [blockedCount, gitQuery, refreshGit, refreshGitRefs])
+
   const usageSeqRef = useRef(0)
   const refreshUsage = useCallback(async (): Promise<void> => {
     const seq = ++usageSeqRef.current
@@ -308,12 +415,6 @@ export default React.memo(function TitleBar({
       if (timer !== null) window.clearTimeout(timer)
     }
   }, [])
-
-  const dirtyCount = gitStatus
-    ? (gitStatus.modified ?? 0) + (gitStatus.untracked ?? 0) + (gitStatus.staged ?? 0) + (gitStatus.conflicted ?? 0)
-    : 0
-
-
 
   const openAgents = (usageStats?.agents || []).filter((a) => a.isOpen)
 
@@ -826,7 +927,10 @@ export default React.memo(function TitleBar({
             aria-expanded={gitOpen}
             className={`${VIEW_TAB} title-bar-git gap-1.5 ${gitOpen ? VIEW_TAB_ACTIVE : VIEW_TAB_INACTIVE}`}
             onClick={() => {
-              setGitOpen((open) => !open)
+              setGitOpen((open) => {
+                if (!open) setGitQuery('')
+                return !open
+              })
               setUsageOpen(false)
               void refreshGit()
             }}
@@ -851,47 +955,126 @@ export default React.memo(function TitleBar({
           </div>
 
           {gitOpen && (
-            <div className="absolute right-2 top-[38px] z-[60000] w-[310px] rounded-[12px] border border-line-soft bg-bg-panel p-3 text-left shadow-2xl">
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <span className="text-[12px] font-semibold text-text">Git status</span>
-                <button
-                  type="button"
-                  className="rounded-md px-1.5 py-0.5 text-[11px] text-text-dim hover:bg-bg-hover hover:text-text"
-                  onClick={() => void refreshGit()}
-                >
-                  Refresh
-                </button>
+            <div className="absolute right-2 top-[38px] z-[60000] flex max-h-[70vh] w-[340px] flex-col rounded-[12px] border border-line-soft bg-bg-panel text-left shadow-2xl">
+              <div className="border-b border-line-soft p-3 pb-2">
+                <input
+                  value={gitQuery}
+                  onChange={(e) => setGitQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && gitQuery.trim() && !gitBranches.some((b) => b.name === gitQuery.trim())) {
+                      void createGitBranch()
+                    }
+                  }}
+                  placeholder="Search Orcpace branches"
+                  aria-label="Search branches and commits"
+                  className="w-full rounded-md border border-line-soft bg-bg-hover px-2 py-1.5 text-[12px] text-text placeholder:text-text-faint focus:border-accent focus:outline-none"
+                />
+                {gitStatus?.repo && (
+                  <div className="mt-1.5 flex items-center justify-between text-[11px] text-text-dim">
+                    <span className="truncate">
+                      {gitStatus.branch || 'HEAD'}
+                      {gitStatus.branch === 'HEAD' && gitHead && <span className="text-accent"> · detached at {gitHead.slice(0, 8)}</span>}
+                    </span>
+                    <span className="flex-none">{dirtyCount ? `Uncommitted: ${dirtyCount} file${dirtyCount > 1 ? 's' : ''}` : 'clean'}</span>
+                  </div>
+                )}
               </div>
-              {!gitStatus ? (
-                <p className="text-[12px] text-text-dim">Checking repository…</p>
-              ) : !gitStatus.repo ? (
-                <div className="space-y-1 text-[12px]">
-                  <p className="text-text-dim">This workspace is not a Git repository.</p>
-                  {gitStatus.error && <p className="break-words text-accent">{gitStatus.error}</p>}
-                </div>
-              ) : (
-                <div className="space-y-2 text-[12px]">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="truncate font-medium text-text">{gitStatus.branch || 'HEAD'}</span>
-                    <span className="flex-none text-text-dim">{dirtyCount ? `${dirtyCount} changed` : 'clean'}</span>
+              <div className="min-h-0 flex-1 overflow-y-auto p-3 pt-2">
+                {gitNotice && (
+                  <p role="status" className="mb-2 rounded-md border border-accent/40 bg-accent/10 px-2 py-1.5 text-[11px] text-text">{gitNotice}</p>
+                )}
+                {gitError && (
+                  <p role="alert" className="mb-2 break-words rounded-md border border-danger/40 bg-danger/10 px-2 py-1.5 text-[11px] text-danger">{gitError}</p>
+                )}
+                {!gitStatus ? (
+                  <p className="text-[12px] text-text-dim">Checking repository…</p>
+                ) : !gitStatus.repo ? (
+                  <div className="space-y-1 text-[12px]">
+                    <p className="text-text-dim">This workspace is not a Git repository.</p>
+                    {gitStatus.error && <p className="break-words text-accent">{gitStatus.error}</p>}
                   </div>
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-text-dim">
-                    <span>Modified: {gitStatus.modified}</span>
-                    <span>Untracked: {gitStatus.untracked}</span>
-                    <span>Staged: {gitStatus.staged}</span>
-                    <span>Conflicts: {gitStatus.conflicted}</span>
-                    <span>Ahead: {gitStatus.ahead}</span>
-                    <span>Behind: {gitStatus.behind}</span>
-                  </div>
-                  {gitStatus.lastCommit && (
-                    <div className="border-t border-line-soft pt-2">
-                      <div className="text-[11px] text-text-faint">Last commit · {gitStatus.lastCommit.hash}</div>
-                      <div className="truncate text-text" title={gitStatus.lastCommit.subject}>{gitStatus.lastCommit.subject}</div>
+                ) : (
+                  <div className="space-y-3 text-[12px]">
+                    <div>
+                      <div className="mb-1 text-[11px] font-semibold text-text-faint">Branches</div>
+                      {gitLoading && gitBranches.length === 0 ? (
+                        <p className="text-text-dim">Loading branches…</p>
+                      ) : gitBranches.length === 0 ? (
+                        <p className="text-text-dim">No branches match.</p>
+                      ) : (
+                        <ul className="space-y-0.5">
+                          {gitBranches.map((branch) => {
+                            const busy = gitBusyRef === branch.name
+                            return (
+                              <li key={branch.name}>
+                                <button
+                                  type="button"
+                                  disabled={busy || branch.current}
+                                  onClick={() => void checkoutGitRef(branch.name, false)}
+                                  title={blockedCount > 0 && !branch.current ? 'Commit or discard changes before switching' : `Checkout ${branch.name}`}
+                                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${branch.current ? 'bg-bg-hover text-text' : 'text-text-dim hover:bg-bg-hover hover:text-text'} disabled:cursor-default disabled:opacity-80`}
+                                >
+                                  <GitBranch size={13} className="flex-none text-text-faint" />
+                                  <span className="min-w-0 flex-1 truncate font-medium">{branch.name}</span>
+                                  {branch.current && dirtyCount > 0 && (
+                                    <span className="flex-none text-[10px] text-text-dim">Uncommitted: {dirtyCount} file{dirtyCount > 1 ? 's' : ''}</span>
+                                  )}
+                                  {branch.current && <span className="flex-none text-[13px] text-text">✓</span>}
+                                  {busy && <span className="flex-none text-[10px] text-text-dim">…</span>}
+                                </button>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      )}
                     </div>
-                  )}
-                  <div className="truncate border-t border-line-soft pt-2 text-[10px] text-text-faint" title={gitStatus.root}>
-                    {gitStatus.root}
+                    <div>
+                      <div className="mb-1 text-[11px] font-semibold text-text-faint">History</div>
+                      {gitLoading && gitCommits.length === 0 ? (
+                        <p className="text-text-dim">Loading history…</p>
+                      ) : gitCommits.length === 0 ? (
+                        <p className="text-text-dim">No commits match.</p>
+                      ) : (
+                        <ul className="space-y-0.5">
+                          {gitCommits.map((commit) => {
+                            const isHead = Boolean(gitHead) && (gitHead.startsWith(commit.hash) || commit.hash.startsWith(gitHead))
+                            const busy = gitBusyRef === commit.hash
+                            return (
+                              <li key={commit.hash}>
+                                <button
+                                  type="button"
+                                  disabled={busy || isHead}
+                                  onClick={() => void checkoutGitRef(commit.hash, true)}
+                                  title={blockedCount > 0 && !isHead ? 'Commit or discard changes before switching' : `Checkout ${commit.short} (detached)`}
+                                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-text-dim transition-colors hover:bg-bg-hover hover:text-text disabled:cursor-default disabled:opacity-80"
+                                >
+                                  <span className="flex-none font-mono text-[10px] text-accent">{commit.short}</span>
+                                  <span className="min-w-0 flex-1 truncate" title={commit.subject}>{commit.subject}</span>
+                                  {isHead && <span className="flex-none text-[13px] text-text">✓</span>}
+                                  {busy && <span className="flex-none text-[10px] text-text-dim">…</span>}
+                                </button>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      )}
+                    </div>
                   </div>
+                )}
+              </div>
+              {gitStatus?.repo && (
+                <div className="border-t border-line-soft p-2">
+                  <button
+                    type="button"
+                    disabled={!gitQuery.trim() || gitBranches.some((b) => b.name === gitQuery.trim()) || gitBusyRef === `new:${gitQuery.trim()}`}
+                    onClick={() => void createGitBranch()}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <span className="flex-none text-[14px]">+</span>
+                    <span className="truncate">
+                      {gitQuery.trim() ? `Create and checkout new branch “${gitQuery.trim()}”…` : 'Create and checkout new branch…'}
+                    </span>
+                  </button>
                 </div>
               )}
             </div>

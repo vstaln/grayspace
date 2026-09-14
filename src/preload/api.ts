@@ -493,6 +493,20 @@ export interface CodeApi {
 }
 
 
+export interface GitBranch {
+  name: string
+  current: boolean
+}
+
+export interface GitCommit {
+  hash: string
+  short: string
+  subject: string
+  author: string
+  at: number
+  refs: string[]
+}
+
 export interface GitStatus {
   repo: boolean
   root?: string
@@ -513,6 +527,10 @@ export interface GitApi {
   status(): Promise<GitStatus | { error: string }>
 
   commit(message: string): Promise<{ hash: string } | { error: string }>
+  branches(): Promise<{ branches: GitBranch[]; current: string } | { error: string }>
+  log(options?: { limit?: number; query?: string }): Promise<{ commits: GitCommit[]; head: string } | { error: string }>
+  checkout(ref: string): Promise<{ branch: string; hash: string } | { error: string }>
+  createBranch(name: string, startPoint?: string): Promise<{ branch: string; hash: string } | { error: string }>
 }
 
 export interface FileEntry {
