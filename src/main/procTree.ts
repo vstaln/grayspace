@@ -93,7 +93,10 @@ export function killProcessTree(rootPid: number | undefined, settleMs = SWEEP_DE
   if (!pendingRoots.has(rootPid)) {
     if (pendingRoots.size >= MAX_ROOTS_PER_SWEEP) {
       const oldestKey = Array.from(pendingRoots.keys())[0]
-      if (oldestKey !== undefined) pendingRoots.delete(oldestKey)
+      if (oldestKey !== undefined) {
+        console.warn(`[proctree] sweep backlog full — dropping oldest root ${oldestKey}`)
+        pendingRoots.delete(oldestKey)
+      }
     }
     pendingRoots.set(rootPid, Date.now())
   }

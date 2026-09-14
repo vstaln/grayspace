@@ -2,7 +2,7 @@ import * as electron from 'electron'
 import * as fs from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
-import { CONTROL_PORT } from './config.ts'
+import { getActiveControlPort } from './config.ts'
 import { getIpcSocketPath } from './ipcSocket.ts'
 import { controlToken } from './controlToken.ts'
 
@@ -63,7 +63,7 @@ export function orcTerminalEnv(terminalId: string): Record<string, string> {
 
     PATH: path ? `${dir}${delimiter()}${path}` : dir,
     ORCSPACE_SOCKET_PATH: getIpcSocketPath(),
-    ORCSPACE_URL: `http://127.0.0.1:${CONTROL_PORT}`,
+    ORCSPACE_URL: `http://127.0.0.1:${getActiveControlPort()}`,
     ORCSPACE_TOKEN: controlToken(),
     ORCSPACE_AGENT_ID: terminalId,
 

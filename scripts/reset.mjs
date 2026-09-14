@@ -20,10 +20,10 @@ const BASE = `http://localhost:${PORT}`
 const TOKEN_HEADER = 'x-orcspace-token'
 
 const args = process.argv.slice(2)
-const wantLocks = args.length === 0 || args.includes('--locks')
+const wantLocks = args.length === 0 || args.includes('--locks') || args.includes('--all')
 
 function controlToken() {
-  const env = (process.env.ORCSPACE_CONTROL_TOKEN || '').trim()
+  const env = (process.env.ORCSPACE_TOKEN || process.env.ORCSPACE_CONTROL_TOKEN || '').trim()
   if (env) return env
   if (process.env.ORCSPACE_CONTROL_TOKEN_FILE) {
     try {

@@ -97,7 +97,6 @@ export function requestInstanceLock(): boolean {
   const hasLock = app.requestSingleInstanceLock()
   if (!hasLock) {
     console.warn('Another OrcSpace instance is already running — handing off and exiting.')
-    app.exit(0)
   }
   return hasLock
 }

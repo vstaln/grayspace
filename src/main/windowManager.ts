@@ -1,15 +1,29 @@
 import { app, BrowserWindow, dialog } from 'electron'
 import * as fs from 'fs'
 import { dirname, join } from 'path'
-import { APP_TITLE, CONTROL_PORT } from './config.ts'
+import { APP_TITLE, getActiveControlPort } from './config.ts'
 import { getPreloadPath, IS_MAC } from './bootstrap.ts'
 import { isLocalPath } from './media.ts'
-import { syncOrcGuide } from './orchestration/guide.ts'
 import type { AppState } from './appState.ts'
-import { isTrustedAppNavigation } from './navigationGuard.ts'
+import { isTrustedAppNavigation, isExternalOpenAllowed } from './navigationGuard.ts'
 import { clearMountedTerminals, setFocusedTerminal } from './ipc/terminalFocus.ts'
 
 let mainWindow: BrowserWindow | null = null
+
+// Electron gold standard for window.open: never create a new BrowserWindow
+// from renderer content. Always deny, and open only validated https URLs
+// (http allowed solely for loopback dev servers) via shell.openExternal.
+// Rate-limited so a compromised renderer cannot flood the OS with windows.
+const externalOpenAt: number[] = []
+
+export function allowExternalOpen(url: string): boolean {
+  if (!isExternalOpenAllowed(url)) return false
+  const now = Date.now()
+  while (externalOpenAt.length > 0 && now - externalOpenAt[0] > 5000) externalOpenAt.shift()
+  if (externalOpenAt.length >= 3) return false
+  externalOpenAt.push(now)
+  return true
+}
 
 
 
@@ -163,7 +177,7 @@ export function createWindow(): BrowserWindow {
 
   win.webContents.on('will-navigate', (e, url) => {
     const devUrl = process.env['ELECTRON_RENDERER_URL']
-    const controlOrigin = `http://127.0.0.1:${CONTROL_PORT}/`
+    const controlOrigin = `http://127.0.0.1:${getActiveControlPort()}/`
     const rendererFile = join(__dirname, '../renderer/index.html')
     if (!isTrustedAppNavigation(url, { devUrl, controlOrigin, rendererFile })) {
       e.preventDefault()
@@ -171,7 +185,7 @@ export function createWindow(): BrowserWindow {
   })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https:') || url.startsWith('http:')) {
+    if (allowExternalOpen(url)) {
       import('electron').then(({ shell }) => shell.openExternal(url)).catch(() => {})
     }
     return { action: 'deny' }
@@ -191,7 +205,7 @@ export function createWindow(): BrowserWindow {
 
 export function handleSecondInstanceArgs(
   argv: string[],
-  deps: { state: AppState; send: (channel: string, ...args: unknown[]) => void; focus: () => void }
+  deps: { setWorkspaceDir: (dir: string) => void; send: (channel: string, ...args: unknown[]) => void; focus: () => void }
 ): void {
   deps.focus()
   const candidates = argv
@@ -204,9 +218,7 @@ export function handleSecondInstanceArgs(
       const stat = fs.statSync(candidate)
       const dir = stat.isDirectory() ? candidate : dirname(candidate)
       if (!fs.existsSync(dir)) continue
-      deps.state.setWorkspaceDir(dir)
-      syncOrcGuide(dir)
-      deps.send('workspace:onDirChange', dir)
+      deps.setWorkspaceDir(dir)
       return
     } catch {
 
@@ -241,6 +253,7 @@ export function setupWebContentsHandlers(sendFn: (channel: string, ...args: unkn
     let isDestroyed = false
     let lastOpenTime = 0
     let lastOpenUrl = ''
+    const popupOpenAt: number[] = []
 
     contents.on('destroyed', () => {
       isDestroyed = true
@@ -284,8 +297,20 @@ export function setupWebContentsHandlers(sendFn: (channel: string, ...args: unkn
       try {
         const parsed = new URL(url)
         if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+          if (parsed.username || parsed.password) return { action: 'deny' }
+          if (!parsed.hostname || url.length > 2048) return { action: 'deny' }
           const now = Date.now()
+          // Same-URL dedup (350ms) first: a repeated click on one link that
+          // gets deduped away must not itself spend the popup budget below,
+          // or a user clicking the same link several times could lock
+          // themselves out of opening anything else.
           if (now - lastOpenTime > 350 || lastOpenUrl !== url) {
+            // Global popup budget: max 5 new tabs per 10s per webview, so a
+            // malicious page cannot fill the canvas up to MAX_WIDGETS with
+            // popup widgets. Counted only for opens that actually pass dedup.
+            while (popupOpenAt.length > 0 && now - popupOpenAt[0] > 10_000) popupOpenAt.shift()
+            if (popupOpenAt.length >= 5) return { action: 'deny' }
+            popupOpenAt.push(now)
             lastOpenTime = now
             lastOpenUrl = url
             sendFn('browser:onOpenTab', url)

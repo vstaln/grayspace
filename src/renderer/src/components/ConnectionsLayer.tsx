@@ -50,11 +50,13 @@ function ConnectionsLayer({ connections, widgets }: Props): React.JSX.Element | 
 
 
 
-  const widgetIdsKey = widgets.map((w) => w.id).join('\n')
+  // Includes id, so this key alone already captures membership and order —
+  // no need for a separate id-only key alongside it.
+  const widgetPositionsKey = widgets.map((w) => `${w.id}:${w.x}:${w.y}:${w.w}:${Boolean(w.maximized)}`).join('\n')
   const byId = useMemo(
     () => (hasConnections ? new Map(widgets.map((w) => [w.id, w])) : new Map<string, Widget>()),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [hasConnections, widgetIdsKey]
+    [hasConnections, widgetPositionsKey]
   )
   if (!hasConnections) return null
 

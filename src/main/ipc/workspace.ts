@@ -67,9 +67,9 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
   ipcMain.handle('workspace:create-code', (_e, rawNameOrFolder?: unknown, rawName?: unknown) => {
     let folder = deps.getWorkspaceDir()
     let name: string | undefined
-    if (typeof rawName === 'string') {
+    if (typeof rawNameOrFolder === 'string' && (typeof rawName === 'string' || rawName === null)) {
       folder = typeof rawNameOrFolder === 'string' ? rawNameOrFolder : folder
-      name = rawName
+      name = typeof rawName === 'string' ? rawName : undefined
     } else if (typeof rawNameOrFolder === 'string') {
       name = rawNameOrFolder
     }
@@ -115,6 +115,11 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     }
     const result = deps.state.deleteCodeWorkspace(folder, id)
     if ('error' in result) return result
+    if (result.workspaces.length === 0) {
+      deps.state.removeRecent(folder ?? '')
+      if (folder === deps.getWorkspaceDir()) deps.setWorkspaceDir(undefined)
+      return result
+    }
     if (folder === deps.getWorkspaceDir()) {
       deps.code.setWorkspaceScope(
         deps.state.activeCodeWorkspaceScope(folder),

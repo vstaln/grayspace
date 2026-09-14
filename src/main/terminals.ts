@@ -65,15 +65,16 @@ function codeTerminalColorEnv(id: string): Record<string, string> {
  * fine. The `LANG`/`LC_ALL` vars set alongside do not cover this: Windows
  * console apps take their encoding from the console, not the environment.
  *
- * cmd.exe intentionally receives no setup command so it opens directly on
- * its first prompt row. PowerShell keeps its non-printing UTF-8 setup.
+ * cmd.exe gets a silent `chcp 65001` (output nulled, prompt stays on its
+ * first row) so non-ASCII output decodes instead of filling with U+FFFD.
+ * PowerShell keeps its non-printing UTF-8 setup.
  * No-op off Windows, where a pty is a plain byte stream.
  */
 export function windowsShellArgs(windowsShell: 'cmd' | 'powershell'): string[] {
   if (process.platform !== 'win32') return []
   return windowsShell === 'powershell'
     ? ['-NoLogo', '-NoExit', '-Command', 'chcp 65001 > $null']
-    : ['/K']
+    : ['/K', 'chcp 65001 >nul']
 }
 
 function safeOrcTerminalEnv(id: string): Record<string, string> {
@@ -170,6 +171,9 @@ interface TerminalRecord {
   lastDataAt: number
 
   exited?: boolean
+
+  /** When the shell exited, used to reclaim the oldest dead slot at the cap. */
+  exitedAt?: number
 }
 
 
@@ -266,9 +270,37 @@ export class TerminalManager extends EventEmitter {
     return pickTerminalName({ favorites, taken: this.takenTitles(exceptId) })
   }
 
+  /**
+   * Free one slot at the terminal cap by dropping the longest-dead session.
+   *
+   * Only records that actually ran and exited qualify: a reserved-but-unspawned
+   * record also has `pty == null && !nativeAlive`, and reclaiming one of those
+   * would destroy a terminal the renderer is still about to attach to.
+   * Returns false when every slot is either live or pending a first spawn.
+   */
+  private reclaimExitedSlot(): boolean {
+    let oldestId: string | null = null
+    let oldestAt = Infinity
+    for (const [id, record] of this.terminals) {
+      if (!record.exited || record.pty != null || record.nativeAlive) continue
+      const at = record.exitedAt ?? 0
+      if (at < oldestAt) {
+        oldestAt = at
+        oldestId = id
+      }
+    }
+    if (oldestId === null) return false
+    this.release(oldestId, { killDescendants: false })
+    return true
+  }
+
   reserve(options: { title?: string; cwd?: string; prefix?: string } = {}): TerminalInfo {
     if (this.terminals.size >= MAX_TERMINALS) {
-      throw new CommandError('rate_limited', `terminal limit reached (${MAX_TERMINALS})`)
+      // Exited shells keep their scrollback for worker-read, but a pile of
+      // closed-but-unreleased widgets must not wedge new terminals forever.
+      if (!this.reclaimExitedSlot()) {
+        throw new CommandError('rate_limited', `terminal limit reached (${MAX_TERMINALS})`)
+      }
     }
     const prefix = options.prefix || 'term'
     const id = this.nextId(prefix)
@@ -361,7 +393,11 @@ export class TerminalManager extends EventEmitter {
     }
     if (!record) {
       if (this.terminals.size >= MAX_TERMINALS) {
-        return { ok: false, error: `terminal limit reached (${MAX_TERMINALS})` }
+        // Same reclaim policy as reserve(): exited slots keep scrollback for
+        // worker-read, but must not wedge brand-new terminals forever.
+        if (!this.reclaimExitedSlot()) {
+          return { ok: false, error: `terminal limit reached (${MAX_TERMINALS})` }
+        }
       }
       record = {
         pty: null,
@@ -394,6 +430,7 @@ export class TerminalManager extends EventEmitter {
       record.output.clear()
       record.readOffset = 0
       record.exited = false
+      record.exitedAt = undefined
     }
 
     if (this.rustPty) {
@@ -498,6 +535,7 @@ export class TerminalManager extends EventEmitter {
     if (!current || !current.nativeAlive) return
     current.nativeAlive = false
     current.exited = true
+    current.exitedAt = Date.now()
     this.emit('exit', id, exitCode)
   }
 
@@ -506,6 +544,7 @@ export class TerminalManager extends EventEmitter {
       if (!record.nativeAlive) continue
       record.nativeAlive = false
       record.exited = true
+      record.exitedAt = Date.now()
       if (this.shuttingDown) {
         // The app is quitting: a replacement shell would only be orphaned.
         this.emit('exit', id, exitCode)
@@ -538,6 +577,7 @@ export class TerminalManager extends EventEmitter {
       // recover on its own.
       current.nativeAlive = false
       current.exited = true
+      current.exitedAt = Date.now()
       this.emit('backend-error', error)
       this.emit('exit', id, 1)
       return
@@ -756,7 +796,13 @@ export class TerminalManager extends EventEmitter {
       if (!record || !this.isRunning(id)) return false
       const from = Math.max(offset, record.output.startOffset)
       const output = record.output.read(from, OUTPUT_BUFFER_LIMIT).data
-      return normalizeDeliveryText(output).includes(expected)
+      const normalized = normalizeDeliveryText(output)
+      if (!normalized || !expected) return false
+      if (expected.length >= 8) return normalized.includes(expected)
+      // Short commands ("ls", "ok") collide with prose already on screen:
+      // require a token boundary so "ls" inside "false" is not a delivery.
+      const escaped = expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      return new RegExp(`(^|\\W)${escaped}(\\W|$)`).test(normalized)
     }
     if (matches()) return Promise.resolve(true)
     if (signal?.aborted) return Promise.resolve(false)
@@ -937,6 +983,7 @@ export class TerminalManager extends EventEmitter {
     current.rootPid = undefined
     current.ptyDisposers = []
     current.exited = true
+    current.exitedAt = Date.now()
 
     killProcessTree(rootPid)
     for (const d of disposers) {

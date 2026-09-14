@@ -13,6 +13,7 @@ import type {
   ChatProvider,
   ChatProviderStatus,
   ChatRequest,
+  AgentConversation,
   BrowserApi,
   CanvasApi,
   CanvasSnapshot,
@@ -176,7 +177,7 @@ const workspace: WorkspaceApi = {
   codeWorkspaces: () => ipcRenderer.invoke('workspace:code-workspaces'),
   codeWorkspaceGroups: () => ipcRenderer.invoke('workspace:code-workspace-groups'),
   createCodeWorkspace: (name?: string, folder?: string) =>
-    folder ? ipcRenderer.invoke('workspace:create-code', folder, name) : ipcRenderer.invoke('workspace:create-code', name),
+    folder ? ipcRenderer.invoke('workspace:create-code', folder, name ?? null) : ipcRenderer.invoke('workspace:create-code', name),
   renameCodeWorkspace: (id: string, name: string, folder?: string) =>
     folder ? ipcRenderer.invoke('workspace:rename-code', folder, id, name) : ipcRenderer.invoke('workspace:rename-code', id, name),
   deleteCodeWorkspace: (id: string, folder?: string) =>
@@ -281,6 +282,7 @@ const canvas: CanvasApi = {
 
 const code: CodeApi = {
   load: (): Promise<CodeSnapshot> => ipcRenderer.invoke('code:load'),
+  conversations: (dir?: string): Promise<AgentConversation[]> => ipcRenderer.invoke('code:conversations', dir),
   save: (snapshot: unknown): Promise<{ ok: boolean } | { error: string }> =>
     ipcRenderer.invoke('code:save', snapshot),
   saveSync: (snapshot: unknown): { ok: boolean } | { error: string } =>

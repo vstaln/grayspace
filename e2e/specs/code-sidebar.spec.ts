@@ -57,3 +57,28 @@ test('Code sidebar shows an existing workspace before the first session', async 
     await closeOrcSpace(ctx)
   }
 })
+
+test('Deleting the last workspace closes its folder', async () => {
+  const ctx = await launchOrcSpace()
+  try {
+    const { page } = ctx
+    await waitForCanvas(page)
+    const folderName = `delete-last-workspace-${Date.now()}`
+    await page.evaluate(async (name) => {
+      const result = await window.api.workspace.create(name)
+      if (typeof result !== 'string') throw new Error('failed to create test workspace')
+    }, folderName)
+
+    await page.getByRole('tab', { name: 'Code', exact: true }).click()
+    const sidebar = page.locator('.rail-shell')
+    await sidebar.getByRole('button', { name: 'Delete Workspace 1', exact: true }).click()
+    const dialog = page.getByRole('alertdialog', { name: 'Delete workspace' })
+    await expect(dialog).toContainText('close this folder')
+    await dialog.getByRole('button', { name: 'Delete', exact: true }).click()
+
+    await expect(sidebar.getByText(folderName, { exact: true })).toHaveCount(0)
+    await expect.poll(() => page.evaluate(() => window.api.workspace.getDir())).toBeNull()
+  } finally {
+    await closeOrcSpace(ctx)
+  }
+})

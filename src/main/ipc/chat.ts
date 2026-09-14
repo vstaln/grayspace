@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readdirSync } from 'node:fs'
-import { extname, join } from 'node:path'
+import { existsSync, readdirSync, statSync } from 'node:fs'
+import { extname, isAbsolute, join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 import type { IpcMainInvokeEvent } from 'electron'
 import { ipcMain, shell } from './shims.ts'
@@ -410,7 +410,17 @@ export function registerChatIpc(deps: IpcDeps): void {
     const resolved = await resolveCommand(providerInfo.command)
     if (!resolved) return { ok: false, error: `${providerInfo.label} CLI is not installed. Run: ${providerInfo.installCommand}` }
     const workspaceDir = typeof request?.workspaceDir === 'string' && request.workspaceDir.length < 1024 ? request.workspaceDir : undefined
-    const workingRoot = (workspaceDir && existsSync(workspaceDir)) ? workspaceDir : (deps.getWorkspaceDir() || process.cwd())
+    // Renderer input: require an absolute existing directory, not just any
+    // existing path, so a file or a crafted relative path cannot become cwd.
+    let requestedDir: string | undefined
+    if (workspaceDir && isAbsolute(workspaceDir)) {
+      try {
+        if (statSync(workspaceDir).isDirectory()) requestedDir = workspaceDir
+      } catch {
+        requestedDir = undefined
+      }
+    }
+    const workingRoot = requestedDir ?? (deps.getWorkspaceDir() || process.cwd())
     let child: ChildProcess
     try {
       child = spawnResolved(resolved, commandArgs(provider, model, effort, input), { cwd: workingRoot })

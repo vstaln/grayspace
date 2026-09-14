@@ -4,7 +4,16 @@ import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-throw new Error('Source installers are disabled. Distribute signed binaries with npm run dist:mac or npm run installer:win.')
+// Source archives are not a distribution channel: they are unsigned, so macOS
+// Gatekeeper rejects them and the updater cannot verify them. Shipping one to
+// users is the mistake this guard exists to prevent. It stays available behind
+// an explicit opt-in for local reproduction of a packaging bug.
+if (process.env.ORCSPACE_ALLOW_SOURCE_ARCHIVE !== '1') {
+  console.error('Source installers are not for distribution: they are unsigned and the updater cannot verify them.')
+  console.error('Ship signed binaries with npm run dist:mac or npm run installer:win.')
+  console.error('For local debugging only, re-run with ORCSPACE_ALLOW_SOURCE_ARCHIVE=1.')
+  process.exit(1)
+}
 const zipPath = join(root, 'OrcSpace-mac-source.zip')
 const updateCmdPath = join(root, 'OrcSpace-Update.command')
 const installerCmdPath = join(root, 'OrcSpace-Installer.command')

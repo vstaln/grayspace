@@ -140,7 +140,18 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
         return a.isDirectory ? -1 : 1
       })
       const parsedPath = parse(targetDir)
-      const parentPath = targetDir === parsedPath.root ? null : dirname(targetDir)
+      const rawParent = targetDir === parsedPath.root ? null : dirname(targetDir)
+      // Never leak one level above the workspace root: the jail ends here.
+      let parentPath: string | null = null
+      if (rawParent) {
+        try {
+          const rootReal = await fs.promises.realpath(workspaceDir).catch(() => workspaceDir)
+          const parentReal = await fs.promises.realpath(rawParent).catch(() => rawParent)
+          parentPath = media.isPathWithinRoot(parentReal, rootReal) ? rawParent : null
+        } catch {
+          parentPath = null
+        }
+      }
       return {
         currentPath: targetDir,
         parentPath,
@@ -285,6 +296,16 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
     '.hta', '.msc', '.cpl', '.url', '.inf', '.pif', '.appref-ms', '.wsb', '.mof', '.gadget'
   ])
 
+  /**
+   * Markup that the OS browser renders with script enabled, in the user's own
+   * browser profile and with file:// read access to the rest of the disk.
+   * Blocked separately from executables so the refusal can say what it is —
+   * "Executable files cannot be opened from here" for an .html report is a
+   * message nobody can act on. `.xml` is deliberately absent: browsers do not
+   * run script from it, and it is a common, harmless data file.
+   */
+  const ACTIVE_MARKUP_EXTENSIONS = new Set(['.html', '.htm', '.xhtml', '.shtml', '.svg', '.mhtml', '.xht'])
+
   ipcMain.handle('fs:open-path', async (_e, targetPath: string) => {
     try {
       const target = resolveTargetIn(targetPath, ws())
@@ -297,8 +318,12 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
 
       }
       for (const candidate of candidates) {
-        if (EXECUTABLE_EXTENSIONS.has(extname(candidate).toLowerCase())) {
+        const ext = extname(candidate).toLowerCase()
+        if (EXECUTABLE_EXTENSIONS.has(ext)) {
           return { error: 'Executable files cannot be opened from here' }
+        }
+        if (ACTIVE_MARKUP_EXTENSIONS.has(ext)) {
+          return { error: 'Web pages cannot be opened in your browser from here — open it in the editor instead' }
         }
       }
       const err = await shell.openPath(target)
