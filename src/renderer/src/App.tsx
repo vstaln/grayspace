@@ -40,8 +40,21 @@ export default function App(): React.JSX.Element {
 
 
   const [activeView, setActiveView] = useState<WorkView>('canvas')
+  const [canvasHistory, setCanvasHistory] = useState({ canUndo: false, canRedo: false })
   const [codeSidebarCollapsed, setCodeSidebarCollapsed] = useState(false)
   const toggleCodeSidebar = useCallback(() => setCodeSidebarCollapsed((collapsed) => !collapsed), [])
+
+  useEffect(() => {
+    const onHistory = (event: Event): void => {
+      const detail = (event as CustomEvent<{ canUndo?: boolean; canRedo?: boolean }>).detail
+      setCanvasHistory({ canUndo: detail?.canUndo === true, canRedo: detail?.canRedo === true })
+    }
+    window.addEventListener('orcspace:canvas-history', onHistory)
+    return () => window.removeEventListener('orcspace:canvas-history', onHistory)
+  }, [])
+
+  const undoCanvas = useCallback(() => window.dispatchEvent(new Event('orcspace:canvas-undo')), [])
+  const redoCanvas = useCallback(() => window.dispatchEvent(new Event('orcspace:canvas-redo')), [])
 
 
   const [codeStarted, setCodeStarted] = useState(false)
@@ -138,6 +151,10 @@ export default function App(): React.JSX.Element {
               onViewChange={showView}
               codeSidebarCollapsed={codeSidebarCollapsed}
               onToggleCodeSidebar={toggleCodeSidebar}
+              canUndo={canvasHistory.canUndo}
+              canRedo={canvasHistory.canRedo}
+              onUndo={undoCanvas}
+              onRedo={redoCanvas}
             />
             <SettingsModal listenForToolbar />
             <div className="flex flex-1 flex-col">

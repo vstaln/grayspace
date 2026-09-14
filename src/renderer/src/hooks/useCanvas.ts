@@ -221,6 +221,50 @@ export function useCanvas() {
   cameraRef.current = camera
   const widgetsRef = useRef(widgets)
   widgetsRef.current = widgets
+  const strokesRef = useRef(strokes)
+  strokesRef.current = strokes
+  const connectionsRef = useRef(connections)
+  connectionsRef.current = connections
+
+  type CanvasHistorySnapshot = {
+    widgets: Widget[]
+    strokes: Stroke[]
+    connections: Connection[]
+  }
+  const historyPastRef = useRef<CanvasHistorySnapshot[]>([])
+  const historyFutureRef = useRef<CanvasHistorySnapshot[]>([])
+  const historyReadyRef = useRef(false)
+  const historyCoalesceRef = useRef<{ key: string; at: number } | null>(null)
+
+  const emitHistoryState = useCallback((): void => {
+    window.dispatchEvent(new CustomEvent('orcspace:canvas-history', {
+      detail: {
+        canUndo: historyPastRef.current.length > 0,
+        canRedo: historyFutureRef.current.length > 0
+      }
+    }))
+  }, [])
+
+  const captureHistorySnapshot = useCallback((): CanvasHistorySnapshot => ({
+    widgets: widgetsRef.current.map((widget) => ({ ...widget })),
+    strokes: strokesRef.current.map((stroke) => ({ ...stroke, points: stroke.points.map((point) => ({ ...point })) })),
+    connections: connectionsRef.current.map((connection) => ({ ...connection }))
+  }), [])
+
+  const recordHistory = useCallback((key = 'canvas'): void => {
+    if (!historyReadyRef.current) return
+    const now = Date.now()
+    const previous = historyCoalesceRef.current
+    if (previous && previous.key === key && now - previous.at < 500) {
+      previous.at = now
+      return
+    }
+    historyPastRef.current.push(captureHistorySnapshot())
+    if (historyPastRef.current.length > 100) historyPastRef.current.shift()
+    historyFutureRef.current = []
+    historyCoalesceRef.current = { key, at: now }
+    emitHistoryState()
+  }, [captureHistorySnapshot, emitHistoryState])
 
 
 
@@ -246,6 +290,14 @@ export function useCanvas() {
 
 
   const canvasChangeSeqRef = useRef(0)
+
+  function resetCanvasHistory(): void {
+    historyPastRef.current = []
+    historyFutureRef.current = []
+    historyCoalesceRef.current = null
+    historyReadyRef.current = true
+    emitHistoryState()
+  }
 
   const hydrate = useCallback(() => {
     if (retryTimerRef.current !== null) {
@@ -275,6 +327,9 @@ export function useCanvas() {
           setCamera(snapshot.camera)
           setStrokes(snapshot.strokes)
           setConnections(snapshot.connections ?? [])
+          widgetsRef.current = snapshot.widgets
+          strokesRef.current = snapshot.strokes
+          connectionsRef.current = snapshot.connections ?? []
           // Only inside this branch: when local changes have already raced
           // ahead of the load, the snapshot is stale and its widget list
           // would read a just-created widget as an orphan and delete the
@@ -285,6 +340,7 @@ export function useCanvas() {
         const maxZ = snapshot.widgets.reduce((max, w) => Math.max(max, w.z), 0)
         zRef.current = Math.max(1, maxZ)
         cascadeRef.current = 0
+        resetCanvasHistory()
 
 
         hydratedRef.current = true
@@ -501,6 +557,7 @@ export function useCanvas() {
       ) return false
 
 
+      recordHistory(`add:${id}`)
       pendingCreatesRef.current.add(id)
 
 
@@ -537,7 +594,7 @@ export function useCanvas() {
       })
       return true
     },
-    [nextZ]
+    [nextZ, recordHistory]
   )
 
 
@@ -547,6 +604,7 @@ export function useCanvas() {
 
 
     pendingDeletesRef.current.add(id)
+    recordHistory(`remove:${id}`)
     pendingCreatesRef.current.delete(id)
     widgetsDirtyRef.current = true
     dirtyWidgetIdsRef.current.add(id)
@@ -584,7 +642,7 @@ export function useCanvas() {
 
     connectionsDirtyRef.current = true
     setConnections((prev) => prev.filter((c) => c.from !== id && c.to !== id))
-  }, [])
+  }, [recordHistory])
 
 
 
@@ -593,6 +651,7 @@ export function useCanvas() {
   const widgetRafRef = useRef<number | null>(null)
 
   const updateWidget = useCallback((id: string, change: Partial<Widget>): void => {
+    recordHistory(`widget:${id}`)
     widgetsDirtyRef.current = true
     dirtyWidgetIdsRef.current.add(id)
     const pending = widgetPatchRef.current.get(id)
@@ -614,7 +673,7 @@ export function useCanvas() {
         return next ?? prev
       })
     })
-  }, [])
+  }, [recordHistory])
 
   const bringToFront = useCallback(
     (id: string): void => {
@@ -646,11 +705,12 @@ export function useCanvas() {
   const beginStroke = useCallback(
     (point: Point): string => {
       const id = makeStrokeId()
+      recordHistory(`stroke:${id}`)
       strokesDirtyRef.current = true
       setStrokes((prev) => [...prev, { id, points: [point], color: strokeColor }])
       return id
     },
-    [strokeColor]
+    [recordHistory, strokeColor]
   )
 
   const extendStroke = useCallback((id: string, point: Point): void => {
@@ -681,18 +741,22 @@ export function useCanvas() {
   }, [])
 
   const clearStrokes = useCallback((): void => {
+    if (strokesRef.current.length === 0) return
+    recordHistory('clear-strokes')
     strokesDirtyRef.current = true
     setStrokes([])
-  }, [])
+  }, [recordHistory])
 
 
 
 
   const discardStroke = useCallback((id: string): void => {
+    if (!strokesRef.current.some((stroke) => stroke.id === id)) return
+    recordHistory(`discard-stroke:${id}`)
     strokeBatchRef.current.delete(id)
     strokesDirtyRef.current = true
     setStrokes((prev) => prev.filter((s) => s.id !== id))
-  }, [])
+  }, [recordHistory])
 
 
 
@@ -708,6 +772,7 @@ export function useCanvas() {
 
 
   const eraseAt = useCallback((point: Point, radius = 14): void => {
+    recordHistory('erase-stroke')
     strokesDirtyRef.current = true
 
 
@@ -808,7 +873,72 @@ export function useCanvas() {
         return next
       })
     })
+  }, [recordHistory])
+
+  const restoreHistorySnapshot = useCallback((snapshot: CanvasHistorySnapshot): void => {
+    const targetIds = new Set(snapshot.widgets.map((widget) => widget.id))
+    for (const widget of widgetsRef.current) {
+      if (!targetIds.has(widget.id) && (!widget.kind || widget.kind === 'terminal')) {
+        void window.api.terminal.dispose(widget.id).catch(() => {})
+      }
+    }
+    if (widgetRafRef.current !== null) {
+      cancelAnimationFrame(widgetRafRef.current)
+      widgetRafRef.current = null
+    }
+    widgetPatchRef.current.clear()
+    strokeBatchRef.current.clear()
+    pendingEraseRef.current = null
+    if (strokeRafRef.current !== null) {
+      cancelAnimationFrame(strokeRafRef.current)
+      strokeRafRef.current = null
+    }
+    if (eraseRafRef.current !== null) {
+      cancelAnimationFrame(eraseRafRef.current)
+      eraseRafRef.current = null
+    }
+    pendingDeletesRef.current.clear()
+    pendingCreatesRef.current.clear()
+    widgetsRef.current = snapshot.widgets
+    strokesRef.current = snapshot.strokes
+    connectionsRef.current = snapshot.connections
+    zRef.current = Math.max(1, ...snapshot.widgets.map((widget) => widget.z))
+    setWidgets(snapshot.widgets)
+    setStrokes(snapshot.strokes)
+    setConnections(snapshot.connections)
+    widgetsDirtyRef.current = true
+    strokesDirtyRef.current = true
+    connectionsDirtyRef.current = true
   }, [])
+
+  const undoCanvas = useCallback((): void => {
+    const target = historyPastRef.current.pop()
+    if (!target) return
+    historyFutureRef.current.push(captureHistorySnapshot())
+    historyCoalesceRef.current = null
+    restoreHistorySnapshot(target)
+    emitHistoryState()
+  }, [captureHistorySnapshot, emitHistoryState, restoreHistorySnapshot])
+
+  const redoCanvas = useCallback((): void => {
+    const target = historyFutureRef.current.pop()
+    if (!target) return
+    historyPastRef.current.push(captureHistorySnapshot())
+    historyCoalesceRef.current = null
+    restoreHistorySnapshot(target)
+    emitHistoryState()
+  }, [captureHistorySnapshot, emitHistoryState, restoreHistorySnapshot])
+
+  useEffect(() => {
+    const onUndo = (): void => undoCanvas()
+    const onRedo = (): void => redoCanvas()
+    window.addEventListener('orcspace:canvas-undo', onUndo)
+    window.addEventListener('orcspace:canvas-redo', onRedo)
+    return () => {
+      window.removeEventListener('orcspace:canvas-undo', onUndo)
+      window.removeEventListener('orcspace:canvas-redo', onRedo)
+    }
+  }, [redoCanvas, undoCanvas])
 
   useEffect(() => {
     const offAdd = window.api.control.onAddWidget(({ id, title, kind, x, y, from }) => {
@@ -854,6 +984,7 @@ export function useCanvas() {
     })
     const offRemove = window.api.control.onRemoveWidget(removeWidget)
     const offRename = window.api.control.onRenameWidget(({ id, title }) => {
+      recordHistory(`rename:${id}`)
       setWidgets((prev) => prev.map((widget) => (widget.id === id ? { ...widget, title } : widget)))
     })
     return () => {
@@ -861,7 +992,7 @@ export function useCanvas() {
       offRemove()
       offRename()
     }
-  }, [addWidget, removeWidget, screenToWorld])
+  }, [addWidget, recordHistory, removeWidget, screenToWorld])
 
 
 

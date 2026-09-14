@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, FileText, Lock, RotateCw, Search, X } from 'lucide-react'
 import { BROWSER_PARTITION, HOME_URL, hostOf, toNavigationUrl, type Webview } from '../lib/browserShared'
-import { WIDGET_FULLSCREEN_SCRIPT } from '../lib/widgetFullscreen'
 
 export type DroppedMediaKind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'doc'
 
@@ -53,7 +52,10 @@ function readUrl(widgetId: string | undefined): string {
   return HOME_URL
 }
 
-export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: string }): React.JSX.Element {
+export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange }: {
+  widgetId?: string
+  onFullscreenChange?: (active: boolean) => void
+}): React.JSX.Element {
   const [url, setUrl] = useState(() => readUrl(widgetId))
   const [address, setAddress] = useState(() => readUrl(widgetId))
   const [media, setMedia] = useState<DroppedMedia | null>(() => readMedia(widgetId))
@@ -123,7 +125,6 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
 
     const onDomReady = (): void => {
       syncHistory()
-      void view.executeJavaScript(WIDGET_FULLSCREEN_SCRIPT, true).catch(() => {})
     }
     const onFail = (event: Event): void => {
       const e = event as Event & { errorCode?: number; errorDescription?: string; isMainFrame?: boolean }
@@ -145,8 +146,14 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
       syncHistory()
     }
     const onEnterHtmlFullscreen = (event: Event): void => {
-      // A webview fullscreen request must stay inside this widget, never promote the app window.
+      // Keep fullscreen inside OrcSpace. CodeView promotes this session so the
+      // browser fills the Code workspace instead of promoting the app window.
       event.preventDefault()
+      onFullscreenChange?.(true)
+    }
+    const onLeaveHtmlFullscreen = (event: Event): void => {
+      event.preventDefault()
+      onFullscreenChange?.(false)
     }
     let crashReloads = 0
     const onCrashed = (): void => {
@@ -169,6 +176,7 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
     view.addEventListener('did-navigate', onNavigate)
     view.addEventListener('did-navigate-in-page', onInPage)
     view.addEventListener('enter-html-full-screen', onEnterHtmlFullscreen)
+    view.addEventListener('leave-html-full-screen', onLeaveHtmlFullscreen)
     view.addEventListener('crashed', onCrashed)
     return () => {
       view.removeEventListener('did-start-loading', onStart)
@@ -179,9 +187,10 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
       view.removeEventListener('did-navigate', onNavigate)
       view.removeEventListener('did-navigate-in-page', onInPage)
       view.removeEventListener('enter-html-full-screen', onEnterHtmlFullscreen)
+      view.removeEventListener('leave-html-full-screen', onLeaveHtmlFullscreen)
       view.removeEventListener('crashed', onCrashed)
     }
-  }, [viewEl])
+  }, [onFullscreenChange, viewEl])
 
 
 

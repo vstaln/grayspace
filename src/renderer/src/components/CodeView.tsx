@@ -111,6 +111,7 @@ const SessionCard = React.memo(function SessionCard({
   promotable,
   maximized,
   onToggleMaximize,
+  onFullscreenChange,
   dragging,
   dropTarget,
   style
@@ -129,6 +130,7 @@ const SessionCard = React.memo(function SessionCard({
   promotable?: boolean
   maximized: boolean
   onToggleMaximize(): void
+  onFullscreenChange(active: boolean): void
   dragging?: boolean
   dropTarget?: boolean
   style?: React.CSSProperties
@@ -138,6 +140,8 @@ const SessionCard = React.memo(function SessionCard({
 
   return (
     <div
+      data-testid="code-session"
+      data-session-agent={session.agent.id}
       className={`flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[6px] border border-[#121212] transition-[opacity,box-shadow] ${
         isBrowserSession(session) ? 'bg-bg-panel' : 'code-terminal-shell'
       } ${
@@ -289,7 +293,9 @@ const SessionCard = React.memo(function SessionCard({
         </div>
       </div>
       <div className="min-h-0 flex-1 bg-[#080808]">
-        {isBrowserSession(session) ? <BrowserWidget /> : <TerminalWidget id={session.id} surface="code" attachmentMode agentId={terminalAgentId(session)} onProcessExit={onProcessExit} />}
+        {isBrowserSession(session)
+          ? <BrowserWidget onFullscreenChange={onFullscreenChange} />
+          : <TerminalWidget id={session.id} surface="code" attachmentMode agentId={terminalAgentId(session)} onProcessExit={onProcessExit} />}
       </div>
     </div>
   )
@@ -945,6 +951,15 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
     return handlers
   }
 
+  const handleBrowserFullscreen = useCallback((id: string, active: boolean): void => {
+    if (active) {
+      markLocalChange()
+      setMaximizedId(id)
+    } else {
+      setMaximizedId((current) => current === id ? null : current)
+    }
+  }, [markLocalChange])
+
   useEffect(() => {
     const cache = handlerCacheRef.current
     if (cache.size === 0) return
@@ -1024,6 +1039,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
                   promotable={false}
                   maximized={maximizedId === session.id}
                   onToggleMaximize={handlers.onToggleMaximize}
+                  onFullscreenChange={(active) => handleBrowserFullscreen(session.id, active)}
                 />
               )
             })}
