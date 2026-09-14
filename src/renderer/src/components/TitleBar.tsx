@@ -322,8 +322,8 @@ export default React.memo(function TitleBar({
           </div>
         {activeView === 'code' && (
           <div
-            className={`${VIEW_SWITCH} title-bar-view-switch relative z-10 flex-none`}
-            style={{ ...noDrag, marginLeft: codeSidebarCollapsed ? 0 : 204 - (IS_MAC ? 78 : 8) }}
+            className={`${VIEW_SWITCH} title-bar-view-switch absolute top-[5px] z-10 flex-none`}
+            style={{ ...noDrag, left: codeSidebarCollapsed ? (IS_MAC ? 170 : 100) : 204 }}
           >
           <button
             type="button"
@@ -343,7 +343,13 @@ export default React.memo(function TitleBar({
             <span className="truncate text-[13px] font-medium text-text">{flash}</span>
           </div>
         )}
-        <div className="h-full flex-1" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
+        <div
+          className="h-full flex-1"
+          style={{
+            WebkitAppRegion: 'drag',
+            marginLeft: activeView === 'code' ? (codeSidebarCollapsed ? 40 : 144) : 0
+          } as React.CSSProperties}
+        />
       </div>
 
       {}

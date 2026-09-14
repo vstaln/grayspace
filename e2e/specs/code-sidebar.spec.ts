@@ -12,6 +12,12 @@ test('Code sidebar toggle stays outside window drag regions and expands the work
     const collapse = page.getByRole('button', { name: 'Collapse sidebar', exact: true })
     await expect(sidebar).toBeVisible()
     await expect(code).toHaveCSS('left', '200px')
+    await expect.poll(async () => {
+      const sidebarBox = await sidebar.boundingBox()
+      const buttonBox = await collapse.boundingBox()
+      if (!sidebarBox || !buttonBox) return Number.NaN
+      return buttonBox.x - (sidebarBox.x + sidebarBox.width)
+    }).toBeCloseTo(8, 0)
     for (const name of ['Collapse sidebar', 'Expand sidebar']) {
       const button = page.getByRole('button', { name, exact: true })
       await expect(button).toBeVisible()
@@ -78,6 +84,8 @@ test('Deleting the last workspace closes its folder', async () => {
 
     await expect(sidebar.getByText(folderName, { exact: true })).toHaveCount(0)
     await expect.poll(() => page.evaluate(() => window.api.workspace.getDir())).toBeNull()
+    await expect(page.getByRole('tab', { name: 'Code', exact: true })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByTestId('code-view')).toBeVisible()
   } finally {
     await closeOrcSpace(ctx)
   }

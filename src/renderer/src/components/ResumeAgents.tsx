@@ -6,7 +6,6 @@ import {
   readDismissed,
   relativeTime,
   resumeAllCount,
-  selectAutoResumeConversations,
   visibleConversations,
   writeDismissed,
   type AgentConversation
@@ -19,7 +18,6 @@ interface Props {
   remainingSlots: number
   onResume(conversation: AgentConversation): void
   onResumeAll?(conversations: AgentConversation[]): void
-  autoResume?: boolean
 }
 
 const COLLAPSED_ROWS = 3
@@ -66,8 +64,7 @@ export default function ResumeAgents({
   dir,
   remainingSlots,
   onResume,
-  onResumeAll,
-  autoResume = true
+  onResumeAll
 }: Props): React.JSX.Element | null {
   const [conversations, setConversations] = useState<AgentConversation[]>([])
   const [loading, setLoading] = useState(true)
@@ -78,7 +75,6 @@ export default function ResumeAgents({
 
   const requestRef = useRef(0)
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const autoResumedRef = useRef(false)
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), CLOCK_TICK_MS)
@@ -112,30 +108,11 @@ export default function ResumeAgents({
         const safe = (Array.isArray(list) ? list : []).filter(launchable)
         setConversations(safe)
         // Drop dismissals whose transcript the agent has since deleted.
-        const currentDismissed = readDismissed(dir)
         setDismissed((current) => {
           const live = new Set(safe.map(conversationKey))
           const kept = Array.from(current).filter((key) => live.has(key))
           return kept.length === current.size ? current : new Set(kept)
         })
-
-        if (autoResume && !autoResumedRef.current && safe.length > 0 && remainingSlots > 0) {
-          const visible = visibleConversations(safe, currentDismissed)
-          const toResume = selectAutoResumeConversations(
-            visible,
-            resumeAllCount(visible.length, remainingSlots, RESUME_ALL_MAX)
-          )
-          if (toResume.length > 0) {
-            autoResumedRef.current = true
-            setLoading(false)
-            if (onResumeAll) {
-              onResumeAll(toResume)
-            } else {
-              for (const conv of toResume) onResume(conv)
-            }
-            return
-          }
-        }
 
         setLoading(false)
       })
@@ -144,10 +121,9 @@ export default function ResumeAgents({
         setConversations([])
         setLoading(false)
       })
-  }, [autoResume, dir, onResume, onResumeAll, remainingSlots])
+  }, [dir])
 
   useEffect(() => {
-    autoResumedRef.current = false
     setExpanded(false)
     setCopyState(null)
     setDismissed(readDismissed(dir))

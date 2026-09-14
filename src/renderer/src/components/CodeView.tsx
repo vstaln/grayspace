@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { FolderOpen, Maximize2, Minimize2, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
+import { Check, Copy, FolderOpen, Maximize2, Minimize2, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
 import TerminalWidget, { forgetTerminalViewport } from './TerminalWidget'
 import BrowserWidget from './BrowserWidget'
 import CodeLauncher, { CODE_AGENTS, CODE_LAUNCH_COUNTS, MAX_CODE_SESSIONS, CodeAgent } from './CodeLauncher'
@@ -10,6 +10,7 @@ import { forgetAgentSelection } from './WidgetFrame'
 import { attachmentAgent } from '../lib/terminalAttachments'
 import { resolvePersistedAgent } from '../lib/persistedAgent'
 import { setCodeSessionCount } from '../lib/codeSessions'
+import { copyText } from '../lib/clipboard'
 
 interface Session {
   id: string
@@ -136,7 +137,18 @@ const SessionCard = React.memo(function SessionCard({
   style?: React.CSSProperties
 }): React.JSX.Element {
   const [editing, setEditing] = useState(false)
+  const [nameCopied, setNameCopied] = useState(false)
+  const mountedRef = useRef(true)
+  const nameCopiedTimerRef = useRef<number | null>(null)
   const displayTitle = session.title || session.agent.label
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (nameCopiedTimerRef.current !== null) window.clearTimeout(nameCopiedTimerRef.current)
+    }
+  }, [])
 
   return (
     <div
@@ -201,7 +213,7 @@ const SessionCard = React.memo(function SessionCard({
         onDoubleClick={!editing ? onToggleMaximize : undefined}
         title={!editing && !maximized ? (promotable ? 'Drag to swap · double-click to expand' : 'Drag to swap session') : undefined}
       >
-        <div className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-[11px] text-text-dim">
+        <div className="group/title flex min-w-0 flex-1 items-center gap-1.5 text-[11px] text-text-dim">
           <span className="flex-none">
             <session.agent.Icon size={12} />
           </span>
@@ -231,16 +243,39 @@ const SessionCard = React.memo(function SessionCard({
               }}
             />
           ) : (
-            <span
-              className="truncate cursor-default select-none hover:text-text"
-              title="Double-click to rename"
-              onDoubleClick={(e) => {
-                e.stopPropagation()
-                setEditing(true)
-              }}
-            >
-              {displayTitle}
-            </span>
+            <>
+              <span
+                className="min-w-0 truncate cursor-default select-none hover:text-text"
+                title="Double-click to rename"
+                onDoubleClick={(e) => {
+                  e.stopPropagation()
+                  setEditing(true)
+                }}
+              >
+                {displayTitle}
+              </span>
+              {!isBrowserSession(session) && <button
+                type="button"
+                aria-label={`Copy terminal name ${displayTitle}`}
+                title="Copy terminal name"
+                onDoubleClick={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void copyText(displayTitle).then((ok) => {
+                    if (!ok || !mountedRef.current) return
+                    setNameCopied(true)
+                    if (nameCopiedTimerRef.current !== null) window.clearTimeout(nameCopiedTimerRef.current)
+                    nameCopiedTimerRef.current = window.setTimeout(() => {
+                      nameCopiedTimerRef.current = null
+                      setNameCopied(false)
+                    }, 1200)
+                  })
+                }}
+                className="grid h-4 w-4 flex-none place-items-center rounded-[3px] text-text-faint opacity-0 transition-[opacity,color,background-color] group-hover/title:opacity-100 hover:bg-bg-hover hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+              >
+                {nameCopied ? <Check size={10} /> : <Copy size={10} />}
+              </button>}
+            </>
           )}
         </div>
         <div className="flex flex-none items-center gap-0.5">
@@ -314,7 +349,6 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
   const [workspaceDir, setWorkspaceDir] = useState<string | null | undefined>(undefined)
   const workspaceDirRef = useRef(workspaceDir)
   workspaceDirRef.current = workspaceDir
-  const autoResumeAllowedRef = useRef(true)
   const [recentDirs, setRecentDirs] = useState<{ path: string; name?: string }[]>([])
   const [pickingDir, setPickingDir] = useState(false)
   const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([])
@@ -501,7 +535,6 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
   }, [])
 
   const hydrate = useCallback(() => {
-    autoResumeAllowedRef.current = true
     if (saveTimerRef.current !== null) {
       clearTimeout(saveTimerRef.current)
       saveTimerRef.current = null
@@ -857,7 +890,6 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
   }, [markLocalChange])
 
   const closeSession = useCallback((id: string): void => {
-    autoResumeAllowedRef.current = false
     const session = sessionsRef.current.find((item) => item.id === id)
     if (session && !isBrowserSession(session)) {
       window.api.terminal.dispose(id).then((res: unknown) => {
@@ -1133,7 +1165,6 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
                         remainingSlots={availableSessionSlots}
                         onResume={resumeConversation}
                         onResumeAll={resumeConversations}
-                        autoResume={autoResumeAllowedRef.current}
                       />
 
                       <div className="mb-2 text-[11px] font-semibold tracking-[0.08em] text-text-faint uppercase">

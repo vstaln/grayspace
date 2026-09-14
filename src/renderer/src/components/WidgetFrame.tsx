@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Maximize2, Minimize2, Pencil, X } from 'lucide-react'
+import { Check, Copy, Maximize2, Minimize2, Pencil, X } from 'lucide-react'
 import ClaudeIcon from './ClaudeIcon'
 import CodexIcon from './CodexIcon'
 import GrokIcon from './GrokIcon'
@@ -22,6 +22,7 @@ import MusicPlayerWidget from './MusicPlayerWidget'
 import ChatWidget from './ChatWidget'
 import ErrorBoundary from './ErrorBoundary'
 import { NON_MAXIMIZABLE, RESIZE_HANDLES, ResizeDir, Widget, WidgetKind } from '../types'
+import { copyText } from '../lib/clipboard'
 
 interface Props {
   widget: Widget
@@ -158,9 +159,20 @@ function WidgetFrame({
   const [attachmentMode, setAttachmentMode] = useState(() => attachmentModeByWidget.has(widget.id) || persisted.attached)
   const [launchedAgentId, setLaunchedAgentId] = useState(() => launchedAgentByWidget.get(widget.id) ?? persisted.launched)
   const [agentLaunchError, setAgentLaunchError] = useState<string | null>(null)
+  const [nameCopied, setNameCopied] = useState(false)
+  const mountedRef = useRef(true)
+  const nameCopiedTimerRef = useRef<number | null>(null)
   const agentMenuRef = useRef<HTMLDivElement>(null)
   const agentPanelRef = useRef<HTMLDivElement>(null)
   const agent = AGENTS[agentIdx]
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (nameCopiedTimerRef.current !== null) window.clearTimeout(nameCopiedTimerRef.current)
+    }
+  }, [])
   const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null)
 
 
@@ -429,33 +441,60 @@ function WidgetFrame({
             }}
           />
         ) : (
-          <span
-            className="min-w-0 flex-1 truncate text-xs text-text"
-            data-testid="widget-title"
-            title={`${widget.title} (double-click to rename)`}
-            onPointerDown={(e) => {
-              if (e.detail >= 2) {
-                e.preventDefault()
+          <div className="group/title flex min-w-0 flex-1 items-center gap-1">
+            <span
+              className="min-w-0 truncate text-xs text-text"
+              data-testid="widget-title"
+              title={`${widget.title} (double-click to rename)`}
+              onPointerDown={(e) => {
+                if (e.detail >= 2) {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  onStartEditing()
+                }
+              }}
+              onClick={(e) => {
+                // Electron can suppress dblclick when the header owns pointer
+                // capture. The second click still carries detail=2, so handle
+                // it directly as a reliable rename entry point.
+                if (e.detail >= 2) {
+                  e.stopPropagation()
+                  onStartEditing()
+                }
+              }}
+              onDoubleClick={(e) => {
                 e.stopPropagation()
                 onStartEditing()
-              }
-            }}
-            onClick={(e) => {
-              // Electron can suppress dblclick when the header owns pointer
-              // capture. The second click still carries detail=2, so handle
-              // it directly as a reliable rename entry point.
-              if (e.detail >= 2) {
-                e.stopPropagation()
-                onStartEditing()
-              }
-            }}
-            onDoubleClick={(e) => {
-              e.stopPropagation()
-              onStartEditing()
-            }}
-          >
-            {widget.title}
-          </span>
+              }}
+            >
+              {widget.title}
+            </span>
+            {isTerminal && (
+              <button
+                type="button"
+                data-canvas-interactive="true"
+                aria-label={`Copy terminal name ${widget.title}`}
+                title="Copy terminal name"
+                onPointerDownCapture={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void copyText(widget.title).then((ok) => {
+                    if (!ok || !mountedRef.current) return
+                    setNameCopied(true)
+                    if (nameCopiedTimerRef.current !== null) window.clearTimeout(nameCopiedTimerRef.current)
+                    nameCopiedTimerRef.current = window.setTimeout(() => {
+                      nameCopiedTimerRef.current = null
+                      setNameCopied(false)
+                    }, 1200)
+                  })
+                }}
+                className="grid h-4 w-4 flex-none place-items-center rounded-[3px] text-text-faint opacity-0 transition-[opacity,color,background-color] group-hover/title:opacity-100 hover:bg-bg-hover hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+              >
+                {nameCopied ? <Check size={10} /> : <Copy size={10} />}
+              </button>
+            )}
+          </div>
         )}
         {isTerminal && (
           <button

@@ -40,6 +40,8 @@ export default function App(): React.JSX.Element {
 
 
   const [activeView, setActiveView] = useState<WorkView>('canvas')
+  const activeViewRef = useRef<WorkView>(activeView)
+  activeViewRef.current = activeView
   const [canvasHistory, setCanvasHistory] = useState({ canUndo: false, canRedo: false })
   const [codeSidebarCollapsed, setCodeSidebarCollapsed] = useState(false)
   const toggleCodeSidebar = useCallback(() => setCodeSidebarCollapsed((collapsed) => !collapsed), [])
@@ -67,13 +69,14 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     let mounted = true
-    const restoreWorkspaceView = (workspaceId: string): void => {
+    const restoreWorkspaceView = (workspaceId: string, preserveCurrentView = false): void => {
       const request = ++workspaceViewLoadRef.current
       void window.api.code.load().then((snap) => {
         if (!mounted || request !== workspaceViewLoadRef.current || codeWorkspaceIdRef.current !== workspaceId) return
         if ((snap?.sessions ?? []).length > 0) setCodeStarted(true)
         const av = (snap as unknown as { activeView?: string } | null | undefined)?.activeView ?? null
 
+        if (preserveCurrentView) return
         if (av === 'code') {
           setCodeStarted(true)
           setActiveView('code')
@@ -92,13 +95,18 @@ export default function App(): React.JSX.Element {
       restoreWorkspaceView(codeWorkspaceIdRef.current)
     }).catch(() => {})
     const offWorkspace = window.api.workspace.onCodeWorkspaceChange((state) => {
+      const nextFolder = state?.folder ?? null
+      const folderClosedWhileInCode =
+        codeWorkspaceFolderRef.current !== null &&
+        nextFolder === null &&
+        activeViewRef.current === 'code'
       const scopeChanged =
         codeWorkspaceIdRef.current !== (state?.activeId ?? 'code-default') ||
-        codeWorkspaceFolderRef.current !== (state?.folder ?? null)
+        codeWorkspaceFolderRef.current !== nextFolder
       codeWorkspaceIdRef.current = state?.activeId ?? 'code-default'
-      codeWorkspaceFolderRef.current = state?.folder ?? null
+      codeWorkspaceFolderRef.current = nextFolder
       // Renaming a workspace changes its label, not the saved view slot.
-      if (scopeChanged) restoreWorkspaceView(codeWorkspaceIdRef.current)
+      if (scopeChanged) restoreWorkspaceView(codeWorkspaceIdRef.current, folderClosedWhileInCode)
     })
     const offCode = window.api.code.onChange((snap) => {
       if ((snap?.sessions ?? []).length > 0) setCodeStarted((prev) => prev || true)

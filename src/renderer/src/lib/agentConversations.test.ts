@@ -8,7 +8,6 @@ import {
   readDismissed,
   relativeTime,
   resumeAllCount,
-  selectAutoResumeConversations,
   upgradeSessionsToResume,
   visibleConversations,
   writeDismissed
@@ -131,46 +130,6 @@ describe('agentConversations - dismissals', () => {
       conversationKey({ agentId: 'claude', id: 'x1234567' }),
       conversationKey({ agentId: 'codex', id: 'x1234567' })
     )
-  })
-})
-
-describe('agentConversations - selectAutoResumeConversations', () => {
-  const now = 1_700_000_000_000
-
-  test('returns empty when no conversations or no slots', () => {
-    assert.deepEqual(selectAutoResumeConversations([], 5), [])
-    assert.deepEqual(selectAutoResumeConversations([{ agentId: 'codex', id: 'c1', updatedAt: now }], 0), [])
-  })
-
-  test('selects latest conversation per distinct agent', () => {
-    const list = [
-      { agentId: 'codex', id: 'c1', updatedAt: now },
-      { agentId: 'codex', id: 'c2', updatedAt: now - 5 * 3600_000 },
-      { agentId: 'claude', id: 'cl1', updatedAt: now - 10 * 3600_000 },
-      { agentId: 'claude', id: 'cl2', updatedAt: now - 20 * 3600_000 }
-    ]
-    const selected = selectAutoResumeConversations(list, 5)
-    assert.deepEqual(selected.map((c) => c.id), ['c1', 'cl1'])
-  })
-
-  test('includes multiple conversations of same agent if in recent burst', () => {
-    const list = [
-      { agentId: 'codex', id: 'c1', updatedAt: now },
-      { agentId: 'codex', id: 'c2', updatedAt: now - 30 * 60_000 }, // 30 min ago
-      { agentId: 'codex', id: 'c3', updatedAt: now - 5 * 3600_000 } // 5h ago
-    ]
-    const selected = selectAutoResumeConversations(list, 5)
-    assert.deepEqual(selected.map((c) => c.id), ['c1', 'c2'])
-  })
-
-  test('respects maxSlots limit', () => {
-    const list = [
-      { agentId: 'codex', id: 'c1', updatedAt: now },
-      { agentId: 'claude', id: 'cl1', updatedAt: now },
-      { agentId: 'antigravity', id: 'a1', updatedAt: now }
-    ]
-    const selected = selectAutoResumeConversations(list, 2)
-    assert.equal(selected.length, 2)
   })
 })
 

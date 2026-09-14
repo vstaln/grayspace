@@ -167,6 +167,17 @@ export function readClipboardText(): string {
   }
 }
 
+export function writeClipboardText(text: string): { ok: true } | { error: string } {
+  if (!clipboard) return { error: 'Clipboard support is unavailable' }
+  if (typeof text !== 'string' || text.length > 4096) return { error: 'Invalid clipboard text' }
+  try {
+    clipboard.writeText(text)
+    return { ok: true }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 export function stageClipboardImage(bytes: Buffer): { ok: true } | { error: string } {
   if (!clipboard || !nativeImage) return { error: 'Clipboard image support is unavailable' }
   if (!bytes.byteLength) return { error: 'Image is empty' }

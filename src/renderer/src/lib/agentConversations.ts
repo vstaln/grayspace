@@ -113,37 +113,6 @@ export function relativeTime(at: number, now: number = Date.now()): string {
 }
 
 /**
- * Selects conversations suitable for automatic resumption when entering a workspace.
- *
- * It prioritises the newest conversation for each distinct agent, plus conversations
- * from the same recent burst of work (within 2 hours of the newest conversation),
- * capped at the available slots.
- */
-export function selectAutoResumeConversations<T extends Pick<AgentConversation, 'agentId' | 'id' | 'updatedAt'>>(
-  conversations: readonly T[],
-  maxSlots: number
-): T[] {
-  if (conversations.length === 0 || maxSlots <= 0) return []
-  const latestTime = conversations[0].updatedAt
-  const RECENT_BURST_MS = 2 * 60 * 60 * 1000 // 2 hours
-
-  const selected: T[] = []
-  const seenAgents = new Set<string>()
-
-  for (const conv of conversations) {
-    if (selected.length >= maxSlots) break
-    const isNewAgent = !seenAgents.has(conv.agentId)
-    const isRecentBurst = latestTime > 0 && latestTime - conv.updatedAt < RECENT_BURST_MS
-    if (isNewAgent || isRecentBurst) {
-      selected.push(conv)
-      seenAgents.add(conv.agentId)
-    }
-  }
-
-  return selected
-}
-
-/**
  * Returns true if the command already has resume flags for the given agent.
  */
 export function isResumeCommand(command: string): boolean {

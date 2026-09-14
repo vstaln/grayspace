@@ -223,6 +223,7 @@ export interface MediaApi {
 
   saveClipboard(): Promise<MediaFile | null>
   readClipboardText(): Promise<string>
+  writeClipboardText?(text: string): Promise<{ ok: true } | { error: string }>
 
 
 

@@ -145,6 +145,8 @@ const media: MediaApi = {
   saveClipboard: (): Promise<MediaFile | null> =>
     ipcRenderer.invoke('media:save-clipboard'),
   readClipboardText: (): Promise<string> => ipcRenderer.invoke('media:read-clipboard-text'),
+  writeClipboardText: (text: string): Promise<{ ok: true } | { error: string }> =>
+    ipcRenderer.invoke('media:write-clipboard-text', text),
   saveClipboardScratch: (): Promise<MediaFile | null> =>
     ipcRenderer.invoke('media:save-clipboard-scratch'),
   stageClipboardImage: (bytes: Uint8Array): Promise<{ ok: true } | { error: string }> =>
