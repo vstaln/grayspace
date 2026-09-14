@@ -1,8 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertCircle, ArrowDownToLine, Check, Loader2, RotateCw } from 'lucide-react'
 import type { AppUpdateState } from '../../../preload/api'
+import { UpdateCurtain } from './UpdateCurtain'
 
 type Tone = 'accent' | 'ok' | 'danger' | 'plain'
+
+// The silent installer gives no progress of its own, so the curtain walks a
+// believable arc instead: quick to most of the way, then patient.
+const INSTALL_MS = 11_000
+const installCurve = (elapsed: number): number => {
+  const t = Math.min(1, elapsed / INSTALL_MS)
+  return Math.min(99, Math.round((1 - Math.pow(1 - t, 2.4)) * 99))
+}
 
 const TONE_CLASS: Record<Tone, string> = {
   accent: 'border-accent-soft bg-accent-soft text-accent',
@@ -15,6 +24,7 @@ export function AppUpdates(): React.JSX.Element {
   const [state, setState] = useState<AppUpdateState | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [curtain, setCurtain] = useState<{ percent: number } | null>(null)
   const mountedRef = useRef(true)
   useEffect(() => {
     mountedRef.current = true
@@ -32,11 +42,22 @@ export function AppUpdates(): React.JSX.Element {
     const timer = setInterval(() => void refresh(), 2000)
     return () => { active = false; clearInterval(timer) }
   }, [])
+  const curtainOpen = curtain !== null
+  useEffect(() => {
+    if (!curtainOpen) return
+    const started = performance.now()
+    const timer = setInterval(() => {
+      const percent = installCurve(performance.now() - started)
+      setCurtain((current) => current ? { ...current, percent } : current)
+    }, 90)
+    return () => clearInterval(timer)
+  }, [curtainOpen])
   const act = async (): Promise<void> => {
     setBusy(true)
     setError('')
     try {
       if (state?.status === 'ready') {
+        setCurtain({ percent: 0 })
         await window.api.settings.installUpdate()
         if (!mountedRef.current) return
         setState(await window.api.settings.updateState())
@@ -47,6 +68,7 @@ export function AppUpdates(): React.JSX.Element {
       }
     } catch {
       if (!mountedRef.current) return
+      setCurtain(null)
       setError('Unable to update. Please try again.')
     } finally {
       if (mountedRef.current) setBusy(false)
@@ -108,5 +130,6 @@ export function AppUpdates(): React.JSX.Element {
         {status === 'ready' ? 'Restart and install' : status === 'error' || error ? 'Try again' : 'Check for updates'}
       </button>
     </div>
+    {curtain && <UpdateCurtain percent={curtain.percent} label={`Updating OrcSpace${state?.version ? ` to ${state.version}` : ''}`} />}
   </section>
 }

@@ -9,10 +9,11 @@ function setup(packaged = true, platform = 'win32') {
   const handlers = new Map<string, () => unknown>()
   let checks = 0
   let installs = 0
+  let installArgs: unknown[] = []
   let feed: unknown = null
   const autoUpdater = Object.assign(new EventEmitter(), {
     checkForUpdates: async () => { checks++; return { downloadPromise: Promise.resolve([]) } },
-    quitAndInstall: () => { installs++ },
+    quitAndInstall: (...args: unknown[]) => { installs++; installArgs = args },
     setFeedURL: (options: unknown) => { feed = options }
   })
   const timers = new Map<number, () => void>()
@@ -30,6 +31,7 @@ function setup(packaged = true, platform = 'win32') {
   return { autoUpdater, call: (name: string) => handlers.get(`updates:${name}`)!(),
     feed: () => feed,
     counts: () => ({ checks, installs }),
+    installArgs: () => installArgs,
     pending: () => timers.size,
     fireTimers: () => { const due = [...timers.values()]; timers.clear(); for (const fn of due) fn() } }
 }
@@ -49,6 +51,8 @@ test('updates guard concurrent checks and require a complete download to install
   assert.equal(s.call('install'), true)
   assert.equal(s.call('install'), false)
   assert.equal(s.counts().installs, 1)
+  // Silent install: the NSIS wizard must never be shown on an update.
+  assert.deepEqual(s.installArgs(), [true, true])
   await Promise.resolve()
 })
 

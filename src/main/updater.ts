@@ -86,7 +86,9 @@ export function registerUpdater(): void {
     if (state.status !== 'ready') return false
     state = { ...state, status: 'installing' }
     setImmediate(() => {
-      try { autoUpdater.quitAndInstall(false, true) } catch (error) { fail(error) }
+      // Silent: the NSIS installer runs with /S so the setup wizard never
+      // appears — the app just closes, updates in place and relaunches.
+      try { autoUpdater.quitAndInstall(true, true) } catch (error) { fail(error) }
     })
     return true
   })
