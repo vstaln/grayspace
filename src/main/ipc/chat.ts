@@ -7,6 +7,7 @@ import type { IpcMainInvokeEvent } from 'electron'
 import { ipcMain, shell } from './shims.ts'
 import { extractChatAuthDetails } from './chatAuth.ts'
 import type { IpcDeps } from './types.ts'
+import { killProcessTree } from '../procTree.ts'
 
 type Provider = 'chatgpt' | 'claude' | 'grok'
 type Effort = 'low' | 'medium' | 'high'
@@ -39,9 +40,19 @@ const MAX_HISTORY = 40
 const active = new Map<string, ChildProcess>()
 const authActive = new Map<Provider, { child: ChildProcess; timeout: NodeJS.Timeout }>()
 
+function killChild(child: ChildProcess | undefined): void {
+  if (!child) return
+  try {
+    if (child.pid) killProcessTree(child.pid)
+  } catch {}
+  try {
+    child.kill()
+  } catch {}
+}
+
 process.once('exit', () => {
-  for (const child of active.values()) child.kill()
-  for (const auth of authActive.values()) auth.child.kill()
+  for (const child of active.values()) killChild(child)
+  for (const auth of authActive.values()) killChild(auth.child)
   active.clear()
   authActive.clear()
 })
@@ -150,7 +161,7 @@ async function run(command: string, args: string[], input?: string): Promise<{ c
       resolve(result)
     }
     timeout = setTimeout(() => {
-      child.kill()
+      killChild(child)
       finish({ code: -1, stdout, stderr: `${stderr}\nTimed out`.trim() })
     }, 10_000)
     child.stdout?.on('data', (chunk: Buffer | string) => { stdout += String(chunk) })
@@ -319,7 +330,7 @@ export function registerChatIpc(deps: IpcDeps): void {
       let openedUrl: string | undefined
       let announcedCode: string | undefined
       let announcedInput = false
-      const timeout = setTimeout(() => child.kill(), 15 * 60_000)
+      const timeout = setTimeout(() => killChild(child), 15 * 60_000)
       authActive.set(provider.id, { child, timeout })
       authEvent(event, provider.id, 'started', { message: `Starting ${provider.label} sign-in…` })
       const onOutput = (chunk: Buffer | string): void => {
@@ -391,7 +402,7 @@ export function registerChatIpc(deps: IpcDeps): void {
     const message = typeof request?.message === 'string' ? request.message.trim().slice(0, MAX_MESSAGE) : ''
     if (!widgetId || !provider || !model || !message) return { ok: false, error: 'Chat request is incomplete.' }
     const previous = active.get(widgetId)
-    previous?.kill()
+    killChild(previous)
     const requestId = randomUUID()
     const input = historyPrompt(Array.isArray(request.history) ? request.history : [], message)
     const providerInfo = providerOf(provider)
@@ -410,14 +421,23 @@ export function registerChatIpc(deps: IpcDeps): void {
     sendEvent(event, { widgetId, requestId, type: 'status', text: 'Thinking…', provider })
     let stdout = ''
     let stderr = ''
+    const timeout = setTimeout(() => {
+      if (active.get(widgetId) !== child) return
+      killChild(child)
+      active.delete(widgetId)
+      sendEvent(event, { widgetId, requestId, type: 'error', text: `${providerInfo.label} request timed out.`, provider })
+    }, 300_000)
+    timeout.unref?.()
     child.stdout?.on('data', (chunk: Buffer | string) => { stdout += String(chunk) })
     child.stderr?.on('data', (chunk: Buffer | string) => { stderr += String(chunk) })
     child.on('error', (error) => {
+      clearTimeout(timeout)
       if (active.get(widgetId) !== child) return
       active.delete(widgetId)
       sendEvent(event, { widgetId, requestId, type: 'error', text: `${providerInfo.label} CLI is unavailable: ${error.message}`, provider })
     })
     child.on('close', (code) => {
+      clearTimeout(timeout)
       if (active.get(widgetId) !== child) return
       active.delete(widgetId)
       if (code !== 0) {
@@ -435,7 +455,7 @@ export function registerChatIpc(deps: IpcDeps): void {
   ipcMain.handle('chat:cancel', (_event, widgetId: string) => {
     const child = active.get(widgetId)
     if (child) {
-      child.kill()
+      killChild(child)
       active.delete(widgetId)
     }
     return { ok: true }

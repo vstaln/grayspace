@@ -1,7 +1,7 @@
 import { getActiveControlPort } from './config.ts'
 import { getIpcSocketPath } from './ipcSocket.ts'
 
-export const APP_VERSION = '2.0.1'
+export const APP_VERSION = '2.0.4'
 
 export interface PresenceInfo {
   ok: true

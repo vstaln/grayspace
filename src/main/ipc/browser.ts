@@ -18,10 +18,12 @@ export function registerBrowserIpc(_deps: IpcDeps): void {
             'cookies',
             'filesystem',
             'indexdb',
+            'indexeddb',
             'localstorage',
             'shadercache',
             'serviceworkers',
-            'cachestorage'
+            'cachestorage',
+            'websql'
           ]
         })
         await ses.clearCache()

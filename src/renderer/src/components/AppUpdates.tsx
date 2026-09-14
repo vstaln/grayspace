@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
+import { AlertCircle, ArrowDownToLine, Check, Loader2, RotateCw } from 'lucide-react'
 import type { AppUpdateState } from '../../../preload/api'
+
+type Tone = 'accent' | 'ok' | 'danger' | 'plain'
+
+const TONE_CLASS: Record<Tone, string> = {
+  accent: 'border-accent-soft bg-accent-soft text-accent',
+  ok: 'border-line-soft bg-bg-hover text-ok',
+  danger: 'border-line-soft bg-bg-hover text-danger',
+  plain: 'border-line-soft bg-bg-hover text-text-dim'
+}
 
 export function AppUpdates(): React.JSX.Element {
   const [state, setState] = useState<AppUpdateState | null>(null)
@@ -43,17 +53,60 @@ export function AppUpdates(): React.JSX.Element {
     }
   }
   const status = state?.status
-  const message = state?.message || (status === 'checking' ? 'Checking for updates…'
-    : status === 'downloading' ? `Downloading ${state?.version}: ${Math.round(state?.percent ?? 0)}%`
-    : status === 'ready' ? `Version ${state?.version} is ready. Restarting will close running terminals.`
+  const working = status === 'checking' || status === 'downloading' || status === 'installing'
+  const percent = Math.max(0, Math.min(100, Math.round(state?.percent ?? 0)))
+  const headline = error ? 'Update failed'
+    : status === 'checking' ? 'Checking for updates…'
+    : status === 'downloading' ? `Downloading ${state?.version ?? 'the update'}`
+    : status === 'ready' ? `Version ${state?.version} is ready`
     : status === 'installing' ? 'Restarting to install…'
-    : status === 'current' ? 'You are up to date.' : 'Check and download the latest version.')
-  return <section className="flex flex-col gap-3 border-t border-line pt-5" aria-label="App updates">
-    <h3 className="text-xs font-medium text-text">Updates {state && <span className="text-text-faint">· {state.currentVersion}</span>}</h3>
-    <p role="status" className="text-[11px] text-text-faint">{error || message}</p>
-    {status === 'downloading' && <progress aria-label="Update download" max={100} value={state?.percent ?? 0} className="w-full" />}
-    <button type="button" className="self-start rounded-[8px] border border-line px-3 py-2 text-xs text-text hover:bg-bg-hover disabled:opacity-50"
-      disabled={busy || !state || !status || ['disabled', 'checking', 'downloading', 'installing'].includes(status)}
-      onClick={() => void act()}>{status === 'ready' ? 'Restart and install' : 'Check for updates'}</button>
+    : status === 'current' ? 'You are up to date'
+    : status === 'error' ? 'Update failed'
+    : status === 'disabled' ? 'Updates are unavailable here'
+    : 'A new version may be waiting'
+  const detail = error || state?.message || (status === 'downloading' ? `${percent}% of the installer downloaded`
+    : status === 'ready' ? 'Restarting will close running terminals.'
+    : status === 'current' ? `OrcSpace ${state?.currentVersion} is the latest release.`
+    : status === 'checking' || status === 'installing' ? ''
+    : 'Check and download the latest version.')
+  const tone: Tone = error || status === 'error' ? 'danger'
+    : status === 'ready' ? 'accent'
+    : status === 'current' ? 'ok' : 'plain'
+  const icon = working ? <Loader2 size={15} className="animate-spin" aria-hidden />
+    : error || status === 'error' ? <AlertCircle size={15} aria-hidden />
+    : status === 'ready' ? <ArrowDownToLine size={15} aria-hidden />
+    : status === 'current' ? <Check size={15} aria-hidden />
+    : <RotateCw size={15} aria-hidden />
+  const disabled = busy || !state || !status || ['disabled', 'checking', 'downloading', 'installing'].includes(status)
+  return <section className="flex flex-col gap-2.5 border-t border-line pt-5" aria-label="App updates">
+    <div className="flex items-center justify-between gap-2">
+      <h3 className="text-xs font-medium text-text">Updates</h3>
+      {state && <span className="rounded-full border border-line-soft bg-bg-hover px-2 py-0.5 text-[10px] font-medium text-text-faint">{state.currentVersion}</span>}
+    </div>
+    <div className="flex flex-col gap-3 overflow-hidden rounded-[14px] border border-line-soft bg-bg-raise p-3.5">
+      <div className="flex items-start gap-2.5">
+        <span className={`grid h-8 w-8 flex-none place-items-center rounded-[10px] border ${TONE_CLASS[tone]}`}>{icon}</span>
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <p className="truncate text-[11.5px] font-medium text-text">{headline}</p>
+          {detail && <p role="status" aria-live="polite" className="text-[11px] leading-relaxed text-text-faint">{detail}</p>}
+        </div>
+        {status === 'downloading' && <span className="flex-none text-[11px] font-medium tabular-nums text-text-dim">{percent}%</span>}
+      </div>
+      {status === 'downloading' && (
+        <div role="progressbar" aria-label="Update download" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}
+          className="h-1.5 w-full overflow-hidden rounded-full bg-bg-hover">
+          <div className="h-full rounded-full bg-accent transition-[width] duration-300 ease-out" style={{ width: `${percent}%` }} />
+        </div>
+      )}
+      <button type="button"
+        className={`flex min-h-[34px] items-center justify-center gap-1.5 self-start rounded-[10px] px-3.5 py-1.5 text-xs font-medium transition-colors duration-150 disabled:cursor-default disabled:opacity-40 ${
+          status === 'ready' ? 'bg-accent text-bg hover:opacity-90' : 'border border-line-soft text-text hover:bg-bg-hover'
+        }`}
+        disabled={disabled}
+        onClick={() => void act()}>
+        {status === 'ready' ? <ArrowDownToLine size={13} aria-hidden /> : <RotateCw size={13} className={working ? 'animate-spin' : ''} aria-hidden />}
+        {status === 'ready' ? 'Restart and install' : status === 'error' || error ? 'Try again' : 'Check for updates'}
+      </button>
+    </div>
   </section>
 }

@@ -336,19 +336,24 @@ export async function readGitDiffStat(cwd: string, staged = false, signal?: Abor
       }
       const [add, del, file] = meta.split('\t')
       const fileClean = file?.replace(/\r$/, '')
-      if (!fileClean) continue
-      let oldPath: string | undefined
-      if (parts[i + 1] && !parts[i + 1].includes('\t')) {
-        oldPath = parts[i + 1].replace(/\r$/, '')
-        if (oldPath && fileClean !== oldPath) {
-          oldPath = undefined
-        } else {
-          oldPath = undefined
+      if (!fileClean) {
+        if (parts[i + 1] && parts[i + 2]) {
+          const oldPath = parts[i + 1].replace(/\r$/, '')
+          const newPath = parts[i + 2].replace(/\r$/, '')
+          i += 2
+          stat.push({
+            path: newPath,
+            oldPath,
+            additions: add === '-' ? 0 : Number(add) || 0,
+            deletions: del === '-' ? 0 : Number(del) || 0,
+            status: 'R'
+          })
+          if (stat.length >= 2000) return { stat, truncated: true }
         }
+        continue
       }
       stat.push({
         path: fileClean,
-        oldPath,
         additions: add === '-' ? 0 : Number(add) || 0,
         deletions: del === '-' ? 0 : Number(del) || 0,
         status: 'M'

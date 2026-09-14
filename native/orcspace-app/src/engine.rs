@@ -1203,9 +1203,10 @@ impl ControlServer {
                         .route("/orchestration/workers", get(list_workers))
                         .route("/orchestration/workers/tell", post(tell_worker))
                         .route("/terminal/{id}/write", post(write_terminal))
+                        .route("/terminal/{id}/output", get(read_terminal_output))
                         // Everything the ported router knows is served here, so
                         // adding a domain to `http::route` serves it without
-                        // touching this file. The three routes above stay
+                        // touching this file. The four routes above stay
                         // explicit because they reach the terminal manager,
                         // which the pure router deliberately does not see.
                         .fallback(handle_routed)
@@ -1346,6 +1347,26 @@ async fn write_terminal(
         id,
         text,
         delivery: Some(receipt),
+    }))
+}
+
+#[derive(Serialize)]
+struct OutputResponse {
+    output: String,
+}
+
+async fn read_terminal_output(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<OutputResponse>, (StatusCode, String)> {
+    authenticate(&headers, &state.token)?;
+    let snapshot = state
+        .manager
+        .snapshot(&id)
+        .map_err(|error| (StatusCode::NOT_FOUND, error))?;
+    Ok(Json(OutputResponse {
+        output: snapshot.output,
     }))
 }
 
@@ -1858,6 +1879,17 @@ mod transport_tests {
         let response = request(&path, "GET", "/nothing/here", "tok", None);
         assert!(response.starts_with("HTTP/1.1 404"), "got {response}");
         assert_eq!(body_of(&response)["code"], serde_json::json!("not_found"));
+    }
+
+    #[test]
+    fn terminal_output_route_reports_output_or_not_found() {
+        let path = test_path("output");
+        let manager = TerminalManager::new("token-for-tests-0123456789abcdef".to_owned());
+        let _server = ControlServer::start_at(manager, "tok".to_owned(), path.clone())
+            .expect("server starts");
+
+        let response = request(&path, "GET", "/terminal/nonexistent/output", "tok", None);
+        assert!(response.starts_with("HTTP/1.1 404"), "got {response}");
     }
 
     /// A second server on a name already in use must fail loudly on the

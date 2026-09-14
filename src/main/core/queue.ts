@@ -1,4 +1,4 @@
-﻿import { CommandError, type CommandPriority } from './types.ts'
+import { CommandError, type CommandPriority } from './types.ts'
 
 export interface TokenBucketOptions {
   capacity?: number
@@ -21,10 +21,15 @@ export class ActorRateLimiter {
     this.now = options.now ?? Date.now
   }
 
+  get bucketCount(): number {
+    return this.buckets.size
+  }
+
   tryConsume(actorId: string, tokens = 1): boolean {
     const now = this.now()
     let bucket = this.buckets.get(actorId)
     if (!bucket) {
+      this.prune(now)
       bucket = { tokens: this.capacity, lastRefill: now }
       this.buckets.set(actorId, bucket)
     } else {
@@ -38,6 +43,25 @@ export class ActorRateLimiter {
       return true
     }
     return false
+  }
+
+  private prune(now: number): void {
+    if (this.buckets.size < 256) return
+    const windowSec = this.capacity / Math.max(0.001, this.refillPerSec)
+    for (const [id, bucket] of this.buckets) {
+      const elapsedSec = (now - bucket.lastRefill) / 1000
+      if (elapsedSec >= windowSec && (bucket.tokens + elapsedSec * this.refillPerSec) >= this.capacity) {
+        this.buckets.delete(id)
+      }
+    }
+    if (this.buckets.size > 2048) {
+      const excess = this.buckets.size - 1024
+      let count = 0
+      for (const id of this.buckets.keys()) {
+        this.buckets.delete(id)
+        if (++count >= excess) break
+      }
+    }
   }
 
   reset(actorId?: string): void {

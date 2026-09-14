@@ -71,9 +71,9 @@ export interface WorkspaceApi {
   rename(path: string, name: string): Promise<RecentDir[] | { error: string }>
   codeWorkspaces(): Promise<CodeWorkspaceState>
   codeWorkspaceGroups(): Promise<CodeWorkspaceGroup[]>
-  createCodeWorkspace(name?: string): Promise<CodeWorkspace | { error: string }>
-  renameCodeWorkspace(id: string, name: string): Promise<CodeWorkspaceState | { error: string }>
-  deleteCodeWorkspace(id: string): Promise<CodeWorkspaceState | { error: string }>
+  createCodeWorkspace(name?: string, folder?: string): Promise<CodeWorkspace | { error: string }>
+  renameCodeWorkspace(id: string, name: string, folder?: string): Promise<CodeWorkspaceState | { error: string }>
+  deleteCodeWorkspace(id: string, folder?: string): Promise<CodeWorkspaceState | { error: string }>
   selectCodeWorkspace(id: string): Promise<CodeWorkspaceState | { error: string }>
   onCodeWorkspaceChange(cb: (state: CodeWorkspaceState) => void): () => void
   onDirChange(cb: (dir: string | null) => void): () => void

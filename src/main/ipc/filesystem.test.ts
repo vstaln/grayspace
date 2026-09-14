@@ -111,3 +111,16 @@ test('fs:list flags truncation so the UI can say the folder was not fully listed
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('fs:open-path blocks executable and script extensions', async () => {
+  const dir = fs.mkdtempSync(join(os.tmpdir(), 'orcspace-fs-'))
+  try {
+    const scriptPath = join(dir, 'run.mjs')
+    fs.writeFileSync(scriptPath, 'console.log("bad")')
+    const res = (await harness(dir).call('fs:open-path', scriptPath)) as { error?: string; ok?: boolean }
+    assert.equal(res.ok, undefined)
+    assert.equal(res.error, 'Executable files cannot be opened from here')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})

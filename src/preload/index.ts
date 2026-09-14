@@ -175,9 +175,12 @@ const workspace: WorkspaceApi = {
   rename: (path: string, name: string): Promise<RecentDir[] | { error: string }> => ipcRenderer.invoke('workspace:rename', path, name),
   codeWorkspaces: () => ipcRenderer.invoke('workspace:code-workspaces'),
   codeWorkspaceGroups: () => ipcRenderer.invoke('workspace:code-workspace-groups'),
-  createCodeWorkspace: (name?: string) => ipcRenderer.invoke('workspace:create-code', name),
-  renameCodeWorkspace: (id: string, name: string) => ipcRenderer.invoke('workspace:rename-code', id, name),
-  deleteCodeWorkspace: (id: string) => ipcRenderer.invoke('workspace:delete-code', id),
+  createCodeWorkspace: (name?: string, folder?: string) =>
+    folder ? ipcRenderer.invoke('workspace:create-code', folder, name) : ipcRenderer.invoke('workspace:create-code', name),
+  renameCodeWorkspace: (id: string, name: string, folder?: string) =>
+    folder ? ipcRenderer.invoke('workspace:rename-code', folder, id, name) : ipcRenderer.invoke('workspace:rename-code', id, name),
+  deleteCodeWorkspace: (id: string, folder?: string) =>
+    folder ? ipcRenderer.invoke('workspace:delete-code', folder, id) : ipcRenderer.invoke('workspace:delete-code', id),
   selectCodeWorkspace: (id: string) => ipcRenderer.invoke('workspace:select-code', id),
   onCodeWorkspaceChange: (cb) => onBroadcast('workspace:onCodeWorkspaceChange', cb),
   onDirChange: (cb: (dir: string | null) => void): (() => void) =>

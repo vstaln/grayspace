@@ -21,7 +21,15 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
 
   ipcMain.handle('workspace:create', async (_e, rawName: unknown) => {
     const name = typeof rawName === 'string' ? rawName.trim() : ''
-    if (!name || name.length > 80 || name === '.' || name === '..' || /[<>:"/\\|?*\u0000-\u001f]/.test(name) || /[. ]$/.test(name)) {
+    if (
+      !name ||
+      name.length > 80 ||
+      name === '.' ||
+      name === '..' ||
+      /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(name) ||
+      /[<>:"/\\|?*\u0000-\u001f]/.test(name) ||
+      /[. ]$/.test(name)
+    ) {
       return { error: 'Enter a valid workspace name.' }
     }
     try {
@@ -56,31 +64,64 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
       name: entry.name
     }))
   })
-  ipcMain.handle('workspace:create-code', (_e, rawName: unknown) => {
-    const folder = deps.getWorkspaceDir()
-    const result = deps.state.createCodeWorkspace(folder, typeof rawName === 'string' ? rawName : undefined)
+  ipcMain.handle('workspace:create-code', (_e, rawNameOrFolder?: unknown, rawName?: unknown) => {
+    let folder = deps.getWorkspaceDir()
+    let name: string | undefined
+    if (typeof rawName === 'string') {
+      folder = typeof rawNameOrFolder === 'string' ? rawNameOrFolder : folder
+      name = rawName
+    } else if (typeof rawNameOrFolder === 'string') {
+      name = rawNameOrFolder
+    }
+    const result = deps.state.createCodeWorkspace(folder, name)
     if ('error' in result) return result
-    deps.code.setWorkspaceScope(deps.state.activeCodeWorkspaceScope(folder))
-    const next = deps.state.codeWorkspaceState(folder)
-    deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', next)
+    if (folder === deps.getWorkspaceDir()) {
+      deps.code.setWorkspaceScope(deps.state.activeCodeWorkspaceScope(folder))
+      const next = deps.state.codeWorkspaceState(folder)
+      deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', next)
+    }
     return result
   })
-  ipcMain.handle('workspace:rename-code', (_e, rawId: unknown, rawName: unknown) => {
-    if (typeof rawId !== 'string' || typeof rawName !== 'string') return { error: 'Invalid workspace.' }
-    const result = deps.state.renameCodeWorkspace(deps.getWorkspaceDir(), rawId, rawName)
-    if (!('error' in result)) deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', result)
+  ipcMain.handle('workspace:rename-code', (_e, rawIdOrFolder: unknown, rawNameOrId: unknown, rawName?: unknown) => {
+    let folder = deps.getWorkspaceDir()
+    let id: string
+    let name: string
+    if (typeof rawName === 'string' && typeof rawNameOrId === 'string' && typeof rawIdOrFolder === 'string') {
+      folder = rawIdOrFolder
+      id = rawNameOrId
+      name = rawName
+    } else if (typeof rawIdOrFolder === 'string' && typeof rawNameOrId === 'string') {
+      id = rawIdOrFolder
+      name = rawNameOrId
+    } else {
+      return { error: 'Invalid workspace.' }
+    }
+    const result = deps.state.renameCodeWorkspace(folder, id, name)
+    if (!('error' in result) && folder === deps.getWorkspaceDir()) {
+      deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', result)
+    }
     return result
   })
-  ipcMain.handle('workspace:delete-code', (_e, rawId: unknown) => {
-    if (typeof rawId !== 'string') return { error: 'Invalid workspace.' }
-    const folder = deps.getWorkspaceDir()
-    const result = deps.state.deleteCodeWorkspace(folder, rawId)
+  ipcMain.handle('workspace:delete-code', (_e, rawIdOrFolder: unknown, rawId?: unknown) => {
+    let folder = deps.getWorkspaceDir()
+    let id: string
+    if (typeof rawId === 'string' && typeof rawIdOrFolder === 'string') {
+      folder = rawIdOrFolder
+      id = rawId
+    } else if (typeof rawIdOrFolder === 'string') {
+      id = rawIdOrFolder
+    } else {
+      return { error: 'Invalid workspace.' }
+    }
+    const result = deps.state.deleteCodeWorkspace(folder, id)
     if ('error' in result) return result
-    deps.code.setWorkspaceScope(
-      deps.state.activeCodeWorkspaceScope(folder),
-      result.activeId === result.workspaces[0]?.id ? folder : undefined
-    )
-    deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', result)
+    if (folder === deps.getWorkspaceDir()) {
+      deps.code.setWorkspaceScope(
+        deps.state.activeCodeWorkspaceScope(folder),
+        result.activeId === result.workspaces[0]?.id ? folder : undefined
+      )
+      deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', result)
+    }
     return result
   })
   ipcMain.handle('workspace:select-code', (_e, rawId: unknown) => {

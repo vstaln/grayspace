@@ -212,7 +212,7 @@ export default React.memo(function BrowserWidget({ widgetId }: { widgetId?: stri
         open(detail.mediaUrl)
       } else {
         const kind = mediaKindForName(detail.name || detail.path!, detail.kind)
-        if (kind !== 'image') {
+        if (kind !== 'image' && kind !== 'audio' && kind !== 'video' && kind !== 'pdf') {
           setLoadError('Could not load the dropped media')
           setLoading(false)
           return
@@ -442,7 +442,18 @@ function MediaViewer({ media, onClose, onOpenExternally }: { media: DroppedMedia
       </div>
     )
   }
-  if (media.kind === 'pdf' || media.kind === 'text') {
+  if (media.kind === 'pdf') {
+    return (
+      <div className="absolute inset-0 flex flex-col bg-bg">
+        <div className="flex flex-none items-center justify-between gap-2 border-b border-line-soft px-2 py-1 text-[10px] text-text-faint">
+          <span className="min-w-0 truncate" title={media.name}>{media.name}</span>
+          <button type="button" onClick={onClose} className="flex-none rounded px-1.5 py-0.5 hover:bg-bg-hover hover:text-text">Close</button>
+        </div>
+        <embed key={media.mediaUrl} src={media.mediaUrl} type="application/pdf" className="min-h-0 w-full flex-1 border-0 bg-bg" />
+      </div>
+    )
+  }
+  if (media.kind === 'text') {
     return (
       <div className="absolute inset-0 flex flex-col bg-bg">
         <div className="flex flex-none items-center justify-between gap-2 border-b border-line-soft px-2 py-1 text-[10px] text-text-faint">

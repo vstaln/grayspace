@@ -280,7 +280,8 @@ export function registerFilesystemIpc(deps: IpcDeps): void {
 
   const EXECUTABLE_EXTENSIONS = new Set([
     '.exe', '.bat', '.cmd', '.com', '.scr', '.msi', '.ps1', '.vbs', '.vbe',
-    '.js', '.jse', '.wsf', '.wsh', '.jar', '.sh', '.bash', '.lnk', '.reg',
+    '.js', '.mjs', '.cjs', '.jse', '.wsf', '.wsh', '.jar', '.sh', '.bash', '.lnk', '.reg',
+    '.py', '.pyw', '.iso', '.vhd', '.vhdx',
     '.hta', '.msc', '.cpl', '.url', '.inf', '.pif', '.appref-ms', '.wsb', '.mof', '.gadget'
   ])
 

@@ -198,7 +198,7 @@ const SessionCard = React.memo(function SessionCard({
             termEl?.focus()
           }
         }}
-        onDoubleClick={promotable && !editing ? onFocus : undefined}
+        onDoubleClick={!editing ? onToggleMaximize : undefined}
         title={!editing && !maximized ? (promotable ? 'Drag to swap · double-click to expand' : 'Drag to swap session') : undefined}
       >
         <div className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-[11px] text-text-dim">

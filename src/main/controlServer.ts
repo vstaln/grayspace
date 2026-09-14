@@ -197,18 +197,20 @@ export function startControlServer(deps: ControlDeps): http.Server {
   const pipeServer = http.createServer(handleRequest)
   let activeSocket = socketPath
   pipeServer.on('error', (err: NodeJS.ErrnoException) => {
-    if (err.code === 'EADDRINUSE') {
+    if (err.code === 'EADDRINUSE' && activeSocket === socketPath) {
       const fallback = process.platform === 'win32'
         ? `\\\\.\\pipe\\orcspace-${process.pid}`
         : join(os.tmpdir(), `orcspace-${process.pid}.sock`)
-      console.warn(`control IPC socket ${activeSocket} in use, falling back to ${fallback}`)
-      prepareSocketPath(fallback)
-      activeSocket = fallback
-      pipeServer.listen(fallback, () => {
-        setActiveSocketPath(fallback)
-        deps.onSocketAssigned?.(fallback)
-      })
-      return
+      if (fallback !== socketPath) {
+        console.warn(`control IPC socket ${activeSocket} in use, falling back to ${fallback}`)
+        prepareSocketPath(fallback)
+        activeSocket = fallback
+        pipeServer.listen(fallback, () => {
+          setActiveSocketPath(fallback)
+          deps.onSocketAssigned?.(fallback)
+        })
+        return
+      }
     }
     console.error('control pipe server error', err)
   })
@@ -225,10 +227,12 @@ export function startControlServer(deps: ControlDeps): http.Server {
 
   const tcpPort = deps.port ?? (Number(process.env.WORKSPACE_CONTROL_PORT) || CONTROL_PORT)
   let activePort = tcpPort
+  let fallbackPortAttempted = false
   const tcpServer = http.createServer(handleRequest)
 
   tcpServer.on('error', (err: NodeJS.ErrnoException) => {
-    if (err.code === 'EADDRINUSE') {
+    if (err.code === 'EADDRINUSE' && !fallbackPortAttempted) {
+      fallbackPortAttempted = true
       console.warn(
         `control port ${activePort} is already in use — falling back to an available free port on 127.0.0.1.`
       )
@@ -808,7 +812,7 @@ async function routeOrchestration(ctx: DomainContext): Promise<boolean> {
             runId: dispatch.runId,
             type: 'worker_done',
             from,
-            to: dispatch.terminalId,
+            to: typeof body.to === 'string' && body.to ? body.to : '@coordinator',
             subject: `worker_done ${dispatch.taskId}`,
             body: `dispatch ${dispatch.id} settled as ${data.status} via API`,
             taskId: dispatch.taskId,
@@ -1205,8 +1209,10 @@ function readJson(req: http.IncomingMessage): Promise<Json> {
       if (settled) return
       settled = true
       clearTimeout(timer)
-
-      req.resume()
+      chunks.length = 0
+      try {
+        req.destroy()
+      } catch {}
       const error = new Error(message) as Error & { statusCode: number }
       error.statusCode = statusCode
       reject(error)

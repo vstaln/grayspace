@@ -482,7 +482,7 @@ function localDayKey(d = new Date()): string {
 
 function shiftLocalDay(key: string, delta: number): string {
   const [y, m, d] = key.split('-').map(Number)
-  const date = new Date(y, m - 1, d)
+  const date = new Date(y, m - 1, d, 12, 0, 0)
   date.setDate(date.getDate() + delta)
   return localDayKey(date)
 }
@@ -501,7 +501,7 @@ function normalizeDay(value: unknown): string | undefined {
   const year = Number(match[1])
   const month = Number(match[2])
   const day = Number(match[3])
-  const date = new Date(year, month - 1, day)
+  const date = new Date(year, month - 1, day, 12, 0, 0)
   if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
     throw new CommandError('invalid', `day "${raw}" is not a real date`)
   }

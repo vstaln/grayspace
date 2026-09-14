@@ -114,7 +114,9 @@ const PRUNABLE_WIDGET_PREFIXES = [
   'orcspace-music-volume:',
   'orcspace-music-muted:',
   'orcspace-browser-url:',
-  'orcspace-browser-media:'
+  'orcspace-browser-media:',
+  'orcspace-chat:messages:',
+  'orcspace-chat:config:'
 ] as const
 
 /**
@@ -539,22 +541,6 @@ export function useCanvas() {
   )
 
 
-  const connectWidgets = useCallback((from: string, to: string): void => {
-    if (!from || !to || from === to) return
-    if (!widgetsRef.current.some((widget) => widget.id === from) || !widgetsRef.current.some((widget) => widget.id === to)) return
-    connectionsDirtyRef.current = true
-    setConnections((prev) => {
-      if (prev.some((connection) => connection.from === from && connection.to === to)) return prev
-      return [...prev, { id: makeConnectionId(), from, to, bornAt: Date.now() }]
-    })
-  }, [])
-
-  const disconnectWidgets = useCallback((from: string, to?: string): void => {
-    if (!from) return
-    connectionsDirtyRef.current = true
-    setConnections((prev) => prev.filter((connection) => connection.from !== from || (to && connection.to !== to)))
-  }, [])
-
   const removeWidget = useCallback((id: string): void => {
 
 
@@ -891,8 +877,6 @@ export function useCanvas() {
     topZ: zRef,
     screenToWorld,
     addWidget,
-    connectWidgets,
-    disconnectWidgets,
     removeWidget,
     updateWidget,
     bringToFront,

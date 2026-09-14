@@ -516,7 +516,7 @@ export default React.memo(function TitleBar({
             type="button"
             aria-haspopup="dialog"
             aria-expanded={usageOpen}
-            className={`${PILL} ${usageOpen ? ON : QUIET} hidden max-w-[340px]`}
+            className={`${PILL} ${usageOpen ? ON : QUIET} hidden md:flex max-w-[340px]`}
             onClick={() => {
               setUsageOpen((open) => !open)
               setGitOpen(false)
@@ -585,7 +585,7 @@ export default React.memo(function TitleBar({
           </button>
 
           {usageOpen && (
-            <div className="hidden absolute right-2 top-[38px] z-[60000] w-[370px] max-h-[82vh] overflow-y-auto rounded-[12px] border border-line-soft bg-bg-panel p-3 text-left shadow-2xl">
+            <div className="absolute right-2 top-[38px] z-[60000] w-[370px] max-h-[82vh] overflow-y-auto rounded-[12px] border border-line-soft bg-bg-panel p-3 text-left shadow-2xl">
               <div className="mb-2.5 flex items-center justify-between gap-3 border-b border-line-soft pb-2">
                 <div className="flex items-center gap-1.5">
                   <span className="text-[12px] font-semibold text-text">AI & Resource Usage</span>

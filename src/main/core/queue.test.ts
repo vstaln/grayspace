@@ -96,6 +96,24 @@ describe('Priority Queue, Rate Limiter and Backpressure', () => {
     assert.equal(limiter.tryConsume('agent-1'), false)
   })
 
+  test('ActorRateLimiter prunes idle refilled buckets to bound memory', () => {
+    let now = 1000
+    const limiter = new ActorRateLimiter({ capacity: 5, refillPerSec: 1, now: () => now })
+    // Populate 300 buckets
+    for (let i = 0; i < 300; i++) {
+      limiter.tryConsume(`actor-${i}`)
+    }
+    assert.equal(limiter.bucketCount, 300)
+
+    // Advance time past the refill window
+    now += 10_000
+
+    // Next consume triggers prune
+    limiter.tryConsume('new-actor')
+    // Old idle buckets that refilled to capacity were pruned
+    assert.ok(limiter.bucketCount < 300, `Expected < 300 buckets, got ${limiter.bucketCount}`)
+  })
+
   test('CommandFlow responds with rate_limited (429) when agent exceeds rate quota', async () => {
     const actors = new ActorRegistry()
     const locks = new LockManager()

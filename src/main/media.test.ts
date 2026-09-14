@@ -3,8 +3,7 @@ import { describe, test } from 'node:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'
-import { pruneScratch, saveBytesToScratch, scratchDir, SCRATCH_TTL_MS } from './media.ts'
-
+import { dataUrl, isPathWithinRoot, pruneScratch, saveBytesToScratch, scratchDir, SCRATCH_TTL_MS } from './media.ts'
 
 function ageFile(path: string, msOld: number): void {
   const past = new Date(Date.now() - msOld)
@@ -58,3 +57,40 @@ describe('saveBytesToScratch', () => {
     }
   })
 })
+
+describe('isPathWithinRoot', () => {
+  test('correctly identifies contained paths case-insensitively on Windows', () => {
+    const root = join(os.tmpdir(), 'orcspace-root-test')
+    const child = join(root, 'sub', 'file.txt')
+    const outside = join(os.tmpdir(), 'orcspace-outside-test', 'file.txt')
+
+    assert.equal(isPathWithinRoot(child, root), true)
+    assert.equal(isPathWithinRoot(root, root), true)
+    assert.equal(isPathWithinRoot(outside, root), false)
+    assert.equal(isPathWithinRoot(join(root, '..', 'escape.txt'), root), false)
+  })
+})
+
+describe('dataUrl', () => {
+  test('allows scratch files and returns base64 data url', async () => {
+    const saved = saveBytesToScratch(Buffer.from('hello png'), 'png')
+    try {
+      const url = await dataUrl(saved.path)
+      assert.ok(url?.startsWith('data:image/png;base64,'))
+    } finally {
+      fs.rmSync(saved.path, { force: true })
+    }
+  })
+
+  test('rejects arbitrary files outside authorized roots', async () => {
+    const outside = join(os.tmpdir(), 'unauthorized-random-file.png')
+    fs.writeFileSync(outside, 'not authorized')
+    try {
+      const url = await dataUrl(outside)
+      assert.equal(url, null)
+    } finally {
+      fs.rmSync(outside, { force: true })
+    }
+  })
+})
+

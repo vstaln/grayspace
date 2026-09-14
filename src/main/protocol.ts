@@ -1,8 +1,8 @@
 import * as electron from 'electron'
-import { join, resolve, normalize, sep } from 'path'
+import { join, resolve } from 'path'
 import * as fs from 'fs'
 import { pathToFileURL } from 'url'
-import { mediaDir } from './media.ts'
+import { isPathWithinRoot, mediaDir } from './media.ts'
 
 const electronAny = electron as unknown as Record<string, any>
 const protocol = electronAny.protocol
@@ -28,8 +28,7 @@ export function setupOrcProtocol(rendererDir = join(__dirname, '../renderer')): 
         if (mediaFileName.includes('\0') || mediaFileName.startsWith('.') || mediaFileName.includes('../') || mediaFileName.includes('..\\')) {
           return new Response('Forbidden', { status: 403 })
         }
-        const dir = normalize(mediaDir())
-        const baseWithSep = dir.endsWith(sep) ? dir : dir + sep
+        const dir = mediaDir()
         const mediaFilePath = resolve(dir, mediaFileName)
         let real: string
         try {
@@ -37,7 +36,7 @@ export function setupOrcProtocol(rendererDir = join(__dirname, '../renderer')): 
         } catch {
           return new Response('Not Found', { status: 404 })
         }
-        if (!real.startsWith(baseWithSep)) return new Response('Forbidden', { status: 403 })
+        if (!isPathWithinRoot(real, dir)) return new Response('Forbidden', { status: 403 })
         let stat: fs.Stats
         try {
           stat = fs.statSync(real)
@@ -68,11 +67,7 @@ export function setupOrcProtocol(rendererDir = join(__dirname, '../renderer')): 
       }
 
       const filePath = resolve(rendererDir, pathname)
-      const normalizedRenderer = normalize(rendererDir)
-      const baseWithSep = normalizedRenderer.endsWith(sep) ? normalizedRenderer : normalizedRenderer + sep
-
-
-      if (filePath !== normalizedRenderer && !filePath.startsWith(baseWithSep)) {
+      if (!isPathWithinRoot(filePath, rendererDir)) {
         return new Response('Forbidden', { status: 403 })
       }
 
@@ -146,13 +141,18 @@ export function setupMediaHeaders(targetSession?: any): void {
       callback: (result: { cancel: boolean; responseHeaders?: Record<string, string | string[]> }) => void
     ) => {
     const responseHeaders = { ...details.responseHeaders }
-    delete responseHeaders['x-frame-options']
-    delete responseHeaders['X-Frame-Options']
-    const csp = responseHeaders['content-security-policy']
-    if (Array.isArray(csp)) {
-      responseHeaders['content-security-policy'] = csp.map((value: string) => value.replace(/frame-ancestors[^;]+;?/gi, ''))
-    } else if (typeof csp === 'string') {
-      responseHeaders['content-security-policy'] = csp.replace(/frame-ancestors[^;]+;?/gi, '')
+    for (const key of Object.keys(responseHeaders)) {
+      const lower = key.toLowerCase()
+      if (lower === 'x-frame-options') {
+        delete responseHeaders[key]
+      } else if (lower === 'content-security-policy') {
+        const csp = responseHeaders[key]
+        if (Array.isArray(csp)) {
+          responseHeaders[key] = csp.map((value: string) => value.replace(/frame-ancestors[^;]+;?/gi, ''))
+        } else if (typeof csp === 'string') {
+          responseHeaders[key] = csp.replace(/frame-ancestors[^;]+;?/gi, '')
+        }
+      }
     }
     callback({ cancel: false, responseHeaders })
     }

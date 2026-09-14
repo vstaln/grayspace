@@ -5,18 +5,36 @@ export type CommandPrefix = '/' | '.' | '@' | 'any'
 const WIDGET_ALIASES: Record<string, WidgetKind> = {
   terminal: 'terminal',
   term: 'terminal',
+  sh: 'terminal',
+  shell: 'terminal',
+  cmd: 'terminal',
   files: 'files',
   file: 'files',
   'sys-monitor': 'sys-monitor',
   monitor: 'sys-monitor',
+  sys: 'sys-monitor',
+  system: 'sys-monitor',
   timer: 'timer',
+  time: 'timer',
+  clock: 'timer',
   planner: 'planner',
+  plan: 'planner',
+  tasks: 'planner',
+  todo: 'planner',
   orchestration: 'orchestration',
+  orc: 'orchestration',
+  orch: 'orchestration',
+  agents: 'orchestration',
+  workers: 'orchestration',
   browser: 'browser',
+  web: 'browser',
   links: 'links',
+  link: 'links',
   music: 'music-player',
   'music-player': 'music-player',
-  chat: 'chat'
+  chat: 'chat',
+  ai: 'chat',
+  ask: 'chat'
 }
 
 export interface WidgetInvocation {

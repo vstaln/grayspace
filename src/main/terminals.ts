@@ -424,7 +424,7 @@ export class TerminalManager extends EventEmitter {
           FORCE_COLOR: '3',
           COLORFGBG: '15;0',
           TERM_PROGRAM: 'OrcSpace',
-          TERM_PROGRAM_VERSION: '2.0.1',
+          TERM_PROGRAM_VERSION: '2.0.4',
           LANG: process.env.LANG || 'en_US.UTF-8',
           LC_ALL: process.env.LC_ALL || process.env.LANG || 'en_US.UTF-8',
           ...codeTerminalColorEnv(id)
@@ -470,7 +470,7 @@ export class TerminalManager extends EventEmitter {
       FORCE_COLOR: '3',
       COLORFGBG: '15;0',
       TERM_PROGRAM: 'OrcSpace',
-      TERM_PROGRAM_VERSION: '2.0.1',
+      TERM_PROGRAM_VERSION: '2.0.4',
       LANG: process.env.LANG || 'en_US.UTF-8',
       LC_ALL: process.env.LC_ALL || process.env.LANG || 'en_US.UTF-8',
       ...codeTerminalColorEnv(id)
@@ -1000,6 +1000,7 @@ export class TerminalManager extends EventEmitter {
     record.ptyDisposers = []
     this.terminals.delete(id)
     this.inputEpochs.delete(id)
+    this.inputTails.delete(id)
     if (this.preferredId === id) this.preferredId = null
 
 

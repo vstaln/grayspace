@@ -106,6 +106,7 @@ export default function ChatWidget({ widgetId, workspaceDir }: { widgetId: strin
       aliveRef.current = false
       off()
       offAuth()
+      void window.api.chat.cancel(widgetId).catch(() => {})
     }
   }, [widgetId])
 
@@ -193,6 +194,7 @@ export default function ChatWidget({ widgetId, workspaceDir }: { widgetId: strin
     setMessages([])
     setError(null)
     setStatus('Ready')
+    try { localStorage.removeItem(`${STORAGE_PREFIX}messages:${widgetId}`) } catch {}
   }
 
   return (
@@ -230,7 +232,7 @@ export default function ChatWidget({ widgetId, workspaceDir }: { widgetId: strin
 
       {error && <div role="alert" className="flex items-center gap-2 rounded-[8px] border border-line-soft bg-bg-raise px-2.5 py-1.5 text-[10px] text-text-faint"><LogIn size={13} className="flex-none" /><span className="min-w-0 flex-1">{error}</span><button type="button" className="text-text hover:underline" onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-settings', { detail: { tab: 'ai' } }))}>Settings</button></div>}
       <form className="flex items-end gap-1.5" onSubmit={(event) => void send(event)}>
-        <textarea aria-label="Chat message" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} rows={2} maxLength={12000} placeholder="Message the model…" className="min-h-[46px] min-w-0 flex-1 resize-none rounded-[8px] border border-line-soft bg-transparent px-2.5 py-2 text-[11px] text-text outline-none placeholder:text-text-faint focus:border-line" />
+        <textarea aria-label="Chat message" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} rows={2} maxLength={12000} placeholder="Message the model…" className="min-h-[46px] min-w-0 flex-1 resize-none rounded-[8px] border border-line-soft bg-transparent px-2.5 py-2 text-[11px] text-text outline-none placeholder:text-text-faint focus:border-line" />
         <button type={busy ? 'button' : 'submit'} aria-label={busy ? 'Stop response' : 'Send message'} title={busy ? 'Stop response' : 'Send message'} className="grid h-9 w-9 flex-none place-items-center rounded-[8px] bg-accent text-bg hover:opacity-90 disabled:cursor-default disabled:opacity-40" disabled={!busy && !draft.trim()} onClick={busy ? stop : undefined}>{busy ? <Square size={14} fill="currentColor" /> : <Sparkles size={15} />}</button>
       </form>
       <div className="flex items-center justify-between text-[10px] text-text-faint"><span>{status} · {EFFORTS.find((item) => item.id === effort)?.hint}</span><button type="button" aria-label="Clear chat" className="inline-flex items-center gap-1 rounded px-1.5 py-1 hover:bg-bg-hover hover:text-text" onClick={clear}><Trash2 size={12} />Clear</button></div>

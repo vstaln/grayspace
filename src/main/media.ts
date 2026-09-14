@@ -452,17 +452,25 @@ export async function dataUrl(path: string): Promise<string | null> {
 
 
 async function authorizedMediaPath(path: string): Promise<string | null> {
-  const userData = getUserDataDir()
+  let userData: string | null = null
   try {
-    const root = await fs.promises.realpath(userData)
-    const candidate = await fs.promises.realpath(resolve(path))
-    const remainder = relative(root, candidate)
-    if (remainder === '' || remainder === '..' || remainder.startsWith(`..${sep}`) || isAbsolute(remainder)) return null
-    return candidate
+    userData = getUserDataDir()
   } catch {
-
-
-
+    userData = null
+  }
+  const scratch = scratchDir()
+  try {
+    const candidate = await fs.promises.realpath(resolve(path))
+    const rootUser = userData ? await fs.promises.realpath(userData).catch(() => resolve(userData!)) : null
+    const rootScratch = await fs.promises.realpath(scratch).catch(() => resolve(scratch))
+    if (
+      (rootUser && isPathWithinRoot(candidate, rootUser) && candidate.toLowerCase() !== rootUser.toLowerCase()) ||
+      (isPathWithinRoot(candidate, rootScratch) && candidate.toLowerCase() !== rootScratch.toLowerCase())
+    ) {
+      return candidate
+    }
+    return null
+  } catch {
     return null
   }
 }

@@ -181,3 +181,32 @@ describe('git - branch picker', () => {
     }
   })
 })
+
+describe('git - readGitDiffStat', () => {
+  it('detects file modifications and renames', async () => {
+    const dir = initTempRepo()
+    try {
+      // Modify a file
+      fs.appendFileSync(join(dir, 'a.txt'), 'two\nthree\n')
+      const diff1 = await readGitDiffStat(dir, false)
+      assert.strictEqual(diff1.stat.length, 1)
+      assert.strictEqual(diff1.stat[0].path, 'a.txt')
+      assert.strictEqual(diff1.stat[0].status, 'M')
+
+      // Stage and commit it
+      execFileSync('git', ['add', '-A'], { cwd: dir })
+      execFileSync('git', ['commit', '-m', 'update a'], { cwd: dir })
+
+      // Rename a file
+      execFileSync('git', ['mv', 'a.txt', 'renamed.txt'], { cwd: dir })
+      const diff2 = await readGitDiffStat(dir, true)
+      assert.strictEqual(diff2.stat.length, 1)
+      assert.strictEqual(diff2.stat[0].path, 'renamed.txt')
+      assert.strictEqual(diff2.stat[0].oldPath, 'a.txt')
+      assert.strictEqual(diff2.stat[0].status, 'R')
+    } finally {
+      try { fs.rmSync(dir, { recursive: true, force: true }) } catch {}
+    }
+  })
+})
+

@@ -844,7 +844,7 @@ export default React.memo(function Sidebar({
           return
         }
       }
-      const result = await window.api.workspace.createCodeWorkspace()
+      const result = await window.api.workspace.createCodeWorkspace(undefined, folder || undefined)
       if (result && typeof result === 'object' && 'error' in result) {
         setFoldersError(result.error)
         return
@@ -852,6 +852,7 @@ export default React.memo(function Sidebar({
       if (result && typeof result === 'object' && 'id' in result) {
         setFoldersError(null)
       }
+      refreshCodeWorkspaceGroups()
     } catch (err) {
       setFoldersError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -886,24 +887,14 @@ export default React.memo(function Sidebar({
         }
         setFoldersError(null)
       } else {
-        // Switch folders only on save, not when the dialog opens: opening
-        // rename on another folder must not move the user there if they cancel.
         const targetFolder = renameTarget.folder
-        if (targetFolder && targetFolder !== workspaceDir) {
-          window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
-          const opened = await window.api.workspace.openRecent(targetFolder)
-          if (opened && typeof opened === 'object' && 'error' in opened) {
-            setFoldersError(opened.error)
-            return
-          }
-        }
-        const result = await window.api.workspace.renameCodeWorkspace(renameTarget.id, nextName)
+        const result = await window.api.workspace.renameCodeWorkspace(renameTarget.id, nextName, targetFolder)
         if ('error' in result) {
           setFoldersError(result.error)
-
           return
         }
         setFoldersError(null)
+        refreshCodeWorkspaceGroups()
       }
       setRenameTarget(null)
     } catch (err) {
@@ -927,18 +918,12 @@ export default React.memo(function Sidebar({
     // workspace that is neither in this folder nor active changes neither, so
     // there is nothing to flush — skip the save and the reload it would cause.
     const activeId = codeWorkspaceGroups.find((group) => group.folder === folder)?.activeId
-    const scopeMoves = folder !== workspaceDir || id === activeId
-    if (scopeMoves) window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
+    const isCurrentActive = folder === workspaceDir && id === activeId
+    if (isCurrentActive) window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
     try {
-      if (folder !== workspaceDir) {
-        const opened = await window.api.workspace.openRecent(folder)
-        if (opened && typeof opened === 'object' && 'error' in opened) {
-          setFoldersError(opened.error)
-          return
-        }
-      }
-      const result = await window.api.workspace.deleteCodeWorkspace(id)
+      const result = await window.api.workspace.deleteCodeWorkspace(id, folder)
       if ('error' in result) setFoldersError(result.error)
+      else refreshCodeWorkspaceGroups()
     } catch (err) {
       setFoldersError(err instanceof Error ? err.message : String(err))
     }

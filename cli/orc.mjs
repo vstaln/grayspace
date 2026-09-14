@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url'
 
 const TOKEN_HEADER = 'x-orcspace-token'
 
-const ORC_VERSION = '2.0.1'
+const ORC_VERSION = '2.0.4'
 
 
 
