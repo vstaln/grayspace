@@ -417,13 +417,35 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       row.dataset.ghostRow = 'true'
       ghostRow = row
     }
+    // `cursorBlink: false` is set once at construction and then taken away
+    // again by the application. Codex ends very nearly every frame it paints
+    // with DECSCUSR `ESC [ 0 q` — 120 of them in a ten-second capture of a
+    // single turn — and xterm reads that as
+    //
+    //   const t = params[0] || 1        // 0 becomes 1
+    //   cursorStyle = 'block'
+    //   cursorBlink = t % 2 === 1       // → true
+    //
+    // so the option is flipped back on continuously, and the renderer starts
+    // tagging the cursor `xterm-cursor-blink`, which xterm's own injected
+    // stylesheet drives with `blink_block 1s step-end infinite` — a keyframe
+    // pair that alternates the cursor background with `inherit`. That 1 Hz
+    // square wave *is* the block appearing and vanishing on screen; it is not
+    // the terminal losing content. Re-asserting the option here, from the
+    // callback that fires once the write carrying the DECSCUSR has been
+    // parsed, lands before the frame is painted.
+    const keepCursorSteady = (): void => {
+      if (term.options.cursorBlink) term.options.cursorBlink = false
+    }
     const writeParsedDisposable = term.onWriteParsed(() => {
+      keepCursorSteady()
       syncGhostRow()
       if (!resizeAnchor || performance.now() > resizeRestoreUntil) return
       const generation = resizeAnchorGeneration
       requestAnimationFrame(() => restoreResizeAnchor(generation))
     })
     const renderDisposable = term.onRender(() => {
+      keepCursorSteady()
       syncGhostRow()
     })
     const cursorMoveDisposable = term.onCursorMove(() => {

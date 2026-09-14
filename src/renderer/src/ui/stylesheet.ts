@@ -534,6 +534,17 @@ const componentsLayer: Sheet = {
     '& .xterm-rows > div': {
       overflow: 'visible !important'
     },
+    // The application can switch blinking back on behind the widget's back:
+    // Codex closes nearly every frame with DECSCUSR `ESC [ 0 q`, which xterm
+    // reads as "blinking block" and writes straight into its options. The
+    // renderer then tags the cursor `xterm-cursor-blink` and its injected
+    // stylesheet animates it with `blink_block 1s step-end infinite`. The
+    // option is re-asserted in TerminalWidget, but a frame can be painted
+    // between the two; this rule is what makes the blink impossible rather
+    // than merely unlikely. Nothing in this app ever wants a blinking cursor.
+    '& .xterm-cursor': {
+      animation: 'none !important'
+    },
     // Marked on the row <div>, which survives xterm rebuilding the row's
     // children — so a cursor span recreated mid-turn is hidden by this rule as
     // it is painted, instead of by a JS pass that always arrived a frame or
