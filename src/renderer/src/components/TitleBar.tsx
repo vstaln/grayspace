@@ -2,12 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
-  Code2,
   Copy,
   GitBranch,
   Minus,
   PanelLeft,
-  PanelsTopLeft,
   Square,
   X
 } from 'lucide-react'
@@ -375,10 +373,9 @@ export default React.memo(function TitleBar({
             role="tab"
             onClick={() => onViewChange('canvas')}
             aria-selected={activeView === 'canvas'}
-            className={`${VIEW_TAB} title-bar-view-tab gap-1.5 ${activeView === 'canvas' ? VIEW_TAB_ACTIVE : VIEW_TAB_INACTIVE}`}
+            className={`${VIEW_TAB} title-bar-view-tab ${activeView === 'canvas' ? VIEW_TAB_ACTIVE : VIEW_TAB_INACTIVE}`}
             title="Canvas"
           >
-            <PanelsTopLeft size={13} strokeWidth={1.8} aria-hidden="true" />
             <span>Canvas</span>
           </button>
           <button
@@ -386,10 +383,9 @@ export default React.memo(function TitleBar({
             role="tab"
             onClick={() => onViewChange('code')}
             aria-selected={activeView === 'code'}
-            className={`${VIEW_TAB} title-bar-view-tab gap-1.5 ${activeView === 'code' ? VIEW_TAB_ACTIVE : VIEW_TAB_INACTIVE}`}
+            className={`${VIEW_TAB} title-bar-view-tab ${activeView === 'code' ? VIEW_TAB_ACTIVE : VIEW_TAB_INACTIVE}`}
             title="Code"
           >
-            <Code2 size={13} strokeWidth={1.8} aria-hidden="true" />
             <span>Code</span>
           </button>
           </div>

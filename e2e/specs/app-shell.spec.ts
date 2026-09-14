@@ -26,6 +26,7 @@ test('the shell starts and renders the canvas chrome', async () => {
   await expect(page.getByTestId('tool-select')).toBeVisible()
   await expect(page.getByTestId('tool-draw')).toBeVisible()
   await expect(page.getByTestId('tool-erase')).toBeVisible()
+  await expect(page.locator('.title-bar-view-switch [role="tab"] svg')).toHaveCount(0)
 
 
 
