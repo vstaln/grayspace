@@ -1,110 +1,18 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Activity,
-  Calendar,
-  Clock,
+  ArrowLeft,
+  ArrowRight,
   Code2,
   Copy,
-  Cpu,
   GitBranch,
-  HardDrive,
-  Layers,
   Minus,
   PanelLeft,
   PanelsTopLeft,
-  RefreshCw,
-  Sparkles,
   Square,
   X
 } from 'lucide-react'
-import AntigravityIcon from './AntigravityIcon'
-import CodexIcon from './CodexIcon'
-import ClaudeIcon from './ClaudeIcon'
-import GrokIcon from './GrokIcon'
-import OpenCodeIcon from './OpenCodeIcon'
-import CursorIcon from './CursorIcon'
-import KimiIcon from './KimiIcon'
-import type { GitBranch as GitBranchInfo, GitCommit as GitCommitInfo, GitStatus, SystemStats } from '../../../preload/index.d'
+import type { GitBranch as GitBranchInfo, GitCommit as GitCommitInfo, GitStatus } from '../../../preload/index.d'
 import { IS_MAC } from '../lib/platform'
-
-function formatBytes(bytes: number): string {
-  if (!bytes) return '0 MB'
-  const gb = bytes / (1024 * 1024 * 1024)
-  if (gb >= 1) return `${gb.toFixed(2)} GB`
-  const mb = bytes / (1024 * 1024)
-  return `${mb.toFixed(0)} MB`
-}
-
-function formatUptime(seconds: number): string {
-  if (!seconds) return '0m'
-  const d = Math.floor(seconds / 86400)
-  const h = Math.floor((seconds % 86400) / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  const s = Math.floor(seconds % 60)
-  if (d > 0) return `${d}d ${h}h ${m}m`
-  if (h > 0) return `${h}h ${m}m`
-  if (m > 0) return `${m}m ${s}s`
-  return `${s}s`
-}
-
-function renderAgentIcon(id: string, size = 13): React.JSX.Element {
-  switch (id) {
-    case 'antigravity':
-      return <AntigravityIcon size={size} />
-    case 'codex':
-      return <CodexIcon size={size} />
-    case 'claude':
-      return <ClaudeIcon size={size} />
-    case 'grok':
-      return <GrokIcon size={size} />
-    case 'opencode':
-      return <OpenCodeIcon size={size} />
-    case 'kimi':
-      return <KimiIcon size={size} />
-    case 'cursor':
-      return <CursorIcon size={size} />
-    default:
-      return <Activity size={size} className="text-accent" />
-  }
-}
-
-function shortAgentName(id: string, name: string): string {
-  switch (id) {
-    case 'antigravity':
-      return 'AGY'
-    case 'codex':
-      return 'CDX'
-    case 'claude':
-      return 'CLD'
-    case 'opencode':
-      return 'OpenCode'
-    case 'kimi':
-      return 'Kimi Code'
-    case 'grok':
-      return 'Grok Build'
-    default:
-      return name.slice(0, 4).toUpperCase()
-  }
-}
-
-function getRemainingColor(rem: number): string {
-  if (rem < 20) return 'text-[#f87171]'
-  if (rem < 50) return 'text-[#e6c07b]'
-  return 'text-[#4ade80]'
-}
-
-function getRemainingProgressBg(rem: number): string {
-  if (rem < 20) return 'bg-[#f87171]'
-  if (rem < 50) return 'bg-[#e6c07b]'
-  return 'bg-[#4ade80]'
-}
-
-function formatTokens(tokens?: number): string {
-  if (!tokens || tokens <= 0) return ''
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M tokens`
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k tokens`
-  return `${tokens} tokens`
-}
 
 export type WorkView = 'canvas' | 'code'
 
@@ -127,26 +35,31 @@ const VIEW_TAB_ACTIVE = 'bg-[#1F1F1F] text-white font-semibold'
 const VIEW_TAB_INACTIVE = 'bg-[#080808] text-white/60 hover:text-white hover:bg-[#2A2A2E]'
 
 
-const PILL =
-  'flex h-10 flex-none items-center gap-1.5 rounded-none border-0 px-2 text-[13px] font-medium transition-colors duration-150 cursor-pointer select-none'
 
 const ICON =
   'grid h-10 w-[46px] flex-none place-items-center rounded-none border-0 transition-colors duration-150 cursor-pointer'
 const QUIET = 'text-text-faint hover:bg-bg-hover hover:text-text'
-const ON = 'bg-bg-hover text-text border-transparent'
 
 interface Props {
   activeView: WorkView
   onViewChange: (view: WorkView) => void
   codeSidebarCollapsed: boolean
   onToggleCodeSidebar: () => void
+  canUndo: boolean
+  canRedo: boolean
+  onUndo: () => void
+  onRedo: () => void
 }
 
 export default React.memo(function TitleBar({
   activeView,
   onViewChange,
   codeSidebarCollapsed,
-  onToggleCodeSidebar
+  onToggleCodeSidebar,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo
 }: Props): React.JSX.Element {
   const [maximized, setMaximized] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
@@ -160,23 +73,18 @@ export default React.memo(function TitleBar({
   const [gitError, setGitError] = useState<string | null>(null)
   const [gitNotice, setGitNotice] = useState<string | null>(null)
   const [gitBusyRef, setGitBusyRef] = useState<string | null>(null)
-  const [usageStats, setUsageStats] = useState<SystemStats | null>(null)
-  const [usageOpen, setUsageOpen] = useState(false)
-  const [usageError, setUsageError] = useState<string | null>(null)
   const rightIslandRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (!gitOpen && !usageOpen) return
+    if (!gitOpen) return
     const onDown = (e: MouseEvent): void => {
       if (rightIslandRef.current && !rightIslandRef.current.contains(e.target as Node)) {
         setGitOpen(false)
-        setUsageOpen(false)
       }
     }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         setGitOpen(false)
-        setUsageOpen(false)
       }
     }
     window.addEventListener('mousedown', onDown)
@@ -185,7 +93,7 @@ export default React.memo(function TitleBar({
       window.removeEventListener('mousedown', onDown)
       window.removeEventListener('keydown', onKey)
     }
-  }, [gitOpen, usageOpen])
+  }, [gitOpen])
 
   useEffect(() => {
 
@@ -305,7 +213,7 @@ export default React.memo(function TitleBar({
 
   const checkoutGitRef = useCallback(async (ref: string, isCommit: boolean): Promise<void> => {
     if (blockedCount > 0) {
-      setGitNotice(`Uncommitted: ${blockedCount} tracked file${blockedCount > 1 ? 's' : ''} — commit or discard changes before switching. Untracked files ride along.`)
+      setGitNotice(`Uncommitted: ${blockedCount} tracked file${blockedCount > 1 ? 's' : ''} вЂ” commit or discard changes before switching. Untracked files ride along.`)
       return
     }
     setGitBusyRef(ref)
@@ -331,7 +239,7 @@ export default React.memo(function TitleBar({
     const name = gitQuery.trim()
     if (!name) return
     if (blockedCount > 0) {
-      setGitNotice(`Uncommitted: ${blockedCount} tracked file${blockedCount > 1 ? 's' : ''} — commit or discard changes before switching. Untracked files ride along.`)
+      setGitNotice(`Uncommitted: ${blockedCount} tracked file${blockedCount > 1 ? 's' : ''} вЂ” commit or discard changes before switching. Untracked files ride along.`)
       return
     }
     setGitBusyRef(`new:${name}`)
@@ -353,50 +261,6 @@ export default React.memo(function TitleBar({
     }
   }, [blockedCount, gitQuery, refreshGit, refreshGitRefs])
 
-  const usageSeqRef = useRef(0)
-  const refreshUsage = useCallback(async (): Promise<void> => {
-    const seq = ++usageSeqRef.current
-    try {
-      const res = await window.api.system.stats()
-
-
-
-      if (seq !== usageSeqRef.current) return
-      if (res && !('error' in res)) {
-        setUsageStats(res as SystemStats)
-        setUsageError(null)
-      } else {
-        setUsageError((res as { error?: string })?.error || 'Failed to load usage stats')
-      }
-    } catch (err) {
-      if (seq !== usageSeqRef.current) return
-      setUsageError(err instanceof Error ? err.message : String(err))
-    }
-  }, [])
-
-
-  useEffect(() => {
-    if (!usageOpen) return
-    void refreshUsage()
-    const timer = setInterval(() => {
-      if (!document.hidden) void refreshUsage()
-    }, 5000)
-    const onVisible = (): void => {
-      if (!document.hidden) void refreshUsage()
-    }
-    const onFocus = (): void => {
-      void refreshUsage()
-    }
-    document.addEventListener('visibilitychange', onVisible)
-    window.addEventListener('focus', onFocus)
-    return () => {
-      clearInterval(timer)
-      usageSeqRef.current += 1
-      document.removeEventListener('visibilitychange', onVisible)
-      window.removeEventListener('focus', onFocus)
-    }
-  }, [refreshUsage, usageOpen])
-
   useEffect(() => {
     let timer: number | null = null
     const onFlash = (event: Event): void => {
@@ -416,7 +280,6 @@ export default React.memo(function TitleBar({
     }
   }, [])
 
-  const openAgents = (usageStats?.agents || []).filter((a) => a.isOpen)
 
   const noDrag = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
 
@@ -435,6 +298,30 @@ export default React.memo(function TitleBar({
     >
       {}
       <div className="flex h-10 min-w-0 items-center gap-3 overflow-hidden" style={noDrag}>
+          <div className={`${VIEW_SWITCH} title-bar-history-switch`} aria-label="Canvas history">
+            <button
+              type="button"
+              className={`${VIEW_TAB} justify-center ${canUndo ? VIEW_TAB_INACTIVE : 'cursor-default text-white/25'}`}
+              onClick={onUndo}
+              disabled={!canUndo}
+              title="Undo"
+              aria-label="Undo"
+              data-testid="titlebar-undo"
+            >
+              <ArrowLeft size={15} />
+            </button>
+            <button
+              type="button"
+              className={`${VIEW_TAB} justify-center ${canRedo ? VIEW_TAB_INACTIVE : 'cursor-default text-white/25'}`}
+              onClick={onRedo}
+              disabled={!canRedo}
+              title="Redo"
+              aria-label="Redo"
+              data-testid="titlebar-redo"
+            >
+              <ArrowRight size={15} />
+            </button>
+          </div>
         {activeView === 'code' && (
           <div
             className={`${VIEW_SWITCH} title-bar-view-switch relative z-10 flex-none`}
@@ -463,25 +350,26 @@ export default React.memo(function TitleBar({
 
       {}
       <div style={noDrag}>
-        <div
-          className={`${VIEW_SWITCH} title-bar-view-switch pointer-events-auto`}
-          style={noDrag}
-          role="tablist"
-          aria-label="Workspace View"
-          onKeyDown={(e) => {
-            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return
-            e.preventDefault()
-            const tabs = Array.from((e.currentTarget as HTMLElement).querySelectorAll('[role="tab"]')) as HTMLElement[]
-            if (tabs.length === 0) return
-            const idx = tabs.indexOf(document.activeElement as HTMLElement)
-            let next = 0
-            if (e.key === 'ArrowRight') next = (idx + 1 + tabs.length) % tabs.length
-            else if (e.key === 'ArrowLeft') next = (idx - 1 + tabs.length) % tabs.length
-            else if (e.key === 'Home') next = 0
-            else next = tabs.length - 1
-            tabs[next]?.focus()
-          }}
-        >
+        <div className="flex items-center gap-1" style={noDrag}>
+          <div
+            className={`${VIEW_SWITCH} title-bar-view-switch pointer-events-auto`}
+            style={noDrag}
+            role="tablist"
+            aria-label="Workspace View"
+            onKeyDown={(e) => {
+              if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return
+              e.preventDefault()
+              const tabs = Array.from((e.currentTarget as HTMLElement).querySelectorAll('[role="tab"]')) as HTMLElement[]
+              if (tabs.length === 0) return
+              const idx = tabs.indexOf(document.activeElement as HTMLElement)
+              let next = 0
+              if (e.key === 'ArrowRight') next = (idx + 1 + tabs.length) % tabs.length
+              else if (e.key === 'ArrowLeft') next = (idx - 1 + tabs.length) % tabs.length
+              else if (e.key === 'Home') next = 0
+              else next = tabs.length - 1
+              tabs[next]?.focus()
+            }}
+          >
           <button
             type="button"
             role="tab"
@@ -504,6 +392,7 @@ export default React.memo(function TitleBar({
             <Code2 size={13} strokeWidth={1.8} aria-hidden="true" />
             <span>Code</span>
           </button>
+          </div>
         </div>
       </div>
 
@@ -511,414 +400,6 @@ export default React.memo(function TitleBar({
       <div className="flex h-10 min-w-0 items-center justify-end" style={noDrag}>
         <div className="h-full flex-1" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
         <div ref={rightIslandRef} className={`${ISLAND} relative gap-0`}>
-          {}
-          <button
-            type="button"
-            aria-haspopup="dialog"
-            aria-expanded={usageOpen}
-            className={`${PILL} ${usageOpen ? ON : QUIET} hidden md:flex max-w-[340px]`}
-            onClick={() => {
-              setUsageOpen((open) => !open)
-              setGitOpen(false)
-              void refreshUsage()
-            }}
-            title={
-              openAgents.length > 0
-                ? `Active AI Agents (${openAgents.map((a) => a.name).join(', ')}):\n` +
-                  openAgents
-                    .map(
-                      (a) =>
-                        `• ${a.name}: 5h ${(a.fiveHour.remainingPercent ?? a.fiveHour.percent)}% Remaining (${a.fiveHour.usedPercent ?? 100 - a.fiveHour.percent}% used, ${a.fiveHour.requests} reqs) | Weekly ${(a.weekly.remainingPercent ?? a.weekly.percent)}% Remaining (${a.weekly.resetInfo})`
-                    )
-                    .join('\n') +
-                  (usageStats ? `\n\nCPU: ${usageStats.cpuPercent}% | RAM: ${usageStats.memUsagePercent}%` : '')
-                : usageStats
-                  ? `Usage (no active AI sessions)\nCPU: ${usageStats.cpuPercent}% | RAM: ${usageStats.memUsagePercent}%\n${usageStats.terminalsCount} active terminal${usageStats.terminalsCount === 1 ? '' : 's'}`
-                  : 'System & AI Usage'
-            }
-          >
-            {openAgents.length > 0 ? (
-              <div className="flex items-center gap-1.5 min-w-0">
-                {openAgents.slice(0, 2).map((ag, idx) => {
-                  const rem5h = ag.fiveHour.remainingPercent ?? ag.fiveHour.percent
-                  const remWk = ag.weekly.remainingPercent ?? ag.weekly.percent
-                  return (
-                    <span key={ag.id} className="flex items-center gap-1 min-w-0">
-                      {idx > 0 && <span className="text-line-soft font-light">|</span>}
-                      <span className="flex-none">{renderAgentIcon(ag.id, 13)}</span>
-                      <span className="text-[11px] font-semibold tracking-tight text-text">
-                        {shortAgentName(ag.id, ag.name)}
-                      </span>
-                      <span className="text-[10px] text-text-dim">5h:</span>
-                      <span className={`text-[11px] font-semibold tabular-nums ${getRemainingColor(rem5h)}`}>
-                        {typeof rem5h === 'number' && Number.isInteger(rem5h) ? `${rem5h}%` : `${Number(rem5h).toFixed(1)}%`}
-                      </span>
-                      <span className="text-[10px] text-text-dim">Wk:</span>
-                      <span className={`text-[11px] font-semibold tabular-nums ${getRemainingColor(remWk)}`}>
-                        {typeof remWk === 'number' && Number.isInteger(remWk) ? `${remWk}%` : `${Number(remWk).toFixed(1)}%`}
-                      </span>
-                    </span>
-                  )
-                })}
-                {openAgents.length > 2 && (
-                  <span className="rounded bg-bg-raise px-1 text-[10px] font-semibold text-text-dim">
-                    +{openAgents.length - 2}
-                  </span>
-                )}
-                <span className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-400 animate-pulse ml-0.5" title="Live 5s updates" />
-              </div>
-            ) : (
-              <>
-                <Activity
-                  size={14}
-                  className={`flex-none ${
-                    usageStats && usageStats.cpuPercent > 80
-                      ? 'text-danger'
-                      : usageStats && usageStats.cpuPercent > 50
-                        ? 'text-[#e6c07b]'
-                        : 'text-text-dim'
-                  }`}
-                />
-                <span className="truncate hidden lg:inline">Usage</span>
-              </>
-            )}
-          </button>
-
-          {usageOpen && (
-            <div className="absolute right-2 top-[38px] z-[60000] w-[370px] max-h-[82vh] overflow-y-auto rounded-[12px] border border-line-soft bg-bg-panel p-3 text-left shadow-2xl">
-              <div className="mb-2.5 flex items-center justify-between gap-3 border-b border-line-soft pb-2">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[12px] font-semibold text-text">AI & Resource Usage</span>
-                  <span className="flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-medium text-emerald-400">
-                    <span className="h-1 w-1 rounded-full bg-emerald-400 animate-pulse" />
-                    5s
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-text-dim hover:bg-bg-hover hover:text-text transition-colors"
-                  onClick={() => void refreshUsage()}
-                  title="Refresh stats now"
-                >
-                  <RefreshCw size={11} />
-                  Refresh
-                </button>
-              </div>
-
-              {!usageStats ? (
-                usageError ? (
-                  <div className="flex flex-col gap-2">
-                    <p className="text-[12px] text-danger">{usageError}</p>
-                    <div>
-                      <button
-                        type="button"
-                        className="rounded-md border border-line-soft px-2 py-1 text-[11px] text-text-dim hover:bg-bg-hover hover:text-text"
-                        onClick={() => void refreshUsage()}
-                      >
-                        Retry
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-[12px] text-text-dim">Loading usage stats…</p>
-                )
-              ) : (
-                <div className="space-y-3 text-[12px]">
-                  {}
-                  <div>
-                    <div className="mb-1.5 flex items-center justify-between text-[11px]">
-                      <span className="flex items-center gap-1 font-semibold text-text">
-                        <Sparkles size={12} className="text-accent" />
-                        Active AI Agents ({openAgents.length})
-                      </span>
-                      {openAgents.length > 0 ? (
-                        <span className="text-[10px] text-emerald-400 font-medium flex items-center gap-1">
-                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                          Live Quota Sync
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-text-faint">0 active</span>
-                      )}
-                    </div>
-
-                    {openAgents.length === 0 ? (
-                      <div className="space-y-2">
-                        <div className="rounded-[8px] border border-line-soft/60 bg-bg-hover p-2 text-center text-[11px] text-text-dim">
-                          No active AI sessions detected. Showing recent CLI agent limits:
-                        </div>
-                        {(usageStats.agents || []).slice(0, 2).map((ag) => {
-                          const rem5h = ag.fiveHour.remainingPercent ?? ag.fiveHour.percent
-                          const remWk = ag.weekly.remainingPercent ?? ag.weekly.percent
-                          const remMo = ag.monthly ? (ag.monthly.remainingPercent ?? ag.monthly.percent) : null
-                          return (
-                            <div
-                              key={ag.id}
-                              className="rounded-[8px] border border-line-soft/60 bg-bg-hover p-2 space-y-1.5 opacity-80"
-                            >
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-1.5 min-w-0">
-                                  <span className="grid h-5 w-5 flex-none place-items-center rounded bg-bg-hover/60">
-                                    {renderAgentIcon(ag.id, 12)}
-                                  </span>
-                                  <span className="font-semibold text-text truncate text-xs">{ag.name}</span>
-                                </div>
-                                <span className="rounded-full border border-line-soft bg-bg-hover/40 px-1.5 py-0.5 text-[9px] text-text-dim">
-                                  Idle
-                                </span>
-                              </div>
-                              {}
-                              <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft text-[10px]">
-                                <div className="flex justify-between">
-                                  <span className="text-text-dim flex items-center gap-1"><Clock size={10} className="text-[#38bdf8]" /> 5h Remaining:</span>
-                                  <span className={`font-semibold tabular-nums ${getRemainingColor(rem5h)}`}>
-                                    {typeof rem5h === 'number' && Number.isInteger(rem5h) ? `${rem5h}%` : `${Number(rem5h).toFixed(1)}%`}
-                                  </span>
-                                </div>
-                                <div className="h-1 w-full overflow-hidden rounded-full bg-line-soft">
-                                  <div className={`h-full ${getRemainingProgressBg(rem5h)}`} style={{ width: `${Math.min(100, Math.max(rem5h > 0 ? 3 : 0, rem5h))}%` }} />
-                                </div>
-                                <div className="flex justify-between text-[9px] text-text-faint">
-                                  <span>{ag.fiveHour.usedPercent ?? (100 - rem5h)}% used ({ag.fiveHour.requests} reqs)</span>
-                                  <span>{ag.fiveHour.resetInfo}</span>
-                                </div>
-                              </div>
-                              {}
-                              <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft text-[10px]">
-                                <div className="flex justify-between">
-                                  <span className="text-text-dim flex items-center gap-1"><Calendar size={10} className="text-[#7fd99a]" /> Weekly Remaining:</span>
-                                  <span className={`font-semibold tabular-nums ${getRemainingColor(remWk)}`}>
-                                    {typeof remWk === 'number' && Number.isInteger(remWk) ? `${remWk}%` : `${Number(remWk).toFixed(1)}%`}
-                                  </span>
-                                </div>
-                                <div className="h-1 w-full overflow-hidden rounded-full bg-line-soft">
-                                  <div className={`h-full ${getRemainingProgressBg(remWk)}`} style={{ width: `${Math.min(100, Math.max(remWk > 0 ? 3 : 0, remWk))}%` }} />
-                                </div>
-                                <div className="flex justify-between text-[9px] text-text-faint">
-                                  <span>{ag.weekly.usedPercent ?? (100 - remWk)}% used ({ag.weekly.requests} reqs)</span>
-                                  <span>{ag.weekly.resetInfo}</span>
-                                </div>
-                              </div>
-                              {}
-                              {ag.monthly && remMo !== null && (
-                                <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft text-[10px]">
-                                  <div className="flex justify-between">
-                                    <span className="text-text-dim flex items-center gap-1"><Layers size={10} className="text-[#a78bfa]" /> Monthly Remaining:</span>
-                                    <span className={`font-semibold tabular-nums ${getRemainingColor(remMo)}`}>
-                                      {typeof remMo === 'number' && Number.isInteger(remMo) ? `${remMo}%` : `${Number(remMo).toFixed(1)}%`}
-                                    </span>
-                                  </div>
-                                  <div className="h-1 w-full overflow-hidden rounded-full bg-line-soft">
-                                    <div className={`h-full ${getRemainingProgressBg(remMo)}`} style={{ width: `${Math.min(100, Math.max(remMo > 0 ? 3 : 0, remMo))}%` }} />
-                                  </div>
-                                  <div className="flex justify-between text-[9px] text-text-faint">
-                                    <span>{ag.monthly.usedPercent ?? (100 - remMo)}% used ({ag.monthly.requests} reqs)</span>
-                                    <span>{ag.monthly.resetInfo}</span>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    ) : (
-                      <div className="space-y-2.5">
-                        {openAgents.map((ag) => {
-                          const rem5h = ag.fiveHour.remainingPercent ?? ag.fiveHour.percent
-                          const remWk = ag.weekly.remainingPercent ?? ag.weekly.percent
-                          const remMo = ag.monthly ? (ag.monthly.remainingPercent ?? ag.monthly.percent) : null
-                          const used5h = ag.fiveHour.usedPercent ?? parseFloat((100 - rem5h).toFixed(1))
-                          const usedWk = ag.weekly.usedPercent ?? parseFloat((100 - remWk).toFixed(1))
-                          const usedMo = ag.monthly ? (ag.monthly.usedPercent ?? parseFloat((100 - (remMo ?? 0)).toFixed(1))) : null
-
-                          return (
-                            <div
-                              key={ag.id}
-                              className="rounded-[8px] border border-line-soft/80 bg-bg-hover p-2.5 space-y-2.5 transition-colors hover:border-line"
-                            >
-                              {}
-                              <div>
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-1.5 min-w-0">
-                                    <span className="grid h-5 w-5 flex-none place-items-center rounded bg-bg-hover/60">
-                                      {renderAgentIcon(ag.id, 13)}
-                                    </span>
-                                    <span className="font-semibold text-text truncate">{ag.name}</span>
-                                    <span className="text-[10px] text-text-faint font-mono">{ag.command}</span>
-                                  </div>
-                                  <span className="flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
-                                    <span className="h-1 w-1 rounded-full bg-emerald-400" />
-                                    {ag.openCount > 1 ? `${ag.openCount} open` : 'Open'}
-                                  </span>
-                                </div>
-                                {(ag.modelName || ag.accountEmail || ag.tierName) && (
-                                  <div className="mt-1 flex items-center gap-2 truncate text-[10px] text-text-dim">
-                                    {ag.modelName && (
-                                      <span className="truncate font-medium text-accent">{ag.modelName}</span>
-                                    )}
-                                    {ag.accountEmail && (
-                                      <span className="truncate text-text-faint">({ag.accountEmail})</span>
-                                    )}
-                                    {ag.tierName && (
-                                      <span className="rounded bg-bg-hover px-1 py-0.5 text-[9px] text-text-dim">{ag.tierName}</span>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-
-                              {}
-                              <div className="space-y-1 rounded bg-bg-hover p-2 border border-line-soft">
-                                <div className="flex items-center justify-between text-[11px]">
-                                  <span className="flex items-center gap-1 text-text font-medium">
-                                    <Clock size={11} className="text-[#38bdf8]" />
-                                    Five Hour Limit Remaining (Осталось)
-                                  </span>
-                                  <span className={`font-semibold tabular-nums ${getRemainingColor(rem5h)}`}>
-                                    {typeof rem5h === 'number' && Number.isInteger(rem5h) ? `${rem5h}%` : `${Number(rem5h).toFixed(2)}%`}
-                                  </span>
-                                </div>
-                                <div className="h-1.5 w-full overflow-hidden rounded-full bg-line-soft">
-                                  <div
-                                    className={`h-full transition-all duration-300 ${getRemainingProgressBg(rem5h)}`}
-                                    style={{ width: `${Math.min(100, Math.max(rem5h > 0 ? 3 : 0, rem5h))}%` }}
-                                  />
-                                </div>
-                                <div className="flex items-center justify-between text-[10px] text-text-faint">
-                                  <span>{used5h}% used · {ag.fiveHour.requests} reqs{ag.fiveHour.tokens ? ` (${formatTokens(ag.fiveHour.tokens)})` : ''}</span>
-                                  <span className="text-text-dim font-medium">{ag.fiveHour.resetInfo}</span>
-                                </div>
-                              </div>
-
-                              {}
-                              <div className="space-y-1 rounded bg-bg-hover p-2 border border-line-soft">
-                                <div className="flex items-center justify-between text-[11px]">
-                                  <span className="flex items-center gap-1 text-text font-medium">
-                                    <Calendar size={11} className="text-[#7fd99a]" />
-                                    Weekly Limit Remaining (Осталось)
-                                  </span>
-                                  <span className={`font-semibold tabular-nums ${getRemainingColor(remWk)}`}>
-                                    {typeof remWk === 'number' && Number.isInteger(remWk) ? `${remWk}%` : `${Number(remWk).toFixed(2)}%`}
-                                  </span>
-                                </div>
-                                <div className="h-1.5 w-full overflow-hidden rounded-full bg-line-soft">
-                                  <div
-                                    className={`h-full transition-all duration-300 ${getRemainingProgressBg(remWk)}`}
-                                    style={{ width: `${Math.min(100, Math.max(remWk > 0 ? 3 : 0, remWk))}%` }}
-                                  />
-                                </div>
-                                <div className="flex items-center justify-between text-[10px] text-text-faint">
-                                  <span>{usedWk}% used · {ag.weekly.requests} reqs{ag.weekly.tokens ? ` (${formatTokens(ag.weekly.tokens)})` : ''}</span>
-                                  <span className="text-text-dim font-medium">{ag.weekly.resetInfo}</span>
-                                </div>
-                              </div>
-
-                              {}
-                              {ag.monthly && remMo !== null && (
-                                <div className="space-y-1 rounded bg-bg-hover p-2 border border-line-soft">
-                                  <div className="flex items-center justify-between text-[11px]">
-                                    <span className="flex items-center gap-1 text-text font-medium">
-                                      <Layers size={11} className="text-[#a78bfa]" />
-                                      Monthly Limit Remaining (Месячный / 30д)
-                                    </span>
-                                    <span className={`font-semibold tabular-nums ${getRemainingColor(remMo)}`}>
-                                      {typeof remMo === 'number' && Number.isInteger(remMo) ? `${remMo}%` : `${Number(remMo).toFixed(2)}%`}
-                                    </span>
-                                  </div>
-                                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-line-soft">
-                                    <div
-                                      className={`h-full transition-all duration-300 ${getRemainingProgressBg(remMo)}`}
-                                      style={{ width: `${Math.min(100, Math.max(remMo > 0 ? 3 : 0, remMo))}%` }}
-                                    />
-                                  </div>
-                                  <div className="flex items-center justify-between text-[10px] text-text-faint">
-                                    <span>{usedMo}% used · {ag.monthly.requests} reqs{ag.monthly.tokens ? ` (${formatTokens(ag.monthly.tokens)})` : ''}</span>
-                                    <span className="text-text-dim font-medium">{ag.monthly.resetInfo}</span>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  {}
-                  <div className="border-t border-line-soft pt-2">
-                    <div className="mb-1.5 flex items-center gap-1 text-[11px] font-semibold text-text">
-                      <Activity size={12} className="text-accent" />
-                      System Resources
-                    </div>
-
-                    <div className="space-y-2 text-[11px]">
-                      {}
-                      <div className="rounded-[8px] border border-line-soft/60 bg-bg-hover p-2">
-                        <div className="mb-1 flex items-center justify-between">
-                          <span className="flex items-center gap-1 text-text-dim">
-                            <Cpu size={11} className="text-[#7aa2f7]" />
-                            CPU Load ({usageStats.cpuCount} cores)
-                          </span>
-                          <span className="font-semibold tabular-nums text-text">{usageStats.cpuPercent}%</span>
-                        </div>
-                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-line-soft">
-                          <div
-                            className={`h-full transition-all duration-300 ${
-                              usageStats.cpuPercent > 80
-                                ? 'bg-danger'
-                                : usageStats.cpuPercent > 50
-                                  ? 'bg-[#e6c07b]'
-                                  : 'bg-[#7aa2f7]'
-                            }`}
-                            style={{ width: `${Math.min(100, Math.max(2, usageStats.cpuPercent))}%` }}
-                          />
-                        </div>
-                        {usageStats.cpuModel && (
-                          <div className="mt-1 truncate text-[10px] text-text-faint" title={usageStats.cpuModel}>
-                            {usageStats.cpuModel}
-                          </div>
-                        )}
-                      </div>
-
-                      {}
-                      <div className="rounded-[8px] border border-line-soft/60 bg-bg-hover p-2">
-                        <div className="mb-1 flex items-center justify-between">
-                          <span className="flex items-center gap-1 text-text-dim">
-                            <HardDrive size={11} className="text-[#7fd99a]" />
-                            RAM Usage
-                          </span>
-                          <span className="font-semibold tabular-nums text-text">{usageStats.memUsagePercent}%</span>
-                        </div>
-                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-line-soft">
-                          <div
-                            className={`h-full transition-all duration-300 ${
-                              usageStats.memUsagePercent > 85
-                                ? 'bg-danger'
-                                : usageStats.memUsagePercent > 65
-                                  ? 'bg-[#e6c07b]'
-                                  : 'bg-[#7fd99a]'
-                            }`}
-                            style={{ width: `${Math.min(100, Math.max(2, usageStats.memUsagePercent))}%` }}
-                          />
-                        </div>
-                        <div className="mt-1 flex justify-between text-[10px] text-text-dim">
-                          <span>Used / Total:</span>
-                          <span className="font-medium text-text tabular-nums">
-                            {formatBytes(usageStats.usedMem)} / {formatBytes(usageStats.totalMem)}
-                          </span>
-                        </div>
-                      </div>
-
-                      {}
-                      <div className="flex justify-between text-[10px] text-text-dim px-0.5">
-                        <span>Active Terminals: <span className="text-accent font-medium">{usageStats.terminalsCount}</span></span>
-                        <span>Uptime: <span className="text-text font-medium">{formatUptime(usageStats.uptime)}</span></span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
           {}
           <div className={`${VIEW_SWITCH} title-bar-git-switch`}>
           <button
@@ -931,13 +412,12 @@ export default React.memo(function TitleBar({
                 if (!open) setGitQuery('')
                 return !open
               })
-              setUsageOpen(false)
               void refreshGit()
             }}
             title={
               gitStatus?.repo
                 ? `Git (${gitStatus.branch || 'HEAD'})\n${dirtyCount > 0 ? `${dirtyCount} changed file${dirtyCount > 1 ? 's' : ''}` : 'Working tree clean'}`
-                : 'Git — not a repository'
+                : 'Git вЂ” not a repository'
             }
           >
             <GitBranch
@@ -973,7 +453,7 @@ export default React.memo(function TitleBar({
                   <div className="mt-1.5 flex items-center justify-between text-[11px] text-text-dim">
                     <span className="truncate">
                       {gitStatus.branch || 'HEAD'}
-                      {gitStatus.branch === 'HEAD' && gitHead && <span className="text-accent"> · detached at {gitHead.slice(0, 8)}</span>}
+                      {gitStatus.branch === 'HEAD' && gitHead && <span className="text-accent"> В· detached at {gitHead.slice(0, 8)}</span>}
                     </span>
                     <span className="flex-none">{dirtyCount ? `Uncommitted: ${dirtyCount} file${dirtyCount > 1 ? 's' : ''}` : 'clean'}</span>
                   </div>
@@ -987,7 +467,7 @@ export default React.memo(function TitleBar({
                   <p role="alert" className="mb-2 break-words rounded-md border border-danger/40 bg-danger/10 px-2 py-1.5 text-[11px] text-danger">{gitError}</p>
                 )}
                 {!gitStatus ? (
-                  <p className="text-[12px] text-text-dim">Checking repository…</p>
+                  <p className="text-[12px] text-text-dim">Checking repositoryвЂ¦</p>
                 ) : !gitStatus.repo ? (
                   <div className="space-y-1 text-[12px]">
                     <p className="text-text-dim">This workspace is not a Git repository.</p>
@@ -998,7 +478,7 @@ export default React.memo(function TitleBar({
                     <div>
                       <div className="mb-1 text-[11px] font-semibold text-text-faint">Branches</div>
                       {gitLoading && gitBranches.length === 0 ? (
-                        <p className="text-text-dim">Loading branches…</p>
+                        <p className="text-text-dim">Loading branchesвЂ¦</p>
                       ) : gitBranches.length === 0 ? (
                         <p className="text-text-dim">No branches match.</p>
                       ) : (
@@ -1019,8 +499,8 @@ export default React.memo(function TitleBar({
                                   {branch.current && dirtyCount > 0 && (
                                     <span className="flex-none text-[10px] text-text-dim">Uncommitted: {dirtyCount} file{dirtyCount > 1 ? 's' : ''}</span>
                                   )}
-                                  {branch.current && <span className="flex-none text-[13px] text-text">✓</span>}
-                                  {busy && <span className="flex-none text-[10px] text-text-dim">…</span>}
+                                  {branch.current && <span className="flex-none text-[13px] text-text">вњ“</span>}
+                                  {busy && <span className="flex-none text-[10px] text-text-dim">вЂ¦</span>}
                                 </button>
                               </li>
                             )
@@ -1031,7 +511,7 @@ export default React.memo(function TitleBar({
                     <div>
                       <div className="mb-1 text-[11px] font-semibold text-text-faint">History</div>
                       {gitLoading && gitCommits.length === 0 ? (
-                        <p className="text-text-dim">Loading history…</p>
+                        <p className="text-text-dim">Loading historyвЂ¦</p>
                       ) : gitCommits.length === 0 ? (
                         <p className="text-text-dim">No commits match.</p>
                       ) : (
@@ -1050,8 +530,8 @@ export default React.memo(function TitleBar({
                                 >
                                   <span className="flex-none font-mono text-[10px] text-accent">{commit.short}</span>
                                   <span className="min-w-0 flex-1 truncate" title={commit.subject}>{commit.subject}</span>
-                                  {isHead && <span className="flex-none text-[13px] text-text">✓</span>}
-                                  {busy && <span className="flex-none text-[10px] text-text-dim">…</span>}
+                                  {isHead && <span className="flex-none text-[13px] text-text">вњ“</span>}
+                                  {busy && <span className="flex-none text-[10px] text-text-dim">вЂ¦</span>}
                                 </button>
                               </li>
                             )
@@ -1072,7 +552,7 @@ export default React.memo(function TitleBar({
                   >
                     <span className="flex-none text-[14px]">+</span>
                     <span className="truncate">
-                      {gitQuery.trim() ? `Create and checkout new branch “${gitQuery.trim()}”…` : 'Create and checkout new branch…'}
+                      {gitQuery.trim() ? `Create and checkout new branch вЂњ${gitQuery.trim()}вЂќвЂ¦` : 'Create and checkout new branchвЂ¦'}
                     </span>
                   </button>
                 </div>
@@ -1096,7 +576,7 @@ export default React.memo(function TitleBar({
                 QUIET whether or not the window is maximized, unlike the panel
                 toggles above. ON is the hover fill, so wearing it at rest made
                 this button look stuck under the cursor next to a plain
-                minimise and close — which is what it is, a window control, not
+                minimise and close вЂ” which is what it is, a window control, not
                 a toggle you read the state of. That state is already carried
                 three times over: the icon swaps, the label swaps, and
                 aria-pressed says it outright.
