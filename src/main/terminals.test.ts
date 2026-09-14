@@ -295,6 +295,62 @@ describe('TerminalManager', () => {
     }
   })
 
+  test('deliverLine accepts a matching pasted-content marker as delivery evidence', async () => {
+    const manager = new TerminalManager()
+    const term = manager.reserve()
+    const record = (manager as unknown as { terminals: Map<string, { pty: { write(data: string): void } | null }> }).terminals.get(term.id)!
+    record.pty = { write: () => {} }
+    const text = 'x'.repeat(1211)
+    try {
+      const delivery = manager.deliverLine(term.id, text, { timeoutMs: 1000 })
+      setTimeout(() => {
+        manager.appendOutput(term.id, '[Pasted Content 1211 chars]\r\n')
+        manager.emit('data', term.id, '[Pasted Content 1211 chars]\r\n')
+      }, 50)
+      assert.equal((await delivery).ok, true)
+    } finally {
+      manager.disposeAll()
+    }
+  })
+
+  test('deliverLine rejects a pasted-content marker with the wrong length', async () => {
+    const manager = new TerminalManager()
+    const term = manager.reserve()
+    const record = (manager as unknown as { terminals: Map<string, { pty: { write(data: string): void } | null }> }).terminals.get(term.id)!
+    record.pty = { write: () => {} }
+    try {
+      const delivery = manager.deliverLine(term.id, 'x'.repeat(1211), { timeoutMs: 300 })
+      setTimeout(() => {
+        manager.appendOutput(term.id, '[Pasted Content 1210 chars]\r\n')
+        manager.emit('data', term.id, '[Pasted Content 1210 chars]\r\n')
+      }, 50)
+      const result = await delivery
+      assert.equal(result.ok, false)
+      assert.match((result as { error: string }).error, /not sent/)
+    } finally {
+      manager.disposeAll()
+    }
+  })
+
+  test('deliverLine preserves multiline messages with bracketed paste markers', async () => {
+    const manager = new TerminalManager()
+    const term = manager.reserve()
+    const writes: string[] = []
+    const record = (manager as unknown as { terminals: Map<string, { pty: { write(data: string): void } | null }> }).terminals.get(term.id)!
+    record.pty = { write: (data: string) => writes.push(data) }
+    try {
+      const delivery = manager.deliverLine(term.id, 'first\nsecond', { pressEnter: false, timeoutMs: 1000 })
+      setTimeout(() => {
+        manager.appendOutput(term.id, 'first\r\nsecond\r\n')
+        manager.emit('data', term.id, 'first\r\nsecond\r\n')
+      }, 50)
+      assert.equal((await delivery).ok, true)
+      assert.deepEqual(writes, ['\x1b[200~first\nsecond\x1b[201~'])
+    } finally {
+      manager.disposeAll()
+    }
+  })
+
   test('delivery matching ignores ANSI paint and wrapped whitespace', () => {
     assert.equal(normalizeDeliveryText('\x1b[31mhello\x1b[0m\r\n world'), 'hello world')
   })

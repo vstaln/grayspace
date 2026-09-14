@@ -19,6 +19,7 @@ import {
 import { setupKeyboardShortcuts, setupTerminalEvents } from './terminalEvents.ts'
 import { setupLifecycle } from './appLifecycle.ts'
 import { startControlServer } from './controlServer'
+import { controlTcpEnabled } from './config.ts'
 import { captureScreen } from './screenshot.ts'
 import { ensureOrcExecutable } from './orcCli.ts'
 import { syncOrcGuide } from './orchestration/guide.ts'
@@ -78,7 +79,8 @@ function applyWorkspaceDir(dir: string | undefined): void {
   const codeWorkspace = state.codeWorkspaceState(dir)
   code.setWorkspaceScope(
     state.activeCodeWorkspaceScope(dir),
-    codeWorkspace.activeId === codeWorkspace.workspaces[0]?.id ? dir : undefined
+    codeWorkspace.activeId === codeWorkspace.workspaces[0]?.id ? dir : undefined,
+    dir
   )
   if (dir) syncAgentConfigsFor(dir)
   send('workspace:onDirChange', dir ?? null)
@@ -200,6 +202,7 @@ app.whenReady().then(() => {
   })
 
   controlServer = startControlServer({
+    allowTcp: controlTcpEnabled(app.isPackaged),
     core,
     terminals,
     planner,

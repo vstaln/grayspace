@@ -374,7 +374,7 @@ export default function PlannerWidget(): React.JSX.Element {
           )}
         </div>
         <div
-          className="flex-none rounded-full border border-line-soft bg-bg-hover/40 px-2 py-0.5 text-[11px] tabular-nums text-text-dim"
+          className="flex-none rounded-pill border border-line-soft bg-bg-hover/40 px-2 py-0.5 text-[11px] tabular-nums text-text-dim"
           title={`${doneCount} completed out of ${totalCount}`}
         >
           {doneCount} of {totalCount}
@@ -390,7 +390,7 @@ export default function PlannerWidget(): React.JSX.Element {
             </div>
             <button
               type="button"
-              className={`rounded-[8px] px-1.5 py-1 text-left text-[11px] transition-colors ${
+              className={`rounded-panel px-1.5 py-1 text-left text-[11px] transition-colors ${
                 !projectFilter ? 'bg-bg-hover text-text' : 'text-text-dim hover:bg-bg-hover/60 hover:text-text'
               }`}
               onClick={() => setProjectFilter(null)}
@@ -404,7 +404,7 @@ export default function PlannerWidget(): React.JSX.Element {
                   key={p}
                   type="button"
                   title={p}
-                  className={`flex items-center gap-1 rounded-[8px] px-1.5 py-1 text-left text-[11px] transition-colors ${
+                  className={`flex items-center gap-1 rounded-panel px-1.5 py-1 text-left text-[11px] transition-colors ${
                     projectFilter === p
                       ? 'bg-bg-hover text-text'
                       : 'text-text-dim hover:bg-bg-hover/60 hover:text-text'
@@ -426,7 +426,7 @@ export default function PlannerWidget(): React.JSX.Element {
           {projects.length > 0 && (
             <div className="flex-none px-3 pt-2 min-[380px]:hidden">
               <select
-                className="w-full rounded-[8px] border border-line-soft bg-transparent px-2 py-1 text-[11px] text-text-dim outline-none focus:border-line"
+                className="w-full rounded-panel border border-line-soft bg-transparent px-2 py-1 text-[11px] text-text-dim outline-none focus:border-line"
                 value={projectFilter ?? ''}
                 onChange={(e) => setProjectFilter(e.target.value || null)}
                 aria-label="Filter by project"
@@ -462,7 +462,7 @@ export default function PlannerWidget(): React.JSX.Element {
                 role="tab"
                 type="button"
                 aria-selected={scope === s.id}
-                className={`rounded-full px-2.5 py-1 text-[11px] transition-colors duration-150 ${
+                className={`rounded-pill px-2.5 py-1 text-[11px] transition-colors duration-150 ${
                   scope === s.id
                     ? 'bg-bg-hover text-text'
                     : 'text-text-faint hover:bg-bg-hover/50 hover:text-text-dim'
@@ -482,7 +482,7 @@ export default function PlannerWidget(): React.JSX.Element {
             }}
             onDrop={(e) => void handleCreateDrop(e)}
           >
-            <div className="flex items-center gap-1.5 rounded-[12px] bg-bg-hover/20 px-2.5 py-1.5">
+            <div className="flex items-center gap-1.5 rounded-panel bg-bg-hover/20 px-2.5 py-1.5">
               <Plus size={14} className="flex-none text-text-faint" aria-hidden />
               <input
                 className="min-w-0 flex-1 bg-transparent px-px text-[12px] text-text outline-none placeholder:text-text-faint"
@@ -506,7 +506,7 @@ export default function PlannerWidget(): React.JSX.Element {
               />
               <button
                 type="button"
-                className="grid h-7 w-7 flex-none place-items-center rounded-[8px] text-text-faint transition-colors hover:bg-bg-hover hover:text-text disabled:opacity-30"
+                className="grid h-7 w-7 flex-none place-items-center rounded-pill text-text-faint transition-colors hover:bg-bg-hover hover:text-text disabled:opacity-30"
                 disabled={creating || createAttachBusy}
                 title="Attach photo"
                 aria-label="Attach photo to new task"
@@ -516,7 +516,7 @@ export default function PlannerWidget(): React.JSX.Element {
               </button>
               <button
                 type="button"
-                className="flex h-6 flex-none items-center rounded-[8px] bg-accent px-2.5 text-[11px] font-semibold text-bg transition-opacity hover:opacity-90 disabled:opacity-30"
+                className="flex h-6 flex-none items-center rounded-panel bg-accent px-2.5 text-[11px] font-semibold text-bg transition-opacity hover:opacity-90 disabled:opacity-30"
                 disabled={creating || createAttachBusy || !title.trim()}
                 title="Add"
                 aria-label="Add item"
@@ -534,7 +534,7 @@ export default function PlannerWidget(): React.JSX.Element {
             )}
             {!projectFilter && (
               <input
-                className="rounded-[10px] border border-line-soft bg-transparent px-2.5 py-1 text-[11px] text-text-dim outline-none placeholder:text-text-faint focus:border-line"
+                className="rounded-panel border border-line-soft bg-transparent px-2.5 py-1 text-[11px] text-text-dim outline-none placeholder:text-text-faint focus:border-line"
                 placeholder="Project (optional)"
                 value={project}
                 disabled={creating}
@@ -553,7 +553,7 @@ export default function PlannerWidget(): React.JSX.Element {
                   type="button"
                   onClick={() => setError(null)}
                   aria-label="Dismiss error"
-                  className="flex-none rounded px-1 leading-none hover:opacity-70"
+                  className="flex-none rounded-panel px-1 leading-none hover:opacity-70"
                 >
                   ×
                 </button>
@@ -569,7 +569,7 @@ export default function PlannerWidget(): React.JSX.Element {
             {loading ? (
               <div className="flex flex-col gap-2 px-1 pt-4" role="status" aria-label="Loading tasks">
                 {[0, 1, 2].map((i) => (
-                  <div key={i} className="h-10 animate-pulse rounded-[12px] bg-bg-hover/60" />
+                  <div key={i} className="h-10 animate-pulse rounded-panel bg-bg-hover/60" />
                 ))}
               </div>
             ) : scoped.length === 0 ? (
@@ -643,12 +643,12 @@ function CreateAttachmentsPreview({
   }, [key])
 
   return (
-    <div className="flex flex-wrap gap-1.5 rounded-[10px] border border-dashed border-line-soft bg-bg-hover/20 px-2 py-2">
+    <div className="flex flex-wrap gap-1.5 rounded-panel border border-dashed border-line-soft bg-bg-hover/20 px-2 py-2">
       {paths.map((path, idx) => {
         const url = urls[path]
         const loaded = Object.prototype.hasOwnProperty.call(urls, path)
         return (
-          <div key={`${path}-${idx}`} className="group relative h-16 w-20 overflow-hidden rounded-[8px] border border-line-soft bg-bg-hover">
+          <div key={`${path}-${idx}`} className="group relative h-16 w-20 overflow-hidden rounded-panel border border-line-soft bg-bg-hover">
             {!loaded ? (
               <span className="grid h-full w-full place-items-center text-text-faint">
                 <Loader size={14} className="animate-spin" />
@@ -662,7 +662,7 @@ function CreateAttachmentsPreview({
             )}
             <button
               type="button"
-              className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-bg-panel text-text opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100 hover:bg-bg-raise"
+              className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-pill bg-bg-panel text-text opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100 hover:bg-bg-raise"
               title="Remove"
               aria-label="Remove attachment"
               onClick={() => onRemove(idx)}
@@ -673,7 +673,7 @@ function CreateAttachmentsPreview({
         )
       })}
       {busy && (
-        <span className="grid h-16 w-20 place-items-center rounded-[8px] border border-line-soft bg-bg-hover text-text-faint">
+        <span className="grid h-16 w-20 place-items-center rounded-panel border border-line-soft bg-bg-hover text-text-faint">
           <Loader size={14} className="animate-spin" />
         </span>
       )}
@@ -709,7 +709,7 @@ function PlanRow({
 
   return (
     <li
-      className={`group flex flex-col gap-1 rounded-[12px] px-2 py-2 transition-colors focus-within:bg-bg-hover/40 ${dragOver ? 'bg-accent/10 ring-1 ring-accent/30' : 'hover:bg-bg-hover/40'}`}
+      className={`group flex flex-col gap-1 rounded-panel px-2 py-2 transition-colors focus-within:bg-bg-hover/40 ${dragOver ? 'bg-accent/10 ring-1 ring-accent/30' : 'hover:bg-bg-hover/40'}`}
       onDragOver={(e) => {
         if (Array.from(e.dataTransfer.types).includes('Files')) {
           e.preventDefault()
@@ -735,7 +735,7 @@ function PlanRow({
       <div className="flex items-start gap-2.5">
         <button
           type="button"
-          className={`mt-0.5 grid h-[18px] w-[18px] flex-none place-items-center rounded-full border transition-colors duration-150 ${
+          className={`mt-0.5 grid h-[18px] w-[18px] flex-none place-items-center rounded-pill border transition-colors duration-150 ${
             item.done
               ? 'border-ok bg-ok/20 text-ok'
               : 'border-line text-transparent hover:border-ok hover:text-ok/70'
@@ -772,7 +772,7 @@ function PlanRow({
                   ariaLabel={`Schedule date for ${item.title}`}
                   disabled={pending}
                   formatValue={formatDayShort}
-                  className="-mx-1 flex h-auto flex-none items-center gap-1 rounded-[6px] border border-transparent px-1 py-0 text-[10px] tabular-nums text-text-faint transition-colors hover:border-line-soft hover:text-text-dim"
+                  className="-mx-1 flex h-auto flex-none items-center gap-1 rounded-panel border border-transparent px-1 py-0 text-[10px] tabular-nums text-text-faint transition-colors hover:border-line-soft hover:text-text-dim"
                 />
               )}
               {item.time && <span className="tabular-nums">{item.time}</span>}
@@ -796,7 +796,7 @@ function PlanRow({
         <div className="mt-0.5 flex flex-none items-center gap-0.5">
           <button
             type="button"
-            className="grid h-7 w-7 place-items-center rounded-[8px] text-text-faint/70 transition-colors hover:bg-bg-hover hover:text-text disabled:opacity-30"
+            className="grid h-7 w-7 place-items-center rounded-pill text-text-faint/70 transition-colors hover:bg-bg-hover hover:text-text disabled:opacity-30"
             title={item.attachments?.length ? `Add photo (${item.attachments.length}/12)` : 'Attach photo'}
             aria-label="Attach photo"
             disabled={pending}
@@ -807,7 +807,7 @@ function PlanRow({
 
           <button
             type="button"
-            className="grid h-7 w-7 place-items-center rounded-[8px] text-text-faint/70 transition-colors hover:bg-bg-hover hover:text-text group-hover:text-text-faint group-focus-within:text-text-faint hover:!text-danger disabled:opacity-30"
+            className="grid h-7 w-7 place-items-center rounded-pill text-text-faint/70 transition-colors hover:bg-bg-hover hover:text-text group-hover:text-text-faint group-focus-within:text-text-faint hover:!text-danger disabled:opacity-30"
             title="Delete"
             aria-label="Delete item"
             disabled={pending}
@@ -823,7 +823,7 @@ function PlanRow({
       )}
 
       {dragOver && (
-        <div className="ml-[28px] flex items-center gap-1.5 rounded-[8px] border border-dashed border-accent/40 bg-accent/10 px-2 py-1 text-[10px] text-accent">
+        <div className="ml-[28px] flex items-center gap-1.5 rounded-panel border border-dashed border-accent/40 bg-accent/10 px-2 py-1 text-[10px] text-accent">
           <ImagePlus size={12} /> Drop image to attach
         </div>
       )}
@@ -870,7 +870,7 @@ function PlanAttachments({
         return (
           <div
             key={`${path}-${idx}`}
-            className="group/thumb relative h-16 w-20 overflow-hidden rounded-[8px] border border-line-soft bg-bg-hover"
+            className="group/thumb relative h-16 w-20 overflow-hidden rounded-panel border border-line-soft bg-bg-hover"
             title={path}
           >
             {!loaded ? (
@@ -888,7 +888,7 @@ function PlanAttachments({
             )}
             <button
               type="button"
-              className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-bg-panel text-text opacity-0 transition-opacity group-hover/thumb:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100 hover:bg-bg-raise disabled:opacity-50"
+              className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-pill bg-bg-panel text-text opacity-0 transition-opacity group-hover/thumb:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100 hover:bg-bg-raise disabled:opacity-50"
               title="Remove photo"
               aria-label="Remove photo"
               disabled={pending}

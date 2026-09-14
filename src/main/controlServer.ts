@@ -104,6 +104,7 @@ interface ControlDeps {
   defaultCwd(): string | undefined
 
   port?: number
+  allowTcp?: boolean
 
   socketPath?: string
 
@@ -229,12 +230,12 @@ export function startControlServer(deps: ControlDeps): http.Server {
   })
 
 
-  const shouldListenTcp = deps.port !== undefined || Boolean(process.env.WORKSPACE_CONTROL_PORT)
-  if (!shouldListenTcp) {
+  setActiveControlPort(0)
+  if (deps.allowTcp !== true) {
     return pipeServer
   }
 
-  const tcpPort = deps.port ?? (Number(process.env.WORKSPACE_CONTROL_PORT) || CONTROL_PORT)
+  const tcpPort = deps.port ?? CONTROL_PORT
   let activePort = tcpPort
   let fallbackPortAttempted = false
   const tcpServer = http.createServer(handleRequest)
@@ -261,12 +262,15 @@ export function startControlServer(deps: ControlDeps): http.Server {
   })
 
   tcpServer.listen(tcpPort, '127.0.0.1', () => {
-    setActiveControlPort(tcpPort)
-    console.log(`control server listening on http://127.0.0.1:${tcpPort}`)
-    deps.onPortAssigned?.(tcpPort)
+    const address = tcpServer.address()
+    const assigned = typeof address === 'object' && address ? address.port : 0
+    setActiveControlPort(assigned)
+    console.log(`control server listening on http://127.0.0.1:${assigned}`)
+    deps.onPortAssigned?.(assigned)
   })
 
   const originalClose = tcpServer.close.bind(tcpServer)
+  tcpServer.once('close', () => setActiveControlPort(0))
   tcpServer.close = (cb?: (err?: Error) => void) => {
     try {
       pipeServer.close()
@@ -437,7 +441,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       app: 'orcspace',
       server: 'orcspace-control',
       version: APP_VERSION,
-      controlPort: getActiveControlPort(),
+      ...(getActiveControlPort() ? { controlPort: getActiveControlPort() } : {}),
       workspaceDir: deps.defaultCwd() ?? null,
       terminals: terminals.list().length,
       commands: core.flow.types()

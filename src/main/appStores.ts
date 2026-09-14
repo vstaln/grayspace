@@ -48,7 +48,8 @@ export function createAppStores(): AppStores {
   const initialCodeWorkspace = state.codeWorkspaceState()
   code.setWorkspaceScope(
     state.activeCodeWorkspaceScope(),
-    initialCodeWorkspace.activeId === initialCodeWorkspace.workspaces[0]?.id ? state.workspaceDir : undefined
+    initialCodeWorkspace.activeId === initialCodeWorkspace.workspaces[0]?.id ? state.workspaceDir : undefined,
+    state.workspaceDir
   )
   const planner = new PlannerStore()
   const orchestration = new OrchestrationStore()

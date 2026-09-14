@@ -6,6 +6,11 @@ import { readStoreJson, sweepTempFiles, writeJsonAtomic } from './storage.ts'
 import { normalizeTerminalNameList } from './terminalNames.ts'
 import { getUserDataDir } from './userData.ts'
 import { notifyCanvasWorkspaceChanged } from './canvasState.ts'
+import {
+  readFolderWorkspaces,
+  removeFolderSessions,
+  writeFolderWorkspaces
+} from './workspaceFolderStore.ts'
 
 const safeStorage = (electron as unknown as { safeStorage?: typeof electron.safeStorage }).safeStorage
 
@@ -216,9 +221,15 @@ export class AppState extends EventEmitter {
   codeWorkspaceState(folder = this.workspaceDir): CodeWorkspaceState {
     this.ensure()
     const key = codeFolderKey(folder)
+    this.adoptFolderWorkspaces(folder, key)
     const previousGroup = this.state.codeWorkspaceGroups[key]
     const previousActive = this.state.activeCodeWorkspaceIds[key]
     const workspaces = this.ensureCodeWorkspaceGroup(key)
+    // Only the folder actually open gets a store seeded into it. The recent
+    // list asks this for every folder it shows, and creating a directory
+    // inside each of them would scatter `.orcspace-workspaces` across projects
+    // the user has not opened in this session.
+    if (folder && key === codeFolderKey(this.state.workspaceDir)) this.persistFolderWorkspaces(folder, key)
     if (previousGroup !== workspaces || previousActive !== this.state.activeCodeWorkspaceIds[key]) this.commitSoon()
     return { workspaces: workspaces.slice(), activeId: this.state.activeCodeWorkspaceIds[key], folder: folder ?? null }
   }
@@ -231,6 +242,7 @@ export class AppState extends EventEmitter {
   createCodeWorkspace(folder: string | undefined, rawName?: string): CodeWorkspace | { error: string } {
     this.ensure()
     const key = codeFolderKey(folder)
+    this.adoptFolderWorkspaces(folder, key)
     const workspaces = this.ensureCodeWorkspaceGroup(key)
     const name = (typeof rawName === 'string' ? rawName.trim() : '') || this.nextCodeWorkspaceName(workspaces)
     const validation = validateWorkspaceName(name)
@@ -242,11 +254,13 @@ export class AppState extends EventEmitter {
     workspaces.push(workspace)
     this.state.activeCodeWorkspaceIds[key] = workspace.id
     this.commit()
+    this.persistFolderWorkspaces(folder, key, true)
     return workspace
   }
 
   renameCodeWorkspace(folder: string | undefined, id: string, rawName: string): CodeWorkspaceState | { error: string } {
     this.ensure()
+    this.adoptFolderWorkspaces(folder, codeFolderKey(folder))
     const workspaces = this.ensureCodeWorkspaceGroup(codeFolderKey(folder))
     const name = rawName.trim()
     const validation = validateWorkspaceName(name)
@@ -258,19 +272,26 @@ export class AppState extends EventEmitter {
     }
     workspace.name = name
     this.commit()
+    this.persistFolderWorkspaces(folder, codeFolderKey(folder), true)
     return this.codeWorkspaceState(folder)
   }
 
   deleteCodeWorkspace(folder: string | undefined, id: string): CodeWorkspaceState | { error: string } {
     this.ensure()
     const key = codeFolderKey(folder)
+    this.adoptFolderWorkspaces(folder, key)
     const workspaces = this.ensureCodeWorkspaceGroup(key)
     const index = workspaces.findIndex((item) => item.id === id)
     if (index === -1) return { error: 'Workspace not found.' }
+    const removed = workspaces[index]
     if (workspaces.length === 1) {
       delete this.state.codeWorkspaceGroups[key]
       delete this.state.activeCodeWorkspaceIds[key]
       this.commit()
+      removeFolderSessions(folder, removed.id)
+      // The folder keeps no workspaces of its own any more; leaving the file
+      // behind would resurrect them the next time it is opened.
+      this.persistFolderWorkspaces(folder, key, true)
       return { workspaces: [], activeId: '', folder: folder ?? null }
     }
     workspaces.splice(index, 1)
@@ -278,16 +299,20 @@ export class AppState extends EventEmitter {
       this.state.activeCodeWorkspaceIds[key] = workspaces[Math.max(0, index - 1)].id
     }
     this.commit()
+    removeFolderSessions(folder, removed.id)
+    this.persistFolderWorkspaces(folder, key, true)
     return this.codeWorkspaceState(folder)
   }
 
   setActiveCodeWorkspace(folder: string | undefined, id: string): CodeWorkspaceState | { error: string } {
     this.ensure()
     const key = codeFolderKey(folder)
+    this.adoptFolderWorkspaces(folder, key)
     if (!this.ensureCodeWorkspaceGroup(key).some((workspace) => workspace.id === id)) return { error: 'Workspace not found.' }
     if (this.state.activeCodeWorkspaceIds[key] === id) return this.codeWorkspaceState(folder)
     this.state.activeCodeWorkspaceIds[key] = id
     this.commit()
+    this.persistFolderWorkspaces(folder, key, true)
     return this.codeWorkspaceState(folder)
   }
 
@@ -607,6 +632,10 @@ export class AppState extends EventEmitter {
 
   private commitTimer: ReturnType<typeof setTimeout> | null = null
 
+  /** Folders whose own store has already been read, and written, this session. */
+  private folderWorkspacesRead = new Set<string>()
+  private folderWorkspacesWritten = new Set<string>()
+
   private commit(): void {
     if (this.commitTimer !== null) {
       clearTimeout(this.commitTimer)
@@ -654,6 +683,35 @@ export class AppState extends EventEmitter {
     let index = 1
     while (names.has(`workspace ${index}`)) index += 1
     return `Workspace ${index}`
+  }
+
+  /**
+   * What the folder itself records wins over what this machine remembered for
+   * it: the folder may have been moved here, restored from a backup, or last
+   * used by another install. Read once per folder per session — the app is the
+   * only writer while it runs, so re-reading on every call would buy nothing.
+   */
+  private adoptFolderWorkspaces(folder: string | undefined, key: string): void {
+    if (!folder || this.folderWorkspacesRead.has(key)) return
+    this.folderWorkspacesRead.add(key)
+    const carried = readFolderWorkspaces(folder)
+    if (!carried) return
+    this.state.codeWorkspaceGroups[key] = carried.workspaces.map((workspace) => ({ ...workspace }))
+    this.state.activeCodeWorkspaceIds[key] = carried.activeId
+    this.commitSoon()
+  }
+
+  /**
+   * Mirrors a folder's workspaces back into it. `force` is for a change the
+   * user just made; without it this only seeds a folder that carries nothing
+   * yet, which is what migrates workspaces that predate the folder store.
+   */
+  private persistFolderWorkspaces(folder: string | undefined, key: string, force = false): void {
+    if (!folder) return
+    if (!force && this.folderWorkspacesWritten.has(key)) return
+    const workspaces = this.state.codeWorkspaceGroups[key] ?? []
+    const activeId = this.state.activeCodeWorkspaceIds[key] ?? workspaces[0]?.id ?? ''
+    if (writeFolderWorkspaces(folder, workspaces, activeId)) this.folderWorkspacesWritten.add(key)
   }
 
   private ensureCodeWorkspaceGroup(key: string): CodeWorkspace[] {

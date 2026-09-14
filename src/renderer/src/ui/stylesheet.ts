@@ -74,7 +74,7 @@ const baseLayer: Sheet = {
   },
   '::-webkit-scrollbar-thumb': {
     background: palette.scrollThumb,
-    borderRadius: '6px',
+    borderRadius: geometry.radiusPill,
     backgroundClip: 'padding-box',
     border: '2px solid transparent'
   },
@@ -122,6 +122,8 @@ const controlSheet: Sheet = {
     display: 'inline-grid',
     placeItems: 'center',
     border: `1px solid ${monochrome.raised}`,
+    // Deliberately not radiusPanel: a 12px corner on a 16px box is a circle,
+    // which would make every checkbox read as a radio button.
     borderRadius: '4px',
     backgroundColor: monochrome.surface,
     colorScheme: 'dark',
@@ -167,7 +169,7 @@ const controlSheet: Sheet = {
     marginRight: '8px',
     padding: '6px 12px',
     border: `1px solid ${monochrome.raised}`,
-    borderRadius: '8px',
+    borderRadius: geometry.radiusPanel,
     color: palette.white,
     background: monochrome.raised,
     cursor: 'pointer'
@@ -533,14 +535,6 @@ const componentsLayer: Sheet = {
     },
     '& .xterm-rows > div': {
       overflow: 'visible !important'
-    },
-    '& [data-ghost-cursor]': {
-      backgroundColor: 'transparent !important',
-      outline: 'none !important',
-      boxShadow: 'none !important',
-      border: 'none !important',
-      animation: 'none !important',
-      opacity: '0 !important'
     }
   },
 
@@ -600,7 +594,12 @@ export const appStylesheet: Sheet = {
 
 
 
-  ':focus-visible': { outline: '1px solid rgba(169,171,176,0.38)', outlineOffset: '1px', borderRadius: '10px' },
+  // No borderRadius here. This rule matches *any* focused element, so setting
+  // one reshaped whatever it landed on: a pill button squared off to a
+  // rectangle the moment it took keyboard focus, and the canvas <main> grew
+  // rounded corners. Chromium draws `outline` along the element's own
+  // border-radius, so the ring hugs the real shape without being told.
+  ':focus-visible': { outline: '1px solid rgba(169,171,176,0.38)', outlineOffset: '1px' },
 
 
 

@@ -625,6 +625,7 @@ export class CommandFlow extends EventEmitter {
     const primaryActorId = options?.actorId ?? commands[0].actorId
     const detailedResults: CommandResult[] = []
     const dataResults: unknown[] = []
+    const rollbackStack: Array<() => void | Promise<void>> = []
 
     try {
       if (signal?.aborted) throw new CommandError('cancelled', 'transaction cancelled before execution')
@@ -702,10 +703,21 @@ export class CommandFlow extends EventEmitter {
           currentVersion: number
           overlayId?: string
           signal?: AbortSignal
+          rollback: (undo: () => void | Promise<void>) => void
           unblock: () => void
         }) => unknown
 
-        const data = await apply({ command: cmd, actor, currentVersion, overlayId, signal, unblock: () => {} })
+        const data = await apply({
+          command: cmd,
+          actor,
+          currentVersion,
+          overlayId,
+          signal,
+          rollback: (undo) => {
+            if (typeof undo === 'function') rollbackStack.push(undo)
+          },
+          unblock: () => {}
+        })
         const version = this.resolveResultVersion(cmd.target, overlayId, data, currentVersion)
 
         const cmdRes: CommandResult = { ok: true, seq: this.journal.lastSeq + 1, version, data }
@@ -757,6 +769,15 @@ export class CommandFlow extends EventEmitter {
       return txResult
     } catch (err) {
       const error = err instanceof CommandError ? err : new CommandError('failed', String(err))
+      for (let i = rollbackStack.length - 1; i >= 0; i -= 1) {
+        try {
+          await rollbackStack[i]()
+        } catch (rollbackError) {
+          // Preserve the original transaction failure while making a broken
+          // compensator visible to diagnostics.
+          console.error('flow.transact rollback failed', rollbackError)
+        }
+      }
       if (intentWritten) {
         const abortEntry = {
           phase: 'abort' as const,
@@ -850,10 +871,11 @@ export class CommandFlow extends EventEmitter {
         currentVersion: number
         overlayId?: string
         signal?: AbortSignal
+        rollback: (undo: () => void | Promise<void>) => void
         unblock: () => void
       }) => unknown
 
-      const data = (await apply({ command: cmd, actor, currentVersion, overlayId, signal, unblock })) as T
+      const data = (await apply({ command: cmd, actor, currentVersion, overlayId, signal, rollback: () => {}, unblock })) as T
       const version = this.resolveResultVersion(cmd.target, overlayId, data, currentVersion)
 
       let commitSeq = this.journal.lastSeq + 1

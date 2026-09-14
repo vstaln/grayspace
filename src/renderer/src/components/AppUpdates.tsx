@@ -102,12 +102,14 @@ export function AppUpdates(): React.JSX.Element {
   const disabled = busy || !state || !status || ['disabled', 'checking', 'downloading', 'installing'].includes(status)
   return <section className="flex flex-col gap-2.5 border-t border-line pt-5" aria-label="App updates">
     <div className="flex items-center justify-between gap-2">
-      <h3 className="text-xs font-medium text-text">Updates</h3>
-      {state && <span className="rounded-full border border-line-soft bg-bg-hover px-2 py-0.5 text-[10px] font-medium text-text-faint">{state.currentVersion}</span>}
+      {/* Same section heading as every other block in Settings: 11px,
+          uppercase, 0.08em. It was the one heading in sentence case. */}
+      <h3 className="text-[11px] font-medium tracking-[0.08em] text-text-faint uppercase">Updates</h3>
+      {state && <span className="rounded-pill border border-line-soft bg-bg-hover px-2 py-0.5 text-[10px] font-medium text-text-faint">{state.currentVersion}</span>}
     </div>
-    <div className="flex flex-col gap-3 overflow-hidden rounded-[14px] border border-line-soft bg-bg-raise p-3.5">
+    <div className="flex flex-col gap-3 overflow-hidden rounded-panel border border-line-soft bg-bg-raise p-3.5">
       <div className="flex items-start gap-2.5">
-        <span className={`grid h-8 w-8 flex-none place-items-center rounded-[10px] border ${TONE_CLASS[tone]}`}>{icon}</span>
+        <span className={`grid h-8 w-8 flex-none place-items-center rounded-pill border ${TONE_CLASS[tone]}`}>{icon}</span>
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <p className="truncate text-[11.5px] font-medium text-text">{headline}</p>
           {detail && <p role="status" aria-live="polite" className="text-[11px] leading-relaxed text-text-faint">{detail}</p>}
@@ -116,12 +118,12 @@ export function AppUpdates(): React.JSX.Element {
       </div>
       {status === 'downloading' && (
         <div role="progressbar" aria-label="Update download" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}
-          className="h-1.5 w-full overflow-hidden rounded-full bg-bg-hover">
-          <div className="h-full rounded-full bg-accent transition-[width] duration-300 ease-out" style={{ width: `${percent}%` }} />
+          className="h-1.5 w-full overflow-hidden rounded-pill bg-bg-hover">
+          <div className="h-full rounded-pill bg-accent transition-[width] duration-300 ease-out" style={{ width: `${percent}%` }} />
         </div>
       )}
       <button type="button"
-        className={`flex min-h-[34px] items-center justify-center gap-1.5 self-start rounded-[10px] px-3.5 py-1.5 text-xs font-medium transition-colors duration-150 disabled:cursor-default disabled:opacity-40 ${
+        className={`flex min-h-[34px] items-center justify-center gap-1.5 self-start rounded-panel px-3.5 py-1.5 text-xs font-medium transition-colors duration-150 disabled:cursor-default disabled:opacity-40 ${
           status === 'ready' ? 'bg-accent text-bg hover:opacity-90' : 'border border-line-soft text-text hover:bg-bg-hover'
         }`}
         disabled={disabled}

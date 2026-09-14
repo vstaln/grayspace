@@ -4,6 +4,8 @@ import TerminalWidget, { forgetTerminalViewport } from './TerminalWidget'
 import BrowserWidget from './BrowserWidget'
 import CodeLauncher, { CODE_AGENTS, CODE_LAUNCH_COUNTS, MAX_CODE_SESSIONS, CodeAgent } from './CodeLauncher'
 import ResumeAgents from './ResumeAgents'
+import RestoreSessionsDialog from './RestoreSessionsDialog'
+import { needsRestorePrompt, splitRestore } from '../lib/restorePrompt'
 import { upgradeSessionsToResume, type AgentConversation } from '../lib/agentConversations'
 import { clearInitialCommand, queueInitialCommand, queueInitialCommandOnce } from '../lib/pendingTerminalCommands'
 import { forgetAgentSelection } from './WidgetFrame'
@@ -154,10 +156,10 @@ const SessionCard = React.memo(function SessionCard({
     <div
       data-testid="code-session"
       data-session-agent={session.agent.id}
-      className={`flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[6px] border border-[#121212] transition-[opacity,box-shadow] ${
+      className={`flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-panel border border-bg-raise transition-[opacity,box-shadow] ${
         isBrowserSession(session) ? 'bg-bg-panel' : 'code-terminal-shell'
       } ${
-        maximized ? 'absolute inset-0 z-20 rounded-none' : ''
+        maximized ? 'absolute inset-0 z-20 rounded-bar' : ''
       } ${dragging ? 'opacity-45' : ''} ${dropTarget ? 'ring-2 ring-accent ring-inset' : ''}`}
       style={style}
       onDragOver={(e) => {
@@ -219,7 +221,7 @@ const SessionCard = React.memo(function SessionCard({
           </span>
           {editing ? (
             <input
-              className="h-[20px] min-w-0 flex-1 appearance-none rounded bg-bg-raise px-1.5 text-[11px] text-text outline-none ring-1 ring-line focus:outline-none"
+              className="h-[20px] min-w-0 flex-1 appearance-none rounded-panel bg-bg-raise px-1.5 text-[11px] text-text outline-none ring-1 ring-line focus:outline-none"
               autoFocus
               defaultValue={displayTitle}
               onClick={(e) => e.stopPropagation()}
@@ -271,7 +273,7 @@ const SessionCard = React.memo(function SessionCard({
                     }, 1200)
                   })
                 }}
-                className="grid h-4 w-4 flex-none place-items-center rounded-[3px] text-text-faint opacity-0 transition-[opacity,color,background-color] group-hover/title:opacity-100 hover:bg-bg-hover hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+                className="grid h-4 w-4 flex-none place-items-center rounded-pill text-text-faint opacity-0 transition-[opacity,color,background-color] group-hover/title:opacity-100 hover:bg-bg-hover hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
               >
                 {nameCopied ? <Check size={10} /> : <Copy size={10} />}
               </button>}
@@ -281,10 +283,10 @@ const SessionCard = React.memo(function SessionCard({
         <div className="flex flex-none items-center gap-0.5">
           {session.status === 'finished' && (
             <span
-              className="flex flex-none items-center gap-1 rounded-full border border-line-soft bg-bg-raise px-1.5 py-px text-[10px] text-text-faint"
+              className="flex flex-none items-center gap-1 rounded-pill border border-line-soft bg-bg-raise px-1.5 py-px text-[10px] text-text-faint"
               title="Process exited"
             >
-              <span className="h-1.5 w-1.5 rounded-full bg-text-faint" />
+              <span className="h-1.5 w-1.5 rounded-pill bg-text-faint" />
               Finished
             </span>
           )}
@@ -296,7 +298,7 @@ const SessionCard = React.memo(function SessionCard({
               e.stopPropagation()
               onOpenLauncher(e.currentTarget)
             }}
-            className="grid h-[18px] w-[18px] place-items-center rounded-[4px] text-text-faint transition-colors hover:bg-accent/15 hover:text-text"
+            className="grid h-[18px] w-[18px] place-items-center rounded-pill text-text-faint transition-colors hover:bg-accent/15 hover:text-text"
           >
             <Plus size={12} strokeWidth={2.5} />
           </button>
@@ -309,7 +311,7 @@ const SessionCard = React.memo(function SessionCard({
               e.stopPropagation()
               onToggleMaximize()
             }}
-            className={`grid h-[18px] w-[18px] place-items-center rounded-[4px] transition-colors ${maximized ? 'bg-bg-hover text-white' : 'text-text-faint hover:bg-bg-hover hover:text-text'}`}
+            className={`grid h-[18px] w-[18px] place-items-center rounded-panel transition-colors ${maximized ? 'bg-bg-hover text-white' : 'text-text-faint hover:bg-bg-hover hover:text-text'}`}
           >
             {maximized ? <Minimize2 size={10} strokeWidth={2.4} /> : <Maximize2 size={10} strokeWidth={2.4} />}
           </button>
@@ -321,13 +323,13 @@ const SessionCard = React.memo(function SessionCard({
               e.stopPropagation()
               onClose()
             }}
-            className="grid h-[18px] w-[18px] place-items-center rounded-[4px] text-text-faint transition-colors hover:bg-bg-hover hover:text-text"
+            className="grid h-[18px] w-[18px] place-items-center rounded-pill text-text-faint transition-colors hover:bg-bg-hover hover:text-text"
           >
             <X size={11} strokeWidth={2.4} />
           </button>
         </div>
       </div>
-      <div className="min-h-0 flex-1 bg-[#080808]">
+      <div className="min-h-0 flex-1 bg-bg">
         {isBrowserSession(session)
           ? <BrowserWidget onFullscreenChange={onFullscreenChange} />
           : <TerminalWidget id={session.id} surface="code" attachmentMode agentId={terminalAgentId(session)} onProcessExit={onProcessExit} />}
@@ -338,6 +340,16 @@ const SessionCard = React.memo(function SessionCard({
 
 export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX.Element {
   const [sessions, setSessions] = useState<Session[]>([])
+  /**
+   * A saved board waiting to be answered for: which of these terminals should
+   * come back. Held out of `sessions` so nothing mounts, and no CLI starts,
+   * until the user has said.
+   */
+  const [pendingRestore, setPendingRestore] = useState<
+    { sessions: Session[]; featuredId: string | null; maximizedId: string | null } | null
+  >(null)
+  const pendingRestoreRef = useRef(pendingRestore)
+  pendingRestoreRef.current = pendingRestore
   const sessionsRef = useRef<Session[]>(sessions)
   sessionsRef.current = sessions
   const [launcherOpen, setLauncherOpen] = useState(false)
@@ -534,6 +546,46 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
     }
   }, [])
 
+  /** Workspaces already answered for in this run of the app. */
+  const answeredRestoreRef = useRef(new Set<string>())
+
+  /**
+   * The answer: the ticked terminals open and start, the rest are let go —
+   * which also drops them from what is saved, so the board matches what is
+   * actually running.
+   */
+  const applyRestore = useCallback((chosen: Set<string>): void => {
+    const pending = pendingRestoreRef.current
+    if (!pending) return
+    const { start, drop } = splitRestore(pending.sessions, chosen)
+    // Nothing here was ever mounted, so there is no terminal to dispose —
+    // only the queued command and the per-session view state to forget.
+    for (const session of drop) {
+      clearInitialCommand(session.id)
+      forgetTerminalViewport(session.id)
+      forgetAgentSelection(session.id)
+    }
+    for (const session of start) {
+      if (!isBrowserSession(session)) queueInitialCommandOnce(session.id, session.agent.command)
+    }
+    const ids = new Set(start.map((session) => session.id))
+    // Answered: switching to another workspace and back does not ask again.
+    answeredRestoreRef.current.add(codeWorkspaceIdRef.current)
+    setPendingRestore(null)
+    // A session started from the launcher while the question was open belongs
+    // to the board too — answering must not take it away.
+    setSessions((current) => [...start, ...current.filter((session) => !ids.has(session.id))])
+    setFeaturedId(pending.featuredId && ids.has(pending.featuredId) ? pending.featuredId : null)
+    setMaximizedId(pending.maximizedId && ids.has(pending.maximizedId) ? pending.maximizedId : null)
+    // Whatever was let go has to leave the saved board too.
+    hydratedRef.current = true
+    dirtyRef.current = true
+  }, [])
+
+  const skipRestore = useCallback((): void => {
+    applyRestore(new Set())
+  }, [applyRestore])
+
   const hydrate = useCallback(() => {
     if (saveTimerRef.current !== null) {
       clearTimeout(saveTimerRef.current)
@@ -549,6 +601,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
     setSessions([])
     setFeaturedId(null)
     setMaximizedId(null)
+    setPendingRestore(null)
     void window.api.code
       .load()
       .then(async (snapshot) => {
@@ -584,18 +637,35 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
           } catch {}
         }
 
-        for (const session of restored) {
-          if (session.status === 'active' && !isBrowserSession(session)) {
-            queueInitialCommandOnce(session.id, session.agent.command)
-          }
-        }
-
         let maxCounter = 0
         for (const s of restored) {
           const c = extractCounter(s.id)
           if (c !== null && c > maxCounter) maxCounter = c
         }
         if (maxCounter > sessionCounter) sessionCounter = maxCounter
+
+        // A board with terminals in it is a question, not an instruction:
+        // opening a folder must not launch a dozen agent CLIs on its own.
+        // Asked once per workspace per run, so switching back and forth does
+        // not keep asking about a board that has already been answered for.
+        const workspaceKey = codeWorkspaceIdRef.current
+        if (needsRestorePrompt(restored) && !answeredRestoreRef.current.has(workspaceKey)) {
+          setPendingRestore({
+            sessions: restored,
+            featuredId: snapshot.featuredId ?? null,
+            maximizedId: snapshot.maximizedId ?? null
+          })
+          // Nothing is saved until the answer comes: a board held in the
+          // dialog must not be written back as an empty one.
+          hydratedRef.current = false
+          return
+        }
+
+        for (const session of restored) {
+          if (session.status === 'active' && !isBrowserSession(session)) {
+            queueInitialCommandOnce(session.id, session.agent.command)
+          }
+        }
         setSessions(restored)
         setFeaturedId(snapshot.featuredId ?? null)
         setMaximizedId(snapshot.maximizedId ?? null)
@@ -1037,14 +1107,25 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
 
   return (
     <div
-      className={`absolute inset-y-0 right-0 ${sidebarCollapsed ? 'left-0' : 'left-[200px]'} z-[40000] flex flex-row pt-10 bg-[#121212] ${
+      className={`absolute inset-y-0 right-0 ${sidebarCollapsed ? 'left-0' : 'left-[200px]'} z-[40000] flex flex-row pt-10 bg-bg-raise ${
         active ? '' : 'pointer-events-none invisible'
       }`}
       data-testid="code-view"
       aria-hidden={!active}
     >
-      <div className="flex min-w-0 min-h-0 flex-1 flex-col bg-[#121212]">
-        <div ref={threeWayContainerRef} className="relative grid min-h-0 flex-1 gap-0 overflow-auto bg-[#121212] p-0"
+      <div className="relative flex min-w-0 min-h-0 flex-1 flex-col bg-bg-raise">
+        {pendingRestore && (
+          <RestoreSessionsDialog
+            folderName={
+              (codeWorkspaceFolderRef.current ?? workspaceDir ?? '').split(/[\\/]/).filter(Boolean).pop() ||
+              'this folder'
+            }
+            sessions={pendingRestore.sessions}
+            onRestore={applyRestore}
+            onSkip={skipRestore}
+          />
+        )}
+        <div ref={threeWayContainerRef} className="relative grid min-h-0 flex-1 gap-0 overflow-auto bg-bg-raise p-0"
             style={sessions.length === 3 ? {
               gridTemplateColumns: `minmax(0, ${threeWaySplit.col}fr) 2px minmax(0, ${100 - threeWaySplit.col}fr)`,
               gridTemplateRows: `minmax(0, ${threeWaySplit.row}fr) 2px minmax(0, ${100 - threeWaySplit.row}fr)`
@@ -1107,7 +1188,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
                         onClick={() => void chooseWorkspace()}
                         disabled={pickingDir}
                         data-testid="code-choose-folder"
-                        className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-[11px] bg-text text-[14px] font-medium text-bg transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line disabled:opacity-40"
+                        className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-panel bg-text text-[14px] font-medium text-bg transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line disabled:opacity-40"
                       >
                         <FolderOpen size={16} />
                         {pickingDir ? 'Choosing…' : 'Choose folder'}
@@ -1125,7 +1206,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
                                 type="button"
                                 title={dir.path}
                                 onClick={() => void openRecentWorkspace(dir.path)}
-                                className="flex h-11 w-full items-center gap-3 rounded-[9px] border border-line-soft bg-bg-panel px-3.5 text-left transition-colors hover:border-line hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+                                className="flex h-11 w-full items-center gap-3 rounded-panel border border-line-soft bg-bg-panel px-3.5 text-left transition-colors hover:border-line hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
                               >
                                 <FolderOpen size={15} className="flex-none text-text-faint" />
                                 <span className="truncate text-[13px] text-text">
@@ -1154,7 +1235,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
                         <button
                           type="button"
                           onClick={() => void chooseWorkspace()}
-                          className="ml-auto flex-none rounded-[7px] px-2.5 py-1.5 text-[12px] text-text-faint transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+                          className="ml-auto flex-none rounded-panel px-2.5 py-1.5 text-[12px] text-text-faint transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
                         >
                           Change
                         </button>
@@ -1187,7 +1268,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
                                 if (!selected) setActiveAgentId(agent.id)
                                 setAgentCounts((current) => ({ ...current, [agent.id]: current[agent.id] ?? 1 }))
                               }}
-                              className={`flex h-11 items-center gap-2.5 rounded-[9px] border px-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line ${
+                              className={`flex h-11 items-center gap-2.5 rounded-panel border px-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line ${
                                 selected
                                   ? 'border-line bg-bg-hover text-text'
                                   : 'border-line-soft bg-bg-panel text-text-dim hover:bg-bg-hover hover:text-text'
@@ -1196,7 +1277,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
                               <span className="flex-none"><Icon size={15} /></span>
                               <span className="truncate text-[13px]">{agent.label}</span>
                               {selected && (
-                                <span className="ml-auto h-[7px] w-[7px] flex-none rounded-full bg-text" />
+                                <span className="ml-auto h-[7px] w-[7px] flex-none rounded-pill bg-text" />
                               )}
                             </button>
                           )
@@ -1217,7 +1298,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
                                   type="button"
                                   aria-pressed={current}
                                   onClick={() => activeAgentId && setAgentCounts((c) => ({ ...c, [activeAgentId]: count }))}
-                                  className={`grid h-10 w-10 place-items-center rounded-[8px] border text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line ${
+                                  className={`grid h-10 w-10 place-items-center rounded-panel border text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line ${
                                     current
                                       ? 'border-line bg-bg-hover text-text'
                                       : 'border-line-soft bg-bg-panel text-text-dim hover:bg-bg-hover hover:text-text'
@@ -1259,7 +1340,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
                         disabled={selectedAgentIds.length === 0 || selectedSessionCount === 0}
                         onClick={launchWorkspace}
                         data-testid="code-launch"
-                        className="flex h-12 w-full items-center justify-center gap-2 rounded-[11px] bg-text text-[14px] font-medium text-bg transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line disabled:cursor-not-allowed disabled:opacity-30"
+                        className="flex h-12 w-full items-center justify-center gap-2 rounded-panel bg-text text-[14px] font-medium text-bg transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line disabled:cursor-not-allowed disabled:opacity-30"
                       >
                         <Plus size={16} />
                         {selectedAgentIds.length === 0

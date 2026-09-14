@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EventEmitter } from 'node:events'
 import * as electron from 'electron'
+import { rustPtyWorkingDirectory } from './conpty.ts'
 
 export interface RustPtySpawnOptions {
   id: string
@@ -68,7 +69,7 @@ export class RustPtySidecar extends EventEmitter {
   private constructor(binary: string) {
     super()
     this.child = spawn(binary, ['--engine'], {
-      cwd: process.cwd(),
+      cwd: rustPtyWorkingDirectory(),
       env: { ...process.env, ORCSPACE_RUST_ENGINE: '1' },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true

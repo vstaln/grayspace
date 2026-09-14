@@ -184,14 +184,21 @@ function sanitizeStrokes(value: unknown): CanvasStroke[] {
   return sanitizeStrokesJs(value ?? [])
 }
 
-function strokesShapeMatch(current: CanvasStroke[], incoming: unknown): boolean {
-  if (!Array.isArray(incoming) || incoming.length !== current.length) return false
-  for (let i = 0; i < current.length; i += 1) {
-    const raw = incoming[i] as { id?: unknown; color?: unknown; points?: unknown } | null
-    if (!raw || raw.id !== current[i].id || raw.color !== current[i].color) return false
-    if (!Array.isArray(raw.points) || raw.points.length !== current[i].points.length) return false
+function strokesEqual(a: CanvasStroke[], b: CanvasStroke[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    const left = a[i]
+    const right = b[i]
+    if (left.id !== right.id || left.color !== right.color || left.points.length !== right.points.length) return false
+    for (let p = 0; p < left.points.length; p += 1) {
+      if (left.points[p].x !== right.points[p].x || left.points[p].y !== right.points[p].y) return false
+    }
   }
   return true
+}
+
+function strokesShapeMatch(current: CanvasStroke[], incoming: unknown): boolean {
+  return Array.isArray(incoming) && strokesEqual(current, sanitizeStrokes(incoming))
 }
 
 function sanitizeConnections(value: unknown): CanvasConnection[] {
@@ -744,9 +751,7 @@ export class CanvasStore extends EventEmitter {
   setStrokes(strokes: unknown, overlayId?: string): CanvasStroke[] {
     this.ensure()
     const next = sanitizeStrokes(strokes)
-    if (next.length === this.strokes.length && next.every((s, i) => s === this.strokes[i])) {
-      return this.strokes
-    }
+    if (strokesEqual(next, this.strokes)) return this.strokes
     this.strokes = next
     this.canvasVersions.bump(CANVAS_TARGET_ID, overlayId)
     this.eventsSinceSnapshot += 1

@@ -71,25 +71,25 @@ function getFileIcon(entry: FileEntry): React.JSX.Element {
   }
   const ext = entry.ext.toLowerCase()
   if (['.ts', '.tsx', '.js', '.jsx', '.py', '.rs', '.go', '.c', '.cpp', '.java', '.php', '.rb', '.sh', '.bat', '.cmd'].includes(ext)) {
-    return <FileCode size={14} className="flex-none text-[#7aa2f7]" />
+    return <FileCode size={14} className="flex-none text-text-faint" />
   }
   if (['.json', '.yaml', '.yml', '.toml', '.xml', '.env', '.config'].includes(ext)) {
-    return <FileJson size={14} className="flex-none text-[#e6c07b]" />
+    return <FileJson size={14} className="flex-none text-text-faint" />
   }
   if (['.md', '.markdown', '.txt', '.log'].includes(ext)) {
-    return <FileText size={14} className="flex-none text-[#7fd99a]" />
+    return <FileText size={14} className="flex-none text-text-faint" />
   }
   if (['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.bmp'].includes(ext)) {
-    return <FileImage size={14} className="flex-none text-[#c792ea]" />
+    return <FileImage size={14} className="flex-none text-text-faint" />
   }
   if (['.mp3', '.wav', '.ogg', '.flac', '.m4a'].includes(ext)) {
-    return <Music size={14} className="flex-none text-[#f783ac]" />
+    return <Music size={14} className="flex-none text-text-faint" />
   }
   if (['.mp4', '.mkv', '.webm', '.avi', '.mov'].includes(ext)) {
-    return <Film size={14} className="flex-none text-[#ff6b6b]" />
+    return <Film size={14} className="flex-none text-text-faint" />
   }
   if (['.csv', '.xlsx', '.xls'].includes(ext)) {
-    return <FileSpreadsheet size={14} className="flex-none text-[#69db7c]" />
+    return <FileSpreadsheet size={14} className="flex-none text-text-faint" />
   }
   return <File size={14} className="flex-none text-text-faint" />
 }
@@ -422,7 +422,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
       <div className="flex flex-none items-center justify-between gap-1.5 border-b border-line-soft px-3 py-2 text-xs">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <button
-            className="grid h-6 w-6 flex-none place-items-center rounded-[6px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text disabled:opacity-30"
+            className="grid h-6 w-6 flex-none place-items-center rounded-pill text-text-dim transition-colors hover:bg-bg-hover hover:text-text disabled:opacity-30"
             disabled={!parentPath || loading}
             onClick={navigateUp}
             title="Go to parent directory"
@@ -438,7 +438,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                 <React.Fragment key={crumb.fullPath}>
                   {idx > 0 && <ChevronRight size={11} className="flex-none text-text-faint/60" />}
                   <button
-                    className={`max-w-[140px] truncate rounded px-1 py-0.5 transition-colors hover:bg-bg-hover hover:text-text ${
+                    className={`max-w-[140px] truncate rounded-panel px-1 py-0.5 transition-colors hover:bg-bg-hover hover:text-text ${
                       idx === breadcrumbs.length - 1 ? 'font-semibold text-text' : 'text-text-dim'
                     }`}
                     onClick={() => setCurrentPath(crumb.fullPath)}
@@ -457,7 +457,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
         {}
         <div className="flex flex-none items-center gap-1">
           <button
-            className="grid h-6 w-6 place-items-center rounded-[6px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+            className="grid h-6 w-6 place-items-center rounded-pill text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
             onClick={() => {
               setCreatingType('file')
               setNewItemName('')
@@ -468,7 +468,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
             <FilePlus size={13} />
           </button>
           <button
-            className="grid h-6 w-6 place-items-center rounded-[6px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+            className="grid h-6 w-6 place-items-center rounded-pill text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
             onClick={() => {
               setCreatingType('dir')
               setNewItemName('')
@@ -479,7 +479,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
             <FolderPlus size={13} />
           </button>
           <button
-            className={`grid h-6 w-6 place-items-center rounded-[6px] transition-colors ${
+            className={`grid h-6 w-6 place-items-center rounded-panel transition-colors ${
               loading ? 'animate-spin text-accent' : 'text-text-dim hover:bg-bg-hover hover:text-text'
             }`}
             onClick={() => void loadDir(currentPath)}
@@ -490,7 +490,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
           </button>
           {currentPath && (
             <button
-              className="grid h-6 w-6 place-items-center rounded-[6px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+              className="grid h-6 w-6 place-items-center rounded-pill text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
               onClick={() => void revealPath(currentPath)}
               title="Reveal in OS Explorer"
               aria-label="Reveal in OS"
@@ -506,7 +506,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
         <div className="relative flex min-w-0 flex-1 items-center">
           <Search size={12} className="pointer-events-none absolute left-2 text-text-faint" />
           <input
-            className="h-6 w-full rounded-[6px] border border-line-soft bg-bg-hover pr-6 pl-7 text-[11px] text-text outline-none placeholder:text-text-faint focus:border-line focus:bg-bg-hover"
+            className="h-6 w-full rounded-panel border border-line-soft bg-bg-hover pr-6 pl-7 text-[11px] text-text outline-none placeholder:text-text-faint focus:border-line focus:bg-bg-hover"
             placeholder="Search files…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -524,7 +524,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
         </div>
 
         <button
-          className={`rounded-[6px] border px-2 py-0.5 text-[10px] transition-colors ${
+          className={`rounded-panel border px-2 py-0.5 text-[10px] transition-colors ${
             showHidden ? 'border-accent/40 bg-accent/15 text-accent' : 'border-line-soft text-text-faint hover:text-text-dim'
           }`}
           onClick={() => setShowHidden((v) => !v)}
@@ -557,7 +557,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
           {creatingType === 'file' ? <FilePlus size={13} className="text-accent" /> : <FolderPlus size={13} className="text-accent" />}
           <input
             autoFocus
-            className="min-w-0 flex-1 rounded border border-line bg-bg px-2 py-1 text-xs text-text outline-none focus:border-accent disabled:opacity-50"
+            className="min-w-0 flex-1 rounded-panel border border-line bg-bg px-2 py-1 text-xs text-text outline-none focus:border-accent disabled:opacity-50"
             placeholder={creatingType === 'file' ? 'File name (e.g. index.ts)' : 'Folder name'}
             aria-label={creatingType === 'file' ? 'New file name' : 'New folder name'}
             value={newItemName}
@@ -569,7 +569,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
             }}
           />
           <button
-            className="flex items-center gap-1.5 rounded bg-accent px-2 py-1 text-[11px] font-semibold text-bg hover:opacity-90 disabled:opacity-40"
+            className="flex items-center gap-1.5 rounded-panel bg-accent px-2 py-1 text-[11px] font-semibold text-bg hover:opacity-90 disabled:opacity-40"
             disabled={!newItemName.trim() || createBusy}
             onClick={() => void handleCreate()}
           >
@@ -577,7 +577,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
             {createBusy ? 'Creating…' : 'Create'}
           </button>
           <button
-            className="rounded px-2 py-1 text-[11px] text-text-dim hover:text-text disabled:opacity-40"
+            className="rounded-panel px-2 py-1 text-[11px] text-text-dim hover:text-text disabled:opacity-40"
             disabled={createBusy}
             onClick={() => setCreatingType(null)}
           >
@@ -593,7 +593,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
             <span>{error}</span>
             <button
               type="button"
-              className="rounded-[6px] border border-line px-2.5 py-1 text-[11px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+              className="rounded-panel border border-line px-2.5 py-1 text-[11px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
               onClick={() => void loadDir(currentPath)}
             >
               Retry
@@ -628,7 +628,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                           {getFileIcon(entry)}
                           <input
                             autoFocus
-                            className="min-w-0 flex-1 rounded border border-accent bg-bg px-1.5 py-0.5 text-xs text-text outline-none"
+                            className="min-w-0 flex-1 rounded-panel border border-accent bg-bg px-1.5 py-0.5 text-xs text-text outline-none"
                             value={renamingName}
                             aria-label="New name"
                             onChange={(e) => setRenamingName(e.target.value)}
@@ -646,7 +646,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                           />
                           <button
                             type="button"
-                            className="flex-none rounded bg-accent px-1.5 py-0.5 text-[10px] font-semibold text-bg hover:opacity-90"
+                            className="flex-none rounded-panel bg-accent px-1.5 py-0.5 text-[10px] font-semibold text-bg hover:opacity-90"
                             onClick={() => void handleRename()}
                             aria-label="Save new name"
                           >
@@ -654,7 +654,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                           </button>
                           <button
                             type="button"
-                            className="flex-none rounded px-1.5 py-0.5 text-[10px] text-text-dim hover:text-text"
+                            className="flex-none rounded-panel px-1.5 py-0.5 text-[10px] text-text-dim hover:text-text"
                             onClick={() => {
                               renameCancelled.current = true
                               setRenamingPath(null)
@@ -691,7 +691,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                       <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100">
                         {!entry.isDirectory && (
                           <button
-                            className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
+                            className="grid h-5 w-5 place-items-center rounded-pill text-text-dim hover:bg-bg-hover hover:text-text"
                             onClick={() => void viewFile(entry.path)}
                             title="Preview file"
                             aria-label={`Preview ${entry.name}`}
@@ -700,7 +700,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                           </button>
                         )}
                         <button
-                          className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
+                          className="grid h-5 w-5 place-items-center rounded-pill text-text-dim hover:bg-bg-hover hover:text-text"
                           onClick={() => void openPath(entry.path)}
                           title="Open in default app"
                           aria-label={`Open ${entry.name} in default app`}
@@ -708,7 +708,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                           <ExternalLink size={12} />
                         </button>
                         <button
-                          className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
+                          className="grid h-5 w-5 place-items-center rounded-pill text-text-dim hover:bg-bg-hover hover:text-text"
                           onClick={() => void copyPath(entry.path)}
                           title="Copy path"
                           aria-label={`Copy path of ${entry.name}`}
@@ -716,7 +716,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                           <Copy size={12} />
                         </button>
                         <button
-                          className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-bg-hover hover:text-text"
+                          className="grid h-5 w-5 place-items-center rounded-pill text-text-dim hover:bg-bg-hover hover:text-text"
                           onClick={() => startRename(entry)}
                           title="Rename"
                           aria-label={`Rename ${entry.name}`}
@@ -724,7 +724,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                           <Pencil size={12} />
                         </button>
                         <button
-                          className="grid h-5 w-5 place-items-center rounded text-text-dim hover:bg-danger/20 hover:text-danger"
+                          className="grid h-5 w-5 place-items-center rounded-pill text-text-dim hover:bg-danger/20 hover:text-danger"
                           onClick={() => void handleDelete(entry)}
                           title="Delete"
                           aria-label={`Delete ${entry.name}`}
@@ -741,7 +741,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                   <td colSpan={4} className="py-2 text-center">
                     <button
                       type="button"
-                      className="rounded-md border border-line px-3 py-1 text-[11px] text-text-dim hover:bg-bg-hover hover:text-text"
+                      className="rounded-panel border border-line px-3 py-1 text-[11px] text-text-dim hover:bg-bg-hover hover:text-text"
                       onClick={() => setVisibleCount((c) => c + 200)}
                     >
                       Show more ({filteredItems.length - visibleCount} remaining)
@@ -796,14 +796,14 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
             </div>
             <div className="flex items-center gap-2">
               <button
-                className="flex items-center gap-1.5 rounded-[8px] border border-line px-2.5 py-1 text-xs text-text-dim hover:bg-bg-hover hover:text-text"
+                className="flex items-center gap-1.5 rounded-panel border border-line px-2.5 py-1 text-xs text-text-dim hover:bg-bg-hover hover:text-text"
                 onClick={() => void openPath(previewFile.path)}
               >
                 <ExternalLink size={13} /> Open with OS App
               </button>
               {previewFile.content !== undefined && (
                 <button
-                  className="flex items-center gap-1.5 rounded-[8px] border border-line px-2.5 py-1 text-xs text-text-dim hover:bg-bg-hover hover:text-text"
+                  className="flex items-center gap-1.5 rounded-panel border border-line px-2.5 py-1 text-xs text-text-dim hover:bg-bg-hover hover:text-text"
                   onClick={async () => {
 
 
@@ -821,7 +821,7 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
                 </button>
               )}
               <button
-                className="grid h-7 w-7 place-items-center rounded-[8px] text-text-dim hover:bg-bg-hover hover:text-text"
+                className="grid h-7 w-7 place-items-center rounded-pill text-text-dim hover:bg-bg-hover hover:text-text"
                 onClick={closePreview}
                 title="Close Preview (Esc)"
               >
@@ -830,13 +830,13 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-auto rounded-[8px] border border-line-soft bg-bg p-3">
+          <div className="min-h-0 flex-1 overflow-auto rounded-panel border border-line-soft bg-bg p-3">
             {previewFile.isImage && previewFile.dataUrl ? (
               <div className="grid h-full place-items-center">
                 <img
                   src={previewFile.dataUrl}
                   alt={previewFile.name}
-                  className="max-h-full max-w-full rounded object-contain"
+                  className="max-h-full max-w-full rounded-panel object-contain"
                 />
               </div>
             ) : previewFile.isBinary ? (

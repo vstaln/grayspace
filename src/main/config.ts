@@ -9,19 +9,25 @@ function configuredPort(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65_535 ? parsed : fallback
 }
 
-let activeControlPort = configuredPort(process.env.WORKSPACE_CONTROL_PORT, isDev ? 20224 : 20220)
+export const CONTROL_PORT = configuredPort(process.env.WORKSPACE_CONTROL_PORT, 20224)
+let activeControlPort = 0
+
+export function controlTcpEnabled(isPackaged: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
+  return !isPackaged && Boolean(
+    env.ELECTRON_RENDERER_URL || env.NODE_ENV === 'development' || env.WORKSPACE_CONTROL_PORT
+  )
+}
 
 export function getActiveControlPort(): number {
   return activeControlPort
 }
 
 export function setActiveControlPort(port: number): void {
-  if (Number.isInteger(port) && port >= 1 && port <= 65_535) {
+  if (Number.isInteger(port) && port >= 0 && port <= 65_535) {
     activeControlPort = port
   }
 }
 
-export const CONTROL_PORT = activeControlPort
 
 
 export const OUTPUT_BUFFER_LIMIT = 50_000

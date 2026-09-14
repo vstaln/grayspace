@@ -5,10 +5,8 @@ import net from 'node:net'
 import { _electron as electron } from 'playwright'
 import { expect } from '@playwright/test'
 import type { ElectronApplication, Page } from 'playwright'
-
-
-
-
+// @ts-expect-error cjs helper without types
+import requestIpc from '../../scripts/ipc-request.cjs'
 
 
 export interface OrcSpaceFixture {
@@ -16,6 +14,7 @@ export interface OrcSpaceFixture {
   page: Page
   profileDir: string
   controlPort: number
+  socketPath?: string
 
   mcpPort: number
   controlToken: string
@@ -127,7 +126,12 @@ export async function waitForCanvas(page: Page): Promise<void> {
 
 
 
-export async function controlGet(fixture: Pick<OrcSpaceFixture, 'controlPort' | 'controlToken'>, path: string): Promise<any> {
+export async function controlGet(fixture: Pick<OrcSpaceFixture, 'controlPort' | 'controlToken' | 'socketPath'>, path: string): Promise<any> {
+  if (fixture.socketPath) {
+    const res = await requestIpc(fixture.socketPath, path, { headers: { 'x-orcspace-token': fixture.controlToken } })
+    if (res.status !== 200) throw new Error(`control GET ${path} -> ${res.status}`)
+    return res.json
+  }
   const res = await fetch(`http://127.0.0.1:${fixture.controlPort}${path}`, {
     headers: { 'x-orcspace-token': fixture.controlToken }
   })
@@ -146,6 +150,9 @@ export async function controlSend(
   path: string,
   body?: unknown
 ): Promise<{ status: number; json: any }> {
+  if (fixture.socketPath) return requestIpc(fixture.socketPath, path, {
+    method, body, headers: { 'x-orcspace-token': fixture.controlToken }
+  })
   const res = await fetch(`http://127.0.0.1:${fixture.controlPort}${path}`, {
     method,
     headers: {

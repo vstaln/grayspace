@@ -41,6 +41,8 @@ pub const MESSAGE_TYPES: [&str; 8] = [
 
 pub const DISPATCH_STATES: [&str; 4] = ["running", "settled", "retained", "released"];
 pub const OUTCOMES: [&str; 2] = ["succeeded", "failed"];
+const MAX_MESSAGES: usize = 2_000;
+const MAX_BODY_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Run {
@@ -134,6 +136,17 @@ fn first_line(text: &str) -> String {
     } else {
         line.to_owned()
     }
+}
+
+fn cap_body(body: &str) -> String {
+    if body.len() <= MAX_BODY_BYTES {
+        return body.to_owned();
+    }
+    let mut end = MAX_BODY_BYTES;
+    while end > 0 && !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    body[..end].to_owned()
 }
 
 impl OrchestrationStore {
@@ -542,6 +555,14 @@ impl OrchestrationStore {
                 format!("type must be one of {}", MESSAGE_TYPES.join(", ")),
             ));
         }
+        if let Some(reply_id) = reply_to {
+            if !self.messages.contains_key(reply_id) {
+                return Err(CommandError::new(
+                    ErrorCode::NotFound,
+                    format!("no message \"{reply_id}\" to reply to"),
+                ));
+            }
+        }
         let id = self.next_id("msg");
         let message = Message {
             id: id.clone(),
@@ -550,7 +571,7 @@ impl OrchestrationStore {
             from: from.to_owned(),
             to: to.to_owned(),
             subject: subject.to_owned(),
-            body: body.to_owned(),
+            body: cap_body(body),
             task_id: task_id.map(str::to_owned),
             dispatch_id: dispatch_id.map(str::to_owned),
             outcome: outcome.map(str::to_owned),
@@ -561,6 +582,10 @@ impl OrchestrationStore {
             acked_by: Vec::new(),
         };
         self.messages.insert(id, message.clone());
+        while self.messages.len() > MAX_MESSAGES {
+            let Some(oldest) = self.messages.keys().next().cloned() else { break };
+            self.messages.shift_remove(&oldest);
+        }
         Ok(message)
     }
 
@@ -603,6 +628,26 @@ impl OrchestrationStore {
         if question.is_empty() {
             return Err(CommandError::new(ErrorCode::Invalid, "a gate needs a question"));
         }
+        if let Some(task_id) = task_id {
+            let Some(task) = self.tasks.get(task_id) else {
+                return Err(CommandError::new(
+                    ErrorCode::NotFound,
+                    format!("no task \"{task_id}\""),
+                ));
+            };
+            if task.run_id != run_id {
+                return Err(CommandError::new(
+                    ErrorCode::Invalid,
+                    format!("task \"{task_id}\" belongs to a different run"),
+                ));
+            }
+            if task.status == "completed" {
+                return Err(CommandError::new(
+                    ErrorCode::Conflict,
+                    format!("task \"{task_id}\" is already completed"),
+                ));
+            }
+        }
         let id = self.next_id("gate");
         let gate = Gate {
             id: id.clone(),
@@ -617,25 +662,58 @@ impl OrchestrationStore {
             version: 1,
         };
         self.gates.insert(id, gate.clone());
+        if let Some(task_id) = task_id {
+            if let Some(task) = self.tasks.get_mut(task_id) {
+                task.status = "blocked".to_owned();
+                task.updated_at = now;
+                task.version += 1;
+            }
+        }
         Ok(gate)
     }
 
     /// A gate is resolved once. Re-resolving would let a decision the run has
     /// already acted on be rewritten underneath it.
     pub fn resolve_gate(&mut self, id: &str, resolution: &str, now: i64) -> CommandResult<Gate> {
-        let Some(gate) = self.gates.get_mut(id) else {
+        let Some(existing) = self.gates.get(id) else {
             return Err(CommandError::new(ErrorCode::NotFound, format!("no gate \"{id}\"")));
         };
-        if gate.resolved_at.is_some() {
+        if existing.resolved_at.is_some() {
             return Err(CommandError::new(
                 ErrorCode::Conflict,
                 format!("gate \"{id}\" is already resolved"),
             ));
         }
+        if !existing.options.is_empty() && !existing.options.iter().any(|option| option == resolution) {
+            return Err(CommandError::new(
+                ErrorCode::Invalid,
+                format!("resolution must be one of {}", existing.options.join(", ")),
+            ));
+        }
+        let task_id = existing.task_id.clone();
+        let gate = self.gates.get_mut(id).expect("checked above");
         gate.resolution = Some(resolution.to_owned());
         gate.resolved_at = Some(now);
         gate.version += 1;
-        Ok(gate.clone())
+        let resolved = gate.clone();
+        if let Some(task_id) = task_id {
+            let deps = self
+                .tasks
+                .get(&task_id)
+                .filter(|task| task.status == "blocked")
+                .map(|task| task.deps.clone());
+            if let Some(deps) = deps {
+                let ready = deps
+                    .iter()
+                    .all(|dep| self.tasks.get(dep).is_some_and(|task| task.status == "completed"));
+                if let Some(task) = self.tasks.get_mut(&task_id) {
+                    task.status = if ready { "ready" } else { "pending" }.to_owned();
+                    task.updated_at = now;
+                    task.version += 1;
+                }
+            }
+        }
+        Ok(resolved)
     }
 
     pub fn list_gates(&self, run_id: Option<&str>, open_only: bool) -> Vec<Gate> {

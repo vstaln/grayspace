@@ -8,7 +8,7 @@ export interface PresenceInfo {
   app: 'orcspace'
   version: string
   pid: number
-  controlPort: number
+  controlPort?: number
   socketPath: string
   workspaceDir: string | null
 }
@@ -46,7 +46,7 @@ export function buildPresence(input: {
     app: 'orcspace',
     version: APP_VERSION,
     pid: input.pid ?? process.pid,
-    controlPort: getActiveControlPort(),
+    ...(getActiveControlPort() ? { controlPort: getActiveControlPort() } : {}),
     socketPath: input.socketPath ?? getIpcSocketPath(),
     workspaceDir: input.workspaceDir ?? null
   }

@@ -4,6 +4,7 @@ import { join } from 'path'
 import { createHash } from 'crypto'
 import { readStoreJson, writeJsonAtomic, writeJsonAtomicAsync } from './storage.ts'
 import { getUserDataDir } from './userData.ts'
+import { ensureFolderStore, forgetFolderStore, workspaceSessionFile } from './workspaceFolderStore.ts'
 
 export const CODE_SCHEMA_VERSION = 1
 const EMPTY_WORKSPACE_SLOT = '__no-workspace__'
@@ -98,10 +99,26 @@ export class CodeStore extends EventEmitter {
 
   private workspaceScope = 'code-default'
   private legacyFolder: string | undefined
+  private folder: string | undefined
 
   constructor() { super() }
 
+  /**
+   * A workspace's sessions live next to the project when it has one, so the
+   * folder carries its own terminals; the app data directory holds them for a
+   * folder that cannot be written to, and for work with no folder open.
+   */
   private get file(): string {
+    // `ensureFolderStore` is what decides whether the folder can hold the file
+    // at all — without it a read-only project would take every write into a
+    // path that silently fails. Its answer is cached per folder.
+    const inFolder = this.folder && ensureFolderStore(this.folder)
+      ? workspaceSessionFile(this.folder, this.activeWorkspaceId())
+      : null
+    return inFolder ?? this.userDataFile
+  }
+
+  private get userDataFile(): string {
     const slot = this.workspaceSlot(this.workspaceScope)
     return join(getUserDataDir(), `workspace-code-${slot}.json`)
   }
@@ -111,11 +128,12 @@ export class CodeStore extends EventEmitter {
     return createHash('sha256').update(scope).digest('hex').slice(0, 32)
   }
 
-  setWorkspaceScope(scope: string, legacyFolder?: string): void {
-    if (!scope || (this.workspaceScope === scope && this.loaded)) return
+  setWorkspaceScope(scope: string, legacyFolder?: string, folder?: string): void {
+    if (!scope || (this.workspaceScope === scope && this.folder === folder && this.loaded)) return
     if (this.loaded) this.flush()
     this.workspaceScope = scope
     this.legacyFolder = legacyFolder
+    this.folder = folder && folder.trim() ? folder : undefined
     this.loaded = false
     this.sessions.clear()
     this.featuredId = null
@@ -138,7 +156,13 @@ export class CodeStore extends EventEmitter {
 
     let source: Record<string, unknown> = raw
     if (Object.keys(raw).length === 0) {
-      if (this.legacyFolder) {
+      // Sessions recorded before this folder kept its own store, or while it
+      // was read-only. Read once here; the next save writes them to the folder.
+      if (this.file !== this.userDataFile) {
+        const carriedElsewhere = readStoreJson<Record<string, unknown>>(this.userDataFile, {})
+        if (Object.keys(carriedElsewhere).length > 0) source = carriedElsewhere
+      }
+      if (Object.keys(source).length === 0 && this.legacyFolder) {
         const oldFolderFile = join(getUserDataDir(), `workspace-code-${this.workspaceSlot(this.legacyFolder)}.json`)
         const oldFolderRaw = readStoreJson<Record<string, unknown>>(oldFolderFile, {})
         if (Object.keys(oldFolderRaw).length > 0) source = oldFolderRaw
@@ -157,6 +181,10 @@ export class CodeStore extends EventEmitter {
       }
     }
     this.loaded = true
+    // Sessions that came from somewhere other than where they now belong:
+    // hand the folder its copy straight away, so it carries the workspace even
+    // if this run never changes anything.
+    const adoptedFromElsewhere = source !== raw && Object.keys(source).length > 0
     const codeSchemaVersion = Number((source as Record<string, unknown>)?.schemaVersion)
     if (Number.isFinite(codeSchemaVersion) && codeSchemaVersion > CODE_SCHEMA_VERSION) {
       console.warn(`code store schema v${codeSchemaVersion} is newer than supported v${CODE_SCHEMA_VERSION}; loading best-effort`)
@@ -167,6 +195,7 @@ export class CodeStore extends EventEmitter {
     this.maximizedId = data.maximizedId
     this.activeView = data.activeView ?? null
     this.version = data.version
+    if (adoptedFromElsewhere) this.flushAsync()
   }
 
   load(): CodeSnapshot {
@@ -279,8 +308,35 @@ export class CodeStore extends EventEmitter {
       writeJsonAtomic(this.file, this.snapshotForPersist())
       this.syncFlushSeq = this.writeSeq
     } catch (err) {
+      if (this.demoteToUserData(err)) {
+        try {
+          writeJsonAtomic(this.userDataFile, this.snapshotForPersist())
+          this.syncFlushSeq = this.writeSeq
+          return
+        } catch (retryErr) {
+          console.error('failed to persist code layout', retryErr)
+          return
+        }
+      }
       console.error('failed to persist code layout', err)
     }
+  }
+
+  /**
+   * The project folder refused the write — it turned read-only, went away with
+   * its share, or never really allowed one. Sessions are worth more than where
+   * they are kept, so the rest of this session goes to the app data directory
+   * instead of throwing the layout away one failed save at a time.
+   *
+   * Returns false when there was nowhere to fall back to, and the error is the
+   * caller's to report.
+   */
+  private demoteToUserData(err: unknown): boolean {
+    if (!this.folder) return false
+    console.warn(`workspace folder store unavailable; keeping sessions in the app data directory instead`, err)
+    forgetFolderStore(this.folder)
+    this.folder = undefined
+    return true
   }
 
   private flushAsync(): void {
@@ -314,6 +370,17 @@ export class CodeStore extends EventEmitter {
         }
       })
       .catch((err: unknown) => {
+        // Same fallback as the synchronous path: a folder that cannot take the
+        // write must not cost the user their layout.
+        if (this.demoteToUserData(err)) {
+          try {
+            writeJsonAtomic(this.userDataFile, this.snapshotForPersist())
+            return
+          } catch (retryErr) {
+            console.error('failed to persist code layout', retryErr)
+            return
+          }
+        }
         console.error('failed to persist code layout', err)
       })
   }

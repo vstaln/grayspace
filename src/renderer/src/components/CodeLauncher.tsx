@@ -95,7 +95,7 @@ export default function CodeLauncher({
         role="dialog"
         aria-modal="true"
         aria-label="Launch Code Session"
-        className="pop-in flex w-[560px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-[12px] border border-line bg-bg-panel shadow-[0_24px_80px_rgba(0,0,0,0.5)]"
+        className="pop-in flex w-[560px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-panel border border-line bg-bg-panel shadow-[0_24px_80px_rgba(0,0,0,0.5)]"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className="flex flex-none items-center justify-between border-b border-line-soft bg-bg-raise px-5 py-4">
@@ -107,7 +107,7 @@ export default function CodeLauncher({
           </div>
           <button
             type="button"
-            className="grid h-8 w-8 min-h-[32px] min-w-[32px] place-items-center rounded-[8px] text-text-faint transition-colors duration-150 hover:bg-bg-hover hover:text-text"
+            className="grid h-8 w-8 min-h-[32px] min-w-[32px] place-items-center rounded-pill text-text-faint transition-colors duration-150 hover:bg-bg-hover hover:text-text"
             title="Close"
             aria-label="Close"
             onClick={onClose}
@@ -134,18 +134,18 @@ export default function CodeLauncher({
                       setSelectedAgentId(a.id)
                       if (a.id === 'browser') setCount(1)
                     }}
-                    className={`flex flex-col items-start gap-2.5 rounded-[10px] border p-3 text-left transition-colors duration-150 ${
+                    className={`flex flex-col items-start gap-2.5 rounded-panel border p-3 text-left transition-colors duration-150 ${
                       isSelected
                         ? 'border-accent bg-bg-hover text-text'
                         : 'border-line-soft bg-bg-panel text-text-dim hover:border-line hover:bg-bg-hover hover:text-text'
                     }`}
                   >
                     <span className="flex w-full items-center justify-between">
-                      <span className="grid h-8 w-8 flex-none place-items-center rounded-[8px] border border-line-soft bg-bg-raise text-text">
+                      <span className="grid h-8 w-8 flex-none place-items-center rounded-pill border border-line-soft bg-bg-raise text-text">
                         <IconComponent size={15} />
                       </span>
                       {isSelected && (
-                        <span className="grid h-4 w-4 place-items-center rounded-full bg-accent text-bg">
+                        <span className="grid h-4 w-4 place-items-center rounded-pill bg-accent text-bg">
                           <Check size={10} strokeWidth={3} />
                         </span>
                       )}
@@ -162,7 +162,7 @@ export default function CodeLauncher({
                 onChange={(e) => setCustomCommand(e.target.value)}
                 placeholder="Command, e.g. aider or qwen"
                 aria-label="Custom CLI command"
-                className="mt-3 h-9 w-full rounded-[8px] border border-line-soft bg-bg-raise px-3 text-xs text-text outline-none transition-colors duration-150 focus:border-line"
+                className="mt-3 h-9 w-full rounded-panel border border-line-soft bg-bg-raise px-3 text-xs text-text outline-none transition-colors duration-150 focus:border-line"
               />
             )}
           </div>
@@ -172,7 +172,7 @@ export default function CodeLauncher({
               <p className="mb-2 text-[11px] font-medium tracking-[0.08em] text-text-faint uppercase">
                 Instances
               </p>
-              <div className="flex gap-1.5 rounded-[10px] border border-line-soft bg-bg-raise p-1">
+              <div className="flex gap-1.5 rounded-panel border border-line-soft bg-bg-raise p-1">
                 {CODE_LAUNCH_COUNTS.map((n) => (
                   <button
                     key={n}
@@ -180,7 +180,7 @@ export default function CodeLauncher({
                     aria-pressed={count === n}
                     disabled={n > remaining || (selectedAgentId === 'browser' && n !== 1)}
                     onClick={() => setCount(n)}
-                    className={`min-h-[36px] min-w-[40px] rounded-[8px] px-3 py-1.5 text-xs font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-30 ${
+                    className={`min-h-[36px] min-w-[40px] rounded-panel px-3 py-1.5 text-xs font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-30 ${
                       count === n
                         ? 'border border-line bg-bg-hover text-text'
                         : 'text-text-dim hover:text-text'
@@ -203,7 +203,7 @@ export default function CodeLauncher({
         <footer className="flex items-center justify-end gap-2 border-t border-line-soft px-5 py-3.5">
           <button
             type="button"
-            className="min-h-[36px] rounded-[8px] border border-line-soft px-4 py-1.5 text-xs text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text"
+            className="min-h-[36px] rounded-panel border border-line-soft px-4 py-1.5 text-xs text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text"
             onClick={onClose}
           >
             Cancel
@@ -212,7 +212,7 @@ export default function CodeLauncher({
             type="button"
             disabled={!canLaunch}
             onClick={handleLaunch}
-            className="flex min-h-[36px] items-center gap-1.5 rounded-[8px] bg-accent px-4 py-1.5 text-xs font-semibold text-bg transition-opacity duration-150 hover:opacity-90 disabled:opacity-35"
+            className="flex min-h-[36px] items-center gap-1.5 rounded-panel bg-accent px-4 py-1.5 text-xs font-semibold text-bg transition-opacity duration-150 hover:opacity-90 disabled:opacity-35"
           >
             <Rocket size={13} />
             Launch {launchCount} {selectedAgentId === 'browser' ? 'widget' : `terminal${launchCount === 1 ? '' : 's'}`}

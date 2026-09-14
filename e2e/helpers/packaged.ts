@@ -20,9 +20,9 @@ async function freePort(): Promise<number> {
 export async function launchPackaged() {
   const executable = path.resolve(process.env.ORCSPACE_PACKAGED || 'dist/win-unpacked/OrcSpace.exe')
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orcspace-packaged-e2e-'))
-  const controlPort = await freePort()
   const debugPort = await freePort()
-  const env: NodeJS.ProcessEnv = { ...process.env, WORKSPACE_CONTROL_PORT: String(controlPort) }
+  const env: NodeJS.ProcessEnv = { ...process.env }
+  delete env.WORKSPACE_CONTROL_PORT
   delete env.ELECTRON_RUN_AS_NODE
   delete env.ORCSPACE_TEST_USER_DATA
   delete env.ORCSPACE_DEV_USER_DATA
@@ -50,7 +50,9 @@ export async function launchPackaged() {
     const page = context.pages()[0] || await context.waitForEvent('page')
     await page.waitForLoadState('domcontentloaded')
     const controlToken = fs.readFileSync(path.join(profileDir, 'control-token'), 'utf8').trim()
-    return { page, profileDir, controlPort, controlToken, close: async () => { await browser.close(); await stop() } }
+    const runtime = JSON.parse(fs.readFileSync(path.join(profileDir, 'runtime.json'), 'utf8'))
+    if (runtime.controlPort || !runtime.socketPath) throw new Error('Packaged app must expose IPC only')
+    return { page, profileDir, controlPort: 0, socketPath: String(runtime.socketPath), controlToken, close: async () => { await browser.close(); await stop() } }
   } catch (error) {
     await stop()
     throw error

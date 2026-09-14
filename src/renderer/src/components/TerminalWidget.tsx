@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Terminal, ITheme } from 'xterm'
-import { FitAddon } from 'xterm-addon-fit'
-import { Unicode11Addon } from 'xterm-addon-unicode11'
-import 'xterm/css/xterm.css'
+import { Terminal, ITheme } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
+import '@xterm/xterm/css/xterm.css'
 import { ThemeName, useTheme } from '../theme'
 import { attachmentAgent, imagePasteShortcut, insertAttachments, isTerminalPasteShortcut } from '../lib/terminalAttachments'
 import { clearInitialCommand, markInitialCommandDelivered, peekInitialCommand } from '../lib/pendingTerminalCommands'
@@ -29,7 +29,7 @@ const cachedSubmit = '\r'
 const APP_OWNED_MODE_RESET =
   '\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l' +
   '\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l' +
-  '\x1b[?2004l\x1b[?25h\x1b[?7h'
+  '\x1b[?2004l\x1b[?2026l\x1b[?25h\x1b[?7h'
 
 
 
@@ -106,11 +106,9 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
   // prompt such as "explain codex" typed into Claude could be mistaken for a
   // shell command and change the attachment shortcut mid-session.
   const agentIdentityLockedRef = useRef(Boolean(agentId?.trim()))
-  const isCodexRef = useRef(agentId === 'codex')
   useEffect(() => {
     agentIdRef.current = attachmentAgent(agentId ?? '')
     agentIdentityLockedRef.current = Boolean(agentId?.trim())
-    isCodexRef.current = agentIdRef.current === 'codex'
   }, [agentId])
 
 
@@ -136,10 +134,8 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       fontFamily: 'Consolas, "Cascadia Mono", monospace',
       lineHeight: 1,
       scrollback: 5000,
-      // Keep xterm's timer disabled as well as using a transparent cursor so
-      // the artifact cannot blink even while the terminal owns focus.
       cursorBlink: false,
-      cursorInactiveStyle: 'none',
+      cursorInactiveStyle: 'outline',
       convertEol: false,
 
 
@@ -241,6 +237,15 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       cancelRestore?.()
       const generation = ++restoreGeneration
       restoreInFlight = true
+      // A reflow scheduled before the restore can capture the empty buffer's
+      // top line and apply it after history has arrived, pulling the viewport
+      // away from the bottom. Invalidate that anchor for this restore.
+      resizeAnchor = null
+      resizeAnchorGeneration += 1
+      if (resizeRestoreTimer !== null) {
+        clearTimeout(resizeRestoreTimer)
+        resizeRestoreTimer = null
+      }
       renderQueue.pause(true)
       term.options.disableStdin = true
       let offset = 0
@@ -330,10 +335,11 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
     let resizeRestoreUntil = 0
     let resizeRestoreTimer: ReturnType<typeof setTimeout> | null = null
     const restoreResizeAnchor = (generation: number): void => {
-      if (generation !== resizeAnchorGeneration || !resizeAnchor) return
+      if (restoreInFlight || generation !== resizeAnchorGeneration || !resizeAnchor) return
       applyViewportAnchor(resizeAnchor)
     }
     const scheduleResizeAnchorRestore = (anchor: ViewportAnchor): void => {
+      if (restoreInFlight) return
       resizeAnchor = anchor
       resizeAnchorGeneration++
       const generation = resizeAnchorGeneration
@@ -347,88 +353,16 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       requestAnimationFrame(() => restoreResizeAnchor(generation))
       resizeRestoreTimer = setTimeout(() => restoreResizeAnchor(generation), 150)
     }
-    // `cleanGhostCursor` reads the textContent of every rendered row and runs
-    // regexes over it. It used to be called straight from onRender,
-    // onWriteParsed *and* onCursorMove — three of the hottest callbacks xterm
-    // has — so a chatty terminal paid a full-DOM text extraction hundreds of
-    // times a second, on the same thread that has to stay responsive to
-    // typing. It is now coalesced to at most one pass per animation frame,
-    // and for a terminal not yet known to be Codex the detection scan itself
-    // is rate-limited: the artifact only appears once the agent is running,
-    // so probing a few times a second is more than enough to catch it.
-    let isCleaningGhostCursor = false
-    let ghostCursorRaf: number | null = null
-    const scheduleGhostCursorClean = (): void => {
-      if (ghostCursorRaf !== null || !mounted) return
-      ghostCursorRaf = requestAnimationFrame(() => {
-        ghostCursorRaf = null
-        cleanGhostCursor()
-      })
-    }
-    // The scan reads textContent of every rendered row, which forces a style
-    // and layout flush. Running it once per animation frame — which is what
-    // the RAF coalescing above actually allows — put that cost on the UI
-    // thread 60 times a second for the whole time an agent was streaming. The
-    // artifact it hides is a stationary cursor, so a few passes a second is
-    // indistinguishable and an order of magnitude cheaper.
-    const GHOST_SCAN_INTERVAL_MS = 250
-    let lastGhostScanAt = 0
-    const cleanGhostCursor = (): void => {
-      if (isCleaningGhostCursor || !mounted) return
-      const knownCodex = isCodexRef.current || agentIdRef.current === 'codex'
-      if (!knownCodex) return
-      const now = performance.now()
-      if (now - lastGhostScanAt < GHOST_SCAN_INTERVAL_MS) return
-      lastGhostScanAt = now
-      isCleaningGhostCursor = true
-      try {
-        const rowsEl = container.querySelector<HTMLElement>('.xterm-rows')
-        if (!rowsEl) return
-        const rowsText = rowsEl.textContent ?? ''
-
-        const isWorking = /working\s*\(|esc to interrupt/i.test(rowsText)
-        if (!isWorking) return
-
-        const rowCount = rowsEl.children.length
-        if (rowCount === 0) return
-
-        for (let index = 0; index < rowCount; index++) {
-          const row = rowsEl.children[index] as HTMLElement
-          if (!row) continue
-          const rawText = (row.textContent ?? '').replace(/[\s\u00A0\u200B-\u200D\uFEFF]/g, '')
-          if (rawText !== '') continue
-          const nextText = rowsEl.children[index + 1]?.textContent ?? ''
-          const next2Text = rowsEl.children[index + 2]?.textContent ?? ''
-          if (!/working\s*\(|esc to interrupt/i.test(nextText) && !/working\s*\(|esc to interrupt/i.test(next2Text)) continue
-
-          const cursor = row.querySelector<HTMLElement>('.xterm-cursor, [data-ghost-cursor]')
-          if (cursor) {
-            cursor.classList.remove('xterm-cursor', 'xterm-cursor-blink', 'xterm-cursor-block')
-            cursor.setAttribute('data-ghost-cursor', 'true')
-            cursor.style.setProperty('background-color', 'transparent', 'important')
-            cursor.style.setProperty('outline', 'none', 'important')
-            cursor.style.setProperty('box-shadow', 'none', 'important')
-            cursor.style.setProperty('animation', 'none', 'important')
-            cursor.style.setProperty('opacity', '0', 'important')
-          }
-        }
-      } finally {
-        isCleaningGhostCursor = false
-      }
-    }
     const writeParsedDisposable = term.onWriteParsed(() => {
-      scheduleGhostCursorClean()
       if (!resizeAnchor || performance.now() > resizeRestoreUntil) return
       const generation = resizeAnchorGeneration
       requestAnimationFrame(() => restoreResizeAnchor(generation))
     })
-    const renderDisposable = term.onRender(() => {
-      scheduleGhostCursorClean()
-    })
-    const cursorMoveDisposable = term.onCursorMove(() => {
-      scheduleGhostCursorClean()
-    })
     const scrollDisposable = term.onScroll(() => {
+      // Streaming scrollback changes viewportY while baseY is still growing.
+      // Those intermediate positions are not user intent and must not replace
+      // the saved bottom-follow state used after restore.
+      if (restoreInFlight) return
       const activeBuffer = term.buffer.active
       rememberViewport(id, {
         line: activeBuffer.viewportY,
@@ -476,7 +410,6 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       if (exitReported) return
       exitReported = true
       clearInitialCommand(id)
-      isCodexRef.current = agentId === 'codex'
       if (agentIdRef.current === 'codex' && agentId !== 'codex') agentIdRef.current = undefined
       term.write(`\r\n\x1b[90m[Process exited${typeof code === 'number' ? ` (code ${code})` : ''}]\x1b[0m\r\n`)
       closeTimer = setTimeout(() => onProcessExitRef.current?.(), 8000)
@@ -507,7 +440,6 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       if (!detected) return
       agentIdRef.current = detected
       agentIdentityLockedRef.current = true
-      isCodexRef.current = detected === 'codex'
     }
     term.onData((data) => {
       // Replayed device queries must not send historical replies to a live shell.
@@ -1135,10 +1067,6 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
         resizeSendTimer = null
       }
       if (resizeRaf !== null) cancelAnimationFrame(resizeRaf)
-      if (ghostCursorRaf !== null) {
-        cancelAnimationFrame(ghostCursorRaf)
-        ghostCursorRaf = null
-      }
       resizeAnchorGeneration++
       if (resizeRestoreTimer) clearTimeout(resizeRestoreTimer)
       observer.disconnect()
@@ -1162,8 +1090,6 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       exitUnsub()
       scrollDisposable.dispose()
       writeParsedDisposable.dispose()
-      renderDisposable.dispose()
-      cursorMoveDisposable.dispose()
 
       try {
         term.dispose()
@@ -1191,7 +1117,7 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
     >
       {connecting && (
         <div role="status" className="pointer-events-none absolute inset-0 grid place-items-center">
-          <span className="animate-pulse rounded bg-bg-raise px-2.5 py-1 text-[11px] text-text-faint">
+          <span className="animate-pulse rounded-panel bg-bg-raise px-2.5 py-1 text-[11px] text-text-faint">
             Connecting…
           </span>
         </div>

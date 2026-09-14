@@ -294,7 +294,7 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
             title="Back"
             disabled={!canGoBack || !!media}
             onClick={() => viewRef.current?.goBack()}
-            className="browser-icon-btn grid h-6 w-6 flex-none place-items-center rounded-md disabled:opacity-30 disabled:pointer-events-none"
+            className="browser-icon-btn grid h-6 w-6 flex-none place-items-center rounded-pill disabled:opacity-30 disabled:pointer-events-none"
           >
             <ArrowLeft size={13} strokeWidth={1.9} />
           </button>
@@ -304,7 +304,7 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
             title="Forward"
             disabled={!canGoForward || !!media}
             onClick={() => viewRef.current?.goForward()}
-            className="browser-icon-btn grid h-6 w-6 flex-none place-items-center rounded-md disabled:opacity-30 disabled:pointer-events-none"
+            className="browser-icon-btn grid h-6 w-6 flex-none place-items-center rounded-pill disabled:opacity-30 disabled:pointer-events-none"
           >
             <ArrowRight size={13} strokeWidth={1.9} />
           </button>
@@ -313,7 +313,7 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
             aria-label={loading ? 'Stop' : 'Reload'}
             title={loading ? 'Stop' : 'Reload'}
             onClick={() => (loading ? viewRef.current?.stop() : viewRef.current?.reload())}
-            className="browser-icon-btn grid h-6 w-6 flex-none place-items-center rounded-md"
+            className="browser-icon-btn grid h-6 w-6 flex-none place-items-center rounded-pill"
           >
             {loading ? <X size={13} strokeWidth={1.9} /> : <RotateCw size={12} strokeWidth={1.9} />}
           </button>
@@ -345,7 +345,7 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
                   e.currentTarget.blur()
                 }
               }}
-              className="browser-omnibox h-6 w-full rounded-full pl-7 pr-2.5 text-[11px] outline-none placeholder:text-text-faint"
+              className="browser-omnibox h-6 w-full rounded-pill pl-7 pr-2.5 text-[11px] outline-none placeholder:text-text-faint"
             />
           </form>
           {host && !editing && !media && <span className="mx-1 hidden max-w-[90px] flex-none truncate text-[10px] text-text-faint xl:block">{host}</span>}
@@ -354,7 +354,7 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
               type="button"
               onClick={closeMedia}
               title="Back to browser"
-              className="flex flex-none items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[10px] text-text-dim hover:bg-bg-hover hover:text-text"
+              className="flex flex-none items-center gap-1 rounded-pill border border-line px-2 py-0.5 text-[10px] text-text-dim hover:bg-bg-hover hover:text-text"
             >
               <X size={10} /> Browser
             </button>
@@ -373,7 +373,7 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
               {retryCountRef.current < 3 ? (
                 <button
                   type="button"
-                  className="rounded-md bg-bg-raise px-2 py-0.5 text-[10px] text-danger hover:bg-bg-hover"
+                  className="rounded-panel bg-bg-raise px-2 py-0.5 text-[10px] text-danger hover:bg-bg-hover"
                   onClick={() => {
                     retryCountRef.current += 1
                     setLoadError(null)
@@ -388,7 +388,7 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
               ) : null}
               <button
                 type="button"
-                className="rounded-md bg-bg-raise px-2 py-0.5 text-[10px] text-text-dim hover:bg-bg-hover hover:text-text"
+                className="rounded-panel bg-bg-raise px-2 py-0.5 text-[10px] text-text-dim hover:bg-bg-hover hover:text-text"
                 onClick={() => {
                   retryCountRef.current = 0
                   setLoadError(null)
@@ -428,7 +428,7 @@ function MediaViewer({ media, onClose, onOpenExternally }: { media: DroppedMedia
   if (media.kind === 'image') {
     return (
       <div className="absolute inset-0 grid place-items-center overflow-auto bg-bg p-2">
-        <img src={media.mediaUrl} alt={media.name} className="max-h-full max-w-full rounded object-contain" />
+        <img src={media.mediaUrl} alt={media.name} className="max-h-full max-w-full rounded-panel object-contain" />
       </div>
     )
   }
@@ -437,7 +437,7 @@ function MediaViewer({ media, onClose, onOpenExternally }: { media: DroppedMedia
       <div className="absolute inset-0 flex flex-col bg-bg">
         <div className="flex flex-none items-center justify-between gap-2 border-b border-line-soft px-2 py-1 text-[10px] text-text-faint">
           <span className="min-w-0 truncate" title={media.name}>{media.name}</span>
-          <button type="button" onClick={onClose} className="flex-none rounded px-1.5 py-0.5 hover:bg-bg-hover hover:text-text">Close</button>
+          <button type="button" onClick={onClose} className="flex-none rounded-panel px-1.5 py-0.5 hover:bg-bg-hover hover:text-text">Close</button>
         </div>
         <video key={media.mediaUrl} src={media.mediaUrl} controls preload="metadata" className="min-h-0 w-full flex-1 bg-black" />
       </div>
@@ -456,7 +456,7 @@ function MediaViewer({ media, onClose, onOpenExternally }: { media: DroppedMedia
       <div className="absolute inset-0 flex flex-col bg-bg">
         <div className="flex flex-none items-center justify-between gap-2 border-b border-line-soft px-2 py-1 text-[10px] text-text-faint">
           <span className="min-w-0 truncate" title={media.name}>{media.name}</span>
-          <button type="button" onClick={onClose} className="flex-none rounded px-1.5 py-0.5 hover:bg-bg-hover hover:text-text">Close</button>
+          <button type="button" onClick={onClose} className="flex-none rounded-panel px-1.5 py-0.5 hover:bg-bg-hover hover:text-text">Close</button>
         </div>
         <embed key={media.mediaUrl} src={media.mediaUrl} type="application/pdf" className="min-h-0 w-full flex-1 border-0 bg-bg" />
       </div>
@@ -467,7 +467,7 @@ function MediaViewer({ media, onClose, onOpenExternally }: { media: DroppedMedia
       <div className="absolute inset-0 flex flex-col bg-bg">
         <div className="flex flex-none items-center justify-between gap-2 border-b border-line-soft px-2 py-1 text-[10px] text-text-faint">
           <span className="min-w-0 truncate" title={media.name}>{media.name}</span>
-          <button type="button" onClick={onClose} className="flex-none rounded px-1.5 py-0.5 hover:bg-bg-hover hover:text-text">Close</button>
+          <button type="button" onClick={onClose} className="flex-none rounded-panel px-1.5 py-0.5 hover:bg-bg-hover hover:text-text">Close</button>
         </div>
         <iframe key={media.mediaUrl} src={media.mediaUrl} title={media.name} sandbox="" className="min-h-0 w-full flex-1 border-0 bg-bg" />
       </div>
@@ -482,14 +482,14 @@ function MediaViewer({ media, onClose, onOpenExternally }: { media: DroppedMedia
         <button
           type="button"
           onClick={() => onOpenExternally(media.path)}
-          className="rounded-md bg-accent px-2.5 py-1 text-[11px] font-medium text-bg hover:opacity-90"
+          className="rounded-panel bg-accent px-2.5 py-1 text-[11px] font-medium text-bg hover:opacity-90"
         >
           Open
         </button>
         <button
           type="button"
           onClick={onClose}
-          className="rounded-md border border-line px-2.5 py-1 text-[11px] text-text-dim hover:bg-bg-hover hover:text-text"
+          className="rounded-panel border border-line px-2.5 py-1 text-[11px] text-text-dim hover:bg-bg-hover hover:text-text"
         >
           Back
         </button>

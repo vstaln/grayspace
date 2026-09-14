@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, LogIn, Settings2, Sparkles, Square, Trash2 } from 'lucide-react'
 import type { ChatMessage, ChatProvider, ChatProviderStatus, ChatReasoningEffort } from '../../../preload/api'
 import { useSettings } from '../hooks/useSettings'
+import { useConfirm } from './ConfirmDialog'
 
 const PROVIDERS: Array<{ id: ChatProvider; label: string }> = [
   { id: 'chatgpt', label: 'ChatGPT' },
@@ -62,6 +63,7 @@ function newMessage(role: ChatMessage['role'], content: string): ChatMessage {
 
 export default function ChatWidget({ widgetId, workspaceDir }: { widgetId: string; workspaceDir?: string | null }): React.JSX.Element {
   const { settings, update } = useSettings()
+  const confirm = useConfirm()
   const savedConfig = useMemo(() => readConfig(widgetId), [widgetId])
   const initialProvider = savedConfig.provider ?? settings.aiProvider ?? 'chatgpt'
   const [provider, setProvider] = useState<ChatProvider>(initialProvider)
@@ -131,6 +133,14 @@ export default function ChatWidget({ widgetId, workspaceDir }: { widgetId: strin
   const connected = providers.find((item) => item.id === provider)?.connected === true
   const availableModels = MODELS[provider]
 
+  // The <select> below fell back to availableModels[0] for display when the
+  // saved model is not one this provider offers, but `send` kept passing the
+  // stale `model`. The dropdown then named one model while every request used
+  // another. Snap the state itself instead of papering over it in the view.
+  useEffect(() => {
+    if (!availableModels.includes(model)) setModel(availableModels[0])
+  }, [availableModels, model])
+
   const changeProvider = (next: ChatProvider): void => {
     configTouchedRef.current = true
     const nextModel = MODELS[next][0]
@@ -189,7 +199,20 @@ export default function ChatWidget({ widgetId, workspaceDir }: { widgetId: strin
     setStatus('Stopped')
   }
 
-  const clear = (): void => {
+  // Every other destructive action on the canvas asks first (closing a
+  // terminal, deleting a file, erasing a drawing). This one threw the whole
+  // conversation away, unrecoverably, on a single click of a 12px button
+  // sitting next to the status line.
+  const clear = async (): Promise<void> => {
+    if (messages.length > 0) {
+      const ok = await confirm('Clear this conversation? The messages cannot be recovered.', {
+        danger: true,
+        title: 'Clear Chat',
+        confirmLabel: 'Clear'
+      })
+      if (!ok) return
+    }
+    if (!aliveRef.current) return
     if (busy) stop()
     setMessages([])
     setError(null)
@@ -199,21 +222,21 @@ export default function ChatWidget({ widgetId, workspaceDir }: { widgetId: strin
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2 p-3" data-testid="chat-widget">
-      <div className="flex flex-wrap items-center gap-1.5 rounded-[9px] border border-line-soft bg-bg-raise p-1.5">
-        <select aria-label="AI provider" value={provider} onChange={(event) => changeProvider(event.target.value as ChatProvider)} className="h-7 min-w-[100px] rounded-[7px] border border-line bg-transparent px-2 text-[10px] text-text outline-none focus:border-line">
+      <div className="flex flex-wrap items-center gap-1.5 rounded-panel border border-line-soft bg-bg-raise p-1.5">
+        <select aria-label="AI provider" value={provider} onChange={(event) => changeProvider(event.target.value as ChatProvider)} className="h-7 min-w-[100px] rounded-panel border border-line bg-transparent px-2 text-[10px] text-text outline-none focus:border-line">
           {PROVIDERS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
         </select>
-        <select aria-label="AI model" value={availableModels.includes(model) ? model : availableModels[0]} onChange={(event) => changeModel(event.target.value)} className="h-7 min-w-[140px] flex-1 rounded-[7px] border border-line bg-transparent px-2 text-[10px] text-text outline-none focus:border-line">
+        <select aria-label="AI model" value={availableModels.includes(model) ? model : availableModels[0]} onChange={(event) => changeModel(event.target.value)} className="h-7 min-w-[140px] flex-1 rounded-panel border border-line bg-transparent px-2 text-[10px] text-text outline-none focus:border-line">
           {availableModels.map((item) => <option key={item} value={item}>{item}</option>)}
         </select>
-        <select aria-label="Reasoning effort" value={effort} onChange={(event) => changeEffort(event.target.value as ChatReasoningEffort)} className="h-7 min-w-[100px] rounded-[7px] border border-line bg-transparent px-2 text-[10px] text-text outline-none focus:border-line">
+        <select aria-label="Reasoning effort" value={effort} onChange={(event) => changeEffort(event.target.value as ChatReasoningEffort)} className="h-7 min-w-[100px] rounded-panel border border-line bg-transparent px-2 text-[10px] text-text outline-none focus:border-line">
           {EFFORTS.map((item) => <option key={item.id} value={item.id}>{item.label} effort</option>)}
         </select>
         <span className="flex h-7 items-center gap-1 px-1 text-[10px] text-text-faint" title={connected ? 'Account connected' : 'Connect this provider in Settings'}>
-          <span className={`h-1.5 w-1.5 rounded-full ${connected ? 'bg-text' : 'bg-line'}`} aria-hidden="true" />
+          <span className={`h-1.5 w-1.5 rounded-pill ${connected ? 'bg-text' : 'bg-line'}`} aria-hidden="true" />
           {connected ? 'Connected' : 'Not connected'}
         </span>
-        <button type="button" aria-label="Open AI settings" title="AI settings" className="grid h-7 w-7 place-items-center rounded-[7px] text-text-faint hover:bg-bg-hover hover:text-text" onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-settings', { detail: { tab: 'ai' } }))}><Settings2 size={14} /></button>
+        <button type="button" aria-label="Open AI settings" title="AI settings" className="grid h-7 w-7 place-items-center rounded-pill text-text-faint hover:bg-bg-hover hover:text-text" onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-settings', { detail: { tab: 'ai' } }))}><Settings2 size={14} /></button>
       </div>
 
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-0.5" aria-live="polite">
@@ -222,20 +245,20 @@ export default function ChatWidget({ widgetId, workspaceDir }: { widgetId: strin
             <div><Sparkles className="mx-auto mb-2 opacity-60" size={22} /><p className="text-text-dim">Ask anything</p><p className="mt-1">Your conversation stays on this widget.</p></div>
           </div>
         ) : messages.map((item) => (
-          <div key={item.id} className={`flex gap-2 rounded-[9px] border px-2.5 py-2 text-[11px] leading-relaxed ${item.role === 'user' ? 'ml-7 border-line bg-bg-hover' : 'mr-4 border-line-soft bg-bg-raise'}`}>
+          <div key={item.id} className={`flex gap-2 rounded-panel border px-2.5 py-2 text-[11px] leading-relaxed ${item.role === 'user' ? 'ml-7 border-line bg-bg-hover' : 'mr-4 border-line-soft bg-bg-raise'}`}>
             {item.role === 'assistant' && <Bot size={14} className="mt-0.5 flex-none text-text-faint" />}
             <div className="min-w-0 whitespace-pre-wrap break-words text-text">{item.content}</div>
           </div>
         ))}
-        {busy && <div className="mr-4 flex items-center gap-2 rounded-[9px] border border-line-soft bg-bg-raise px-2.5 py-2 text-[11px] text-text-faint"><Bot size={14} /><span>{status}</span></div>}
+        {busy && <div className="mr-4 flex items-center gap-2 rounded-panel border border-line-soft bg-bg-raise px-2.5 py-2 text-[11px] text-text-faint"><Bot size={14} /><span>{status}</span></div>}
       </div>
 
-      {error && <div role="alert" className="flex items-center gap-2 rounded-[8px] border border-line-soft bg-bg-raise px-2.5 py-1.5 text-[10px] text-text-faint"><LogIn size={13} className="flex-none" /><span className="min-w-0 flex-1">{error}</span><button type="button" className="text-text hover:underline" onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-settings', { detail: { tab: 'ai' } }))}>Settings</button></div>}
+      {error && <div role="alert" className="flex items-center gap-2 rounded-panel border border-line-soft bg-bg-raise px-2.5 py-1.5 text-[10px] text-text-faint"><LogIn size={13} className="flex-none" /><span className="min-w-0 flex-1">{error}</span><button type="button" className="text-text hover:underline" onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-settings', { detail: { tab: 'ai' } }))}>Settings</button></div>}
       <form className="flex items-end gap-1.5" onSubmit={(event) => void send(event)}>
-        <textarea aria-label="Chat message" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} rows={2} maxLength={12000} placeholder="Message the model…" className="min-h-[46px] min-w-0 flex-1 resize-none rounded-[8px] border border-line-soft bg-transparent px-2.5 py-2 text-[11px] text-text outline-none placeholder:text-text-faint focus:border-line" />
-        <button type={busy ? 'button' : 'submit'} aria-label={busy ? 'Stop response' : 'Send message'} title={busy ? 'Stop response' : 'Send message'} className="grid h-9 w-9 flex-none place-items-center rounded-[8px] bg-accent text-bg hover:opacity-90 disabled:cursor-default disabled:opacity-40" disabled={!busy && !draft.trim()} onClick={busy ? stop : undefined}>{busy ? <Square size={14} fill="currentColor" /> : <Sparkles size={15} />}</button>
+        <textarea aria-label="Chat message" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} rows={2} maxLength={12000} placeholder="Message the model…" className="min-h-[46px] min-w-0 flex-1 resize-none rounded-panel border border-line-soft bg-transparent px-2.5 py-2 text-[11px] text-text outline-none placeholder:text-text-faint focus:border-line" />
+        <button type={busy ? 'button' : 'submit'} aria-label={busy ? 'Stop response' : 'Send message'} title={busy ? 'Stop response' : 'Send message'} className="grid h-9 w-9 flex-none place-items-center rounded-pill bg-accent text-bg hover:opacity-90 disabled:cursor-default disabled:opacity-40" disabled={!busy && !draft.trim()} onClick={busy ? stop : undefined}>{busy ? <Square size={14} fill="currentColor" /> : <Sparkles size={15} />}</button>
       </form>
-      <div className="flex items-center justify-between text-[10px] text-text-faint"><span>{status} · {EFFORTS.find((item) => item.id === effort)?.hint}</span><button type="button" aria-label="Clear chat" className="inline-flex items-center gap-1 rounded px-1.5 py-1 hover:bg-bg-hover hover:text-text" onClick={clear}><Trash2 size={12} />Clear</button></div>
+      <div className="flex items-center justify-between text-[10px] text-text-faint"><span>{status} · {EFFORTS.find((item) => item.id === effort)?.hint}</span><button type="button" aria-label="Clear chat" className="inline-flex items-center gap-1 rounded-panel px-1.5 py-1 hover:bg-bg-hover hover:text-text" onClick={() => void clear()}><Trash2 size={12} />Clear</button></div>
     </div>
   )
 }

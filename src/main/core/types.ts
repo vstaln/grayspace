@@ -159,6 +159,15 @@ export interface CommandContext {
 
   signal?: AbortSignal
 
+  /**
+   * Register a compensating action for a transaction.  Handlers that mutate
+   * external state should capture the previous value before changing it and
+   * register an undo here.  Actions run in reverse order when a later step
+   * fails; errors from an undo never mask the original command error.
+   *
+   * For a standalone command this is a no-op.
+   */
+  rollback(undo: () => void | Promise<void>): void
 
 
   unblock(): void

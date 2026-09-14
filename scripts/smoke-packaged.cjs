@@ -1,7 +1,7 @@
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const net = require('node:net')
+const requestIpc = require('./ipc-request.cjs')
 const { spawn, spawnSync } = require('node:child_process')
 const { setTimeout: delay } = require('node:timers/promises')
 
@@ -14,15 +14,9 @@ async function main() {
     encoding: 'utf8', timeout: 15_000, windowsHide: true
   })
   if (help.status !== 0 || !help.stdout.includes('OrcSpace')) throw new Error('Packaged CLI or NODE_OPTIONS fuse failed')
-  const port = await new Promise(resolve => {
-    const server = net.createServer()
-    server.listen(0, '127.0.0.1', () => {
-      const assigned = server.address().port
-      server.close(() => resolve(assigned))
-    })
-  })
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'orc-packaged-smoke-'))
-  const env = { ...process.env, WORKSPACE_CONTROL_PORT: String(port) }
+  const env = { ...process.env }
+  delete env.WORKSPACE_CONTROL_PORT
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(binary, [`--user-data-dir=${profile}`, '--disable-gpu'], { env, stdio: 'ignore', windowsHide: true })
   try {
@@ -30,11 +24,13 @@ async function main() {
       if (child.exitCode !== null) throw new Error(`Packaged app exited: ${child.exitCode}`)
       try {
         const token = fs.readFileSync(path.join(profile, 'control-token'), 'utf8').trim()
-        const response = await fetch(`http://127.0.0.1:${port}/health`, {
-          headers: { 'x-orcspace-token': token }, signal: AbortSignal.timeout(1000)
+        const runtime = JSON.parse(fs.readFileSync(path.join(profile, 'runtime.json'), 'utf8'))
+        if (runtime.controlPort) throw new Error('Packaged app unexpectedly advertises a TCP port')
+        const response = await requestIpc(runtime.socketPath, '/health', {
+          headers: { 'x-orcspace-token': token }
         })
-        const health = await response.json()
-        if (response.ok && health.ok && health.app === 'orcspace') {
+        const health = response.json
+        if (response.status === 200 && health.ok && health.app === 'orcspace') {
           console.log('Packaged startup, authenticated health, CLI and NODE_OPTIONS protection passed.')
           return
         }

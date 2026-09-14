@@ -14,6 +14,7 @@ import { MAX_FAVORITE_TERMINAL_NAMES, normalizeTerminalName, normalizeTerminalNa
 import ClaudeIcon from './ClaudeIcon'
 import CodexIcon from './CodexIcon'
 import GrokIcon from './GrokIcon'
+import { monochrome } from '../ui/tokens'
 
 interface Props {
   workspaceDir: string | null
@@ -47,7 +48,7 @@ function IconButton({
       style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       data-testid={testId}
       className={[
-        'group relative grid h-[38px] w-[38px] place-items-center rounded-[10px] border border-transparent text-text-dim transition-colors duration-150',
+        'group relative grid h-[38px] w-[38px] place-items-center rounded-pill border border-transparent text-text-dim transition-colors duration-150',
         active
           ? 'rail-btn-active'
           : danger
@@ -62,11 +63,11 @@ function IconButton({
     >
       {children}
       {badge ? (
-        <span className="absolute top-0.5 right-0.5 min-w-[15px] rounded-full bg-accent px-1 text-[9px] leading-[15px] font-semibold text-bg">
+        <span className="absolute top-0.5 right-0.5 min-w-[15px] rounded-pill bg-accent px-1 text-[9px] leading-[15px] font-semibold text-bg">
           {badge}
         </span>
       ) : null}
-      <span className="pointer-events-none absolute left-[calc(100%+10px)] z-[900] max-w-[min(20rem,calc(100vw-72px))] overflow-hidden rounded-[10px] border border-line bg-bg-panel px-2.5 py-1.5 text-[11px] text-ellipsis whitespace-nowrap text-text opacity-0 transition-all duration-150 -translate-x-1 group-hover:translate-x-0 group-hover:opacity-100 group-focus-visible:translate-x-0 group-focus-visible:opacity-100">
+      <span className="pointer-events-none absolute left-[calc(100%+10px)] z-[900] max-w-[min(20rem,calc(100vw-72px))] overflow-hidden rounded-panel border border-line bg-bg-panel px-2.5 py-1.5 text-[11px] text-ellipsis whitespace-nowrap text-text opacity-0 transition-all duration-150 -translate-x-1 group-hover:translate-x-0 group-hover:opacity-100 group-focus-visible:translate-x-0 group-focus-visible:opacity-100">
         {label}
       </span>
     </button>
@@ -78,6 +79,16 @@ const SETTINGS_TABS = [
   { id: 'appearance' as const, label: 'Appearance', Icon: Palette },
   { id: 'ai' as const, label: 'AI', Icon: Bot }
 ]
+
+type SettingsTab = (typeof SETTINGS_TABS)[number]['id']
+
+// Keyed off SETTINGS_TABS rather than a hand-written union, so adding a tab
+// without giving it a subtitle is a compile error instead of a blank line.
+const SETTINGS_TAB_HINTS: Record<SettingsTab, string> = {
+  account: 'Manage the local profile used throughout this workspace.',
+  appearance: 'Theme, shell and what the canvas right-click menu offers.',
+  ai: 'Connect an AI account once, then use its subscription in every AI Chat widget.'
+}
 
 const FAVORITE_WIDGETS = [
   ['terminal', 'Terminal', 'Shell in the current workspace'],
@@ -117,9 +128,9 @@ const AI_MODELS: Record<ChatProvider, string[]> = {
 
 const CAPTION = 'text-[11px] font-medium tracking-[0.08em] text-text-faint uppercase'
 const BTN_QUIET =
-  'min-h-9 rounded-[8px] border border-line-soft px-3 py-1.5 text-[11px] text-text-dim outline-none transition-colors duration-150 hover:border-line hover:bg-bg-hover hover:text-text focus-visible:ring-1 focus-visible:ring-line disabled:cursor-not-allowed disabled:opacity-35'
+  'min-h-9 rounded-panel border border-line-soft px-3 py-1.5 text-[11px] text-text-dim outline-none transition-colors duration-150 hover:border-line hover:bg-bg-hover hover:text-text focus-visible:ring-1 focus-visible:ring-line disabled:cursor-not-allowed disabled:opacity-35'
 const BTN_PRIMARY =
-  'min-h-9 rounded-[8px] bg-accent px-3.5 py-1.5 text-[11px] font-medium text-bg outline-none transition-opacity duration-150 hover:opacity-90 focus-visible:ring-1 focus-visible:ring-line focus-visible:ring-offset-2 focus-visible:ring-offset-bg-panel disabled:cursor-not-allowed disabled:opacity-35'
+  'min-h-9 rounded-panel bg-accent px-3.5 py-1.5 text-[11px] font-medium text-bg outline-none transition-opacity duration-150 hover:opacity-90 focus-visible:ring-1 focus-visible:ring-line focus-visible:ring-offset-2 focus-visible:ring-offset-bg-panel disabled:cursor-not-allowed disabled:opacity-35'
 
 function Section({
   title,
@@ -164,7 +175,7 @@ function Choice({
       aria-checked={selected}
       disabled={disabled}
       onClick={onClick}
-      className={`flex min-h-9 flex-col gap-1.5 rounded-[10px] border p-3.5 text-left outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-line ${
+      className={`flex min-h-9 flex-col gap-1.5 rounded-panel border p-3.5 text-left outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-line ${
         selected ? 'border-line bg-bg-hover' : 'border-line-soft bg-transparent hover:border-line hover:bg-bg-hover'
       } ${disabled ? 'pointer-events-none opacity-50' : ''}`}
     >
@@ -172,8 +183,8 @@ function Choice({
         <span className={`text-xs ${selected ? 'text-text' : 'text-text-dim'}`}>{label}</span>
         <span className="flex items-center gap-2">
           {selected && <span className="flex-none text-[10px] text-text-faint">Active</span>}
-          <span aria-hidden="true" className={`grid h-4 w-4 place-items-center rounded-full border ${selected ? 'border-text' : 'border-line'}`}>
-            {selected && <span className="h-1.5 w-1.5 rounded-full bg-text" />}
+          <span aria-hidden="true" className={`grid h-4 w-4 place-items-center rounded-pill border ${selected ? 'border-text' : 'border-line'}`}>
+            {selected && <span className="h-1.5 w-1.5 rounded-pill bg-text" />}
           </span>
         </span>
       </span>
@@ -221,7 +232,7 @@ export function SettingsModal({
 }): React.JSX.Element {
   const { theme, setTheme, background, dim, setDim, blur, setBlur, pickBackground, clearBackground, error } = useTheme()
   const { settings, update, error: settingsError } = useSettings()
-  const [tab, setTab] = useState<'appearance' | 'account' | 'ai'>('account')
+  const [tab, setTab] = useState<SettingsTab>('account')
   const [userName, setUserName] = useState('')
   const [favoriteNamesText, setFavoriteNamesText] = useState('')
   const nameEntries = favoriteNamesText.split(/[\n,]+/).map((name) => name.trim()).filter(Boolean)
@@ -400,7 +411,7 @@ export function SettingsModal({
           aria-modal="true"
           aria-label="Settings"
           data-testid="settings-modal"
-          className="pop-in flex max-h-[calc(100vh-40px)] w-[min(820px,calc(100vw-56px))] flex-col overflow-hidden rounded-[12px] border border-line bg-bg-panel shadow-[0_24px_80px_rgba(0,0,0,0.36)] sm:flex-row"
+          className="pop-in flex max-h-[calc(100vh-40px)] w-[min(820px,calc(100vw-56px))] flex-col overflow-hidden rounded-panel border border-line bg-bg-panel shadow-[0_24px_80px_rgba(0,0,0,0.36)] sm:flex-row"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           <nav className="flex flex-none gap-1 overflow-x-auto border-b border-line bg-bg-raise p-2.5 sm:w-[160px] sm:flex-col sm:border-r sm:border-b-0 sm:p-3">
@@ -411,7 +422,7 @@ export function SettingsModal({
                 key={id}
                 data-testid={`settings-tab-${id}`}
                 aria-current={tab === id ? 'true' : undefined}
-                className={`flex min-h-9 flex-none items-center gap-2.5 rounded-[8px] px-2.5 py-1.5 text-left text-xs outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-line sm:w-full ${
+                className={`flex min-h-9 flex-none items-center gap-2.5 rounded-panel px-2.5 py-1.5 text-left text-xs outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-line sm:w-full ${
                   tab === id ? 'border border-line bg-bg-hover text-text' : 'border border-transparent text-text-dim hover:bg-bg-hover hover:text-text'
                 }`}
                 onClick={() => setTab(id)}
@@ -422,13 +433,20 @@ export function SettingsModal({
             ))}
           </nav>
           <main ref={mainRef} className="flex min-w-0 flex-1 flex-col gap-7 overflow-auto bg-bg-panel px-7 py-6 min-h-0">
-            <header className="flex flex-none items-center justify-between">
-              <h2 className="text-[20px] font-semibold text-text">
-                {tab === 'appearance' ? 'Appearance' : tab === 'ai' ? 'AI' : 'Account'}
-              </h2>
+            {/* The subtitle belongs to the header block. It used to be the
+                first child of this `gap-7` column with a -mt-5 pulling it back
+                up under the title, so the spacing only looked right on the two
+                tabs that happened to have one. */}
+            <header className="flex flex-none items-start justify-between gap-4">
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <h2 className="text-[20px] font-semibold text-text">
+                  {SETTINGS_TABS.find((item) => item.id === tab)?.label ?? 'Account'}
+                </h2>
+                <p className="text-[11px] leading-relaxed text-text-dim">{SETTINGS_TAB_HINTS[tab]}</p>
+              </div>
               <button
                 type="button"
-                className="grid h-9 w-9 place-items-center rounded-[8px] text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus-visible:ring-1 focus-visible:ring-line"
+                className="grid h-9 w-9 place-items-center rounded-pill text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus-visible:ring-1 focus-visible:ring-line"
                 onClick={() => setOpen(false)}
                 aria-label="Close settings"
               >
@@ -484,7 +502,7 @@ export function SettingsModal({
                       return (
                         <label
                           key={id}
-                          className="flex min-h-9 cursor-pointer items-center gap-3 rounded-[8px] px-2 py-2 text-xs text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text focus-within:bg-bg-hover focus-within:ring-1 focus-within:ring-line"
+                          className="flex min-h-9 cursor-pointer items-center gap-3 rounded-panel px-2 py-2 text-xs text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text focus-within:bg-bg-hover focus-within:ring-1 focus-within:ring-line"
                         >
                           <input
                             type="checkbox"
@@ -511,11 +529,11 @@ export function SettingsModal({
                 <Section title="Background">
                   {background ? (
                     <div
-                      className="h-32 rounded-[10px] border border-line-soft bg-cover bg-center"
+                      className="h-32 rounded-panel border border-line-soft bg-cover bg-center"
                       style={{ backgroundImage: wallpaperBackgroundImage(background) }}
                     />
                   ) : (
-                    <div className="rounded-[10px] border border-dashed border-line-soft px-3 py-8 text-center text-[11px] text-text-faint">
+                    <div className="rounded-panel border border-dashed border-line-soft px-3 py-8 text-center text-[11px] text-text-faint">
                       No background selected
                     </div>
                   )}
@@ -541,9 +559,8 @@ export function SettingsModal({
 
             {tab === 'account' && (
               <div className="flex max-w-xl flex-col gap-8">
-                <p className="-mt-5 text-[11px] leading-relaxed text-text-dim">Manage the local profile used throughout this workspace.</p>
-                <div className="flex items-center gap-3.5 rounded-[12px] border border-line-soft bg-bg-raise p-4">
-                  <div className="grid h-11 w-11 flex-none place-items-center rounded-full border border-line-soft bg-bg-raise text-[13px] font-medium text-text select-none">
+                <div className="flex items-center gap-3.5 rounded-panel border border-line-soft bg-bg-raise p-4">
+                  <div className="grid h-11 w-11 flex-none place-items-center rounded-pill border border-line-soft bg-bg-raise text-[13px] font-medium text-text select-none">
                     {(userName.trim() || settings.userName || 'you').slice(0, 2).toUpperCase()}
                   </div>
                   <div className="flex min-w-0 flex-1 flex-col gap-1">
@@ -564,7 +581,7 @@ export function SettingsModal({
                   hint="Shown across your workspace."
                 >
                   <input
-                    className="w-full rounded-[8px] border border-line-soft bg-transparent px-3 py-2.5 text-xs text-text outline-none transition-colors duration-150 focus:border-line"
+                    className="w-full rounded-panel border border-line-soft bg-transparent px-3 py-2.5 text-xs text-text outline-none transition-colors duration-150 focus:border-line"
                     type="text"
                     aria-label="Display name"
                     maxLength={40}
@@ -595,7 +612,7 @@ export function SettingsModal({
                     value={favoriteNamesText}
                     onChange={(event) => setFavoriteNamesText(event.target.value)}
                     placeholder={'James\nHenry\nOliver'}
-                    className="w-full resize-y rounded-[8px] border border-line-soft bg-transparent px-3 py-2.5 text-xs text-text outline-none focus:border-line"
+                    className="w-full resize-y rounded-panel border border-line-soft bg-transparent px-3 py-2.5 text-xs text-text outline-none focus:border-line"
                   />
                   {namesError && <p id="favorite-terminal-names-error" role="alert" className="text-[11px] text-danger">{namesError}</p>}
                   <div className="flex items-center justify-between gap-3">
@@ -622,7 +639,6 @@ export function SettingsModal({
 
             {tab === 'ai' && (
               <div className="flex max-w-xl flex-col gap-8">
-                <p className="-mt-5 text-[11px] leading-relaxed text-text-dim">Connect an AI account once, then use its subscription in every AI Chat widget.</p>
 
                 <Section title="Provider accounts" hint="Sign-in opens the provider's official OAuth flow. Credentials stay with the provider CLI on this device.">
                   <div className="flex flex-col gap-2.5">
@@ -632,8 +648,8 @@ export function SettingsModal({
                       const connecting = state?.connecting === true
                       const unavailable = state?.available === false
                       return (
-                        <div key={provider.id} className="flex items-center gap-3 rounded-[10px] border border-line-soft bg-bg-raise p-3.5">
-                          <div className="grid h-8 w-8 flex-none place-items-center rounded-[8px] border border-line text-text" aria-label={`${provider.label} icon`}><provider.Icon size={16} /></div>
+                        <div key={provider.id} className="flex items-center gap-3 rounded-panel border border-line-soft bg-bg-raise p-3.5">
+                          <div className="grid h-8 w-8 flex-none place-items-center rounded-pill border border-line text-text" aria-label={`${provider.label} icon`}><provider.Icon size={16} /></div>
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 text-xs text-text"><span>{provider.label}</span>{connected && <span className="text-[10px] text-text-faint">Connected</span>}</div>
                             <p className="mt-1 truncate text-[10px] text-text-faint">{state?.detail || provider.hint}</p>
@@ -644,13 +660,13 @@ export function SettingsModal({
                       )
                     })}
                     {authPrompt && (
-                      <div role={authPrompt.type === 'error' ? 'alert' : 'status'} className="flex flex-wrap items-center gap-2 rounded-[9px] border border-line-soft bg-bg-raise px-3 py-2 text-[11px] text-text-dim">
+                      <div role={authPrompt.type === 'error' ? 'alert' : 'status'} className="flex flex-wrap items-center gap-2 rounded-panel border border-line-soft bg-bg-raise px-3 py-2 text-[11px] text-text-dim">
                         <span className="min-w-0 flex-1">{authPrompt.message}</span>
-                        {authPrompt.userCode && <code className="select-all rounded border border-line px-2 py-1 font-mono text-xs text-text">{authPrompt.userCode}</code>}
+                        {authPrompt.userCode && <code className="select-all rounded-panel border border-line px-2 py-1 font-mono text-xs text-text">{authPrompt.userCode}</code>}
                         {authPrompt.url && <a href={authPrompt.url} target="_blank" rel="noreferrer" className="text-text underline underline-offset-2">Open sign-in page</a>}
                         {authPrompt.requiresInput && (
                           <form className="flex w-full items-center gap-2" onSubmit={(event) => { event.preventDefault(); void submitAuthCode() }}>
-                            <input aria-label="OAuth code" value={authCode} onChange={(event) => setAuthCode(event.target.value)} placeholder="Paste OAuth code" autoComplete="off" className="h-8 min-w-0 flex-1 rounded-[7px] border border-line bg-transparent px-2 font-mono text-[10px] text-text outline-none focus:border-text-faint" />
+                            <input aria-label="OAuth code" value={authCode} onChange={(event) => setAuthCode(event.target.value)} placeholder="Paste OAuth code" autoComplete="off" className="h-8 min-w-0 flex-1 rounded-panel border border-line bg-transparent px-2 font-mono text-[10px] text-text outline-none focus:border-text-faint" />
                             <button type="submit" className={BTN_PRIMARY} disabled={busy || !authCode.trim()}>Continue</button>
                           </form>
                         )}
@@ -661,12 +677,12 @@ export function SettingsModal({
 
                 <Section title="Chat defaults" hint="These defaults are used for new chat widgets. You can override them directly in each chat.">
                   <label className="flex flex-col gap-1.5 text-[11px] text-text-dim">Provider
-                    <select aria-label="Default AI provider" value={settings.aiProvider ?? 'chatgpt'} onChange={(event) => { const next = event.target.value as ChatProvider; void update({ aiProvider: next, aiModel: AI_MODELS[next][0] }) }} className="h-9 rounded-[8px] border border-line-soft bg-transparent px-2.5 text-xs text-text outline-none focus:border-line">
+                    <select aria-label="Default AI provider" value={settings.aiProvider ?? 'chatgpt'} onChange={(event) => { const next = event.target.value as ChatProvider; void update({ aiProvider: next, aiModel: AI_MODELS[next][0] }) }} className="h-9 rounded-panel border border-line-soft bg-transparent px-2.5 text-xs text-text outline-none focus:border-line">
                       {AI_PROVIDERS.map((provider) => <option key={provider.id} value={provider.id}>{provider.label}</option>)}
                     </select>
                   </label>
                   <label className="flex flex-col gap-1.5 text-[11px] text-text-dim">Model
-                    <select aria-label="Default AI model" value={AI_MODELS[settings.aiProvider ?? 'chatgpt'].includes(settings.aiModel ?? '') ? settings.aiModel : AI_MODELS[settings.aiProvider ?? 'chatgpt'][0]} onChange={(event) => void update({ aiModel: event.target.value })} className="h-9 rounded-[8px] border border-line-soft bg-transparent px-2.5 text-xs text-text outline-none focus:border-line">
+                    <select aria-label="Default AI model" value={AI_MODELS[settings.aiProvider ?? 'chatgpt'].includes(settings.aiModel ?? '') ? settings.aiModel : AI_MODELS[settings.aiProvider ?? 'chatgpt'][0]} onChange={(event) => void update({ aiModel: event.target.value })} className="h-9 rounded-panel border border-line-soft bg-transparent px-2.5 text-xs text-text outline-none focus:border-line">
                       {AI_MODELS[settings.aiProvider ?? 'chatgpt'].map((model) => <option key={model} value={model}>{model}</option>)}
                     </select>
                   </label>
@@ -759,6 +775,14 @@ export default React.memo(function Sidebar({
       refreshCodeWorkspaceGroups()
     })
   }, [refreshCodeWorkspaceGroups])
+
+  // Nothing reset this when the menu closed, and openCodeWorkspace never
+  // clears it on success — so a failed open left its message waiting inside
+  // the panel, and the next time the user opened Folders it greeted them with
+  // a stale error about an action they had already moved on from.
+  useEffect(() => {
+    if (foldersOpen) setFoldersError(null)
+  }, [foldersOpen])
 
   useEffect(() => {
     if (!foldersOpen) return
@@ -1003,7 +1027,7 @@ export default React.memo(function Sidebar({
             ref={foldersMenuRef}
             role="menu"
             aria-label="Workspace Folders"
-            className="absolute top-0 left-[calc(100%+10px)] z-[9500] w-72 max-w-[calc(100vw-70px)] max-h-[calc(100vh-120px)] overflow-auto rounded-[10px] border border-line bg-bg-panel p-2 shadow-2xl"
+            className="absolute top-0 left-[calc(100%+10px)] z-[9500] w-72 max-w-[calc(100vw-70px)] max-h-[calc(100vh-120px)] overflow-auto rounded-panel border border-line bg-bg-panel p-2 shadow-2xl"
             onKeyDown={(e) => {
 
               if (e.key === 'Escape') {
@@ -1032,7 +1056,7 @@ export default React.memo(function Sidebar({
 {recent.map((entry) => (
                   <div
                     key={entry.path}
-                    className={`group flex items-center gap-1 rounded-[10px] ${entry.path === workspaceDir ? 'bg-bg-hover' : ''}`}
+                    className={`group flex items-center gap-1 rounded-panel ${entry.path === workspaceDir ? 'bg-bg-hover' : ''}`}
                     title={entry.path}
                   >
                     <button
@@ -1044,7 +1068,7 @@ export default React.memo(function Sidebar({
                       <span className="block truncate text-[10px] text-text-faint">{entry.path}</span>
                     </button>
                     <button
-                      className={`flex-none rounded-[10px] p-1 text-text-faint hover:bg-bg-hover hover:text-text ${entry.pinned ? 'text-accent' : ''}`}
+                      className={`flex-none rounded-panel p-1 text-text-faint hover:bg-bg-hover hover:text-text ${entry.pinned ? 'text-accent' : ''}`}
                       title={entry.pinned ? 'Unpin' : 'Pin'}
                       aria-label={entry.pinned ? `Unpin ${entry.name}` : `Pin ${entry.name}`}
                       onClick={() => void pinRecent(entry.path)}
@@ -1052,7 +1076,7 @@ export default React.memo(function Sidebar({
                       <Pin size={12} />
                     </button>
                     <button
-                      className="flex-none rounded-[10px] p-1 text-text-faint hover:bg-bg-hover hover:text-text"
+                      className="flex-none rounded-panel p-1 text-text-faint hover:bg-bg-hover hover:text-text"
                       title="Remove from recent"
                       aria-label={`Remove ${entry.name} from recent`}
                       onClick={() => void forgetRecent(entry.path)}
@@ -1066,10 +1090,10 @@ export default React.memo(function Sidebar({
               )}
             </div>
             {foldersError && (
-              <div className="px-2 pt-1 pb-2 text-[11px] leading-snug text-danger">{foldersError}</div>
+              <div role="alert" className="px-2 pt-1 pb-2 text-[11px] leading-snug text-danger">{foldersError}</div>
             )}
             <button
-              className="mt-2 flex w-full items-center justify-center gap-2 rounded-[10px] bg-accent px-3 py-2 text-xs font-semibold text-bg hover:opacity-90"
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-panel bg-accent px-3 py-2 text-xs font-semibold text-bg hover:opacity-90"
               onClick={() => {
                 window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
                 onPickDir()
@@ -1096,7 +1120,7 @@ export default React.memo(function Sidebar({
               const currentFolder = group.folder === workspaceDir
               return (
                 <div key={group.folder} className="min-w-0">
-                  <div className="group/folder flex h-9 items-center gap-1 rounded-[8px] px-2" title={group.folder}>
+                  <div className="group/folder flex h-9 items-center gap-1 rounded-panel px-2" title={group.folder}>
                     <FolderOpen size={13} className={`flex-none ${currentFolder ? 'text-text' : 'text-text-faint'}`} />
                     <span className={`min-w-0 flex-1 truncate text-[11px] font-semibold ${currentFolder ? 'text-text' : 'text-text-dim'}`}>
                       {group.name}
@@ -1108,7 +1132,7 @@ export default React.memo(function Sidebar({
                       data-testid={currentFolder ? 'workspace-create' : undefined}
                       disabled={creatingWorkspace}
                       onClick={() => openCreateWorkspace(group.folder)}
-                      className="grid h-7 w-7 flex-none place-items-center rounded-[7px] text-text-faint transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line disabled:opacity-40"
+                      className="grid h-7 w-7 flex-none place-items-center rounded-pill text-text-faint transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line disabled:opacity-40"
                     >
                       <Plus size={13} />
                     </button>
@@ -1117,12 +1141,12 @@ export default React.memo(function Sidebar({
                     {group.workspaces.map((workspace) => {
                       const current = currentFolder && workspace.id === group.activeId
                       return (
-                        <div key={workspace.id} className={`group flex min-w-0 items-center rounded-[8px] transition-colors ${current ? 'bg-bg-hover' : 'hover:bg-bg-hover'}`}>
+                        <div key={workspace.id} className={`group flex min-w-0 items-center rounded-panel transition-colors ${current ? 'bg-bg-hover' : 'hover:bg-bg-hover'}`}>
                           <button
                             type="button"
                             data-testid={current ? 'current-workspace' : undefined}
                             aria-current={current ? 'page' : undefined}
-                            className={`flex h-8 min-w-0 flex-1 items-center gap-2 rounded-[8px] px-2 text-left text-[11px] outline-none focus-visible:ring-1 focus-visible:ring-line ${current ? 'text-text' : 'text-text-dim'}`}
+                            className={`flex h-8 min-w-0 flex-1 items-center gap-2 rounded-panel px-2 text-left text-[11px] outline-none focus-visible:ring-1 focus-visible:ring-line ${current ? 'text-text' : 'text-text-dim'}`}
                             onClick={() => void selectCodeWorkspace(group.folder, workspace.id)}
                           >
                             <Code2 size={12} className="flex-none" />
@@ -1132,7 +1156,7 @@ export default React.memo(function Sidebar({
                             type="button"
                             aria-label={`Rename ${workspace.name}`}
                             title="Rename workspace"
-                            className="grid h-8 w-7 flex-none place-items-center rounded-[7px] text-text-faint opacity-0 transition-colors group-hover:opacity-100 hover:bg-bg-raise hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+                            className="grid h-8 w-7 flex-none place-items-center rounded-panel text-text-faint opacity-0 transition-colors group-hover:opacity-100 hover:bg-bg-raise hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
                             onClick={() => void renameCodeWorkspace(group.folder, workspace.id, workspace.name)}
                           >
                             <Pencil size={11} />
@@ -1141,7 +1165,7 @@ export default React.memo(function Sidebar({
                             type="button"
                             aria-label={`Delete ${workspace.name}`}
                             title="Delete workspace"
-                            className="mr-0.5 grid h-8 w-7 flex-none place-items-center rounded-[7px] text-text-faint opacity-0 transition-colors group-hover:opacity-100 hover:bg-bg-raise hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+                            className="mr-0.5 grid h-8 w-7 flex-none place-items-center rounded-panel text-text-faint opacity-0 transition-colors group-hover:opacity-100 hover:bg-bg-raise hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
                             onClick={() => void deleteCodeWorkspace(group.folder, workspace.id, workspace.name, group.workspaces.length === 1)}
                           >
                             <Trash2 size={11} strokeWidth={1.8} />
@@ -1154,7 +1178,7 @@ export default React.memo(function Sidebar({
               )
             })}
             {!codeWorkspaceGroups.length && (
-              <div className="rounded-[8px] border border-line bg-bg-panel px-3 py-4 text-center text-[11px] text-text-faint">
+              <div className="rounded-panel border border-line bg-bg-panel px-3 py-4 text-center text-[11px] text-text-faint">
                 Open a folder to create your first workspace
               </div>
             )}
@@ -1167,7 +1191,7 @@ export default React.memo(function Sidebar({
             window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
             onPickDir()
           }}
-          className="mx-2 mb-2 flex h-9 flex-none items-center justify-center gap-2 rounded-[8px] border border-line bg-bg-hover px-3 text-[11px] font-medium text-text-dim transition-colors hover:bg-bg-raise hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+          className="mx-2 mb-2 flex h-9 flex-none items-center justify-center gap-2 rounded-panel border border-line bg-bg-hover px-3 text-[11px] font-medium text-text-dim transition-colors hover:bg-bg-raise hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
         >
           <FolderPlus size={14} /> New folder
         </button>
@@ -1177,7 +1201,7 @@ export default React.memo(function Sidebar({
 
   const renameDialog = renameTarget ? createPortal(
     <div
-      className="fixed inset-0 z-[60000] flex items-center justify-center bg-[#121212]/80 p-6 backdrop-blur-[2px]"
+      className="fixed inset-0 z-[60000] flex items-center justify-center bg-bg-raise/80 p-6 backdrop-blur-[2px]"
       role="presentation"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) setRenameTarget(null)
@@ -1190,7 +1214,7 @@ export default React.memo(function Sidebar({
         aria-label="Rename workspace"
         data-testid="rename-workspace-dialog"
         tabIndex={-1}
-        className="pop-in flex w-[min(380px,calc(100vw-32px))] flex-col gap-4 rounded-[14px] border border-line-soft bg-bg-panel p-5 shadow-2xl"
+        className="pop-in flex w-[min(380px,calc(100vw-32px))] flex-col gap-4 rounded-panel border border-line-soft bg-bg-panel p-5 shadow-2xl"
         onSubmit={(event) => {
           event.preventDefault()
           void submitRename()
@@ -1219,7 +1243,7 @@ export default React.memo(function Sidebar({
             maxLength={80}
             placeholder="Workspace name"
             aria-label="Workspace name"
-            className="rounded-[8px] border border-line-soft bg-bg-raise px-3 py-2.5 text-xs font-normal tracking-normal text-text outline-none focus:border-line"
+            className="rounded-panel border border-line-soft bg-bg-raise px-3 py-2.5 text-xs font-normal tracking-normal text-text outline-none focus:border-line"
           />
         </label>
         <div className="flex justify-end gap-2">
@@ -1237,18 +1261,18 @@ export default React.memo(function Sidebar({
     <>
     {renameDialog}
     <aside
-      className={`rail-shell rail relative z-[45000] flex flex-none flex-col gap-1 border-r border-line pt-10 pb-2 select-none bg-[#121212] ${expanded ? 'is-expanded w-[200px] items-stretch' : 'w-rail items-center'}`}
-      style={{ WebkitAppRegion: 'drag', backgroundColor: '#121212' } as React.CSSProperties}
+      className={`rail-shell rail relative z-[45000] flex flex-none flex-col gap-1 border-r border-line pt-10 pb-2 select-none bg-bg-raise ${expanded ? 'is-expanded w-[200px] items-stretch' : 'w-rail items-center'}`}
+      style={{ WebkitAppRegion: 'drag', backgroundColor: monochrome.surface } as React.CSSProperties}
     >
       {!expanded && <button
         type="button"
         aria-label="Account"
         title={`${avatarName} · Account`}
-        className="group absolute bottom-[52px] left-1/2 grid h-9 w-9 -translate-x-1/2 place-items-center rounded-full border border-line bg-bg-raise p-[2px] transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+        className="group absolute bottom-[52px] left-1/2 grid h-9 w-9 -translate-x-1/2 place-items-center rounded-pill border border-line bg-bg-raise p-[2px] transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-account'))}
       >
-        <span className="grid h-full w-full place-items-center rounded-full bg-bg-panel text-[10px] font-bold text-text">
+        <span className="grid h-full w-full place-items-center rounded-pill bg-bg-panel text-[10px] font-bold text-text">
           {avatarInitials}
         </span>
       </button>}
@@ -1284,11 +1308,11 @@ export default React.memo(function Sidebar({
         <div className="flex flex-col gap-1 border-t border-line px-2 pt-2">
           <button
             type="button"
-            className="flex h-10 items-center gap-2.5 rounded-[8px] px-2 text-left text-text-dim transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+            className="flex h-10 items-center gap-2.5 rounded-panel px-2 text-left text-text-dim transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
             onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-account'))}
             aria-label="Account"
           >
-            <span className="grid h-7 w-7 flex-none place-items-center rounded-full border border-line bg-bg-panel text-[9px] font-bold text-text">{avatarInitials}</span>
+            <span className="grid h-7 w-7 flex-none place-items-center rounded-pill border border-line bg-bg-panel text-[9px] font-bold text-text">{avatarInitials}</span>
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-1 min-w-0">
                 <span className="truncate text-[11px] font-medium text-text">{avatarName}</span>
@@ -1300,7 +1324,7 @@ export default React.memo(function Sidebar({
           <button
             type="button"
             data-testid="rail-settings"
-            className="flex h-9 items-center gap-2.5 rounded-[8px] px-2 text-[11px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+            className="flex h-9 items-center gap-2.5 rounded-panel px-2 text-[11px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
             onClick={() => window.dispatchEvent(new CustomEvent('orcspace:open-settings'))}
           >
             <Settings size={15} />

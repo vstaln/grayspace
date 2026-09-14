@@ -127,10 +127,10 @@ export default function OrchestrationWidget(): React.JSX.Element {
   if (loading) {
     return (
       <div className="flex h-full flex-col gap-2 overflow-hidden px-3 py-2" role="status" aria-label="Loading orchestration">
-        <div className="h-4 w-2/3 animate-pulse rounded bg-bg-hover" />
-        <div className="h-3 w-1/3 animate-pulse rounded bg-bg-hover" />
-        <div className="h-16 animate-pulse rounded-[8px] bg-bg-hover/50" />
-        <div className="h-16 animate-pulse rounded-[8px] bg-bg-hover/50" />
+        <div className="h-4 w-2/3 animate-pulse rounded-panel bg-bg-hover" />
+        <div className="h-3 w-1/3 animate-pulse rounded-panel bg-bg-hover" />
+        <div className="h-16 animate-pulse rounded-panel bg-bg-hover/50" />
+        <div className="h-16 animate-pulse rounded-panel bg-bg-hover/50" />
       </div>
     )
   }
@@ -169,7 +169,7 @@ export default function OrchestrationWidget(): React.JSX.Element {
             onClick={() => setActionError(null)}
             aria-label="Dismiss error"
             title="Dismiss"
-            className="grid h-5 w-5 flex-none place-items-center rounded text-red-300/70 hover:bg-red-950/40 hover:text-red-200"
+            className="grid h-5 w-5 flex-none place-items-center rounded-pill text-red-300/70 hover:bg-red-950/40 hover:text-red-200"
           >
             <X size={12} />
           </button>
@@ -221,14 +221,14 @@ export default function OrchestrationWidget(): React.JSX.Element {
         {openGates.length > 0 && (
           <Section icon={<ShieldAlert size={12} />} title="Decision gates">
             {openGates.map((gate) => (
-              <div key={gate.id} className="mb-2 rounded-[8px] border border-line-soft bg-bg-hover/25 p-2">
+              <div key={gate.id} className="mb-2 rounded-panel border border-line-soft bg-bg-hover/25 p-2">
                 <p className="text-text">{gate.question}</p>
                 <div className="mt-1.5 flex flex-wrap gap-1">
                   {(gate.options.length ? gate.options : ['ok']).map((option, optIdx) => (
                     <button
                       key={`${option}-${optIdx}`}
                       disabled={isBusy(gate.id)}
-                      className="rounded-[6px] border border-line bg-bg-raise px-2 py-1 text-[11px] text-text transition-colors hover:bg-bg-hover disabled:opacity-50"
+                      className="rounded-panel border border-line bg-bg-raise px-2 py-1 text-[11px] text-text transition-colors hover:bg-bg-hover disabled:opacity-50"
                       onClick={() => act(gate.id, () => window.api.orchestration.resolveGate(gate.id, option))}
                     >
                       {option}
@@ -245,7 +245,7 @@ export default function OrchestrationWidget(): React.JSX.Element {
             {unaccounted.map((dispatch) => (
               <div
                 key={dispatch.id}
-                className="mb-1.5 flex items-center justify-between gap-2 rounded-[8px] border border-line-soft bg-bg-hover/25 px-2 py-1.5"
+                className="mb-1.5 flex items-center justify-between gap-2 rounded-panel border border-line-soft bg-bg-hover/25 px-2 py-1.5"
               >
                 <span className="min-w-0 truncate">
                   <OutcomeDot outcome={dispatch.outcome} />
@@ -255,14 +255,14 @@ export default function OrchestrationWidget(): React.JSX.Element {
                 <span className="flex flex-none gap-1">
                   <button
                     disabled={isBusy(dispatch.id)}
-                    className="rounded-[6px] border border-line px-2 py-0.5 text-[11px] text-text-dim hover:bg-bg-hover disabled:opacity-50"
+                    className="rounded-panel border border-line px-2 py-0.5 text-[11px] text-text-dim hover:bg-bg-hover disabled:opacity-50"
                     onClick={() => act(dispatch.id, () => window.api.orchestration.account(dispatch.id, 'retained'))}
                   >
                     Keep
                   </button>
                   <button
                     disabled={isBusy(dispatch.id)}
-                    className="rounded-[6px] border border-line px-2 py-0.5 text-[11px] text-text-dim hover:bg-bg-hover disabled:opacity-50"
+                    className="rounded-panel border border-line px-2 py-0.5 text-[11px] text-text-dim hover:bg-bg-hover disabled:opacity-50"
                     onClick={() =>
                       act(dispatch.id, () => window.api.orchestration.account(dispatch.id, 'released', true))
                     }
@@ -353,7 +353,7 @@ function AskCard({
   onSend(text?: string): void
 }): React.JSX.Element {
   return (
-    <div className="mb-2 rounded-[8px] border border-line-soft bg-bg-hover/25 p-2">
+    <div className="mb-2 rounded-panel border border-line-soft bg-bg-hover/25 p-2">
       <p className="text-[10px] text-text-faint">
         {ask.from}
         {ask.taskId ? ` · ${ask.taskId}` : ''}
@@ -365,7 +365,7 @@ function AskCard({
             <button
               key={`${option}-${optIdx}`}
               disabled={busy}
-              className="rounded-[6px] border border-line bg-bg-raise px-2 py-0.5 text-[11px] text-text hover:bg-bg-hover disabled:opacity-50"
+              className="rounded-panel border border-line bg-bg-raise px-2 py-0.5 text-[11px] text-text hover:bg-bg-hover disabled:opacity-50"
               onClick={() => {
                 onChange(option)
 
@@ -382,7 +382,7 @@ function AskCard({
           value={value}
           disabled={busy}
           placeholder="Answer…"
-          className="min-w-0 flex-1 rounded-[6px] border border-line bg-bg-raise px-2 py-1 text-[11px] text-text outline-none focus:border-accent"
+          className="min-w-0 flex-1 rounded-panel border border-line bg-bg-raise px-2 py-1 text-[11px] text-text outline-none focus:border-accent"
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && value.trim()) onSend()
@@ -390,7 +390,7 @@ function AskCard({
         />
         <button
           disabled={busy || !value.trim()}
-          className="grid h-[26px] w-[26px] flex-none place-items-center rounded-[6px] border border-line bg-bg-raise text-text-dim hover:bg-bg-hover disabled:opacity-40"
+          className="grid h-[26px] w-[26px] flex-none place-items-center rounded-pill border border-line bg-bg-raise text-text-dim hover:bg-bg-hover disabled:opacity-40"
           onClick={() => onSend()}
           title="Send reply"
         >
@@ -415,7 +415,7 @@ function PermissionCard({
   onRespond(approved: boolean): void
 }): React.JSX.Element {
   return (
-    <div className="mb-2 rounded-[8px] border border-line bg-bg-hover/25 p-2">
+    <div className="mb-2 rounded-panel border border-line bg-bg-hover/25 p-2">
       <p className="text-[10px] text-text-faint">
         {permission.from}
         {permission.taskId ? ` · ${permission.taskId}` : ''}
@@ -426,14 +426,14 @@ function PermissionCard({
         disabled={busy}
         placeholder="Optional note…"
         aria-label="Permission note"
-        className="mt-1.5 w-full rounded-[6px] border border-line bg-bg-raise px-2 py-1 text-[11px] text-text outline-none focus:border-accent"
+        className="mt-1.5 w-full rounded-panel border border-line bg-bg-raise px-2 py-1 text-[11px] text-text outline-none focus:border-accent"
         onChange={(e) => onChange(e.target.value)}
       />
       <div className="mt-1.5 flex gap-1">
         <button
           type="button"
           disabled={busy}
-          className="rounded-[6px] border border-line bg-bg-raise px-2 py-1 text-[11px] text-text hover:bg-bg-hover disabled:opacity-50"
+          className="rounded-panel border border-line bg-bg-raise px-2 py-1 text-[11px] text-text hover:bg-bg-hover disabled:opacity-50"
           onClick={() => onRespond(true)}
         >
           Allow
@@ -441,7 +441,7 @@ function PermissionCard({
         <button
           type="button"
           disabled={busy}
-          className="rounded-[6px] border border-line bg-bg-raise px-2 py-1 text-[11px] text-text-dim hover:bg-bg-hover disabled:opacity-50"
+          className="rounded-panel border border-line bg-bg-raise px-2 py-1 text-[11px] text-text-dim hover:bg-bg-hover disabled:opacity-50"
           onClick={() => onRespond(false)}
         >
           Deny

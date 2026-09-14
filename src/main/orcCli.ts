@@ -63,7 +63,8 @@ export function orcTerminalEnv(terminalId: string): Record<string, string> {
 
     PATH: path ? `${dir}${delimiter()}${path}` : dir,
     ORCSPACE_SOCKET_PATH: getIpcSocketPath(),
-    ORCSPACE_URL: `http://127.0.0.1:${getActiveControlPort()}`,
+    ORCSPACE_URL: getActiveControlPort() ? `http://127.0.0.1:${getActiveControlPort()}` : '',
+    WORKSPACE_CONTROL_PORT: getActiveControlPort() ? String(getActiveControlPort()) : '',
     ORCSPACE_TOKEN: controlToken(),
     ORCSPACE_AGENT_ID: terminalId,
 

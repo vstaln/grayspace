@@ -111,12 +111,22 @@ function strokeBounds(stroke: Stroke): StrokeBounds {
 const PRUNABLE_WIDGET_PREFIXES = [
   'orcspace-links:',
   'orcspace-music-playlists:',
+  // MusicPlayerWidget writes the playlist/track cursor under its own prefix,
+  // and it was the one per-widget key this list never learned about: closing a
+  // music player left the entry behind, and the hydration sweep below skipped
+  // it too, so it survived for the life of the install.
+  'orcspace-music-index:',
   'orcspace-music-volume:',
   'orcspace-music-muted:',
   'orcspace-browser-url:',
   'orcspace-browser-media:',
   'orcspace-chat:messages:',
-  'orcspace-chat:config:'
+  'orcspace-chat:config:',
+  // Cleared by name in removeWidget below, but only when the widget is still
+  // in `widgetsRef` at that moment. Listing it here also sweeps entries left
+  // by earlier installs, and both widgets are canvas-only (WidgetFrame is
+  // rendered from App alone), so "not on the canvas" is proof of garbage.
+  'orcspace-timer:'
 ] as const
 
 /**

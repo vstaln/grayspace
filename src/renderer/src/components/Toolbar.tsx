@@ -47,7 +47,7 @@ interface Props {
 function ToolButton({ label, testId, active, disabled, onClick, children }: {
   label: string; testId: string; active?: boolean; disabled?: boolean; onClick(): void; children: React.ReactNode
 }): React.JSX.Element {
-  return <button type="button" disabled={disabled} className={`grid h-8 w-8 flex-none place-items-center rounded-[9px] transition-colors duration-150 disabled:cursor-default disabled:opacity-35 ${active ? 'bg-bg-hover text-text' : 'text-text hover:bg-bg-hover'}`} onClick={onClick} title={label} aria-label={label} aria-disabled={disabled || undefined} data-testid={testId} {...(active !== undefined ? { 'aria-pressed': active } : {})}>{children}</button>
+  return <button type="button" disabled={disabled} className={`grid h-8 w-8 flex-none place-items-center rounded-panel transition-colors duration-150 disabled:cursor-default disabled:opacity-35 ${active ? 'bg-bg-hover text-text' : 'text-text hover:bg-bg-hover'}`} onClick={onClick} title={label} aria-label={label} aria-disabled={disabled || undefined} data-testid={testId} {...(active !== undefined ? { 'aria-pressed': active } : {})}>{children}</button>
 }
 
 export default function Toolbar({ tool, onToolChange, hasStrokes, onClearStrokes, strokeColor, onStrokeColorChange, workspaceDir, onPickDir, terminals, targetTerminalId = '', commandPrefix, onTargetTerminalChange, onCreateWidget, onSubmitCommand }: Props): React.JSX.Element {
@@ -116,10 +116,10 @@ export default function Toolbar({ tool, onToolChange, hasStrokes, onClearStrokes
     backdropFilter: 'blur(20px) brightness(0.94)',
     WebkitBackdropFilter: 'blur(20px) brightness(0.94)'
   } as React.CSSProperties
-  return <div className="fixed bottom-6 left-1/2 z-[300] flex h-12 w-[min(720px,calc(100vw-24px))] max-w-[calc(100vw-24px)] -translate-x-1/2 items-center gap-1 rounded-[14px] border border-line px-2 py-1 shadow-2xl glass:border-line-soft" style={shellStyle} role="toolbar" aria-label="Canvas Tools" aria-orientation="horizontal">
+  return <div className="fixed bottom-6 left-1/2 z-[300] flex h-12 w-[min(720px,calc(100vw-24px))] max-w-[calc(100vw-24px)] -translate-x-1/2 items-center gap-1 rounded-panel border border-line px-2 py-1 shadow-2xl glass:border-line-soft" style={shellStyle} role="toolbar" aria-label="Canvas Tools" aria-orientation="horizontal">
     {suggestions.length > 0 && (
       <div
-        className="absolute bottom-[calc(100%+8px)] left-10 z-[320] min-w-[250px] overflow-hidden rounded-[10px] border border-line bg-bg-panel/95 p-1 shadow-2xl backdrop-blur-md"
+        className="absolute bottom-[calc(100%+8px)] left-10 z-[320] min-w-[250px] overflow-hidden rounded-panel border border-line bg-bg-panel/95 p-1 shadow-2xl backdrop-blur-md"
         role="listbox"
         id="command-suggestions"
         aria-label="Command suggestions"
@@ -133,7 +133,7 @@ export default function Toolbar({ tool, onToolChange, hasStrokes, onClearStrokes
             id={`command-suggestion-${index}`}
             aria-selected={index === Math.min(suggestionIndex, suggestions.length - 1)}
             data-testid={`command-suggestion-${name}`}
-            className={`flex w-full cursor-pointer items-center gap-2 rounded-[7px] px-2.5 py-2 text-left text-[11px] ${index === Math.min(suggestionIndex, suggestions.length - 1) ? 'bg-bg-hover text-text' : 'text-text-dim hover:bg-bg-hover hover:text-text'}`}
+            className={`flex w-full cursor-pointer items-center gap-2 rounded-panel px-2.5 py-2 text-left text-[11px] ${index === Math.min(suggestionIndex, suggestions.length - 1) ? 'bg-bg-hover text-text' : 'text-text-dim hover:bg-bg-hover hover:text-text'}`}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => chooseSuggestion(name)}
           >
@@ -143,8 +143,8 @@ export default function Toolbar({ tool, onToolChange, hasStrokes, onClearStrokes
         ))}
       </div>
     )}
-    <div className={`absolute bottom-[calc(100%+8px)] left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-[12px] border border-line bg-bg-raise/90 px-2.5 py-2 shadow-2xl backdrop-blur-[20px] transition-all glass:border-line-soft ${paletteHidden ? 'pointer-events-none invisible scale-95 opacity-0' : 'scale-100 opacity-100'}`} role="group" aria-label="Stroke Color" inert={paletteHidden ? true : undefined} aria-hidden={paletteHidden || undefined} onMouseEnter={() => setShowPalette(true)} onMouseLeave={() => setShowPalette(false)} onFocus={() => setShowPalette(true)} onBlur={() => setShowPalette(false)}>
-      {STROKE_COLORS.map((c) => <button key={c} type="button" className={`relative h-5 w-5 flex-none rounded-full border transition-transform duration-150 after:absolute after:-inset-[2px] after:rounded-full after:content-[''] ${strokeColor === c ? 'scale-110 border-accent' : 'border-line hover:scale-105'}`} style={{ backgroundColor: c }} onClick={() => { onStrokeColorChange(c); if (tool !== 'draw') onToolChange('draw') }} title={STROKE_COLOR_NAMES[c]} aria-label={STROKE_COLOR_NAMES[c]} aria-pressed={strokeColor === c} />)}
+    <div className={`absolute bottom-[calc(100%+8px)] left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-panel border border-line bg-bg-raise/90 px-2.5 py-2 shadow-2xl backdrop-blur-[20px] transition-all glass:border-line-soft ${paletteHidden ? 'pointer-events-none invisible scale-95 opacity-0' : 'scale-100 opacity-100'}`} role="group" aria-label="Stroke Color" inert={paletteHidden ? true : undefined} aria-hidden={paletteHidden || undefined} onMouseEnter={() => setShowPalette(true)} onMouseLeave={() => setShowPalette(false)} onFocus={() => setShowPalette(true)} onBlur={() => setShowPalette(false)}>
+      {STROKE_COLORS.map((c) => <button key={c} type="button" className={`relative h-5 w-5 flex-none rounded-pill border transition-transform duration-150 after:absolute after:-inset-[2px] after:rounded-pill after:content-[''] ${strokeColor === c ? 'scale-110 border-accent' : 'border-line hover:scale-105'}`} style={{ backgroundColor: c }} onClick={() => { onStrokeColorChange(c); if (tool !== 'draw') onToolChange('draw') }} title={STROKE_COLOR_NAMES[c]} aria-label={STROKE_COLOR_NAMES[c]} aria-pressed={strokeColor === c} />)}
     </div>
     <form className="flex min-w-0 flex-1 items-center gap-1.5" onSubmit={submitCommand}>
       <div className="relative" onMouseEnter={() => setShowPalette(true)} onMouseLeave={(e) => { const to = e.relatedTarget as HTMLElement | null; if (!to?.closest?.('[role="group"][aria-label="Stroke Color"]')) setShowPalette(false) }} onFocus={() => setShowPalette(true)} onBlur={() => setShowPalette(false)}>
@@ -169,21 +169,21 @@ export default function Toolbar({ tool, onToolChange, hasStrokes, onClearStrokes
           if (picked) chooseSuggestion(picked[0])
         }
       }} className="min-w-0 flex-1 bg-transparent px-1 text-[11px] text-text outline-none placeholder:text-text-faint" placeholder={mode === 'message' ? 'Write a message…' : `Run a command or ${commandPrefix === 'any' ? '/terminal' : `${commandPrefix}terminal`}`} aria-label="Command input" role="combobox" aria-expanded={suggestions.length > 0} aria-controls={suggestions.length > 0 ? 'command-suggestions' : undefined} aria-activedescendant={suggestions.length > 0 ? `command-suggestion-${Math.min(suggestionIndex, suggestions.length - 1)}` : undefined} autoComplete="off" />
-      <button type="submit" className="grid h-7 w-7 flex-none place-items-center rounded-[8px] text-text hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-30" disabled={!canSubmit} aria-label={mode === 'message' ? 'Send message' : 'Run command'} title={mode === 'message' ? 'Send message' : 'Run command'}>↵</button>
+      <button type="submit" className="grid h-7 w-7 flex-none place-items-center rounded-pill text-text hover:bg-bg-hover disabled:cursor-not-allowed disabled:opacity-30" disabled={!canSubmit} aria-label={mode === 'message' ? 'Send message' : 'Run command'} title={mode === 'message' ? 'Send message' : 'Run command'}>↵</button>
     </form>
     <span className="mx-0.5 h-5 w-px bg-bg-hover" aria-hidden="true" />
-    <select data-testid="command-mode" value={mode} onChange={(event) => setMode(event.target.value as 'command' | 'message')} className="h-7 max-w-[96px] rounded-[8px] border border-line bg-bg-raise px-1.5 text-[10px] text-text outline-none" aria-label="Command mode">
+    <select data-testid="command-mode" value={mode} onChange={(event) => setMode(event.target.value as 'command' | 'message')} className="h-7 max-w-[96px] rounded-panel border border-line bg-bg-raise px-1.5 text-[10px] text-text outline-none" aria-label="Command mode">
       <option value="command">Command</option>
       <option value="message">Message</option>
     </select>
-    <select value={activeTerminalId} onChange={(event) => onTargetTerminalChange(event.target.value)} disabled={!terminals.length} className="h-7 max-w-[112px] rounded-[8px] border border-line bg-bg-raise px-1.5 text-[10px] text-text outline-none" aria-label="Target terminal">
+    <select value={activeTerminalId} onChange={(event) => onTargetTerminalChange(event.target.value)} disabled={!terminals.length} className="h-7 max-w-[112px] rounded-panel border border-line bg-bg-raise px-1.5 text-[10px] text-text outline-none" aria-label="Target terminal">
       {terminals.length ? terminals.map((terminal) => <option key={terminal.id} value={terminal.id}>{terminal.title || 'Terminal'}</option>) : <option value="">No terminal</option>}
     </select>
-    <button type="button" className="flex h-7 max-w-[120px] min-w-0 items-center gap-1 rounded-[8px] px-1.5 text-text hover:bg-bg-hover" onClick={onPickDir} aria-label="Change directory" title={workspaceDir || 'Change directory'}>
+    <button type="button" className="flex h-7 max-w-[120px] min-w-0 items-center gap-1 rounded-panel px-1.5 text-text hover:bg-bg-hover" onClick={onPickDir} aria-label="Change directory" title={workspaceDir || 'Change directory'}>
       <FolderOpen size={14} className="flex-none" />
       <span className="truncate text-[10px]">{dirName}</span>
     </button>
-    <button type="button" className="grid h-7 w-7 flex-none place-items-center rounded-[8px] text-text hover:bg-bg-hover" onClick={openSettings} aria-label="Settings" title="Settings">
+    <button type="button" className="grid h-7 w-7 flex-none place-items-center rounded-pill text-text hover:bg-bg-hover" onClick={openSettings} aria-label="Settings" title="Settings">
       <Settings size={14} />
     </button>
     <span className="mx-0.5 h-5 w-px bg-bg-hover" aria-hidden="true" />

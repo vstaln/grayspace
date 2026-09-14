@@ -2,7 +2,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import net from 'node:net'
+import requestIpc from './ipc-request.cjs'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
@@ -10,7 +10,6 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const executable = path.join(root, 'dist', 'win-unpacked', 'OrcSpace.exe')
-const requestedControlPort = process.env.WORKSPACE_CONTROL_PORT
 const timeoutMs = Number(process.env.ORCSPACE_SMOKE_TIMEOUT_MS || 60_000)
 let userDataDir
 let child
@@ -18,29 +17,9 @@ let exited = false
 let childError = null
 let hardStopTimer = null
 
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer()
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address()
-      const port = typeof address === 'object' && address ? address.port : 0
-      server.close(() => resolve(port))
-    })
-  })
-}
 
 
-function parsePort(value) {
-  if (value === undefined || value === null) return null
-  const text = String(value).trim()
-  if (!/^\d{1,5}$/.test(text)) return null
-  const port = Number(text)
-  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null
-}
 
-const controlPort = parsePort(requestedControlPort) ?? await freePort()
-const controlUrl = `http://127.0.0.1:${controlPort}/health`
 
 if (!fs.existsSync(executable)) {
   console.error(`[smoke] executable not found: ${executable}`)
@@ -55,7 +34,7 @@ child = spawn(executable, [`--user-data-dir=${userDataDir}`, '--disable-gpu'], {
   windowsHide: true,
   env: {
     ...process.env,
-    WORKSPACE_CONTROL_PORT: String(controlPort),
+    WORKSPACE_CONTROL_PORT: '',
   }
 })
 
@@ -70,15 +49,6 @@ function childExitMessage(phase) {
   return `OrcSpace exited before ${phase}`
 }
 
-async function request(url, init, timeout = 2_000) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeout)
-  try {
-    return await fetch(url, { ...init, signal: controller.signal })
-  } finally {
-    clearTimeout(timer)
-  }
-}
 
 async function waitForToken(deadline) {
   while (Date.now() < deadline) {
@@ -98,9 +68,11 @@ async function waitForControl(token, deadline) {
   while (Date.now() < deadline) {
     if (exited) throw new Error(childExitMessage('control server health'))
     try {
-      const response = await request(controlUrl, { headers: { 'x-orcspace-token': token } })
-      if (response.ok) {
-        const body = await response.json()
+      const runtime = JSON.parse(fs.readFileSync(path.join(userDataDir, 'runtime.json'), 'utf8'))
+      if (runtime.controlPort) throw new Error('Packaged app unexpectedly advertises a TCP port')
+      const response = await requestIpc(runtime.socketPath, '/health', { headers: { 'x-orcspace-token': token } })
+      if (response.status === 200) {
+        const body = response.json
         if (body?.ok === true) return
       }
     } catch {
@@ -140,7 +112,7 @@ try {
   const deadline = Date.now() + timeoutMs
   const token = await waitForToken(deadline)
   await waitForControl(token, deadline)
-  console.log('[smoke] combined renderer/control server health passed')
+  console.log('[smoke] IPC control server health passed; no TCP port advertised')
 } catch (error) {
   console.error(`[smoke] ${error instanceof Error ? error.message : String(error)}`)
   process.exitCode = 1

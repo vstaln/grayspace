@@ -15,7 +15,9 @@ test('a crashed renderer reconnects to the same running shell', async () => {
     await terminalFrame(page).locator('textarea').focus()
     await page.keyboard.type(`set ORC_CRASH_CHECK=${marker}`)
     await page.keyboard.press('Enter')
-    await waitForTerminalOutput(ctx, id, (output) => output.includes(marker))
+    // Typed echo may contain cursor-position sequences between characters.
+    // The screen, rather than a stripped byte stream, is the observable result.
+    await expect(terminalFrame(page).locator('.xterm-rows')).toContainText(marker)
     await ctx.app.evaluate(({ BrowserWindow }) => new Promise<void>((resolve) => {
       const contents = BrowserWindow.getAllWindows()[0].webContents
       contents.once('did-finish-load', () => resolve())

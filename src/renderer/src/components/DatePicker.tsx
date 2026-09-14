@@ -154,7 +154,7 @@ export default function DatePicker({
         onClick={() => (open ? setOpen(false) : openPicker())}
         className={
           className ??
-          'flex h-[30px] min-w-0 flex-none items-center gap-1.5 rounded-[10px] border border-line bg-bg px-2 text-[12px] text-text outline-none transition-colors focus:border-text-faint disabled:opacity-50'
+          'flex h-[30px] min-w-0 flex-none items-center gap-1.5 rounded-panel border border-line bg-bg px-2 text-[12px] text-text outline-none transition-colors focus:border-text-faint disabled:opacity-50'
         }
       >
         <Calendar size={13} className="flex-none text-text-faint" aria-hidden />
@@ -170,7 +170,7 @@ export default function DatePicker({
             role="dialog"
             aria-modal="true"
             aria-label="Choose date"
-            className="fixed z-[9800] w-[264px] max-w-[calc(100vw-8px)] rounded-[12px] border border-line-soft bg-bg-panel p-2.5 shadow-2xl"
+            className="fixed z-[9800] w-[264px] max-w-[calc(100vw-8px)] rounded-panel border border-line-soft bg-bg-panel p-2.5 shadow-2xl"
 
 
             style={{ left: pos?.left ?? 0, top: pos?.top ?? 0, visibility: pos ? 'visible' : 'hidden' }}
@@ -184,7 +184,7 @@ export default function DatePicker({
                 type="button"
                 aria-label="Previous month"
                 onClick={() => setViewMonth((m) => new Date(m.getFullYear(), m.getMonth() - 1, 1))}
-                className="grid h-6 w-6 place-items-center rounded-[8px] text-text-dim hover:bg-bg-hover hover:text-text"
+                className="grid h-6 w-6 place-items-center rounded-pill text-text-dim hover:bg-bg-hover hover:text-text"
               >
                 <ChevronLeft size={14} />
               </button>
@@ -195,7 +195,7 @@ export default function DatePicker({
                 type="button"
                 aria-label="Next month"
                 onClick={() => setViewMonth((m) => new Date(m.getFullYear(), m.getMonth() + 1, 1))}
-                className="grid h-6 w-6 place-items-center rounded-[8px] text-text-dim hover:bg-bg-hover hover:text-text"
+                className="grid h-6 w-6 place-items-center rounded-pill text-text-dim hover:bg-bg-hover hover:text-text"
               >
                 <ChevronRight size={14} />
               </button>
@@ -247,7 +247,7 @@ export default function DatePicker({
                     onClick={() => pick(d)}
                     aria-current={isToday ? 'date' : undefined}
                     aria-pressed={isSelected}
-                    className={`grid h-7 w-7 place-items-center rounded-full text-[12px] transition-colors ${
+                    className={`grid h-7 w-7 place-items-center rounded-pill text-[12px] transition-colors ${
                       isSelected
                         ? 'bg-accent font-semibold text-bg'
                         : isToday
@@ -269,14 +269,14 @@ export default function DatePicker({
                   onChange('')
                   setOpen(false)
                 }}
-                className="rounded-[8px] px-2 py-1 text-[11px] text-text-dim hover:bg-bg-hover hover:text-text disabled:opacity-40 disabled:hover:bg-transparent"
+                className="rounded-panel px-2 py-1 text-[11px] text-text-dim hover:bg-bg-hover hover:text-text disabled:opacity-40 disabled:hover:bg-transparent"
               >
                 Clear
               </button>
               <button
                 type="button"
                 onClick={() => pick(today)}
-                className="rounded-[8px] px-2 py-1 text-[11px] text-accent hover:bg-bg-hover"
+                className="rounded-panel px-2 py-1 text-[11px] text-accent hover:bg-bg-hover"
               >
                 Today
               </button>

@@ -31,6 +31,18 @@ export function patchWindowsPtyAgents(packageDir = defaultPackageDir) {
 
   if (fs.existsSync(ptyAgentPath)) {
     let content = fs.readFileSync(ptyAgentPath, 'utf8')
+    // The shipped DLL can close a quiet session without a final data event.
+    // Always arm worker cleanup on kill, and clean up natural EOF as well.
+    if (!content.includes('orcspaceConptyCleanup')) {
+      content = content.replace(
+        "this._conoutSocketWorker.onReady(function () {",
+        "this._outSocket.once('close', function orcspaceConptyCleanup() { _this._conoutSocketWorker.dispose(); });\n        this._conoutSocketWorker.onReady(function () {"
+      ).replace(
+        "this._outSocket.on('data', function () {\n                    _this._conoutSocketWorker.dispose();\n                });",
+        "this._outSocket.on('data', function () {\n                    _this._conoutSocketWorker.dispose();\n                });\n                this._conoutSocketWorker.dispose();"
+      )
+      fs.writeFileSync(ptyAgentPath, content, 'utf8')
+    }
     if (!content.includes("agent.on('exit'")) {
       content = content.replace(
         "agent.on('message', function (message) {",

@@ -76,7 +76,7 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     const result = deps.state.createCodeWorkspace(folder, name)
     if ('error' in result) return result
     if (folder === deps.getWorkspaceDir()) {
-      deps.code.setWorkspaceScope(deps.state.activeCodeWorkspaceScope(folder))
+      deps.code.setWorkspaceScope(deps.state.activeCodeWorkspaceScope(folder), undefined, folder)
       const next = deps.state.codeWorkspaceState(folder)
       deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', next)
     }
@@ -123,7 +123,8 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     if (folder === deps.getWorkspaceDir()) {
       deps.code.setWorkspaceScope(
         deps.state.activeCodeWorkspaceScope(folder),
-        result.activeId === result.workspaces[0]?.id ? folder : undefined
+        result.activeId === result.workspaces[0]?.id ? folder : undefined,
+        folder
       )
       deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', result)
     }
@@ -136,7 +137,8 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     if ('error' in result) return result
     deps.code.setWorkspaceScope(
       deps.state.activeCodeWorkspaceScope(folder),
-      result.activeId === result.workspaces[0]?.id ? folder : undefined
+      result.activeId === result.workspaces[0]?.id ? folder : undefined,
+      folder
     )
     deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', result)
     return result

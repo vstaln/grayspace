@@ -59,9 +59,19 @@ test('the wheel scrolls terminal scrollback, even while a TUI tracks the mouse',
 
   await waitForTerminalOutput(ctx, id, (output) => output.includes('TRACKING_READY'))
 
-  const viewport = frame.locator('.xterm-viewport')
-  await expect.poll(async () => viewport.evaluate((el) => el.scrollTop)).toBeGreaterThan(0)
-  const bottom = await viewport.evaluate((el) => el.scrollTop)
+  // xterm 6 virtualizes scrolling; DOM scrollTop no longer tracks scrollback.
+  // Check the lines the user actually sees instead.
+  const rows = frame.locator('.xterm-rows')
+  await expect(rows).toContainText('TRACKING_READY')
+  const firstVisibleLine = async (): Promise<number> => rows.evaluate(el => {
+    for (const row of Array.from(el.children)) {
+      const match = /^line(\d+)\s*$/.exec(row.textContent ?? '')
+      if (match) return Number(match[1])
+    }
+    return -1
+  })
+  await expect.poll(firstVisibleLine).toBeGreaterThan(1)
+  const bottom = await firstVisibleLine()
 
   const box = await frame.getByTestId('terminal-xterm').boundingBox()
   if (!box) throw new Error('terminal pane has no box')
@@ -70,7 +80,8 @@ test('the wheel scrolls terminal scrollback, even while a TUI tracks the mouse',
 
 
 
-  await expect.poll(async () => viewport.evaluate((el) => el.scrollTop)).toBeLessThan(bottom)
+  await expect.poll(firstVisibleLine).toBeGreaterThan(0)
+  await expect.poll(firstVisibleLine).toBeLessThan(bottom)
 
   await page.mouse.wheel(0, 400)
 
@@ -78,9 +89,5 @@ test('the wheel scrolls terminal scrollback, even while a TUI tracks the mouse',
 
 
 
-  await expect
-    .poll(async () =>
-      viewport.evaluate((el) => Math.abs(el.scrollTop - (el.scrollHeight - el.clientHeight)) <= 1)
-    )
-    .toBe(true)
+  await expect.poll(firstVisibleLine).toBe(bottom)
 })

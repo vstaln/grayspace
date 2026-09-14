@@ -37,6 +37,7 @@ const PROVIDERS: ProviderInfo[] = [
 const MODEL_RE = /^[A-Za-z0-9._:/-]{1,120}$/
 const MAX_MESSAGE = 12_000
 const MAX_HISTORY = 40
+const MAX_PROVIDER_OUTPUT = 4 * 1024 * 1024
 const active = new Map<string, ChildProcess>()
 const authActive = new Map<Provider, { child: ChildProcess; timeout: NodeJS.Timeout }>()
 
@@ -48,6 +49,13 @@ function killChild(child: ChildProcess | undefined): void {
   try {
     child.kill()
   } catch {}
+}
+
+function appendProviderOutput(current: string, chunk: Buffer | string): string {
+  const incoming = String(chunk)
+  if (!incoming) return current
+  const combined = current + incoming
+  return combined.length <= MAX_PROVIDER_OUTPUT ? combined : combined.slice(-MAX_PROVIDER_OUTPUT)
 }
 
 process.once('exit', () => {
@@ -164,8 +172,8 @@ async function run(command: string, args: string[], input?: string): Promise<{ c
       killChild(child)
       finish({ code: -1, stdout, stderr: `${stderr}\nTimed out`.trim() })
     }, 10_000)
-    child.stdout?.on('data', (chunk: Buffer | string) => { stdout += String(chunk) })
-    child.stderr?.on('data', (chunk: Buffer | string) => { stderr += String(chunk) })
+    child.stdout?.on('data', (chunk: Buffer | string) => { stdout = appendProviderOutput(stdout, chunk) })
+    child.stderr?.on('data', (chunk: Buffer | string) => { stderr = appendProviderOutput(stderr, chunk) })
     child.on('error', (error) => finish({ code: -1, stdout, stderr: `${stderr}\n${error.message}`.trim() }))
     child.on('close', (code) => finish({ code: code ?? -1, stdout, stderr }))
     if (input !== undefined) {

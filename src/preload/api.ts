@@ -488,7 +488,7 @@ export interface CodeSnapshot {
 
 export interface AgentConversation {
   id: string
-  agentId: 'claude' | 'codex' | 'antigravity'
+  agentId: 'claude' | 'codex' | 'antigravity' | 'grok'
   title: string
   updatedAt: number
   command: string

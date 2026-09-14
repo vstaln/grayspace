@@ -18,6 +18,10 @@ const { CanvasStore } = await import('./canvasState.ts')
 const { startControlServer } = await import('./controlServer.ts')
 const { controlToken } = await import('./controlToken.ts')
 const { getIpcSocketPath } = await import('./ipcSocket.ts')
+const { setActiveSocketPath } = await import('./ipcSocket.ts')
+const { controlTcpEnabled, getActiveControlPort, setActiveControlPort } = await import('./config.ts')
+const { buildPresence } = await import('./linkSnapshot.ts')
+const { orcTerminalEnv } = await import('./orcCli.ts')
 
 describe('orc CLI - Functional, Performance & Integration Tests', () => {
   let server: ReturnType<typeof startControlServer>
@@ -61,6 +65,7 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     })
 
     server = startControlServer({
+      allowTcp: true,
       core,
       terminals,
       planner,
@@ -411,5 +416,52 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     })
     assert.equal(res.status, 0, res.stderr)
     assert.equal((res.json as { agentId: string }).agentId, agentId)
+  })
+
+  test('packaged app refuses TCP even with development environment variables', () => {
+    assert.equal(controlTcpEnabled(true, { NODE_ENV: 'development', ELECTRON_RENDERER_URL: 'http://localhost:3000', WORKSPACE_CONTROL_PORT: '20224' }), false)
+    assert.equal(controlTcpEnabled(false, {}), false)
+    assert.equal(controlTcpEnabled(false, { NODE_ENV: 'development' }), true)
+    assert.equal(controlTcpEnabled(false, { WORKSPACE_CONTROL_PORT: '20224' }), true)
+  })
+
+  test('production serves CLI over IPC without binding or advertising TCP', async () => {
+    const previousSocket = getIpcSocketPath()
+    const previousPort = getActiveControlPort()
+    const previousEnvPort = process.env.WORKSPACE_CONTROL_PORT
+    process.env.WORKSPACE_CONTROL_PORT = String(testPort)
+    const socketPath = process.platform === 'win32'
+      ? `\\\\.\\pipe\\orcspace-production-test-${process.pid}`
+      : join(userData, 'production.sock')
+    const ipc = startControlServer({
+      core, terminals, planner, orchestration, canvas,
+      state: { workspaceDir: userData } as never,
+      defaultCwd: () => userData,
+      allowTcp: controlTcpEnabled(true), port: testPort, socketPath
+    })
+    try {
+      await new Promise<void>((done, reject) => { ipc.once('listening', done); ipc.once('error', reject) })
+      assert.equal(ipc.address(), socketPath)
+      assert.equal(getActiveControlPort(), 0)
+      assert.equal('controlPort' in buildPresence({ workspaceDir: userData }), false)
+      const env = orcTerminalEnv(agentId)
+      assert.equal(env.ORCSPACE_SOCKET_PATH, socketPath)
+      assert.equal(env.ORCSPACE_URL, '')
+      assert.equal(env.WORKSPACE_CONTROL_PORT, '')
+      const health = await runOrc(['api', 'GET', '/health'], env)
+      assert.equal(health.status, 0, health.stderr)
+      assert.equal((health.json as { ok: boolean }).ok, true)
+      assert.equal('controlPort' in (health.json as object), false)
+      const identity = await runOrc(['whoami'], env)
+      assert.equal(identity.status, 0, identity.stderr)
+      assert.equal((identity.json as { agentId: string }).agentId, agentId)
+    } finally {
+      ipc.closeAllConnections()
+      await new Promise<void>((done) => ipc.close(() => done()))
+      setActiveSocketPath(previousSocket)
+      setActiveControlPort(previousPort)
+      if (previousEnvPort === undefined) delete process.env.WORKSPACE_CONTROL_PORT
+      else process.env.WORKSPACE_CONTROL_PORT = previousEnvPort
+    }
   })
 })

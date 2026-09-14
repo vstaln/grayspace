@@ -58,9 +58,11 @@ const push = useCallback((store: string, message: string, kind: ToastItem['kind'
   return { toasts, push, dismiss }
 }
 
-export function ToastContainer({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (id: number) => void }): React.JSX.Element | null {
-  if (toasts.length === 0) return null
-
+export function ToastContainer({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (id: number) => void }): React.JSX.Element {
+  // The live region has to already be in the document when content is inserted
+  // into it, otherwise screen readers miss the very first toast. Returning null
+  // while empty re-created the region with the toast already inside it, which
+  // announces nothing. Keep the region mounted and let it be empty instead.
   const visible = toasts.slice(-5)
   return (
     <div
@@ -75,12 +77,14 @@ export function ToastContainer({ toasts, onDismiss }: { toasts: ToastItem[]; onD
         return (
           <div
             key={t.id}
-            role="alert"
-            className={`pointer-events-auto flex max-w-[420px] items-start gap-3 rounded-[10px] border ${borderClass} bg-bg-panel px-3 py-2 text-[12px] shadow-lg`}
+            // No role="alert" here: the wrapper is already a live region, and
+            // nesting one inside another made every toast announce twice.
+            className={`pointer-events-auto flex max-w-[420px] items-start gap-3 rounded-panel border ${borderClass} bg-bg-panel px-3 py-2 text-[12px] shadow-lg`}
           >
             <span aria-hidden="true" className={`mt-0.5 ${iconClass}`}>{icon}</span>
             <div className="flex-1">
-              <div className="font-medium text-text">Failed to save {t.store}</div>
+              {/* `push` accepts kind: 'info', and those are not save failures. */}
+              <div className="font-medium text-text">{isError ? `Failed to save ${t.store}` : t.store}</div>
               <div className="text-text-dim break-words">{t.message.slice(0, 200)}</div>
             </div>
             <button

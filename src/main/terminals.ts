@@ -3,6 +3,7 @@ import * as os from 'os'
 import * as fs from 'fs'
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch'
 import type { IPty } from '@homebridge/node-pty-prebuilt-multiarch'
+import { windowsPtyOptions } from './conpty.ts'
 import { OUTPUT_BUFFER_LIMIT, MAX_TERMINAL_WRITE_BYTES, defaultShell } from './config.ts'
 import { CommandError } from './core/index.ts'
 import { killProcessTree } from './procTree.ts'
@@ -447,6 +448,7 @@ export class TerminalManager extends EventEmitter {
     try {
       const windowsShell = this.getWindowsShell()
       const child = pty.spawn(defaultShell(windowsShell), windowsShellArgs(windowsShell), {
+        ...(process.platform === 'win32' ? windowsPtyOptions : {}),
         name: 'xterm-256color',
         cols: isPositiveInt(cols) ? cols : 80,
         rows: isPositiveInt(rows) ? rows : 24,
@@ -717,6 +719,7 @@ export class TerminalManager extends EventEmitter {
       id,
       staged.offset,
       staged.expected,
+      staged.expectedLength,
       options.timeoutMs ?? 4_000,
       options.signal
     )
@@ -761,19 +764,22 @@ export class TerminalManager extends EventEmitter {
     id: string,
     text: string,
     options: { pressEnter?: boolean; signal?: AbortSignal }
-  ): Promise<{ ok: true; offset: number; expected: string } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; offset: number; expected: string; expectedLength: number } | { ok: false; error: string }> {
     const epoch = this.inputEpochs.get(id)
     if (options.signal?.aborted) return { ok: false, error: 'delivery cancelled' }
     if (typeof text !== 'string' || !text.trim()) return { ok: false, error: 'message is empty' }
     const record = this.terminals.get(id)
     if (!record || !this.isRunning(id)) return { ok: false, error: `terminal ${id} is not running` }
 
-    const singleLine = text.replace(/\r\n|\r|\n/g, ' ')
-    const expected = normalizeDeliveryText(singleLine)
+    const pastedText = text.replace(/\r\n?/g, '\n')
+    const multiline = pastedText.includes('\n')
+    const input = multiline ? `\x1b[200~${pastedText}\x1b[201~` : pastedText
+    const expected = normalizeDeliveryText(pastedText)
     if (!expected) return { ok: false, error: 'message has no visible text' }
+    const expectedLength = pastedText.length
     const offset = record.output.globalOffset
 
-    const typed = await this.write(id, singleLine)
+    const typed = await this.write(id, input)
     if (!typed.ok) return { ok: false, error: typed.error }
     if (options.pressEnter !== false) {
       if (!(await this.waitBeforeSubmit(id, options.signal))) return { ok: false, error: 'delivery cancelled' }
@@ -781,13 +787,14 @@ export class TerminalManager extends EventEmitter {
       const submitted = await this.write(id, '\r')
       if (!submitted.ok) return { ok: false, error: submitted.error }
     }
-    return { ok: true, offset, expected }
+    return { ok: true, offset, expected, expectedLength }
   }
 
   private waitForDeliveryEcho(
     id: string,
     offset: number,
     expected: string,
+    expectedLength: number,
     timeoutMs: number,
     signal?: AbortSignal
   ): Promise<boolean> {
@@ -798,11 +805,12 @@ export class TerminalManager extends EventEmitter {
       const output = record.output.read(from, OUTPUT_BUFFER_LIMIT).data
       const normalized = normalizeDeliveryText(output)
       if (!normalized || !expected) return false
-      if (expected.length >= 8) return normalized.includes(expected)
+      if (expected.length >= 8 && normalized.includes(expected)) return true
       // Short commands ("ls", "ok") collide with prose already on screen:
       // require a token boundary so "ls" inside "false" is not a delivery.
       const escaped = expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      return new RegExp(`(^|\\W)${escaped}(\\W|$)`).test(normalized)
+      if (expected.length < 8 && new RegExp(`(^|\\W)${escaped}(\\W|$)`).test(normalized)) return true
+      return pasteMarkerMatches(normalized, expectedLength)
     }
     if (matches()) return Promise.resolve(true)
     if (signal?.aborted) return Promise.resolve(false)
@@ -1216,6 +1224,17 @@ export function normalizeDeliveryText(value: string): string {
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function pasteMarkerMatches(value: string, expectedLength: number): boolean {
+  const marker = /\[\s*pasted\s+(?:content|text)\b([^\]\r\n]*)\]/gi
+  for (const match of value.matchAll(marker)) {
+    const body = match[1] ?? ''
+    const explicitLength = body.match(/(\d[\d,]*)\s*(?:chars?|characters?)\b/i)?.[1]
+    const candidate = explicitLength ?? [...body.matchAll(/\d[\d,]*/g)].at(-1)?.[0]
+    if (candidate && Number(candidate.replace(/,/g, '')) === expectedLength) return true
+  }
+  return false
 }
 
 /** Minimum gap between a typed message and its Enter. See waitBeforeSubmit. */

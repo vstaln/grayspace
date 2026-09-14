@@ -251,7 +251,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
       </button>
 
       <div
-        className="h-2 w-full overflow-hidden rounded-[9999px] bg-bg-hover"
+        className="h-2 w-full overflow-hidden rounded-pill bg-bg-hover"
         role="progressbar"
         aria-label="Timer progress"
         aria-valuemin={0}
@@ -259,7 +259,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
         aria-valuenow={Math.round(progress * 100)}
       >
         <div
-          className={`h-full rounded-[9999px] transition-[width] duration-200 ease-out ${over ? 'bg-danger' : 'bg-accent/70'}`}
+          className={`h-full rounded-pill transition-[width] duration-200 ease-out ${over ? 'bg-danger' : 'bg-accent/70'}`}
           style={{ width: `${progress * 100}%` }}
         />
       </div>
@@ -271,7 +271,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
 
       <div className="flex items-center gap-1.5">
         <button
-          className="flex items-center gap-1.5 rounded-[10px] border border-line bg-bg-hover/40 px-3 py-1.5 text-[12px] text-text transition-colors duration-150 hover:bg-bg-hover"
+          className="flex items-center gap-1.5 rounded-panel border border-line bg-bg-hover/40 px-3 py-1.5 text-[12px] text-text transition-colors duration-150 hover:bg-bg-hover"
           onClick={() => (running ? pause() : start())}
           aria-label={running ? 'Pause' : 'Start'}
         >
@@ -279,7 +279,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
           {running ? 'Pause' : 'Start'}
         </button>
         <button
-          className="grid h-8 w-8 place-items-center rounded-[10px] border border-line bg-bg-hover/40 text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text"
+          className="grid h-8 w-8 place-items-center rounded-pill border border-line bg-bg-hover/40 text-text-dim transition-colors duration-150 hover:bg-bg-hover hover:text-text"
           title="Reset"
           aria-label="Reset timer"
           onClick={() => reset()}
@@ -307,7 +307,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
                 onFocus={(e) => e.target.select()}
                 onKeyDown={(e) => handleKeyDown(e, setCustomHours, 99)}
                 placeholder="0"
-                className="h-6 w-9 rounded-[6px] border border-line bg-bg-raise text-center text-xs text-text outline-none transition-colors focus:border-accent"
+                className="h-6 w-9 rounded-panel border border-line bg-bg-raise text-center text-xs text-text outline-none transition-colors focus:border-accent"
                 aria-label="Hours"
                 title="Hours (0-99)"
               />
@@ -325,7 +325,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
                 onFocus={(e) => e.target.select()}
                 onKeyDown={(e) => handleKeyDown(e, setCustomMinutes, 59)}
                 placeholder="0"
-                className="h-6 w-9 rounded-[6px] border border-line bg-bg-raise text-center text-xs text-text outline-none transition-colors focus:border-accent"
+                className="h-6 w-9 rounded-panel border border-line bg-bg-raise text-center text-xs text-text outline-none transition-colors focus:border-accent"
                 aria-label="Minutes"
                 title="Minutes (0-59)"
               />
@@ -343,7 +343,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
                 onFocus={(e) => e.target.select()}
                 onKeyDown={(e) => handleKeyDown(e, setCustomSeconds, 59)}
                 placeholder="0"
-                className="h-6 w-9 rounded-[6px] border border-line bg-bg-raise text-center text-xs text-text outline-none transition-colors focus:border-accent"
+                className="h-6 w-9 rounded-panel border border-line bg-bg-raise text-center text-xs text-text outline-none transition-colors focus:border-accent"
                 aria-label="Seconds"
                 title="Seconds (0-59)"
               />
@@ -353,7 +353,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
           <div className="flex items-center gap-1.5">
             <button
               type="submit"
-              className="rounded-[6px] bg-accent px-2.5 py-0.5 text-[11px] font-medium text-bg transition-opacity hover:opacity-90"
+              className="rounded-panel bg-accent px-2.5 py-0.5 text-[11px] font-medium text-bg transition-opacity hover:opacity-90"
             >
               Set
             </button>
@@ -363,7 +363,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
                 setCustomError(null)
                 setIsCustom(false)
               }}
-              className="rounded-[6px] border border-line bg-bg-hover/40 px-2.5 py-0.5 text-[11px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+              className="rounded-panel border border-line bg-bg-hover/40 px-2.5 py-0.5 text-[11px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
             >
               Cancel
             </button>
@@ -379,7 +379,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
           {PRESETS.map((min) => (
             <button
               key={min}
-              className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-colors duration-150 disabled:cursor-default disabled:opacity-40 ${
+              className={`rounded-pill border px-2.5 py-0.5 text-[11px] transition-colors duration-150 disabled:cursor-default disabled:opacity-40 ${
                 totalMs === min * 60_000 && isPresetActive
                   ? 'border-line text-text'
                   : 'border-line-soft text-text-faint hover:text-text-dim'
@@ -395,7 +395,7 @@ export default function TimerWidget({ widgetId }: { widgetId?: string }): React.
             </button>
           ))}
           <button
-            className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-colors duration-150 disabled:cursor-default disabled:opacity-40 ${
+            className={`rounded-pill border px-2.5 py-0.5 text-[11px] transition-colors duration-150 disabled:cursor-default disabled:opacity-40 ${
               !isPresetActive
                 ? 'border-line text-text'
                 : 'border-line-soft text-text-faint hover:text-text-dim'

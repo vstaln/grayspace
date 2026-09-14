@@ -1,13 +1,20 @@
 import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   claudeProjectSlug,
   claudeProjectSlugUnicode,
   listAgentConversations,
   parseAntigravityHistory,
+  decodeGrokCwd,
+  parseGrokSummary,
+  parseGrokTitle,
+  parseSqlTime,
+  summaryConversation,
+  workspaceUriToPath,
   parseClaudeTitle,
   parseCodexMeta,
   parseCodexTitle,
@@ -432,11 +439,11 @@ describe('agentSessions - discovery', () => {
     }
   })
 
-  test('default limit caps the list at 20', async () => {
+  test('default limit caps the list at the number of sessions Code can hold', async () => {
     const home = makeHome()
     try {
       const dir = join(home, '.claude', 'projects', claudeProjectSlug(WORKSPACE))
-      for (let i = 0; i < 25; i++) {
+      for (let i = 0; i < 40; i++) {
         writeFileAt(
           join(dir, `aaaaaaaa-1111-2222-3333-${String(i).padStart(12, '0')}.jsonl`),
           jsonl({ type: 'user', message: { role: 'user', content: `task ${i}` } }),
@@ -444,8 +451,289 @@ describe('agentSessions - discovery', () => {
         )
       }
       const found = await listAgentConversations(WORKSPACE, { home })
-      assert.equal(found.length, 20)
-      assert.equal(found[0].title, 'task 24')
+      assert.equal(found.length, 32)
+      assert.equal(found[0].title, 'task 39')
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+})
+
+const SUMMARY_FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
+/** The folder the checked-in summaries fixture records its conversations in. */
+const FIXTURE_WORKSPACE = 'C:\\Users\\dev\\Project'
+
+/** The real `conversation_summaries.db` shape, as SQLite wrote it. */
+function installSummaries(home: string, withLog = true): void {
+  const target = join(home, '.gemini', 'antigravity-cli', 'conversation_summaries.db')
+  mkdirSync(join(target, '..'), { recursive: true })
+  copyFileSync(join(SUMMARY_FIXTURES, 'antigravity-summaries.db'), target)
+  if (withLog) copyFileSync(join(SUMMARY_FIXTURES, 'antigravity-summaries.db-wal'), `${target}-wal`)
+}
+
+describe('agentSessions - antigravity workspaces and times', () => {
+  test('a file uri becomes the path it names', () => {
+    assert.equal(workspaceUriToPath('file:///C:/Users/dev/Project'), 'C:/Users/dev/Project')
+    assert.equal(workspaceUriToPath('file:///home/dev/Project'), '/home/dev/Project')
+    assert.equal(workspaceUriToPath('file:///C:/Users/dev/My%20Project'), 'C:/Users/dev/My Project')
+    assert.equal(workspaceUriToPath('C:/Users/dev/Project'), 'C:/Users/dev/Project')
+  })
+
+  test('the time column parses despite its space and extra digits', () => {
+    assert.equal(parseSqlTime('2026-09-14 14:29:24.9264321+00:00'), Date.parse('2026-09-14T14:29:24.926Z'))
+    assert.equal(parseSqlTime('2026-09-14 14:29:24'), Date.parse('2026-09-14T14:29:24Z'))
+    assert.equal(parseSqlTime('nonsense'), 0)
+    assert.equal(parseSqlTime(null), 0)
+  })
+
+  test('a summary row for this folder resumes by id', () => {
+    const found = summaryConversation(
+      {
+        conversation_id: '11111111-1111-4111-8111-111111111111',
+        title: 'Casual Opening Greeting',
+        last_modified_time: '2026-09-14 14:29:24+00:00',
+        workspace_uris: JSON.stringify([`file:///${WORKSPACE.replace(/\\/g, '/')}`]),
+        killed: 0
+      },
+      WORKSPACE
+    )
+    assert.equal(found?.command, 'agy --conversation 11111111-1111-4111-8111-111111111111')
+    assert.equal(found?.title, 'Casual Opening Greeting')
+  })
+
+  test('another folder, a killed conversation and a nested one are not offered', () => {
+    const base = {
+      conversation_id: '11111111-1111-4111-8111-111111111111',
+      title: 'x',
+      last_modified_time: '2026-09-14 14:29:24+00:00',
+      workspace_uris: JSON.stringify([`file:///${WORKSPACE.replace(/\\/g, '/')}`]),
+      killed: 0
+    }
+    assert.ok(summaryConversation(base, WORKSPACE))
+    assert.equal(summaryConversation({ ...base, workspace_uris: '["file:///C:/Other"]' }, WORKSPACE), null)
+    assert.equal(summaryConversation({ ...base, killed: 1 }, WORKSPACE), null)
+    assert.equal(summaryConversation({ ...base, parent_conversation_id: 'p' }, WORKSPACE), null)
+    assert.equal(summaryConversation({ ...base, conversation_id: 'no' }, WORKSPACE), null)
+  })
+})
+
+describe('agentSessions - antigravity discovery', () => {
+  test('conversations the history never stamped with an id are still found', async (t) => {
+    // The fixture records a Windows workspace, which only resolves as a path there.
+    if (process.platform !== 'win32') return t.skip('windows paths')
+    const home = makeHome()
+    try {
+      installSummaries(home)
+      // What a recent CLI writes: a prompt line with no conversation id at all.
+      writeFileAt(
+        join(home, '.gemini', 'antigravity-cli', 'history.jsonl'),
+        jsonl({ display: 'hello there', timestamp: 1_789_396_138_768, workspace: FIXTURE_WORKSPACE })
+      )
+
+      const found = await listAgentConversations(FIXTURE_WORKSPACE, { home })
+      assert.deepEqual(
+        found.map((c) => c.id).sort(),
+        ['11111111-1111-4111-8111-111111111111', '44444444-4444-4444-8444-444444444444']
+      )
+      assert.ok(found.every((c) => c.command.startsWith('agy --conversation ')))
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  test('what the user typed wins over the generated summary title', async (t) => {
+    if (process.platform !== 'win32') return t.skip('windows paths')
+    const home = makeHome()
+    try {
+      installSummaries(home)
+      writeFileAt(
+        join(home, '.gemini', 'antigravity-cli', 'history.jsonl'),
+        jsonl({
+          display: 'fix the installer',
+          timestamp: 1_789_396_138_768,
+          workspace: FIXTURE_WORKSPACE,
+          conversationId: '11111111-1111-4111-8111-111111111111'
+        })
+      )
+
+      const found = await listAgentConversations(FIXTURE_WORKSPACE, { home })
+      const conversation = found.find((c) => c.id === '11111111-1111-4111-8111-111111111111')
+      assert.equal(conversation?.title, 'fix the installer')
+      // The history is newer than the summary, so it dates the conversation.
+      assert.equal(conversation?.updatedAt, 1_789_396_138_768)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  test('a missing summaries store leaves the history as the only source', async () => {
+    const home = makeHome()
+    try {
+      writeFileAt(
+        join(home, '.gemini', 'antigravity-cli', 'history.jsonl'),
+        jsonl({
+          display: 'agy work',
+          timestamp: 3_000_000,
+          workspace: WORKSPACE,
+          conversationId: 'cccccccc-1111-2222-3333-444444444444'
+        })
+      )
+      const found = await listAgentConversations(WORKSPACE, { home })
+      assert.deepEqual(found.map((c) => c.id), ['cccccccc-1111-2222-3333-444444444444'])
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  test('every agent gets a share of the room, not just the busiest one', async (t) => {
+    if (process.platform !== 'win32') return t.skip('windows paths')
+    const home = makeHome()
+    try {
+      installSummaries(home)
+      const project = join(home, '.claude', 'projects', claudeProjectSlug(FIXTURE_WORKSPACE))
+      for (let i = 0; i < 6; i++) {
+        writeFileAt(
+          join(project, `aaaaaaaa-1111-2222-3333-00000000000${i}.jsonl`),
+          jsonl({ type: 'user', cwd: FIXTURE_WORKSPACE, message: { role: 'user', content: `claude ${i}` } }),
+          9_000 + i
+        )
+      }
+
+      const found = await listAgentConversations(FIXTURE_WORKSPACE, { home, limit: 4 })
+      assert.equal(found.length, 4)
+      // Two of each, rather than four claude transcripts crowding antigravity out.
+      assert.equal(found.filter((c) => c.agentId === 'antigravity').length, 2)
+      assert.equal(found.filter((c) => c.agentId === 'claude').length, 2)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+})
+
+/** One Grok session on disk: the group is the folder, URL-encoded. */
+function installGrokSession(
+  home: string,
+  dir: string,
+  id: string,
+  options: { updates?: string; summary?: unknown; group?: string; cwdFile?: string; mtime?: number } = {}
+): void {
+  const group = join(home, '.grok', 'sessions', options.group ?? encodeURIComponent(dir))
+  writeFileAt(join(group, id, 'updates.jsonl'), options.updates ?? jsonl({ sessionUpdate: 'user_message', content: [{ type: 'text', text: 'grok work' }] }), options.mtime)
+  if (options.summary !== undefined) writeFileAt(join(group, id, 'summary.json'), JSON.stringify(options.summary))
+  if (options.cwdFile !== undefined) writeFileAt(join(group, '.cwd'), options.cwdFile)
+}
+
+const GROK_ID = 'dddddddd-1111-2222-3333-444444444444'
+
+describe('agentSessions - grok parsing', () => {
+  test('a group name decodes back to the folder it stands for', () => {
+    assert.equal(decodeGrokCwd(encodeURIComponent(WORKSPACE)), WORKSPACE)
+    // A slug-plus-hash name is not percent-encoded; it must survive untouched.
+    assert.equal(decodeGrokCwd('Project-9f2c1a%zz'), 'Project-9f2c1a%zz')
+  })
+
+  test('the summary index gives the title, folder and time', () => {
+    const summary = parseGrokSummary(
+      JSON.stringify({
+        info: { session_id: GROK_ID, cwd: WORKSPACE },
+        generated_title: 'Fix the installer',
+        session_summary: 'a much longer recap',
+        updated_at: '2026-09-14T14:29:24Z',
+        created_at: '2026-09-14T13:00:00Z'
+      })
+    )
+    assert.equal(summary?.id, GROK_ID)
+    assert.equal(summary?.title, 'Fix the installer')
+    assert.equal(summary?.cwd, WORKSPACE)
+    assert.equal(summary?.updatedAt, Date.parse('2026-09-14T14:29:24Z'))
+  })
+
+  test('a summary without a title falls back to its recap, and broken json to nothing', () => {
+    assert.equal(parseGrokSummary(JSON.stringify({ last_turn_summary: 'renamed the widget' }))?.title, 'renamed the widget')
+    assert.equal(parseGrokSummary('{ truncated'), null)
+    assert.equal(parseGrokSummary('[]'), null)
+  })
+
+  test('a prompt streamed in chunks is stitched back into one title', () => {
+    const head = jsonl(
+      { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'add a ' } },
+      { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'resume panel' } },
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'sure' } }
+    )
+    assert.equal(parseGrokTitle(head), 'add a resume panel')
+  })
+
+  test('a whole prompt is read as it is, and agent output never becomes a title', () => {
+    assert.equal(parseGrokTitle(jsonl({ sessionUpdate: 'user_message', content: [{ type: 'text', text: 'ship it' }] })), 'ship it')
+    assert.equal(parseGrokTitle(jsonl({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done' } })), '')
+  })
+})
+
+describe('agentSessions - grok discovery', () => {
+  test('a session in this folder resumes by id, titled by its summary', async () => {
+    const home = makeHome()
+    try {
+      installGrokSession(home, WORKSPACE, GROK_ID, {
+        summary: { info: { session_id: GROK_ID, cwd: WORKSPACE }, generated_title: 'Fix the installer', updated_at: '2026-09-14T14:29:24Z' }
+      })
+      const found = await listAgentConversations(WORKSPACE, { home })
+      assert.deepEqual(
+        found.map((c) => [c.agentId, c.title, c.command, c.updatedAt]),
+        [['grok', 'Fix the installer', `grok --resume ${GROK_ID}`, Date.parse('2026-09-14T14:29:24Z')]]
+      )
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  test('without a summary the first prompt titles the row and the log dates it', async () => {
+    const home = makeHome()
+    try {
+      installGrokSession(home, WORKSPACE, GROK_ID, { mtime: 5_000 })
+      const found = await listAgentConversations(WORKSPACE, { home })
+      assert.deepEqual(found.map((c) => [c.title, c.updatedAt]), [['grok work', 5_000_000]])
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  test('a folder too long to encode is found through its .cwd file', async () => {
+    const home = makeHome()
+    try {
+      installGrokSession(home, WORKSPACE, GROK_ID, { group: 'Project-9f2c1a3b', cwdFile: `${WORKSPACE}
+` })
+      const found = await listAgentConversations(WORKSPACE, { home })
+      assert.deepEqual(found.map((c) => c.id), [GROK_ID])
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  test('a group named by some other scheme is still found through its summaries', async () => {
+    const home = makeHome()
+    try {
+      // Neither the directory name nor a `.cwd` file names this folder.
+      installGrokSession(home, WORKSPACE, GROK_ID, {
+        group: 'some-other-scheme',
+        summary: { info: { session_id: GROK_ID, cwd: WORKSPACE }, generated_title: 'Fix the installer' }
+      })
+      const found = await listAgentConversations(WORKSPACE, { home })
+      assert.deepEqual(found.map((c) => [c.id, c.title]), [[GROK_ID, 'Fix the installer']])
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  test('another folder’s sessions, and one the summary disowns, are not offered', async () => {
+    const home = makeHome()
+    try {
+      installGrokSession(home, `${WORKSPACE}-other`, GROK_ID)
+      assert.deepEqual(await listAgentConversations(WORKSPACE, { home }), [])
+
+      installGrokSession(home, WORKSPACE, GROK_ID, {
+        summary: { info: { session_id: GROK_ID, cwd: `${WORKSPACE}-other` } }
+      })
+      assert.deepEqual(await listAgentConversations(WORKSPACE, { home }), [])
     } finally {
       rmSync(home, { recursive: true, force: true })
     }

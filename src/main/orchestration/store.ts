@@ -7,9 +7,11 @@ import { CommandError, VersionRegistry } from '../core/index.ts'
 import {
   DISPATCH_STATES,
   MESSAGE_TYPES,
+  OUTCOMES,
   TASK_STATUSES,
   isHandle,
   type Dispatch,
+  type DispatchState,
   type Gate,
   type Message,
   type MessageType,
@@ -57,6 +59,22 @@ interface PersistedShape {
   dispatches: Dispatch[]
   messages: Message[]
   gates: Gate[]
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function stringField(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback
+}
+
+function numberField(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
 }
 
 
@@ -123,15 +141,108 @@ export class OrchestrationStore extends EventEmitter {
 
 
   private load(): void {
-    const data = readStoreJson<PersistedShape>(this.file, emptyShape())
+    const raw = readStoreJson<unknown>(this.file, emptyShape())
+    const data: Record<string, unknown> = isRecord(raw) ? raw : {}
     if (typeof data.schemaVersion === 'number' && data.schemaVersion > ORCHESTRATION_SCHEMA_VERSION) {
       console.warn(`orchestration store schema v${data.schemaVersion} is newer than supported v${ORCHESTRATION_SCHEMA_VERSION}; loading best-effort`)
     }
-    for (const run of data.runs ?? []) this.runs.set(run.id, run)
-    for (const task of data.tasks ?? []) this.tasks.set(task.id, task)
-    for (const dispatch of data.dispatches ?? []) this.dispatches.set(dispatch.id, dispatch)
-    for (const gate of data.gates ?? []) this.gates.set(gate.id, gate)
-    this.messages = [...(data.messages ?? [])]
+    const runs = Array.isArray(data.runs) ? data.runs : []
+    const tasks = Array.isArray(data.tasks) ? data.tasks : []
+    const dispatches = Array.isArray(data.dispatches) ? data.dispatches : []
+    const gates = Array.isArray(data.gates) ? data.gates : []
+    const messages = Array.isArray(data.messages) ? data.messages : []
+
+    for (const raw of runs) {
+      if (!isRecord(raw) || !stringField(raw.id)) continue
+      const run: Run = {
+        id: stringField(raw.id),
+        objective: stringField(raw.objective),
+        coordinator: stringField(raw.coordinator),
+        createdAt: numberField(raw.createdAt),
+        version: Math.max(1, numberField(raw.version, 1)),
+        ...(typeof raw.closedAt === 'number' && Number.isFinite(raw.closedAt) ? { closedAt: raw.closedAt } : {})
+      }
+      this.runs.set(run.id, run)
+    }
+    for (const raw of tasks) {
+      if (!isRecord(raw) || !stringField(raw.id) || !stringField(raw.runId)) continue
+      const status = TASK_STATUSES.includes(raw.status as OrcTaskStatus) ? raw.status as OrcTaskStatus : 'pending'
+      const outcome = OUTCOMES.includes(raw.outcome as Outcome) ? raw.outcome as Outcome : undefined
+      const task: OrcTask = {
+        id: stringField(raw.id),
+        runId: stringField(raw.runId),
+        title: stringField(raw.title),
+        spec: stringField(raw.spec),
+        deps: stringList(raw.deps),
+        status,
+        createdBy: stringField(raw.createdBy),
+        createdAt: numberField(raw.createdAt),
+        updatedAt: numberField(raw.updatedAt, numberField(raw.createdAt)),
+        version: Math.max(1, numberField(raw.version, 1)),
+        ...(stringList(raw.images).length ? { images: stringList(raw.images) } : {}),
+        ...(outcome ? { outcome } : {})
+      }
+      this.tasks.set(task.id, task)
+    }
+    for (const raw of dispatches) {
+      if (!isRecord(raw) || !stringField(raw.id) || !stringField(raw.runId) || !stringField(raw.taskId)) continue
+      const state = DISPATCH_STATES.includes(raw.state as DispatchState) ? raw.state as DispatchState : 'settled'
+      const outcome = OUTCOMES.includes(raw.outcome as Outcome) ? raw.outcome as Outcome : undefined
+      const dispatch: Dispatch = {
+        id: stringField(raw.id),
+        runId: stringField(raw.runId),
+        taskId: stringField(raw.taskId),
+        terminalId: stringField(raw.terminalId),
+        agent: stringField(raw.agent),
+        state,
+        preamble: stringField(raw.preamble),
+        startedAt: numberField(raw.startedAt),
+        version: Math.max(1, numberField(raw.version, 1)),
+        ...(outcome ? { outcome } : {}),
+        ...(typeof raw.settledAt === 'number' && Number.isFinite(raw.settledAt) ? { settledAt: raw.settledAt } : {}),
+        ...(stringList(raw.filesModified).length ? { filesModified: stringList(raw.filesModified) } : {})
+      }
+      this.dispatches.set(dispatch.id, dispatch)
+    }
+    for (const raw of gates) {
+      if (!isRecord(raw) || !stringField(raw.id) || !stringField(raw.runId)) continue
+      const gate: Gate = {
+        id: stringField(raw.id),
+        runId: stringField(raw.runId),
+        question: stringField(raw.question),
+        options: stringList(raw.options),
+        createdBy: stringField(raw.createdBy),
+        createdAt: numberField(raw.createdAt),
+        version: Math.max(1, numberField(raw.version, 1)),
+        ...(stringField(raw.taskId) ? { taskId: stringField(raw.taskId) } : {}),
+        ...(typeof raw.resolution === 'string' ? { resolution: raw.resolution } : {}),
+        ...(typeof raw.resolvedAt === 'number' && Number.isFinite(raw.resolvedAt) ? { resolvedAt: raw.resolvedAt } : {})
+      }
+      this.gates.set(gate.id, gate)
+    }
+    this.messages = messages.flatMap((raw): Message[] => {
+      if (!isRecord(raw) || !stringField(raw.id) || !stringField(raw.runId)) return []
+      const type = MESSAGE_TYPES.includes(raw.type as MessageType) ? raw.type as MessageType : 'note'
+      const outcome = OUTCOMES.includes(raw.outcome as Outcome) ? raw.outcome as Outcome : undefined
+      return [{
+        id: stringField(raw.id),
+        runId: stringField(raw.runId),
+        type,
+        from: stringField(raw.from),
+        to: stringField(raw.to, '@coordinator'),
+        subject: stringField(raw.subject),
+        body: stringField(raw.body),
+        createdAt: numberField(raw.createdAt),
+        ackedBy: stringList(raw.ackedBy),
+        ...(stringField(raw.taskId) ? { taskId: stringField(raw.taskId) } : {}),
+        ...(stringField(raw.dispatchId) ? { dispatchId: stringField(raw.dispatchId) } : {}),
+        ...(outcome ? { outcome } : {}),
+        ...(stringList(raw.filesModified).length ? { filesModified: stringList(raw.filesModified) } : {}),
+        ...(stringList(raw.images).length ? { images: stringList(raw.images) } : {}),
+        ...(stringList(raw.options).length ? { options: stringList(raw.options) } : {}),
+        ...(stringField(raw.replyTo) ? { replyTo: stringField(raw.replyTo) } : {})
+      }]
+    })
     this.messageIndex.clear()
     this.repliesByAskId.clear()
     for (const m of this.messages) {
@@ -210,6 +321,15 @@ export class OrchestrationStore extends EventEmitter {
         if (seq <= this.syncFlushedSeq) return
         try {
           await writeJsonAtomicAsync(this.file, snapshot)
+          // A synchronous shutdown flush can overtake this write.  In that
+          // case the snapshot above is stale and must not be the final file
+          // left on disk.  One correction is enough here; any newer mutation
+          // will schedule its own debounced write.
+          if (seq <= this.syncFlushedSeq || seq < this.writeSeq) {
+            const latestSeq = this.writeSeq
+            await writeJsonAtomicAsync(this.file, this.payload())
+            this.syncFlushedSeq = Math.max(this.syncFlushedSeq, latestSeq)
+          }
         } catch (err) {
           notifyPersistError('orchestration', err)
         }
@@ -701,22 +821,30 @@ export class OrchestrationStore extends EventEmitter {
     const run = this.requireRun(input.runId)
     const question = String(input.question ?? '').trim()
     if (!question) throw new CommandError('invalid', 'a gate needs a question')
+    const task = input.taskId ? this.tasks.get(input.taskId) : undefined
+    if (input.taskId && !task) {
+      throw new CommandError('not_found', `no task "${input.taskId}" — call task-list first`)
+    }
+    if (task && task.runId !== run.id) {
+      throw new CommandError('invalid', `task "${task.id}" belongs to a different run`)
+    }
+    if (task?.status === 'completed') {
+      throw new CommandError('conflict', `task "${task.id}" is already completed`)
+    }
     const id = this.id('gate')
     const gate: Gate = {
       id,
       runId: run.id,
       ...(input.taskId ? { taskId: input.taskId } : {}),
       question,
-      options: (input.options ?? []).map(String),
+      options: Array.isArray(input.options) ? input.options.map(String) : [],
       createdBy: input.createdBy,
       createdAt: this.now(),
       version: this.gateVersions.bump(id)
     }
     this.gates.set(id, gate)
 
-    if (input.taskId) {
-      const task = this.tasks.get(input.taskId)
-      if (!task) throw new CommandError('not_found', `no task "${input.taskId}" — call task-list first`)
+    if (task) {
       task.status = 'blocked'
       task.updatedAt = this.now()
       task.version = this.taskVersions.bump(task.id)

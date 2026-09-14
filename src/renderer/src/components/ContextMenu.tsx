@@ -178,7 +178,7 @@ export default function ContextMenu({
       aria-label="Context Menu"
       tabIndex={-1}
       aria-activedescendant={items[selectedIndex] ? `cm-item-${items[selectedIndex].id}` : undefined}
-      className="fixed z-[10000] w-[260px] max-w-[calc(100vw-16px)] rounded-[12px] border border-line bg-bg-panel p-2 shadow-2xl glass:bg-bg-panel/90 glass:backdrop-blur-2xl glass:backdrop-saturate-150 select-none"
+      className="fixed z-[10000] w-[260px] max-w-[calc(100vw-16px)] rounded-panel border border-line bg-bg-panel p-2 shadow-2xl glass:bg-bg-panel/90 glass:backdrop-blur-2xl glass:backdrop-saturate-150 select-none"
       style={{ left: pos.x, top: pos.y }}
       onPointerDown={(e) => {
 
@@ -225,7 +225,7 @@ export default function ContextMenu({
             </p>
             <button
               type="button"
-              className="rounded-[8px] border border-line-soft px-2.5 py-1 text-[11px] text-text-dim outline-none transition-colors duration-150 hover:border-line hover:bg-bg-hover hover:text-text focus-visible:ring-1 focus-visible:ring-line"
+              className="rounded-panel border border-line-soft px-2.5 py-1 text-[11px] text-text-dim outline-none transition-colors duration-150 hover:border-line hover:bg-bg-hover hover:text-text focus-visible:ring-1 focus-visible:ring-line"
               onClick={() => {
                 onClose()
                 window.dispatchEvent(
@@ -251,7 +251,7 @@ export default function ContextMenu({
               aria-label={`${item.label} — ${item.hint}`}
               onMouseEnter={() => setSelectedIndex(i)}
               onClick={item.onSelect}
-              className={`group flex cursor-pointer items-center gap-2.5 rounded-[9px] px-2.5 py-1.5 transition-colors duration-100 ${
+              className={`group flex cursor-pointer items-center gap-2.5 rounded-panel px-2.5 py-1.5 transition-colors duration-100 ${
                 isSelected ? 'bg-bg-hover text-text' : 'text-text-dim hover:bg-bg-hover hover:text-text'
               } ${isPanelGroupStart ? 'mt-1.5 border-t border-line-soft pt-2' : ''}`}
             >

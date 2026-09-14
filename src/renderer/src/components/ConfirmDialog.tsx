@@ -91,7 +91,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
             aria-modal="true"
             aria-label={pending.title || 'Confirmation'}
             aria-describedby="confirm-msg"
-            className="max-h-[calc(100vh-24px)] w-full max-w-[340px] overflow-auto rounded-[10px] border border-line bg-bg-panel p-4 shadow-2xl"
+            className="max-h-[calc(100vh-24px)] w-full max-w-[340px] overflow-auto rounded-panel border border-line bg-bg-panel p-4 shadow-2xl"
             tabIndex={-1}
           >
             {pending.title && (
@@ -104,7 +104,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
               <button
                 autoFocus
                 data-testid="confirm-cancel"
-                className="rounded-[10px] border border-line-soft px-3 py-1.5 text-[12px] text-text-dim transition-colors duration-150 hover:border-line hover:text-text"
+                className="rounded-panel border border-line-soft px-3 py-1.5 text-[12px] text-text-dim transition-colors duration-150 hover:border-line hover:text-text"
                 onClick={() => settle(false)}
               >
                 {pending.cancelLabel || 'Cancel'}
@@ -113,8 +113,8 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }): Re
                 data-testid="confirm-accept"
                 className={
                   pending.danger
-                    ? 'rounded-[10px] border border-danger/30 bg-danger/12 px-3 py-1.5 text-[12px] text-danger transition-colors duration-150 hover:bg-danger/20'
-                    : 'rounded-[10px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-bg transition-opacity duration-150 hover:opacity-90'
+                    ? 'rounded-panel border border-danger/30 bg-danger/12 px-3 py-1.5 text-[12px] text-danger transition-colors duration-150 hover:bg-danger/20'
+                    : 'rounded-panel bg-accent px-3 py-1.5 text-[12px] font-semibold text-bg transition-opacity duration-150 hover:opacity-90'
                 }
                 onClick={() => settle(true)}
               >

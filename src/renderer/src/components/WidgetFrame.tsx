@@ -173,6 +173,15 @@ function WidgetFrame({
       if (nameCopiedTimerRef.current !== null) window.clearTimeout(nameCopiedTimerRef.current)
     }
   }, [])
+
+  // The banner is only cleared by the next launch attempt, so a one-off
+  // failure used to sit on the header for the rest of the session, covering
+  // the title of a terminal that is working fine.
+  useEffect(() => {
+    if (!agentLaunchError) return
+    const timer = window.setTimeout(() => setAgentLaunchError(null), 6000)
+    return () => window.clearTimeout(timer)
+  }, [agentLaunchError])
   const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null)
 
 
@@ -391,7 +400,7 @@ function WidgetFrame({
   return (
     <div
       className={[
-        'widget-shell widget absolute flex flex-col overflow-hidden rounded-[10px]',
+        'widget-shell widget absolute flex flex-col overflow-hidden rounded-panel',
         isTerminal ? 'is-terminal' : '',
         isTerminal ? 'is-canvas-terminal' : '',
         active ? 'is-active' : ''
@@ -426,7 +435,7 @@ function WidgetFrame({
           <input
             aria-label="Widget title"
             data-testid="widget-title-input"
-            className="h-[22px] min-w-0 flex-1 appearance-none rounded border border-transparent bg-transparent px-1.5 text-xs text-text outline-none focus:border-line focus:bg-bg-raise"
+            className="h-[22px] min-w-0 flex-1 appearance-none rounded-panel border border-transparent bg-transparent px-1.5 text-xs text-text outline-none focus:border-line focus:bg-bg-raise"
             autoFocus
             defaultValue={widget.title}
             onBlur={(e) => onRename(e.target.value.trim() || widget.title)}
@@ -489,7 +498,7 @@ function WidgetFrame({
                     }, 1200)
                   })
                 }}
-                className="grid h-4 w-4 flex-none place-items-center rounded-[3px] text-text-faint opacity-0 transition-[opacity,color,background-color] group-hover/title:opacity-100 hover:bg-bg-hover hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+                className="grid h-4 w-4 flex-none place-items-center rounded-pill text-text-faint opacity-0 transition-[opacity,color,background-color] group-hover/title:opacity-100 hover:bg-bg-hover hover:text-text focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
               >
                 {nameCopied ? <Check size={10} /> : <Copy size={10} />}
               </button>
@@ -498,7 +507,7 @@ function WidgetFrame({
         )}
         {isTerminal && (
           <button
-            className="grid h-6 w-6 place-items-center rounded-[10px] text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60 disabled:opacity-40"
+            className="grid h-6 w-6 place-items-center rounded-pill text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60 disabled:opacity-40"
             onClick={launchAgent}
             disabled={isLaunching}
             data-testid="widget-launch-agent"
@@ -511,7 +520,7 @@ function WidgetFrame({
         {isTerminal && agentLaunchError && (
           <span
             role="alert"
-            className="absolute top-[34px] right-2 z-[60] max-w-[70%] truncate rounded-[8px] border border-danger/40 bg-bg-panel px-2 py-1 text-[10px] text-danger shadow-lg"
+            className="absolute top-[34px] right-2 z-[60] max-w-[70%] truncate rounded-panel border border-danger/40 bg-bg-panel px-2 py-1 text-[10px] text-danger shadow-lg"
             title={agentLaunchError}
           >
             {agentLaunchError}
@@ -520,7 +529,7 @@ function WidgetFrame({
         {isTerminal && (
           <div className="relative" ref={agentMenuRef}>
             <button
-              className="grid h-6 w-6 place-items-center rounded-[10px] text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
+              className="grid h-6 w-6 place-items-center rounded-pill text-text-faint outline-none transition-colors duration-150 hover:bg-bg-hover hover:text-text focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
               data-canvas-interactive="true"
               onPointerDownCapture={(e) => e.stopPropagation()}
               onClick={() => setAgentMenuOpen((v) => !v)}
@@ -540,7 +549,7 @@ function WidgetFrame({
                   role="menu"
                   aria-label="Agent"
                   data-canvas-interactive="true"
-                  className="fixed z-[9800] flex min-w-[150px] flex-col overflow-hidden rounded-[10px] border border-line-soft bg-bg-panel py-1 shadow-lg"
+                  className="fixed z-[9800] flex min-w-[150px] flex-col overflow-hidden rounded-panel border border-line-soft bg-bg-panel py-1 shadow-lg"
                   style={{ left: menuPos.left, top: menuPos.top, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
 
 
@@ -629,7 +638,7 @@ function WidgetFrame({
             </span>
           )}
           <button
-            className="grid h-full w-8 place-items-center rounded-tr-[10px] text-text-dim outline-none transition-colors duration-150 hover:bg-[#e04343] hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
+            className="grid h-full w-8 place-items-center rounded-tr-panel text-text-dim outline-none transition-colors duration-150 hover:bg-[#e04343] hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-text-faint/60"
             onClick={onClose}
             data-testid="widget-close"
             title="Close"
@@ -652,14 +661,17 @@ function WidgetFrame({
       </div>
       {!widget.maximized &&
         RESIZE_HANDLES.map((dir) => (
+          // Pointer targets only. These carried role="separator", a label, an
+          // orientation, a live size readout and tabIndex={0} — eight invisible
+          // tab stops in front of every widget's content (eighty on a canvas of
+          // ten) that announced themselves and then did nothing, because no key
+          // handler was ever attached. Keyboard resizing already lives on the
+          // frame itself (Alt+Arrow, App's onFrameKey), so to assistive tech
+          // these are decoration.
           <div
             key={dir}
-            role="separator"
-            aria-label={`Resize ${dir === 'n' ? 'up' : dir === 's' ? 'down' : dir === 'e' ? 'right' : dir === 'w' ? 'left' : dir}`}
-            aria-orientation={dir === 'n' || dir === 's' ? 'horizontal' : dir === 'e' || dir === 'w' ? 'vertical' : undefined}
-            aria-valuetext={`${Math.round(widget.w)} by ${Math.round(widget.h)}`}
-            tabIndex={0}
-            className={`absolute ${HANDLE_CLASS[dir]} focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60`}
+            aria-hidden="true"
+            className={`absolute ${HANDLE_CLASS[dir]}`}
             onPointerDown={(e) => onResizeStart(e, dir)}
           />
         ))}

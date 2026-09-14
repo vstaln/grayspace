@@ -1,4 +1,5 @@
 import * as fs from 'fs'
+import { dirname } from 'path'
 import { CommandError, fileResource, parseResource } from '../core/index.ts'
 import { isLocalPath, resolveInWorkspaceSync } from '../media.ts'
 import { writeTextAtomicAsync } from '../storage.ts'
@@ -129,11 +130,19 @@ export function registerFileCommands(deps: CommandDeps): void {
         const raw = command.payload?.path
         const abs = jail(raw, workspaceOf())
         assertTargetMatches(command.target, abs)
-        if (fs.existsSync(abs)) throw new CommandError('failed', 'Folder already exists')
         try {
-          await fs.promises.mkdir(abs, { recursive: true })
+          // Create parents separately, then create the target atomically.  A
+          // preflight existsSync followed by recursive mkdir has a TOCTOU gap
+          // in which another process can create the folder and we incorrectly
+          // report success despite the command's "fails if it already exists"
+          // contract.
+          await fs.promises.mkdir(dirname(abs), { recursive: true })
+          await fs.promises.mkdir(abs)
           return { ok: true }
         } catch (err) {
+          if ((err as NodeJS.ErrnoException)?.code === 'EEXIST') {
+            throw new CommandError('failed', 'Folder already exists')
+          }
           throw new CommandError('failed', err instanceof Error ? err.message : String(err))
         }
       }

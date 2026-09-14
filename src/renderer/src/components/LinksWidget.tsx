@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Check, Clipboard, Link2, Plus, Trash2 } from 'lucide-react'
-import { isSafeUrl, safeHref } from '../lib/sanitizeUrl'
+import { isSafeUrl, safeHref, withScheme } from '../lib/sanitizeUrl'
 
 interface LinkItem {
   id: string
@@ -75,7 +75,7 @@ export default function LinksWidget({ widgetId }: { widgetId: string }): React.J
 
   const addLink = (event: React.FormEvent): void => {
     event.preventDefault()
-    const value = url.trim()
+    const value = withScheme(url.trim())
     const cleanTitle = title.trim()
     if (!value) {
       setError('Enter a link')
@@ -125,7 +125,7 @@ export default function LinksWidget({ widgetId }: { widgetId: string }): React.J
       <form className="space-y-1.5" onSubmit={addLink}>
         <div className="flex gap-1.5">
           <input
-            className="min-w-0 flex-1 rounded-[8px] border border-line bg-bg-raise px-2.5 py-1.5 text-[11px] text-text outline-none placeholder:text-text-faint focus:border-accent"
+            className="min-w-0 flex-1 rounded-panel border border-line bg-bg-raise px-2.5 py-1.5 text-[11px] text-text outline-none placeholder:text-text-faint focus:border-accent"
             value={title}
             onChange={(event) => setTitle(event.target.value)}
             placeholder="Link name (optional)"
@@ -135,14 +135,19 @@ export default function LinksWidget({ widgetId }: { widgetId: string }): React.J
         </div>
         <div className="flex gap-1.5">
           <input
-            className="min-w-0 flex-1 rounded-[8px] border border-line bg-bg-raise px-2.5 py-1.5 text-[11px] text-text outline-none placeholder:text-text-faint focus:border-accent"
+            className="min-w-0 flex-1 rounded-panel border border-line bg-bg-raise px-2.5 py-1.5 text-[11px] text-text outline-none placeholder:text-text-faint focus:border-accent"
             value={url}
-            onChange={(event) => setUrl(event.target.value)}
+            onChange={(event) => {
+              setUrl(event.target.value)
+              // Otherwise the rejection stays on screen while the user is
+              // already typing the corrected link.
+              setError(null)
+            }}
             placeholder="URL or path"
             aria-label="URL"
             maxLength={2000}
           />
-          <button className="grid h-8 w-8 flex-none place-items-center rounded-[8px] bg-accent text-bg hover:brightness-110" title="Add link" aria-label="Add link" type="submit">
+          <button className="grid h-8 w-8 flex-none place-items-center rounded-pill bg-accent text-bg hover:brightness-110" title="Add link" aria-label="Add link" type="submit">
             <Plus size={15} />
           </button>
         </div>
@@ -156,7 +161,7 @@ export default function LinksWidget({ widgetId }: { widgetId: string }): React.J
         ) : links.map((link) => {
           const href = safeHref(link.url)
           return (
-          <div key={link.id} className="group flex items-center gap-2 rounded-[9px] border border-line-soft bg-bg-raise px-2 py-1.5">
+          <div key={link.id} className="group flex items-center gap-2 rounded-panel border border-line-soft bg-bg-raise px-2 py-1.5">
             <Link2 className="flex-none text-accent" size={14} />
             {href ? (
               <a
@@ -179,10 +184,10 @@ export default function LinksWidget({ widgetId }: { widgetId: string }): React.J
                 <div className="truncate text-[10px] text-text-faint" title={link.url}>{displayUrl(link.url)}</div>
               </div>
             )}
-            <button className="grid h-7 w-7 flex-none place-items-center rounded-[7px] text-text-faint hover:bg-bg-hover hover:text-accent" onClick={() => void copyLink(link)} title={href ? 'Copy link' : 'Copy path'} aria-label={href ? `Copy ${link.title}` : `Copy path ${link.title}`}>
+            <button className="grid h-7 w-7 flex-none place-items-center rounded-pill text-text-faint hover:bg-bg-hover hover:text-accent" onClick={() => void copyLink(link)} title={href ? 'Copy link' : 'Copy path'} aria-label={href ? `Copy ${link.title}` : `Copy path ${link.title}`}>
               {copiedId === link.id ? <Check size={14} /> : <Clipboard size={14} />}
             </button>
-            <button className="grid h-7 w-7 flex-none place-items-center rounded-[7px] text-text-faint hover:bg-danger/15 hover:text-danger" onClick={() => setLinks((current) => current.filter((item) => item.id !== link.id))} title="Remove link" aria-label={`Remove ${link.title}`}>
+            <button className="grid h-7 w-7 flex-none place-items-center rounded-pill text-text-faint hover:bg-danger/15 hover:text-danger" onClick={() => setLinks((current) => current.filter((item) => item.id !== link.id))} title="Remove link" aria-label={`Remove ${link.title}`}>
               <Trash2 size={13} />
             </button>
           </div>

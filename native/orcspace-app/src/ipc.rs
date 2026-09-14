@@ -16,7 +16,7 @@
 //! The path is identical to the one Electron uses, so `orc` finds either
 //! implementation without being told which is running.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The environment variable every spawned terminal is told the socket through.
 ///
@@ -25,6 +25,67 @@ use std::path::PathBuf;
 /// variable makes every agent try to reach the control server over HTTP at a
 /// name that is not one — which fails silently, per agent, at spawn time.
 pub const SOCKET_PATH_ENV: &str = "ORCSPACE_SOCKET_PATH";
+
+/// The directory shared with Electron and the JavaScript CLI.  Keeping the
+/// token beside the socket discovery files lets a standalone native build be
+/// addressed by `orc` without requiring callers to copy an environment value
+/// around manually.
+pub fn user_data_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("ORCSPACE_TEST_USER_DATA") {
+        return PathBuf::from(dir);
+    }
+    if let Some(dir) = std::env::var_os("ORCSPACE_DEV_USER_DATA") {
+        return PathBuf::from(dir);
+    }
+    if cfg!(windows) {
+        if let Some(dir) = std::env::var_os("APPDATA") {
+            return PathBuf::from(dir).join("OrcSpace");
+        }
+        if let Some(dir) = std::env::var_os("LOCALAPPDATA") {
+            return PathBuf::from(dir).join("OrcSpace");
+        }
+    } else if cfg!(target_os = "macos") {
+        if let Some(dir) = std::env::var_os("HOME") {
+            return PathBuf::from(dir).join("Library").join("Application Support").join("OrcSpace");
+        }
+    } else if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+        return PathBuf::from(dir).join("OrcSpace");
+    } else if let Some(dir) = std::env::var_os("HOME") {
+        return PathBuf::from(dir).join(".config").join("OrcSpace");
+    }
+    PathBuf::from(".orcspace")
+}
+
+pub fn control_token_path() -> PathBuf {
+    user_data_dir().join("control-token")
+}
+
+/// Atomically publish the token used by the control server.  A unique temp
+/// file prevents a reader from observing a partial token during startup.
+pub fn persist_control_token(token: &str) -> std::io::Result<PathBuf> {
+    let path = control_token_path();
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let temp = parent.join(format!(".control-token-{}-{}.tmp", std::process::id(), uuid::Uuid::new_v4().simple()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temp)?;
+    use std::io::Write;
+    file.write_all(token.as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+    #[cfg(windows)]
+    {
+        let _ = std::fs::remove_file(&path);
+    }
+    std::fs::rename(&temp, &path)?;
+    Ok(path)
+}
 
 /// Matches `isDevEnvironment()`: a dev run is anything started by the dev
 /// tooling, so its socket never collides with an installed app's.

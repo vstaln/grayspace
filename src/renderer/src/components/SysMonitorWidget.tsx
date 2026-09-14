@@ -229,7 +229,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
         <div className="flex items-center gap-1">
           <div className="relative" ref={intervalMenuRef}>
             <button
-              className="flex h-7 items-center gap-1 rounded-[8px] border border-line-soft bg-bg-hover/35 px-2 text-[10px] text-text-dim outline-none transition-colors hover:border-line hover:bg-bg-hover hover:text-text focus-visible:ring-1 focus-visible:ring-accent/60"
+              className="flex h-7 items-center gap-1 rounded-panel border border-line-soft bg-bg-hover/35 px-2 text-[10px] text-text-dim outline-none transition-colors hover:border-line hover:bg-bg-hover hover:text-text focus-visible:ring-1 focus-visible:ring-accent/60"
               onClick={() => setIntervalMenuOpen((open) => !open)}
               title="Refresh interval"
               aria-label="Refresh interval"
@@ -243,7 +243,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
               <div
                 role="menu"
                 aria-label="Refresh interval"
-                className="absolute top-[calc(100%+4px)] right-0 z-20 min-w-[64px] overflow-hidden rounded-[8px] border border-line-soft bg-bg-panel py-1 shadow-lg"
+                className="absolute top-[calc(100%+4px)] right-0 z-20 min-w-[64px] overflow-hidden rounded-panel border border-line-soft bg-bg-panel py-1 shadow-lg"
               >
                 {[1000, 2000, 5000].map((value) => (
                   <button
@@ -259,7 +259,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
                     }}
                   >
                     {value / 1000}s
-                    {refreshInterval === value && <span className="ml-2 h-1.5 w-1.5 rounded-full bg-accent" />}
+                    {refreshInterval === value && <span className="ml-2 h-1.5 w-1.5 rounded-pill bg-accent" />}
                   </button>
                 ))}
               </div>
@@ -267,7 +267,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
           </div>
 
           <button
-            className={`grid h-7 w-7 place-items-center rounded-[8px] border border-line-soft transition-colors ${
+            className={`grid h-7 w-7 place-items-center rounded-panel border border-line-soft transition-colors ${
               paused
                 ? 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/15'
                 : 'bg-bg-hover/35 text-text-dim hover:border-line hover:bg-bg-hover hover:text-text'
@@ -280,7 +280,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
           </button>
 
           <button
-            className="grid h-7 w-7 place-items-center rounded-[8px] border border-line-soft bg-bg-hover/35 text-text-dim transition-colors hover:border-line hover:bg-bg-hover hover:text-text"
+            className="grid h-7 w-7 place-items-center rounded-pill border border-line-soft bg-bg-hover/35 text-text-dim transition-colors hover:border-line hover:bg-bg-hover hover:text-text"
             onClick={() => void fetchStats()}
             title="Refresh now"
             aria-label="Refresh stats"
@@ -300,7 +300,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
       <div className="min-h-0 flex-1 overflow-y-auto p-3 space-y-3.5">
         {}
         {stats?.agents && stats.agents.length > 0 && (
-          <div className="rounded-[10px] border border-line-soft bg-bg-hover/20 p-2.5 space-y-2.5">
+          <div className="rounded-panel border border-line-soft bg-bg-hover/20 p-2.5 space-y-2.5">
             <div className="flex items-center justify-between text-xs font-semibold text-text">
               <span className="flex items-center gap-1.5">
                 <Sparkles size={13} className="text-accent" />
@@ -328,24 +328,24 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
                   return (
                     <div
                       key={ag.id}
-                      className="rounded-[8px] border border-line-soft/80 bg-bg-hover p-2 space-y-2"
+                      className="rounded-panel border border-line-soft/80 bg-bg-hover p-2 space-y-2"
                     >
                       <div>
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-1.5 min-w-0">
-                            <span className="grid h-5 w-5 flex-none place-items-center rounded bg-bg-hover/60">
+                            <span className="grid h-5 w-5 flex-none place-items-center rounded-pill bg-bg-hover/60">
                               {renderAgentIcon(ag.id, 13)}
                             </span>
                             <span className="font-semibold text-text truncate text-xs">{ag.name}</span>
                           </div>
                           <span
-                            className={`flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium border ${
+                            className={`flex items-center gap-1 rounded-pill px-1.5 py-0.5 text-[10px] font-medium border ${
                               ag.isOpen
                                 ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
                                 : 'border-line-soft bg-bg-hover/40 text-text-dim'
                             }`}
                           >
-                            {ag.isOpen && <span className="h-1 w-1 rounded-full bg-emerald-400" />}
+                            {ag.isOpen && <span className="h-1 w-1 rounded-pill bg-emerald-400" />}
                             {ag.isOpen ? `${ag.openCount > 1 ? `${ag.openCount} ` : ''}Active` : 'Idle'}
                           </span>
                         </div>
@@ -358,14 +358,14 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
                               <span className="truncate text-text-faint">({ag.accountEmail})</span>
                             )}
                             {ag.tierName && (
-                              <span className="rounded bg-bg-hover px-1 py-0.5 text-[9px] text-text-dim">{ag.tierName}</span>
+                              <span className="rounded-panel bg-bg-hover px-1 py-0.5 text-[9px] text-text-dim">{ag.tierName}</span>
                             )}
                           </div>
                         )}
                       </div>
 
                       {}
-                      <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft">
+                      <div className="space-y-1 rounded-panel bg-bg-hover p-1.5 border border-line-soft">
                         <div className="flex items-center justify-between text-[10px]">
                           <span className="flex items-center gap-1 text-text font-medium">
                             <Clock size={10} className="text-[#38bdf8]" /> 5h Remaining (Осталось)
@@ -374,7 +374,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
                             {typeof rem5h === 'number' && Number.isInteger(rem5h) ? `${rem5h}%` : `${Number(rem5h).toFixed(2)}%`}
                           </span>
                         </div>
-                        <div className="h-1 w-full overflow-hidden rounded-full bg-line-soft">
+                        <div className="h-1 w-full overflow-hidden rounded-pill bg-line-soft">
                           <div
                             className={`h-full transition-all duration-300 ${getRemainingProgressBg(rem5h)}`}
                             style={{ width: `${Math.min(100, Math.max(rem5h > 0 ? 3 : 0, rem5h))}%` }}
@@ -387,7 +387,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
                       </div>
 
                       {}
-                      <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft">
+                      <div className="space-y-1 rounded-panel bg-bg-hover p-1.5 border border-line-soft">
                         <div className="flex items-center justify-between text-[10px]">
                           <span className="flex items-center gap-1 text-text font-medium">
                             <Calendar size={10} className="text-[#7fd99a]" /> Weekly Remaining (Осталось)
@@ -396,7 +396,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
                             {typeof remWk === 'number' && Number.isInteger(remWk) ? `${remWk}%` : `${Number(remWk).toFixed(2)}%`}
                           </span>
                         </div>
-                        <div className="h-1 w-full overflow-hidden rounded-full bg-line-soft">
+                        <div className="h-1 w-full overflow-hidden rounded-pill bg-line-soft">
                           <div
                             className={`h-full transition-all duration-300 ${getRemainingProgressBg(remWk)}`}
                             style={{ width: `${Math.min(100, Math.max(remWk > 0 ? 3 : 0, remWk))}%` }}
@@ -410,7 +410,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
 
                       {}
                       {ag.monthly && remMo !== null && (
-                        <div className="space-y-1 rounded bg-bg-hover p-1.5 border border-line-soft">
+                        <div className="space-y-1 rounded-panel bg-bg-hover p-1.5 border border-line-soft">
                           <div className="flex items-center justify-between text-[10px]">
                             <span className="flex items-center gap-1 text-text font-medium">
                               <Layers size={10} className="text-[#a78bfa]" /> Monthly Remaining (Месячный)
@@ -419,7 +419,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
                               {typeof remMo === 'number' && Number.isInteger(remMo) ? `${remMo}%` : `${Number(remMo).toFixed(2)}%`}
                             </span>
                           </div>
-                          <div className="h-1 w-full overflow-hidden rounded-full bg-line-soft">
+                          <div className="h-1 w-full overflow-hidden rounded-pill bg-line-soft">
                             <div
                               className={`h-full transition-all duration-300 ${getRemainingProgressBg(remMo)}`}
                               style={{ width: `${Math.min(100, Math.max(remMo > 0 ? 3 : 0, remMo))}%` }}
@@ -441,7 +441,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
         {}
         <div className="grid grid-cols-2 gap-2.5">
           {}
-          <div className="rounded-[10px] border border-line-soft bg-bg-hover/20 p-2.5">
+          <div className="rounded-panel border border-line-soft bg-bg-hover/20 p-2.5">
             <div className="mb-1.5 flex items-center justify-between text-xs">
               <span className="flex items-center gap-1 text-text-dim">
                 <Cpu size={13} className="text-[#7aa2f7]" /> CPU Load
@@ -450,7 +450,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
             </div>
 
             {}
-            <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-line-soft">
+            <div className="mb-2 h-1.5 w-full overflow-hidden rounded-pill bg-line-soft">
               <div
                 className={`h-full transition-all duration-300 ${
                   cpuPercent > 80 ? 'bg-danger' : cpuPercent > 50 ? 'bg-[#e6c07b]' : 'bg-[#7aa2f7]'
@@ -460,11 +460,11 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
             </div>
 
             {}
-            <div className="flex h-9 items-end gap-[2px] rounded bg-bg-hover px-1 py-0.5">
+            <div className="flex h-9 items-end gap-[2px] rounded-panel bg-bg-hover px-1 py-0.5">
               {cpuHistory.map((val, i) => (
                 <div
                   key={i}
-                  className={`flex-1 rounded-t-sm transition-all duration-300 ${
+                  className={`flex-1 rounded-t-panel transition-all duration-300 ${
                     val > 80 ? 'bg-danger' : val > 50 ? 'bg-[#e6c07b]' : 'bg-[#7aa2f7]'
                   }`}
                   style={{ height: `${Math.max(4, (val / 100) * 32)}px` }}
@@ -479,7 +479,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
           </div>
 
           {}
-          <div className="rounded-[10px] border border-line-soft bg-bg-hover/20 p-2.5">
+          <div className="rounded-panel border border-line-soft bg-bg-hover/20 p-2.5">
             <div className="mb-1.5 flex items-center justify-between text-xs">
               <span className="flex items-center gap-1 text-text-dim">
                 <HardDrive size={13} className="text-[#7fd99a]" /> RAM Usage
@@ -488,7 +488,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
             </div>
 
             {}
-            <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-line-soft">
+            <div className="mb-2 h-1.5 w-full overflow-hidden rounded-pill bg-line-soft">
               <div
                 className={`h-full transition-all duration-300 ${
                   memPercent > 85 ? 'bg-danger' : memPercent > 65 ? 'bg-[#e6c07b]' : 'bg-[#7fd99a]'
@@ -521,7 +521,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
         </div>
 
         {}
-        <div className="rounded-[10px] border border-line-soft bg-bg-hover/20 p-2.5">
+        <div className="rounded-panel border border-line-soft bg-bg-hover/20 p-2.5">
           <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-text">
             <Server size={13} className="text-accent" /> Host & Runtime
           </div>
@@ -555,7 +555,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
 
         {}
         {stats?.flow && (
-          <div className="rounded-[10px] border border-line-soft bg-bg-hover/20 p-2.5">
+          <div className="rounded-panel border border-line-soft bg-bg-hover/20 p-2.5">
             <div className="mb-2 flex items-center justify-between text-xs font-semibold text-text">
               <span className="flex items-center gap-1.5">
                 <Zap size={13} className="text-[#e6c07b]" /> Command Bus
@@ -611,7 +611,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
         )}
 
         {}
-        <div className="rounded-[10px] border border-line-soft bg-bg-hover/20 p-2.5">
+        <div className="rounded-panel border border-line-soft bg-bg-hover/20 p-2.5">
           <div className="mb-2 flex items-center justify-between text-xs font-semibold text-text">
             <span className="flex items-center gap-1.5">
               <Terminal size={13} className="text-[#c792ea]" /> Active Canvas Terminals ({stats?.activeTerminals?.length ?? 0})
@@ -625,11 +625,11 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
               {(stats.activeTerminals || []).map((t) => (
                 <div
                   key={t.id}
-                  className="flex items-center justify-between rounded-[6px] border border-line-soft/60 bg-bg-hover px-2 py-1 text-xs"
+                  className="flex items-center justify-between rounded-panel border border-line-soft/60 bg-bg-hover px-2 py-1 text-xs"
                 >
                   <div className="flex min-w-0 items-center gap-2">
                     <span
-                      className={`h-2 w-2 rounded-full ${
+                      className={`h-2 w-2 rounded-pill ${
                         t.running ? 'bg-emerald-400 animate-pulse' : 'bg-text-faint'
                       }`}
                     />
@@ -642,7 +642,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
 
                   <div className="flex items-center gap-1">
                     <button
-                      className="rounded p-1 text-text-dim hover:bg-danger/20 hover:text-danger"
+                      className="rounded-panel p-1 text-text-dim hover:bg-danger/20 hover:text-danger"
                       onClick={() => void handleKillTerminal(t.id, t.title)}
                       title="Kill terminal process"
                       aria-label="Close terminal"
@@ -659,7 +659,7 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
         {}
         <div className="flex items-center gap-2 pt-1">
           <button
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-[8px] border border-line bg-bg-hover/30 px-2.5 py-1.5 text-xs text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-panel border border-line bg-bg-hover/30 px-2.5 py-1.5 text-xs text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
             onClick={() => void handleReleaseLocks()}
             title="Release all resource and task locks"
           >

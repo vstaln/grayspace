@@ -68,6 +68,37 @@ function looksDangerous(value: string): boolean {
 
 
 
+// A single dotted word is just as likely to be a file name as a host, and the
+// field accepts both. "report.pdf" must not quietly become a web address.
+const FILE_LIKE = /\.(pdf|txt|md|markdown|json|ya?ml|toml|xml|csv|tsv|log|zip|tar|gz|7z|rar|png|jpe?g|gif|webp|svg|ico|bmp|mp[34]|wav|flac|m4a|mkv|mov|avi|webm|docx?|xlsx?|pptx?|exe|dll|dmg|iso|bat|cmd|ps1|sh|ts|tsx|js|jsx|py|rs|go|java|c|cpp|h)$/i
+
+/**
+ * Give a scheme-less but host-shaped entry the https:// it obviously meant.
+ *
+ * Without this, "example.com" reaches isSafeUrl as a relative path: rejected
+ * outright as unsafe when the renderer runs from file://, and otherwise stored
+ * as a link that resolves against the app's own origin. Neither is what someone
+ * pasting a hostname wanted. Anything already carrying a scheme, an explicit
+ * path, or a Windows separator is returned untouched.
+ */
+export function withScheme(value: string): string {
+  if (!value) return value
+  // A colon followed by digits is a port, not a scheme. Without the lookahead
+  // "localhost:5173" and "example.com:8080" read as the schemes "localhost:"
+  // and "example.com:" and were handed back untouched.
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d)/.test(value)) return value
+  if (value.startsWith('/') || value.startsWith('.') || value.startsWith('#')) return value
+  if (value.includes('\\')) return value
+  // Host-shaped: a dot-separated label run (or localhost), optional :port/path.
+  if (!/^(localhost|[\w-]+(\.[\w-]+)+)(:\d+)?([/?#].*)?$/.test(value)) return value
+  // A path, a port or www. settles it; a bare "name.ext" does not.
+  const bareHost = !/[/?#:]/.test(value)
+  if (bareHost && !value.startsWith('www.') && FILE_LIKE.test(value)) return value
+  return `https://${value}`
+}
+
+
+
 export function isSafeUrl(url: string, options?: SanitizeOptions): boolean {
   if (typeof url !== 'string') return false
 

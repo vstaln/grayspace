@@ -1,21 +1,24 @@
 use axum::{
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
 };
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
+use orcspace_app::queue::ActorRateLimiter;
 use std::{
     collections::{HashMap, VecDeque},
+    fs,
     io::{Read, Write},
+    path::{Path as FsPath, PathBuf},
 
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         mpsc, Arc, Condvar, Mutex, Weak,
     },
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const MAX_SCROLLBACK: usize = 1_000_000;
@@ -43,6 +46,8 @@ const MAX_PENDING_EVENT_BYTES: usize = 8 * 1024 * 1024;
 /// handed over without waiting (see `enqueue_input`), so this is what keeps a
 /// shell that has stopped reading its input from growing the queue forever.
 const MAX_PENDING_INPUT_BYTES: usize = 1024 * 1024;
+const MAX_HTTP_BODY_BYTES: usize = 2 * 1024 * 1024;
+const SUBMIT_GAP: Duration = Duration::from_millis(200);
 /// How long a single write into a PTY may stay in flight before the terminal
 /// is treated as no longer reading its input.
 ///
@@ -119,7 +124,7 @@ struct TerminalHandle {
     /// blocks for as long as the child refuses to read: sharing one channel
     /// made resize and dispose queue behind a stuck keystroke, so the only
     /// way out of a wedged terminal was closing the widget.
-    input_tx: mpsc::Sender<Vec<u8>>,
+    input_tx: mpsc::Sender<TerminalInput>,
     /// Resize/dispose. Served by a thread that never writes to the PTY, so it
     /// stays responsive no matter what the child is doing.
     control_tx: mpsc::Sender<ControlCommand>,
@@ -134,6 +139,13 @@ struct TerminalHandle {
     /// `child.kill()` alone only terminates the direct child and leaves
     /// grandchildren (agents, servers) orphaned.
     child_pid: Option<u32>,
+}
+
+#[derive(Debug)]
+struct TerminalInput {
+    data: Vec<u8>,
+    press_enter: bool,
+    acknowledgement: Option<mpsc::Sender<Result<(), String>>>,
 }
 
 #[derive(Debug)]
@@ -346,7 +358,7 @@ impl TerminalManager {
         // be the thread that answers a resize, a dispose or an interrupt.
         // One shared channel is what let a single stuck keystroke freeze
         // everything about a terminal, Ctrl+C and close included.
-        let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>();
+        let (input_tx, input_rx) = mpsc::channel::<TerminalInput>();
         let (control_tx, control_rx) = mpsc::channel::<ControlCommand>();
         let events = Arc::clone(&self.inner);
         let reader_state = Arc::clone(&state);
@@ -486,9 +498,25 @@ impl TerminalManager {
         text: &str,
         press_enter: bool,
     ) -> Result<DeliveryReceipt, String> {
-        let bytes = encode_terminal_input(text, press_enter)?;
-        let count = bytes.len();
-        self.deliver_input(id, bytes)?;
+        let bytes = encode_terminal_input(text, false)?;
+        let count = bytes.len() + usize::from(press_enter);
+        let handle = self.handle(id)?;
+        let (tx, rx) = mpsc::channel();
+        {
+            let _guard = lock_recover(&handle.input_guard);
+            if write_in_flight_ms(&handle.writing_since) >= STUCK_WRITE_MS
+                || handle.pending_input.load(Ordering::Acquire).saturating_add(count) > MAX_PENDING_INPUT_BYTES
+            {
+                return Err(format!("terminal {id} is not reading input"));
+            }
+            push_terminal_input(id, &handle, TerminalInput {
+                data: bytes,
+                press_enter,
+                acknowledgement: Some(tx),
+            })?;
+        }
+        rx.recv_timeout(Duration::from_secs(5))
+            .map_err(|_| format!("terminal {id}: input write not confirmed; delivery is uncertain, do not resend automatically"))??;
         Ok(DeliveryReceipt {
             id: format!("delivery-{}", uuid::Uuid::new_v4().simple()),
             terminal_id: id.to_owned(),
@@ -622,9 +650,13 @@ fn enqueue_input(id: &str, handle: &TerminalHandle, data: Vec<u8>) -> Result<(),
 /// Hand bytes to the writer thread. No capacity check: callers decide whether
 /// this payload is allowed past the queue cap.
 fn push_input(id: &str, handle: &TerminalHandle, data: Vec<u8>) -> Result<(), String> {
-    let len = data.len();
+    push_terminal_input(id, handle, TerminalInput { data, press_enter: false, acknowledgement: None })
+}
+
+fn push_terminal_input(id: &str, handle: &TerminalHandle, input: TerminalInput) -> Result<(), String> {
+    let len = input.data.len() + usize::from(input.press_enter);
     handle.pending_input.fetch_add(len, Ordering::AcqRel);
-    handle.input_tx.send(data).map_err(|_| {
+    handle.input_tx.send(input).map_err(|_| {
         // The writer thread is gone, so nothing will ever drain this. Undo
         // the reservation or the terminal would look permanently backed up.
         handle.pending_input.fetch_sub(len, Ordering::AcqRel);
@@ -648,21 +680,46 @@ fn is_interrupt(data: &[u8]) -> bool {
 /// reading no longer takes the whole terminal down with it.
 fn run_writer(
     mut writer: Box<dyn Write + Send>,
-    rx: mpsc::Receiver<Vec<u8>>,
+    rx: mpsc::Receiver<TerminalInput>,
     control_tx: mpsc::Sender<ControlCommand>,
     pending_input: Arc<AtomicUsize>,
     writing_since: Arc<AtomicU64>,
     id: String,
 ) {
-    while let Ok(data) = rx.recv() {
+    let mut last_bulk_write: Option<Instant> = None;
+    while let Ok(input) = rx.recv() {
         // Published before the write and cleared after it: this is what lets
         // `enqueue_input` tell "busy for a moment" from "stopped reading",
         // and reject new input on the spot instead of queueing it behind
         // bytes that may never be delivered.
         writing_since.store(now_millis_u64(), Ordering::Release);
-        let result = writer.write_all(&data).and_then(|_| writer.flush());
+        // Electron sends text and Enter as separate raw requests. A slow
+        // writer can receive both at once despite the caller's own delay.
+        if input.data == b"\r" {
+            if let Some(last) = last_bulk_write {
+                thread::sleep(SUBMIT_GAP.saturating_sub(last.elapsed()));
+            }
+        }
+        let result = writer.write_all(&input.data).and_then(|_| writer.flush()).and_then(|_| {
+            if input.press_enter {
+                // Delay at the actual writer, after the paste has drained, not
+                // at the caller where a backed-up queue can erase the gap.
+                thread::sleep(SUBMIT_GAP);
+                writer.write_all(b"\r")?;
+                writer.flush()?;
+            }
+            Ok(())
+        });
+        last_bulk_write = if input.data.len() > 1 && !input.press_enter {
+            Some(Instant::now())
+        } else {
+            None
+        };
         writing_since.store(0, Ordering::Release);
-        pending_input.fetch_sub(data.len(), Ordering::AcqRel);
+        pending_input.fetch_sub(input.data.len() + usize::from(input.press_enter), Ordering::AcqRel);
+        if let Some(ack) = input.acknowledgement {
+            let _ = ack.send(result.as_ref().map(|_| ()).map_err(|error| format!("write terminal {id}: {error}")));
+        }
         if let Err(error) = result {
             // A PTY whose writer is broken cannot be typed into again. The
             // control thread turns this into the same teardown a dispose
@@ -1154,7 +1211,13 @@ impl ControlServer {
     /// from the network even in principle. `orc` finds either implementation at
     /// the same path without being told which is running.
     pub fn start(manager: TerminalManager, token: String) -> Result<Self, String> {
-        Self::start_at(manager, token, orcspace_app::listener::default_path())
+        let storage = orcspace_app::ipc::user_data_dir().join("orchestration.json");
+        Self::start_at_with_storage(
+            manager,
+            token,
+            orcspace_app::listener::default_path(),
+            storage,
+        )
     }
 
     /// Starts on an explicit path. A test — or a second instance — uses this to
@@ -1164,12 +1227,22 @@ impl ControlServer {
         token: String,
         path: String,
     ) -> Result<Self, String> {
+        let storage = PathBuf::from(format!("{path}.orchestration.json"));
+        Self::start_at_with_storage(manager, token, path, storage)
+    }
+
+    fn start_at_with_storage(
+        manager: TerminalManager,
+        token: String,
+        path: String,
+        orchestration_file: PathBuf,
+    ) -> Result<Self, String> {
         let state = HttpState {
             manager,
             token,
-            orchestration: Arc::new(Mutex::new(
-                orcspace_app::orchestration::OrchestrationStore::new(),
-            )),
+            orchestration: Arc::new(Mutex::new(load_orchestration(&orchestration_file))),
+            orchestration_file,
+            rate_limiter: Arc::new(Mutex::new(ActorRateLimiter::default())),
         };
 
         // The listener is opened on this thread, before the server thread is
@@ -1210,6 +1283,7 @@ impl ControlServer {
                         // explicit because they reach the terminal manager,
                         // which the pure router deliberately does not see.
                         .fallback(handle_routed)
+                        .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
                         .with_state(state);
                     if let Err(error) = axum::serve(listener, app).await {
                         eprintln!("control server stopped: {error}");
@@ -1232,6 +1306,56 @@ impl ControlServer {
     }
 }
 
+fn load_orchestration(path: &FsPath) -> orcspace_app::orchestration::OrchestrationStore {
+    let Ok(bytes) = fs::read(path) else {
+        return orcspace_app::orchestration::OrchestrationStore::new();
+    };
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(value) if value.is_object() => {
+            orcspace_app::orchestration::OrchestrationStore::load(&value)
+        }
+        Ok(_) | Err(_) => {
+            let stamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let corrupt = PathBuf::from(format!("{}.corrupt-{stamp}", path.display()));
+            let _ = fs::rename(path, corrupt);
+            orcspace_app::orchestration::OrchestrationStore::new()
+        }
+    }
+}
+
+fn persist_orchestration(
+    path: &FsPath,
+    store: &orcspace_app::orchestration::OrchestrationStore,
+) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| FsPath::new("."));
+    fs::create_dir_all(parent)?;
+    let temp = parent.join(format!(
+        ".orchestration-{}-{}.tmp",
+        std::process::id(),
+        uuid::Uuid::new_v4().simple()
+    ));
+    let result = (|| {
+        let data = serde_json::to_vec_pretty(&store.to_json())
+            .map_err(std::io::Error::other)?;
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temp)?;
+        file.write_all(&data)?;
+        file.sync_all()?;
+        drop(file);
+        #[cfg(windows)]
+        {
+            let _ = fs::remove_file(path);
+        }
+        fs::rename(&temp, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
 #[derive(Clone)]
 struct HttpState {
     manager: TerminalManager,
@@ -1239,6 +1363,8 @@ struct HttpState {
     /// Shared because the fallback handler mutates it and axum hands each
     /// request its own clone of the state.
     orchestration: Arc<Mutex<orcspace_app::orchestration::OrchestrationStore>>,
+    orchestration_file: PathBuf,
+    rate_limiter: Arc<Mutex<ActorRateLimiter>>,
 }
 
 #[derive(Serialize)]
@@ -1259,6 +1385,8 @@ struct WorkerInfo {
 struct TellRequest {
     to: String,
     text: String,
+    #[serde(rename = "agentId")]
+    agent_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1267,6 +1395,8 @@ struct WriteRequest {
     text: Option<String>,
     #[serde(rename = "pressEnter", default = "default_true")]
     press_enter: bool,
+    #[serde(rename = "agentId")]
+    agent_id: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -1286,6 +1416,7 @@ async fn list_workers(
     headers: HeaderMap,
 ) -> Result<Json<WorkerList>, (StatusCode, String)> {
     authenticate(&headers, &state.token)?;
+    check_rate_limit(&state, &headers, None)?;
     let workers = state
         .manager
         .snapshots()
@@ -1307,6 +1438,7 @@ async fn tell_worker(
     Json(request): Json<TellRequest>,
 ) -> Result<Json<WriteResponse>, (StatusCode, String)> {
     authenticate(&headers, &state.token)?;
+    check_rate_limit(&state, &headers, request.agent_id.as_deref())?;
     let manager = state.manager.clone();
     let to = request.to.clone();
     let text = request.text.clone();
@@ -1329,6 +1461,7 @@ async fn write_terminal(
     Json(request): Json<WriteRequest>,
 ) -> Result<Json<WriteResponse>, (StatusCode, String)> {
     authenticate(&headers, &state.token)?;
+    check_rate_limit(&state, &headers, request.agent_id.as_deref())?;
     let text = request
         .text
         .ok_or_else(|| bad_request("terminal.write requires text".to_owned()))?;
@@ -1361,6 +1494,7 @@ async fn read_terminal_output(
     Path(id): Path<String>,
 ) -> Result<Json<OutputResponse>, (StatusCode, String)> {
     authenticate(&headers, &state.token)?;
+    check_rate_limit(&state, &headers, None)?;
     let snapshot = state
         .manager
         .snapshot(&id)
@@ -1398,6 +1532,44 @@ async fn handle_routed(
         query.insert(key.to_owned(), percent_decode_query(value));
     }
 
+    let parsed_body = if body.is_empty() {
+        serde_json::json!({})
+    } else {
+        match serde_json::from_slice::<serde_json::Value>(&body) {
+            Ok(value) if value.is_object() => value,
+            Ok(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": "request body must be a JSON object",
+                        "code": "invalid"
+                    })),
+                );
+            }
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": "request body must be valid JSON",
+                        "code": "invalid"
+                    })),
+                );
+            }
+        }
+    };
+    let agent_id = headers
+        .get("x-agent-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .or_else(|| query.get("agentId").cloned())
+        .or_else(|| parsed_body.get("agentId").and_then(|value| value.as_str()).map(str::to_owned));
+    if let Err((status, error)) = check_rate_limit(&state, &headers, agent_id.as_deref()) {
+        return (
+            status,
+            Json(serde_json::json!({ "error": error, "code": "rate_limited" })),
+        );
+    }
+
     let request = orcspace_app::http::Request {
         method: method.as_str().to_owned(),
         path: uri.path().to_owned(),
@@ -1405,11 +1577,8 @@ async fn handle_routed(
         // A body that is absent or unparseable is null, which every route
         // treats as "no fields given" rather than as an error — the same as a
         // GET with no body at all.
-        body: serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null),
-        agent_id: headers
-            .get("x-agent-id")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned),
+        body: parsed_body,
+        agent_id,
     };
 
     let now = SystemTime::now()
@@ -1426,10 +1595,23 @@ async fn handle_routed(
     };
 
     match orcspace_app::http::route(&request, &mut deps) {
-        Some(response) => (
-            StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            Json(response.body),
-        ),
+        Some(response) => {
+            if method != axum::http::Method::GET.as_str() && response.status < 400 {
+                if let Err(error) = persist_orchestration(&state.orchestration_file, &store) {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": format!("failed to persist orchestration: {error}"),
+                            "code": "failed"
+                        })),
+                    );
+                }
+            }
+            (
+                StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                Json(response.body),
+            )
+        }
         None => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "no such route", "code": "not_found" })),
@@ -1456,6 +1638,26 @@ fn percent_decode_query(raw: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+fn check_rate_limit(
+    state: &HttpState,
+    headers: &HeaderMap,
+    hint: Option<&str>,
+) -> Result<(), (StatusCode, String)> {
+    let header = headers.get("x-agent-id").and_then(|value| value.to_str().ok());
+    let raw = hint.filter(|value| !value.trim().is_empty()).or(header).unwrap_or("api").trim();
+    let key = raw
+        .char_indices()
+        .nth(128)
+        .map(|(index, _)| &raw[..index])
+        .unwrap_or(raw);
+    let now = now_millis().min(i64::MAX as u128) as i64;
+    if lock_recover(&state.rate_limiter).try_consume(key, 1.0, now) {
+        Ok(())
+    } else {
+        Err((StatusCode::TOO_MANY_REQUESTS, "too many requests".to_owned()))
+    }
 }
 
 fn authenticate(headers: &HeaderMap, token: &str) -> Result<(), (StatusCode, String)> {
@@ -1674,6 +1876,77 @@ mod tests {
         // would refuse every keystroke on a perfectly healthy terminal.
         let idle = AtomicU64::new(0);
         assert_eq!(super::write_in_flight_ms(&idle), 0);
+    }
+
+    #[test]
+    fn message_enter_is_separate_and_acknowledged_after_flush() {
+        use std::io::Write;
+        use std::sync::{mpsc, Arc, Mutex, atomic::AtomicUsize};
+        use std::time::{Duration, Instant};
+        struct RecordingWriter(Arc<Mutex<Vec<(Vec<u8>, Instant)>>>);
+        impl Write for RecordingWriter {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().push((data.to_vec(), Instant::now()));
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let (tx, rx) = mpsc::channel();
+        let (control_tx, _) = mpsc::channel();
+        let (ack_tx, ack_rx) = mpsc::channel();
+        let pending = Arc::new(AtomicUsize::new(13));
+        tx.send(super::TerminalInput {
+            data: b"hello".to_vec(), press_enter: true, acknowledgement: Some(ack_tx),
+        }).unwrap();
+        tx.send(super::TerminalInput {
+            data: b"x".to_vec(), press_enter: false, acknowledgement: None,
+        }).unwrap();
+        tx.send(super::TerminalInput {
+            data: b"world".to_vec(), press_enter: false, acknowledgement: None,
+        }).unwrap();
+        tx.send(super::TerminalInput {
+            data: b"\r".to_vec(), press_enter: false, acknowledgement: None,
+        }).unwrap();
+        drop(tx);
+        let output = Arc::clone(&writes);
+        let queued = Arc::clone(&pending);
+        let worker = std::thread::spawn(move || super::run_writer(
+            Box::new(RecordingWriter(output)), rx, control_tx, queued,
+            Arc::new(AtomicU64::new(0)), "test".to_owned(),
+        ));
+        ack_rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+        assert!(writes.lock().unwrap().iter().any(|(bytes, _)| bytes == b"\r"));
+        worker.join().unwrap();
+        let writes = writes.lock().unwrap();
+        assert_eq!(writes.iter().map(|(bytes, _)| bytes.as_slice()).collect::<Vec<_>>(), vec![b"hello".as_slice(), b"\r", b"x", b"world", b"\r"]);
+        assert!(writes[1].1.duration_since(writes[0].1) >= Duration::from_millis(200));
+        assert!(writes[4].1.duration_since(writes[3].1) >= Duration::from_millis(200));
+        assert_eq!(pending.load(std::sync::atomic::Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn failed_submit_is_not_acknowledged_as_success() {
+        struct FailedSubmit;
+        impl std::io::Write for FailedSubmit {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                if data == b"\r" { return Err(std::io::Error::other("submit failed")); }
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (control_tx, control_rx) = std::sync::mpsc::channel();
+        let (ack_tx, ack_rx) = std::sync::mpsc::channel();
+        tx.send(super::TerminalInput {
+            data: b"hello".to_vec(), press_enter: true, acknowledgement: Some(ack_tx),
+        }).unwrap();
+        drop(tx);
+        super::run_writer(Box::new(FailedSubmit), rx, control_tx,
+            std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(6)),
+            std::sync::Arc::new(AtomicU64::new(0)), "test".to_owned());
+        assert!(ack_rx.recv().unwrap().unwrap_err().contains("submit failed"));
+        assert!(matches!(control_rx.recv().unwrap(), super::ControlCommand::WriterFailed));
     }
 
     #[test]

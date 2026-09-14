@@ -22,6 +22,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import http from 'node:http'
+import https from 'node:https'
 import { fileURLToPath } from 'node:url'
 
 const TOKEN_HEADER = 'x-orcspace-token'
@@ -180,9 +181,8 @@ function getDiscoveredTargets() {
   return targets
 }
 
-const TARGETS = getDiscoveredTargets()
-const TARGET = TARGETS[0]
-const TARGET_DESC = TARGET.url || TARGET.socketPath
+let discoveredTargets
+const targets = () => (discoveredTargets ??= getDiscoveredTargets())
 const AGENT_ID = process.env.ORCSPACE_AGENT_ID || process.env.ORCSPACE_TERMINAL_ID || 'cli'
 let workingToken = null
 let workingTarget = null
@@ -199,6 +199,10 @@ function parseArgs(argv) {
   const positional = []
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
+    if (arg === '--') {
+      positional.push(...argv.slice(i + 1))
+      break
+    }
     if (!arg.startsWith('--')) {
       positional.push(arg)
       continue
@@ -283,7 +287,10 @@ class OrcError extends Error {
 const isNotFound = (err) => err instanceof OrcError && (err.code === 'not_found' || err.code === 'http_404')
 
 async function requestTarget({ target, method, path, headers, body, signal, timeoutMs }) {
-  if (target.socketPath) {
+  {
+    const url = target.socketPath ? null : new URL(`${target.url}${path}`)
+    const transport = url?.protocol === 'https:' ? https : http
+    const serializedBody = body === undefined ? undefined : JSON.stringify(body)
     return new Promise((resolve, reject) => {
       let req
       const cleanup = () => {
@@ -295,7 +302,7 @@ async function requestTarget({ target, method, path, headers, body, signal, time
       }, timeoutMs) : null
 
       const onAbort = () => {
-        if (req) req.destroy(new OrcError('OrcSpace request aborted', 'aborted'))
+        if (req) req.destroy(new OrcError('OrcSpace request aborted', signal?.reason?.name === 'TimeoutError' ? 'timeout' : 'aborted'))
       }
       if (signal) {
         if (signal.aborted) {
@@ -305,18 +312,20 @@ async function requestTarget({ target, method, path, headers, body, signal, time
         signal.addEventListener('abort', onAbort, { once: true })
       }
 
-      req = http.request({
-        socketPath: target.socketPath,
-        path,
+      req = transport.request({
+        ...(target.socketPath ? { socketPath: target.socketPath, path } : {
+          protocol: url.protocol, hostname: url.hostname, port: url.port,
+          path: `${url.pathname}${url.search}`
+        }),
         method,
-        headers,
+        headers: { ...headers, ...(serializedBody === undefined ? {} : { 'Content-Length': Buffer.byteLength(serializedBody) }) },
         timeout: timeoutMs
       }, (res) => {
         const chunks = []
         res.on('data', (chunk) => chunks.push(chunk))
         res.on('error', (err) => {
           cleanup()
-          reject(new OrcError(`OrcSpace response interrupted (${err.message})`, 'offline'))
+          reject(new OrcError(`OrcSpace response interrupted (${err.message})`, 'response_interrupted'))
         })
         res.on('end', () => {
           cleanup()
@@ -325,7 +334,10 @@ async function requestTarget({ target, method, path, headers, body, signal, time
           const contentType = res.headers['content-type'] || ''
           let payload
           if (contentType.includes('application/json')) {
-            try { payload = JSON.parse(text) } catch { payload = text }
+            try { payload = JSON.parse(text) } catch {
+              reject(new OrcError('OrcSpace returned invalid JSON', 'invalid_response'))
+              return
+            }
           } else {
             payload = text
           }
@@ -341,53 +353,13 @@ async function requestTarget({ target, method, path, headers, body, signal, time
         cleanup()
         if (err instanceof OrcError) return reject(err)
         reject(new OrcError(
-          `OrcSpace is not reachable at ${target.socketPath} — is the app running? (${err.message})`,
-          'offline'
+          `OrcSpace is not reachable at ${target.socketPath || target.url} — is the app running? (${err.message})`,
+          ['ECONNREFUSED', 'ENOENT', 'ENOTFOUND'].includes(err.code) ? 'offline' : 'connection_lost'
         ))
       })
 
-      if (body !== undefined) {
-        req.write(JSON.stringify(body))
-      }
-      req.end()
+      req.end(serializedBody)
     })
-  } else {
-    const url = `${target.url}${path}`
-    let response
-    try {
-      response = await fetch(url, {
-        method,
-        headers,
-        keepalive: true,
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        ...(signal ? { signal } : {})
-      })
-    } catch (fetchErr) {
-      if (fetchErr.name === 'TimeoutError' || fetchErr.code === 23) {
-        throw new OrcError(
-          `OrcSpace request timed out after ${Math.round((timeoutMs || 15000) / 1000)}s for ${path}`,
-          'timeout'
-        )
-      }
-      throw new OrcError(
-        `OrcSpace is not reachable at ${target.url} — is the app running? (${fetchErr.message})`,
-        'offline'
-      )
-    }
-
-    const isJson = (response.headers.get('content-type') || '').includes('application/json')
-    let payload
-    try {
-      payload = isJson ? await response.json() : await response.text()
-    } catch {
-      payload = ''
-    }
-
-    return {
-      ok: response.ok,
-      status: response.status,
-      payload
-    }
   }
 }
 
@@ -402,14 +374,14 @@ async function call(method, path, body, options = {}) {
 
   let lastError = null
 
-  const candidateTargets = workingTarget ? [workingTarget] : TARGETS
+  const candidateTargets = workingTarget ? [workingTarget] : targets()
   for (const target of candidateTargets) {
     let candidateTokens = [...initialTokens]
     for (let i = 0; i < candidateTokens.length; i += 1) {
       const token = candidateTokens[i]
       try {
         const timeoutMs = options.timeoutMs ?? (options.signal ? undefined : 15_000)
-        const signal = options.signal ?? (timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined)
+        const signal = options.signal
 
         const response = await requestTarget({
           target,
@@ -445,8 +417,7 @@ async function call(method, path, body, options = {}) {
           if (candidateTokens.length === 1) {
             const all = getAllCandidateTokens(false)
             if (all.length > 1) {
-              candidateTokens = all
-              i = -1
+              candidateTokens.push(...all.filter((candidate) => !candidateTokens.includes(candidate)))
               continue
             }
           }
@@ -456,7 +427,7 @@ async function call(method, path, body, options = {}) {
         lastError = err
 
 
-        if (err instanceof OrcError && ['offline', 'timeout', 'http_404'].includes(err.code)) break
+        if (err instanceof OrcError && (err.code === 'offline' || (method === 'GET' && ['timeout', 'connection_lost', 'response_interrupted'].includes(err.code)))) break
         throw err
       }
     }
@@ -509,6 +480,29 @@ function emit(value, human) {
 }
 
 const taskLine = (t) => `  ${t.id}  [${t.status}]  ${t.title}${t.deps?.length ? `  deps=${t.deps.join(',')}` : ''}`
+const planLine = (value) => {
+  const items = Array.isArray(value) ? value : value?.items
+  if (Array.isArray(items)) {
+    return items.length
+      ? items.map((item) => `  ${item.id}  [${item.done ? 'done' : 'open'}]  ${item.title}`).join('\n')
+      : '  (no plans)'
+  }
+  if (value?.id) return `  ${value.id}  [${value.done ? 'done' : 'open'}]  ${value.title ?? ''}`
+  return value?.ok === true ? 'ok' : undefined
+}
+const widgetLine = (widget) => `  ${widget.id}  [${widget.kind}]  ${widget.title ?? widget.cwd ?? ''}${widget.alive === false ? '  (exited)' : ''}`
+const canvasLine = (value) => {
+  const widgets = Array.isArray(value) ? value : value?.widgets
+  if (Array.isArray(widgets)) return widgets.length ? widgets.map(widgetLine).join('\n') : '  (no widgets)'
+  if (value?.id) return widgetLine(value)
+  return value?.ok === true ? 'ok' : undefined
+}
+const terminalLine = (value) => {
+  if (typeof value === 'string') return value
+  if (typeof value?.output === 'string') return value.output
+  if (value?.id) return `  ${value.id}  ${value.title ?? value.cwd ?? ''}${value.alive === false ? '  (exited)' : ''}`
+  return value?.ok === true ? 'ok' : undefined
+}
 const dispatchLine = (d) =>
   `  ${d.id}  ${d.state}${d.outcome ? `/${d.outcome}` : ''}  task=${d.taskId}  term=${d.terminalId}  ${d.agent}`
 const messageLine = (m) =>
@@ -829,7 +823,7 @@ async function main(argv) {
       const drift = serverVersion && serverVersion !== ORC_VERSION ? serverVersion : null
       const result = {
         ok: true,
-        app: TARGET_DESC,
+        app: (workingTarget || targets()[0]).url || (workingTarget || targets()[0]).socketPath,
         version: ORC_VERSION,
         serverVersion: serverVersion ?? null,
         drift,
@@ -1312,11 +1306,11 @@ async function main(argv) {
 
 
     case 'canvas':
-      return emit(await canvas(positional[1], flags, positional))
+      return emit(await canvas(positional[1], flags, positional), canvasLine)
     case 'plan':
-      return emit(await plan(positional[1], flags, positional))
+      return emit(await plan(positional[1], flags, positional), planLine)
     case 'terminal':
-      return emit(await terminal(positional[1], flags, positional))
+      return emit(await terminal(positional[1], flags, positional), terminalLine)
     case 'git':
       return positional[1] === 'commit'
         ? emit(

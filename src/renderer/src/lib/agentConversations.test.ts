@@ -8,6 +8,8 @@ import {
   readDismissed,
   relativeTime,
   resumeAllCount,
+  conversationsToResume,
+  pruneSelection,
   upgradeSessionsToResume,
   visibleConversations,
   writeDismissed
@@ -281,5 +283,55 @@ describe('agentConversations - upgradeSessionsToResume regression tests', () => 
     assert.equal(upgraded[0].status, 'active')
     assert.equal(upgraded[1].agent.command, 'codex')
     assert.equal(upgraded[1].status, 'active')
+  })
+})
+
+describe('agentConversations - choosing what a bulk resume opens', () => {
+  const rows = [
+    { agentId: 'claude' as const, id: 'a' },
+    { agentId: 'codex' as const, id: 'b' },
+    { agentId: 'antigravity' as const, id: 'c' },
+    { agentId: 'claude' as const, id: 'd' }
+  ]
+  const key = (row: { agentId: string; id: string }): string => `${row.agentId}:${row.id}`
+
+  test('with nothing ticked the newest few are opened', () => {
+    const picked = conversationsToResume(rows, new Set(), 10, 2)
+    assert.deepEqual(picked.map((row) => row.id), ['a', 'b'])
+  })
+
+  test('a selection is opened whole, past the blind-click cap', () => {
+    const selected = new Set([key(rows[0]), key(rows[2]), key(rows[3])])
+    const picked = conversationsToResume(rows, selected, 10, 2)
+    assert.deepEqual(picked.map((row) => row.id), ['a', 'c', 'd'])
+  })
+
+  test('a selection is still capped by the free session slots', () => {
+    const selected = new Set([key(rows[0]), key(rows[1]), key(rows[2])])
+    const picked = conversationsToResume(rows, selected, 2, 6)
+    assert.deepEqual(picked.map((row) => row.id), ['a', 'b'])
+  })
+
+  test('the list order decides, not the order rows were ticked', () => {
+    const selected = new Set([key(rows[3]), key(rows[1])])
+    const picked = conversationsToResume(rows, selected, 10, 6)
+    assert.deepEqual(picked.map((row) => row.id), ['b', 'd'])
+  })
+
+  test('no free slots opens nothing, ticked or not', () => {
+    assert.deepEqual(conversationsToResume(rows, new Set([key(rows[0])]), 0, 6), [])
+    assert.deepEqual(conversationsToResume(rows, new Set(), -1, 6), [])
+  })
+
+  test('a key for a row that is gone is not resumed', () => {
+    // Same id under another agent must not stand in for the missing row.
+    const selected = new Set(['claude:gone', 'codex:b'])
+    const picked = conversationsToResume(rows, selected, 10, 6)
+    assert.deepEqual(picked.map((row) => row.id), ['b'])
+  })
+
+  test('pruning keeps only the keys that still have a row', () => {
+    const kept = pruneSelection(new Set(['claude:a', 'claude:gone']), rows.map(key))
+    assert.deepEqual(Array.from(kept), ['claude:a'])
   })
 })

@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { patchWindowsPtyAgents } from '../scripts/patch-pty.mjs'
+import { ensureConptyRuntime } from '../scripts/conpty-runtime.mjs'
 
 // The N-API addons, built one at a time by `napi build` below. They are
 // deliberately absent from native/Cargo.toml's `members` and listed in its
@@ -29,8 +30,13 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 
 function ensureElectronPty() {
+  const packageDir = join(repoRoot, 'node_modules', '@homebridge', 'node-pty-prebuilt-multiarch')
+  const bundledRelease = join(repoRoot, 'dist', 'win-unpacked', 'resources', 'app.asar.unpacked',
+    'node_modules', '@homebridge', 'node-pty-prebuilt-multiarch', 'build', 'Release')
+  // Both PTY backends require the DLL and its matching host, even when the
+  // native addon already exists. Do not downgrade this failure to a warning.
+  if (process.platform === 'win32') ensureConptyRuntime(packageDir, bundledRelease)
   try {
-    const packageDir = join(repoRoot, 'node_modules', '@homebridge', 'node-pty-prebuilt-multiarch')
     patchWindowsPtyAgents(packageDir)
     const addonName = process.platform === 'win32' ? 'conpty.node' : 'pty.node'
     const addon = join(packageDir, 'build', 'Release', addonName)
@@ -40,18 +46,6 @@ function ensureElectronPty() {
 
 
     if (process.platform === 'win32') {
-      const bundledRelease = join(
-        repoRoot,
-        'dist',
-        'win-unpacked',
-        'resources',
-        'app.asar.unpacked',
-        'node_modules',
-        '@homebridge',
-        'node-pty-prebuilt-multiarch',
-        'build',
-        'Release'
-      )
       const bundledAddon = join(bundledRelease, addonName)
       if (existsSync(bundledAddon)) {
         mkdirSync(dirname(addon), { recursive: true })
@@ -89,6 +83,9 @@ function ensureElectronPty() {
     patchWindowsPtyAgents(packageDir)
   } catch (err) {
     console.warn(`[pty] ensureElectronPty warning:`, err.message)
+  } finally {
+    // node-gyp rebuild can remove build/Release, including the runtime pair.
+    if (process.platform === 'win32') ensureConptyRuntime(packageDir, bundledRelease)
   }
 }
 

@@ -1,6 +1,7 @@
 import { promises as fsp } from 'fs'
 import * as os from 'os'
-import { join, resolve } from 'path'
+import { basename, join, resolve } from 'path'
+import { readSqliteTable } from './sqliteRead.ts'
 
 /**
  * Conversations the CLI agents keep on disk, so a Code session can be picked
@@ -16,7 +17,7 @@ export interface AgentConversation {
   /** The agent's own conversation id — what its resume flag takes. */
   id: string
   /** Matches `CodeAgent.id` in the renderer, so the row can show its icon. */
-  agentId: 'claude' | 'codex' | 'antigravity'
+  agentId: 'claude' | 'codex' | 'antigravity' | 'grok'
   /** First human message of the conversation, or '' when none was found. */
   title: string
   /** Last activity, ms since epoch. */
@@ -31,7 +32,11 @@ export interface ListOptions {
   limit?: number
 }
 
-const DEFAULT_LIMIT = 20
+/**
+ * As many as the Code view can hold, so a restore that reopens a full board
+ * still has a conversation to offer every terminal.
+ */
+const DEFAULT_LIMIT = 32
 /** Enough of a transcript to find its first human message. */
 const HEAD_BYTES = 192 * 1024
 /**
@@ -52,6 +57,18 @@ const HISTORY_TAIL_BYTES = 2 * 1024 * 1024
  * full; the early exit is what keeps the common case cheap.
  */
 const CODEX_FILE_BUDGET = 150
+/**
+ * Grok keeps one folder per session, so a group directory can hold hundreds of
+ * them; only the newest are opened, and its `summary.json` is a small index
+ * file that never needs more than this.
+ */
+const GROK_SUMMARY_BYTES = 64 * 1024
+/**
+ * How many session summaries the group search may open when no directory name
+ * matches this folder. It is what keeps a machine with a long Grok history
+ * from being walked in full on every refresh.
+ */
+const GROK_GROUP_PROBE_BUDGET = 40
 const TITLE_MAX = 140
 
 /** Conversation ids land in a shell command, so keep them boring. */
@@ -289,6 +306,148 @@ export function parseAntigravityHistory(tail: string, dir: string): AgentConvers
   return Array.from(byId.values())
 }
 
+/**
+ * `file:///C:/Users/x/project` → `C:/Users/x/project`, the form `samePath`
+ * compares. A plain path is left as it is: the column has held both.
+ */
+export function workspaceUriToPath(uri: string): string {
+  if (!uri.startsWith('file:')) return uri
+  let path = uri.replace(/^file:\/\/\/?/, '')
+  try {
+    path = decodeURIComponent(path)
+  } catch {
+    // A stray percent sign is not worth dropping the whole row over.
+  }
+  // A UNC share (`file://server/share`) keeps its leading slashes.
+  if (uri.startsWith('file://') && !uri.startsWith('file:///')) return `//${path}`
+  // A POSIX path lost its root to the prefix strip; a drive letter never had one.
+  return /^[A-Za-z]:/.test(path) ? path : `/${path}`
+}
+
+/**
+ * Antigravity writes `2026-09-14 14:29:24.9264321+00:00` — a space instead of
+ * the `T`, and more fractional digits than `Date` accepts.
+ */
+export function parseSqlTime(value: unknown): number {
+  if (typeof value === 'number') return epochMs(value)
+  if (typeof value !== 'string') return 0
+  const text = value.trim()
+  if (!text) return 0
+  const normalized = text
+    .replace(' ', 'T')
+    .replace(/(\.\d{3})\d+/, '$1')
+    .replace(/([+-]\d{2}:\d{2}|Z)?$/, (zone) => zone || 'Z')
+  const at = Date.parse(normalized)
+  return Number.isFinite(at) && at > 0 ? at : 0
+}
+
+/** One row of `conversation_summaries`, as far as resuming cares. */
+export function summaryConversation(row: Record<string, unknown>, dir: string): AgentConversation | null {
+  const id = typeof row.conversation_id === 'string' ? row.conversation_id : ''
+  if (!SAFE_ID.test(id)) return null
+  // A conversation the CLI killed cannot be resumed, and a nested one belongs
+  // to its parent's run rather than to the user's terminal.
+  if (row.killed === 1 || row.killed === true) return null
+  if (typeof row.parent_conversation_id === 'string' && row.parent_conversation_id) return null
+
+  const raw = typeof row.workspace_uris === 'string' ? row.workspace_uris : ''
+  let uris: string[] = []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (Array.isArray(parsed)) uris = parsed.filter((v): v is string => typeof v === 'string')
+  } catch {
+    if (raw) uris = [raw]
+  }
+  if (!uris.some((uri) => samePath(workspaceUriToPath(uri), dir))) return null
+
+  const updatedAt = Math.max(parseSqlTime(row.last_modified_time), parseSqlTime(row.last_user_input_time))
+  const title =
+    candidateTitle(typeof row.title === 'string' ? row.title : '')?.text ??
+    candidateTitle(typeof row.preview === 'string' ? row.preview : '')?.text ??
+    ''
+  return { id, agentId: 'antigravity', title, updatedAt, command: `agy --conversation ${id}` }
+}
+
+/**
+ * Grok names a session group after the working directory, URL-encoded. A path
+ * too long to encode gets a slug plus a hash instead, and the real path is
+ * recorded in a `.cwd` file beside the sessions — so a name that does not
+ * decode to a path is left as it is and simply never matches.
+ */
+export function decodeGrokCwd(name: string): string {
+  try {
+    return decodeURIComponent(name)
+  } catch {
+    return name
+  }
+}
+
+export interface GrokSummary {
+  id: string
+  cwd: string
+  title: string
+  updatedAt: number
+}
+
+/**
+ * `summary.json` — Grok's own index entry for a session. Every field is
+ * optional here: a summary written by a build that names things differently,
+ * or one truncated mid-write, must still leave the session resumable from its
+ * directory name and file times.
+ */
+export function parseGrokSummary(text: string): GrokSummary | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (!isRecord(parsed)) return null
+  const info = isRecord(parsed.info) ? parsed.info : {}
+  const pick = (...values: unknown[]): string =>
+    values.find((value): value is string => typeof value === 'string' && value.trim().length > 0)?.trim() ?? ''
+
+  const id = pick(info.session_id, info.sessionId, info.id, parsed.session_id, parsed.sessionId)
+  const cwd = pick(info.cwd, info.working_directory, info.workingDirectory, parsed.cwd)
+  // The model-written title is what the picker shows; the summaries behind it
+  // are longer, but a long line beats no line at all.
+  const title =
+    candidateTitle(pick(parsed.generated_title, parsed.title))?.text ??
+    candidateTitle(pick(parsed.session_summary, parsed.last_turn_summary, parsed.last_recap))?.text ??
+    ''
+  const updatedAt = Math.max(parseSqlTime(parsed.updated_at), parseSqlTime(parsed.created_at))
+  return { id, cwd, title, updatedAt }
+}
+
+/**
+ * The first thing the user typed, from the ACP update stream. Grok writes a
+ * prompt either whole (`user_message`) or in streamed pieces
+ * (`user_message_chunk`), so both shapes are read, and a chunked prompt is
+ * stitched back together before it is judged.
+ */
+export function parseGrokTitle(head: string): string {
+  const picker = new TitlePicker()
+  let chunks = ''
+  for (const entry of jsonLines(head)) {
+    const kind = typeof entry.sessionUpdate === 'string' ? entry.sessionUpdate : ''
+    if (kind !== 'user_message' && kind !== 'user_message_chunk') {
+      // Anything after the prompt belongs to the agent; a stitched prompt is
+      // complete as soon as the turn moves on.
+      if (chunks.trim()) break
+      continue
+    }
+    const content = entry.content
+    if (kind === 'user_message_chunk' && isRecord(content) && typeof content.text === 'string') {
+      chunks += content.text
+      continue
+    }
+    if (picker.offer(messageCandidate(content))) break
+    if (isRecord(content) && typeof content.text === 'string' && picker.offer(candidateTitle(content.text))) break
+  }
+  if (!picker.value) picker.offer(candidateTitle(chunks))
+  return picker.value
+}
+
 interface Candidate {
   path: string
   mtime: number
@@ -395,9 +554,114 @@ async function codexConversations(dir: string, home: string, limit: number): Pro
 }
 
 async function antigravityConversations(dir: string, home: string, _limit: number): Promise<AgentConversation[]> {
-  const file = join(home, '.gemini', 'antigravity-cli', 'history.jsonl')
-  const tail = await readChunk(file, HISTORY_TAIL_BYTES, true).catch(() => '')
-  return parseAntigravityHistory(tail, dir)
+  const root = join(home, '.gemini', 'antigravity-cli')
+  // Two stores, because neither is complete on its own: the summaries database
+  // is the only place a conversation's id is tied to its folder, while the
+  // prompt history is the only place the user's own words are. A conversation
+  // started in a build that stopped stamping ids into the history would be
+  // invisible if we read the history alone.
+  const [rows, tail] = await Promise.all([
+    readSqliteTable(join(root, 'conversation_summaries.db'), 'conversation_summaries', {
+      // The trailing `raw_summary` blob is of no interest, and not assembling
+      // it keeps a long conversation's row to a single page read.
+      maxPayloadBytes: 16 * 1024
+    }).catch(() => []),
+    readChunk(join(root, 'history.jsonl'), HISTORY_TAIL_BYTES, true).catch(() => '')
+  ])
+
+  const byId = new Map<string, AgentConversation>()
+  for (const row of rows) {
+    const conversation = summaryConversation(row, dir)
+    if (conversation) byId.set(conversation.id, conversation)
+  }
+  for (const conversation of parseAntigravityHistory(tail, dir)) {
+    const known = byId.get(conversation.id)
+    if (!known) {
+      byId.set(conversation.id, conversation)
+      continue
+    }
+    // What the user typed beats the CLI's generated summary, and the history
+    // can be newer than a summary that has not been rewritten yet.
+    if (conversation.title) known.title = conversation.title
+    if (conversation.updatedAt > known.updatedAt) known.updatedAt = conversation.updatedAt
+  }
+  return Array.from(byId.values())
+}
+
+/**
+ * Where Grok keeps its sessions. `GROK_HOME` moves the whole store, so it is
+ * tried first, and the default home stays a candidate either way: an exported
+ * variable that points somewhere empty must not hide the real history.
+ */
+function grokRoots(home: string): string[] {
+  const override = process.env.GROK_HOME?.trim()
+  const roots = override ? [join(override, 'sessions')] : []
+  roots.push(join(home, '.grok', 'sessions'))
+  return roots
+}
+
+/** The session group Grok recorded for this folder, or '' when it kept none. */
+async function grokGroupDir(root: string, dir: string): Promise<string> {
+  const names = await fsp.readdir(root).catch(() => [] as string[])
+  for (const name of names) {
+    if (samePath(decodeGrokCwd(name), dir)) return join(root, name)
+  }
+  // A path too long to encode is stored under a slug plus a hash, with the
+  // original written to `.cwd`. Only folders no name matched pay this read.
+  for (const name of names) {
+    const recorded = await fsp.readFile(join(root, name, '.cwd'), 'utf8').catch(() => '')
+    if (recorded.trim() && samePath(recorded.trim(), dir)) return join(root, name)
+  }
+  // Last resort: ask the sessions themselves. A build that names its groups by
+  // some other scheme would otherwise have no history here at all, and every
+  // session records the folder it ran in. It is a bounded scan, and it only
+  // ever runs for a folder Grok has no group for — most often because the user
+  // has never run Grok here, where the listing above is already empty.
+  let budget = GROK_GROUP_PROBE_BUDGET
+  for (const name of names) {
+    const group = join(root, name)
+    for (const id of await fsp.readdir(group).catch(() => [] as string[])) {
+      if (!SAFE_ID.test(id) || budget-- <= 0) continue
+      const summary = parseGrokSummary(
+        await readChunk(join(group, id, 'summary.json'), GROK_SUMMARY_BYTES, false).catch(() => '')
+      )
+      if (summary?.cwd && samePath(summary.cwd, dir)) return group
+    }
+  }
+  return ''
+}
+
+async function grokConversations(dir: string, home: string, limit: number): Promise<AgentConversation[]> {
+  let group = ''
+  for (const root of grokRoots(home)) {
+    group = await grokGroupDir(root, dir)
+    if (group) break
+  }
+  if (!group) return []
+
+  const ids = (await fsp.readdir(group).catch(() => [] as string[])).filter((name) => SAFE_ID.test(name))
+  // `updates.jsonl` is the authoritative log, so a directory without one holds
+  // nothing to resume, and its write time is when the session was last used.
+  const candidates = await statFiles(ids.map((id) => join(group, id, 'updates.jsonl')), limit)
+
+  const out: AgentConversation[] = []
+  for (const candidate of candidates) {
+    const sessionDir = join(candidate.path, '..')
+    const id = basename(sessionDir)
+    const summary = parseGrokSummary(await readChunk(join(sessionDir, 'summary.json'), GROK_SUMMARY_BYTES, false).catch(() => ''))
+    // A hashed group name can in principle be shared; the summary's own cwd is
+    // the last word on whether the session belongs to this folder.
+    if (summary?.cwd && !samePath(summary.cwd, dir)) continue
+    const title = summary?.title || parseGrokTitle(await readChunk(candidate.path, HEAD_BYTES, false).catch(() => ''))
+    out.push({
+      id,
+      agentId: 'grok',
+      title,
+      updatedAt: summary?.updatedAt || candidate.mtime,
+      command: `grok --resume ${id}`
+    })
+  }
+  return out
 }
 
 /**
@@ -415,7 +679,7 @@ export async function listAgentConversations(
   const limit = Number.isFinite(options.limit) ? Math.max(1, Math.floor(options.limit as number)) : DEFAULT_LIMIT
 
   const groups = await Promise.all(
-    [claudeConversations, codexConversations, antigravityConversations].map((provider) =>
+    [claudeConversations, codexConversations, antigravityConversations, grokConversations].map((provider) =>
       provider(dir, home, limit).catch(() => [] as AgentConversation[])
     )
   )
@@ -431,20 +695,27 @@ export async function listAgentConversations(
   byRecency.sort((a, b) => b.updatedAt - a.updatedAt)
 
   // Recency alone lets one busy agent fill the whole list, hiding that the
-  // folder also has conversations in the others. Every agent that has any gets
-  // its newest in first; the rest of the room is plain recency.
-  const picked: AgentConversation[] = []
-  const takenAgents = new Set<string>()
+  // folder also has conversations in the others — and a restore that reopens
+  // three terminals of one agent needs three of its conversations, not one.
+  // So the room is dealt out a round at a time, newest first within each
+  // agent, and any room an agent does not use goes back to plain recency.
+  const queues = new Map<string, AgentConversation[]>()
   for (const conversation of byRecency) {
-    if (picked.length >= limit) break
-    if (takenAgents.has(conversation.agentId)) continue
-    takenAgents.add(conversation.agentId)
-    picked.push(conversation)
+    const queue = queues.get(conversation.agentId)
+    if (queue) queue.push(conversation)
+    else queues.set(conversation.agentId, [conversation])
   }
-  for (const conversation of byRecency) {
-    if (picked.length >= limit) break
-    if (picked.includes(conversation)) continue
-    picked.push(conversation)
+  const picked: AgentConversation[] = []
+  while (picked.length < limit) {
+    let dealt = false
+    for (const queue of queues.values()) {
+      if (picked.length >= limit) break
+      const next = queue.shift()
+      if (!next) continue
+      picked.push(next)
+      dealt = true
+    }
+    if (!dealt) break
   }
   return picked.sort((a, b) => b.updatedAt - a.updatedAt)
 }

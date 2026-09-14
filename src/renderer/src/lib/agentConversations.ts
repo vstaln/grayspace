@@ -5,7 +5,7 @@
 
 export interface AgentConversation {
   id: string
-  agentId: 'claude' | 'codex' | 'antigravity'
+  agentId: 'claude' | 'codex' | 'antigravity' | 'grok'
   title: string
   updatedAt: number
   command: string
@@ -89,6 +89,41 @@ export function visibleConversations<T extends Pick<AgentConversation, 'agentId'
  */
 export function resumeAllCount(visible: number, remainingSlots: number, max: number): number {
   return Math.max(0, Math.min(visible, remainingSlots, max))
+}
+
+/**
+ * What a bulk resume should open.
+ *
+ * A selection is an explicit answer to "how many, and which" — it is capped
+ * only by the free session slots, never by the blind-click cap, because the
+ * user has already named every process they are asking for. With nothing
+ * selected the button keeps its old meaning: the newest few.
+ */
+export function conversationsToResume<T extends Pick<AgentConversation, 'agentId' | 'id'>>(
+  visible: readonly T[],
+  selected: ReadonlySet<string>,
+  remainingSlots: number,
+  max: number
+): T[] {
+  const slots = Math.max(0, remainingSlots)
+  const picked = visible.filter((conversation) => selected.has(conversationKey(conversation)))
+  if (picked.length > 0) return picked.slice(0, slots)
+  return visible.slice(0, resumeAllCount(visible.length, slots, max))
+}
+
+/**
+ * Drops selected keys whose row is gone — dismissed, or deleted by the agent
+ * between two scans — so a stale key can never resume something invisible, or
+ * keep the button counting rows that are not there.
+ */
+export function pruneSelection(
+  selected: ReadonlySet<string>,
+  live: Iterable<string>
+): Set<string> {
+  const liveKeys = new Set(live)
+  const kept = new Set<string>()
+  for (const key of selected) if (liveKeys.has(key)) kept.add(key)
+  return kept
 }
 
 const MINUTE = 60_000

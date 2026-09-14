@@ -7,6 +7,7 @@ mod ui;
 use anyhow::Result;
 use eframe::egui;
 use engine::{ControlServer, TerminalEvent, TerminalManager};
+use orcspace_app::ipc::persist_control_token;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufWriter, Write};
@@ -28,6 +29,8 @@ fn main() -> Result<()> {
         }
         return run_engine(manager);
     }
+    persist_control_token(&token)
+        .map_err(|error| anyhow::anyhow!("cannot publish control token: {error}"))?;
     let control = ControlServer::start(manager.clone(), token).map_err(anyhow::Error::msg)?;
     manager.set_control_socket(control.socket_path());
     manager.spawn("terminal-1").map_err(anyhow::Error::msg)?;

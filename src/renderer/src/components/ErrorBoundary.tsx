@@ -31,7 +31,7 @@ export default class ErrorBoundary extends React.Component<{ children: React.Rea
         <h1 className="text-lg font-semibold">Something went wrong</h1>
         <p className="max-w-md text-sm text-text-dim">{message}</p>
         <button
-          className="mt-2 rounded-[10px] border border-line px-4 py-2 text-sm hover:bg-bg-hover"
+          className="mt-2 rounded-panel border border-line px-4 py-2 text-sm hover:bg-bg-hover"
           onClick={() => {
 
 

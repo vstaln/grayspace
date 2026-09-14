@@ -739,7 +739,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
       }}
     >
       <div className="flex items-center gap-2">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-bg-hover text-text">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-pill border border-line bg-bg-hover text-text">
           <Music2 size={15} />
         </div>
         <div className="min-w-0 flex-1">
@@ -747,7 +747,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
           <div className="truncate text-[11px] text-text">{list.name}</div>
         </div>
         <button
-          className="rounded-md p-1.5 text-text-faint transition hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-30"
+          className="rounded-panel p-1.5 text-text-faint transition hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-30"
           title={lists.length > 1 ? 'Delete playlist' : 'The last playlist cannot be deleted'}
           aria-label={lists.length > 1 ? 'Delete playlist' : 'The last playlist cannot be deleted'}
           disabled={lists.length <= 1}
@@ -761,7 +761,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
         </button>
       </div>
 
-      <div className="flex items-center gap-2 rounded-lg border border-line bg-bg p-2">
+      <div className="flex items-center gap-2 rounded-panel border border-line bg-bg p-2">
         <select
           className="min-w-0 flex-1 bg-transparent text-[11px] text-text outline-none"
           value={listIndex}
@@ -777,12 +777,12 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
             </option>
           ))}
         </select>
-        <span className="rounded border border-line px-1.5 py-0.5 text-[9px] tabular-nums text-text-faint">{list.tracks.length} tracks</span>
+        <span className="rounded-panel border border-line px-1.5 py-0.5 text-[9px] tabular-nums text-text-faint">{list.tracks.length} tracks</span>
       </div>
 
-      <div className="rounded-xl border border-line bg-bg-hover p-3">
+      <div className="rounded-panel border border-line bg-bg-hover p-3">
         <div className="flex items-center gap-3">
-          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border border-line bg-bg text-text">
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-panel border border-line bg-bg text-text">
             <Music2 size={25} className={playing ? 'animate-pulse' : ''} />
           </div>
           <div className="min-w-0 flex-1">
@@ -812,38 +812,38 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
                 onPointerCancel={onBarUp}
                 onKeyDown={onBarKey}
               >
-                <div className="h-1 w-full overflow-hidden rounded-full bg-line transition-all duration-150 group-hover:h-1.5">
-                  <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
+                <div className="h-1 w-full overflow-hidden rounded-pill bg-line transition-all duration-150 group-hover:h-1.5">
+                  <div className="h-full rounded-pill bg-accent" style={{ width: `${pct}%` }} />
                 </div>
                 <div
-                  className="pointer-events-none absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent shadow transition-transform duration-150 group-hover:scale-125 group-active:scale-150"
+                  className="pointer-events-none absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-pill bg-accent shadow transition-transform duration-150 group-hover:scale-125 group-active:scale-150"
                   style={{ left: `${pct}%`, opacity: canSeek ? 1 : 0 }}
                 />
               </div>
               <span className="w-9 text-[10px] tabular-nums text-text-faint">{format(duration)}</span>
             </div>
             <div className="mt-2 flex items-center justify-center gap-2">
-              <button className="rounded-md p-1.5 text-text-faint transition hover:bg-bg hover:text-text disabled:opacity-30" disabled={list.tracks.length < 2} onClick={() => advance(-1)} title="Previous">
+              <button className="rounded-panel p-1.5 text-text-faint transition hover:bg-bg hover:text-text disabled:opacity-30" disabled={list.tracks.length < 2} onClick={() => advance(-1)} title="Previous">
                 <SkipBack size={14} />
               </button>
               <button
-                className="flex h-9 w-9 items-center justify-center rounded-full bg-accent text-bg shadow transition hover:brightness-110 active:scale-90 disabled:opacity-40"
+                className="flex h-9 w-9 items-center justify-center rounded-pill bg-accent text-bg shadow transition hover:brightness-110 active:scale-90 disabled:opacity-40"
                 disabled={track?.provider === 'youtube' && !ready}
                 onClick={togglePlay}
                 title={playing ? 'Pause' : 'Play'}
               >
                 {playing ? <Pause size={15} /> : <Play size={15} className="translate-x-[1px]" />}
               </button>
-              <button className="flex h-8 w-8 items-center justify-center rounded-full border border-line text-text-faint transition hover:border-text-faint hover:text-text active:scale-90" onClick={stop} title="Stop">
+              <button className="flex h-8 w-8 items-center justify-center rounded-pill border border-line text-text-faint transition hover:border-text-faint hover:text-text active:scale-90" onClick={stop} title="Stop">
                 <SquareStop size={15} />
               </button>
-              <button className="rounded-md p-1.5 text-text-faint transition hover:bg-bg hover:text-text disabled:opacity-30" disabled={list.tracks.length < 2} onClick={() => advance(1)} title="Next">
+              <button className="rounded-panel p-1.5 text-text-faint transition hover:bg-bg hover:text-text disabled:opacity-30" disabled={list.tracks.length < 2} onClick={() => advance(1)} title="Next">
                 <SkipForward size={14} />
               </button>
             </div>
             <div className="mt-2 flex items-center justify-end gap-1.5">
               <button
-                className="rounded-md p-1 text-text-faint transition hover:bg-bg hover:text-text"
+                className="rounded-panel p-1 text-text-faint transition hover:bg-bg hover:text-text"
                 title={muted ? 'Unmute' : 'Mute'}
                 onClick={() => {
                   if (!muted) preMuteVolume.current = volume
@@ -874,17 +874,17 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
 
       <form className="flex gap-1.5" onSubmit={addTrack}>
         <input
-          className="min-w-0 flex-1 rounded-lg border border-line bg-bg px-2.5 py-2 text-[11px] text-text outline-none transition placeholder:text-text-faint focus:border-text-faint"
+          className="min-w-0 flex-1 rounded-panel border border-line bg-bg px-2.5 py-2 text-[11px] text-text outline-none transition placeholder:text-text-faint focus:border-text-faint"
           placeholder="Paste YouTube, Yandex, Spotify or audio link"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
         />
-        <button className="rounded-lg bg-accent px-2.5 text-bg disabled:cursor-not-allowed disabled:opacity-40" type="submit" title="Add track" aria-label="Add track" disabled={!draft.trim()}>
+        <button className="rounded-panel bg-accent px-2.5 text-bg disabled:cursor-not-allowed disabled:opacity-40" type="submit" title="Add track" aria-label="Add track" disabled={!draft.trim()}>
           <Plus size={14} />
         </button>
       </form>
 
-      <div className="flex min-h-[72px] flex-1 flex-col overflow-hidden rounded-xl border border-line bg-bg">
+      <div className="flex min-h-[72px] flex-1 flex-col overflow-hidden rounded-panel border border-line bg-bg">
         <div className="flex items-center justify-between border-b border-line px-3 py-2">
           <span className="text-[9px] font-semibold uppercase tracking-[0.15em] text-text-faint">Queue</span>
           {track && <span className="max-w-[55%] truncate text-[10px] text-text-faint">{track.title}</span>}
@@ -894,7 +894,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
             <div className="p-4 text-center text-[11px] text-text-faint">Your queue is empty. Add a song link above.</div>
           ) : (
             list.tracks.map((t, i) => (
-              <div key={t.id} className={`group flex items-center gap-2 rounded-lg px-2 py-2 ${i === trackIndex ? 'bg-bg-hover' : 'hover:bg-bg-hover/60'}`}>
+              <div key={t.id} className={`group flex items-center gap-2 rounded-panel px-2 py-2 ${i === trackIndex ? 'bg-bg-hover' : 'hover:bg-bg-hover/60'}`}>
                 <button
                   className="flex min-w-0 flex-1 items-center gap-2 truncate text-left text-[11px] text-text"
                   title={i === trackIndex ? (playing ? 'Pause' : 'Play') : `Play ${t.title}`}
@@ -908,13 +908,13 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
                     }
                   }}
                 >
-                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-line text-text-faint">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-pill border border-line text-text-faint">
                     {i === trackIndex && playing ? <Loader2 size={12} className="animate-spin" /> : <Music2 size={12} />}
                   </span>
                   <span className="min-w-0 truncate">{t.title}</span>
                   <span className="shrink-0 text-[9px] uppercase text-text-faint">{t.provider}</span>
                 </button>
-                <button className="rounded p-1 text-text-faint opacity-60 transition hover:bg-bg hover:text-text group-hover:opacity-100" title={`Remove ${t.title}`} aria-label={`Remove ${t.title}`} onClick={() => removeTrack(t.id)}>
+                <button className="rounded-panel p-1 text-text-faint opacity-60 transition hover:bg-bg hover:text-text group-hover:opacity-100" title={`Remove ${t.title}`} aria-label={`Remove ${t.title}`} onClick={() => removeTrack(t.id)}>
                   <Trash2 size={11} />
                 </button>
               </div>
@@ -924,7 +924,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
       </div>
 
       {id && (
-        <div className="pointer-events-none absolute left-0 top-0 h-20 w-full overflow-hidden rounded border border-line bg-bg opacity-[0.01]" aria-hidden="true">
+        <div className="pointer-events-none absolute left-0 top-0 h-20 w-full overflow-hidden rounded-panel border border-line bg-bg opacity-[0.01]" aria-hidden="true">
           <img
             className="h-full w-full object-cover"
             src={`https://i.ytimg.com/vi/${id}/mqdefault.jpg`}
@@ -939,10 +939,10 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
       )}
 
       {ytError && (
-        <div className="flex items-center gap-2 rounded-lg border border-line bg-bg p-2 text-[10px] text-text-faint">
+        <div className="flex items-center gap-2 rounded-panel border border-line bg-bg p-2 text-[10px] text-text-faint">
           <span className="min-w-0 flex-1">{ytError}</span>
           <button
-            className="flex shrink-0 items-center gap-1 rounded-md border border-line px-2 py-1 text-text transition hover:bg-bg-hover"
+            className="flex shrink-0 items-center gap-1 rounded-panel border border-line px-2 py-1 text-text transition hover:bg-bg-hover"
             onClick={() => {
               apiPromise = null
               setYtRetry((n) => n + 1)
@@ -953,7 +953,7 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
         </div>
       )}
 
-      {mediaError && <div className="rounded-lg border border-line bg-bg p-2 text-[10px] text-text-faint">{mediaError}</div>}
+      {mediaError && <div className="rounded-panel border border-line bg-bg p-2 text-[10px] text-text-faint">{mediaError}</div>}
 
       {track?.provider === 'audio' && audioSrc && (
         <audio
@@ -994,11 +994,11 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
         />
       )}
 
-      {track?.provider === 'youtube' && !id && <div className="rounded-lg border border-line bg-bg p-2 text-[10px] text-text-faint">Could not read a video id from this YouTube link — use a normal watch, youtu.be or shorts URL.</div>}
+      {track?.provider === 'youtube' && !id && <div className="rounded-panel border border-line bg-bg p-2 text-[10px] text-text-faint">Could not read a video id from this YouTube link — use a normal watch, youtu.be or shorts URL.</div>}
 
       {(track?.provider === 'yandex' || track?.provider === 'spotify') &&
         (embed ? (
-          <div className="overflow-hidden rounded-lg border border-line bg-bg">
+          <div className="overflow-hidden rounded-panel border border-line bg-bg">
             <div className="border-b border-line px-3 py-2 text-[10px] text-text-faint">Controls for {providerLabel} are available below.</div>
             <iframe
               key={track.id}
@@ -1015,12 +1015,12 @@ export default function MusicPlayerWidget({ widgetId }: { widgetId: string }): R
             />
           </div>
         ) : (
-          <div className="rounded-lg border border-line bg-bg p-2 text-[10px] text-text-faint">Could not detect a playable track id in this link.</div>
+          <div className="rounded-panel border border-line bg-bg p-2 text-[10px] text-text-faint">Could not detect a playable track id in this link.</div>
         ))}
 
       <form className="flex gap-1.5 border-t border-line pt-2" onSubmit={addList}>
-        <input className="min-w-0 flex-1 rounded-lg border border-line bg-bg px-2.5 py-2 text-[11px] text-text outline-none placeholder:text-text-faint focus:border-text-faint" placeholder="New playlist name" value={name} onChange={(e) => setName(e.target.value)} />
-        <button className="rounded-lg border border-line px-2.5 text-[11px] text-text transition hover:bg-bg-hover" type="submit">Create</button>
+        <input className="min-w-0 flex-1 rounded-panel border border-line bg-bg px-2.5 py-2 text-[11px] text-text outline-none placeholder:text-text-faint focus:border-text-faint" placeholder="New playlist name" value={name} onChange={(e) => setName(e.target.value)} />
+        <button className="rounded-panel border border-line px-2.5 text-[11px] text-text transition hover:bg-bg-hover" type="submit">Create</button>
       </form>
     </div>
   )

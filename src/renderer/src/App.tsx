@@ -224,7 +224,7 @@ function Wallpaper(): React.JSX.Element | null {
         <div className="pointer-events-none absolute inset-x-0 top-10 z-[900] flex justify-center">
           <button
             type="button"
-            className="pointer-events-auto rounded-[10px] border border-line bg-bg-panel/90 px-3 py-1.5 text-[11px] text-text-dim shadow-sm hover:bg-bg-hover hover:text-text"
+            className="pointer-events-auto rounded-panel border border-line bg-bg-panel/90 px-3 py-1.5 text-[11px] text-text-dim shadow-sm hover:bg-bg-hover hover:text-text"
             onClick={() => void pickBackground()}
           >
             Photo theme needs a background — choose one
@@ -854,6 +854,15 @@ function OrcSpaceCanvas({
     const dir = dirs[e.key]
     if (!dir) {
 
+      // The empty-canvas hint advertises T and N alongside +/-/0/Home. The
+      // listener for `orcspace:new-terminal` already existed; nothing ever
+      // dispatched it, so both keys were dead and the hint was a lie.
+      if ((e.key === 't' || e.key === 'T' || e.key === 'n' || e.key === 'N') &&
+        !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault()
+        window.dispatchEvent(new Event('orcspace:new-terminal'))
+        return
+      }
       if (e.key === '+' || e.key === '=') {
         e.preventDefault()
         setCamera((c) => ({ ...c, zoom: Math.min(4, c.zoom * 1.2) }))
@@ -1082,20 +1091,36 @@ function OrcSpaceCanvas({
     e.preventDefault()
   }
 
+  // Polls that outlive the canvas keep firing `deliver`/`onFailed` against a
+  // torn-down tree, so every pending one is cancelled on unmount.
+  const pendingDeliveriesRef = useRef<Set<number>>(new Set())
+  useEffect(() => {
+    const pending = pendingDeliveriesRef.current
+    return () => {
+      for (const timer of pending) window.clearInterval(timer)
+      pending.clear()
+    }
+  }, [])
+
   const deliverWhenMounted = useCallback(
     (widgetId: string, deliver: () => void, onDelivered: () => void, onFailed: () => void): void => {
       let attempts = 0
+      const stop = (timer: number): void => {
+        window.clearInterval(timer)
+        pendingDeliveriesRef.current.delete(timer)
+      }
       const timer = window.setInterval(() => {
         attempts += 1
         if (widgetsRef.current.some((w) => w.id === widgetId)) {
-          window.clearInterval(timer)
+          stop(timer)
           deliver()
           onDelivered()
         } else if (attempts >= 10) {
-          window.clearInterval(timer)
+          stop(timer)
           onFailed()
         }
       }, 100)
+      pendingDeliveriesRef.current.add(timer)
     },
     []
   )
@@ -1125,7 +1150,13 @@ function OrcSpaceCanvas({
     const dropPoint = toWorld(e.clientX, e.clientY)
     const shortName = (name: string): string => (name.length > 80 ? `${name.slice(0, 77)}…` : name)
     const files = Array.from(e.dataTransfer.files)
+    // Every file used to be placed at the identical drop point, so dropping a
+    // folder's worth of images produced one visible widget with the rest
+    // hidden exactly underneath it. Cascade them the way a file manager does.
+    const CASCADE_PX = 28
+    let placed = 0
     for (const file of files) {
+      const filePoint = { x: dropPoint.x + placed * CASCADE_PX, y: dropPoint.y + placed * CASCADE_PX }
       const ext = file.name.includes('.') ? file.name.split('.').pop()!.toLowerCase() : file.type.split('/')[1] || 'bin'
       const isAudio = file.type.startsWith('audio/') || /^(mp3|wav|ogg|oga|flac|aac|m4a|opus|weba|wma)$/i.test(ext)
       const isVideo = file.type.startsWith('video/') || /^(mp4|m4v|webm|mkv|mov|avi|wmv|flv|ogv|mpg|mpeg)$/i.test(ext)
@@ -1157,8 +1188,9 @@ function OrcSpaceCanvas({
               }))
               setCanvasNotice(`Added "${shortName(file.name)}" to music player`)
             } else {
-              const widgetId = placeWidget('music-player', dropPoint)
+              const widgetId = placeWidget('music-player', filePoint)
               if (widgetId) {
+                placed += 1
                 deliverWhenMounted(
                   widgetId,
                   () => window.dispatchEvent(new CustomEvent('orcspace:add-music-track', {
@@ -1170,8 +1202,9 @@ function OrcSpaceCanvas({
               }
             }
           } else {
-            const widgetId = placeWidget('browser', dropPoint)
+            const widgetId = placeWidget('browser', filePoint)
             if (widgetId) {
+              placed += 1
               const mediaUrl = `orc://media/${saved.name}`
               const kind = mediaKind
               deliverWhenMounted(
@@ -1380,12 +1413,12 @@ function OrcSpaceCanvas({
             aria-label="Empty canvas"
             role="status"
           >
-            <div className="rounded-[14px] border border-line-soft bg-bg-panel/80 px-6 py-5 text-center shadow-xl backdrop-blur-md">
+            <div className="rounded-panel border border-line-soft bg-bg-panel/80 px-6 py-5 text-center shadow-xl backdrop-blur-md">
               <div className="mb-1 text-sm font-medium text-text">Your canvas is clear</div>
               <div className="mb-3 text-[11px] text-text-faint">Use the command bar below: /terminal, /chat, .files, @planner, or plain terminal</div>
               <button
                 type="button"
-                className="pointer-events-auto rounded-[8px] bg-accent px-3 py-1.5 text-[11px] font-medium text-bg hover:opacity-90"
+                className="pointer-events-auto rounded-panel bg-accent px-3 py-1.5 text-[11px] font-medium text-bg hover:opacity-90"
                 onClick={() => {
                   const cx = mainSize.w > 0 ? mainSize.w / 2 : window.innerWidth / 2
                   const cy = mainSize.h > 0 ? mainSize.h / 2 : window.innerHeight / 2
@@ -1402,12 +1435,12 @@ function OrcSpaceCanvas({
                 Add terminal
               </button>
               <div className="mt-2 text-[10px] text-text-faint">
-                <kbd className="rounded border border-line px-1 py-0.5 text-[9px] text-text-dim">T</kbd>{' '}
-                <kbd className="rounded border border-line px-1 py-0.5 text-[9px] text-text-dim">N</kbd>{' '}
-                <kbd className="rounded border border-line px-1 py-0.5 text-[9px] text-text-dim">+</kbd>{' '}
-                <kbd className="rounded border border-line px-1 py-0.5 text-[9px] text-text-dim">-</kbd>{' '}
-                <kbd className="rounded border border-line px-1 py-0.5 text-[9px] text-text-dim">0</kbd>{' '}
-                <kbd className="rounded border border-line px-1 py-0.5 text-[9px] text-text-dim">Home</kbd>
+                <kbd className="rounded-panel border border-line px-1 py-0.5 text-[9px] text-text-dim">T</kbd>{' '}
+                <kbd className="rounded-panel border border-line px-1 py-0.5 text-[9px] text-text-dim">N</kbd>{' '}
+                <kbd className="rounded-panel border border-line px-1 py-0.5 text-[9px] text-text-dim">+</kbd>{' '}
+                <kbd className="rounded-panel border border-line px-1 py-0.5 text-[9px] text-text-dim">-</kbd>{' '}
+                <kbd className="rounded-panel border border-line px-1 py-0.5 text-[9px] text-text-dim">0</kbd>{' '}
+                <kbd className="rounded-panel border border-line px-1 py-0.5 text-[9px] text-text-dim">Home</kbd>
               </div>
             </div>
           </div>
@@ -1430,7 +1463,7 @@ function OrcSpaceCanvas({
         {
 }
         {canvasNotice && (
-          <div role="status" className="pointer-events-none absolute bottom-20 left-1/2 z-[300] -translate-x-1/2 rounded-[10px] border border-line bg-bg-panel/95 px-3 py-1.5 text-[11px] text-text shadow-lg">
+          <div role="status" className="pointer-events-none absolute bottom-20 left-1/2 z-[300] -translate-x-1/2 rounded-panel border border-line bg-bg-panel/95 px-3 py-1.5 text-[11px] text-text shadow-lg">
             {canvasNotice}
           </div>
         )}

@@ -24,18 +24,18 @@ const ISLAND =
   'flex h-10 items-center gap-1 border-0 bg-transparent p-0'
 
 const VIEW_SWITCH =
-  'flex h-[30px] items-center gap-0 rounded-full border border-[#121212] bg-[#080808] p-[3px]'
+  'flex h-[30px] items-center gap-0 rounded-pill border border-bg-raise bg-bg p-[3px]'
 
 const VIEW_TAB =
-  'flex h-[24px] flex-none items-center rounded-full px-[11px] text-[12px] font-medium transition-colors duration-150 cursor-pointer select-none'
+  'flex h-[24px] flex-none items-center rounded-pill px-[11px] text-[12px] font-medium transition-colors duration-150 cursor-pointer select-none'
 
-const VIEW_TAB_ACTIVE = 'bg-[#1F1F1F] text-white font-semibold'
-const VIEW_TAB_INACTIVE = 'bg-[#080808] text-white/60 hover:text-white hover:bg-[#2A2A2E]'
+const VIEW_TAB_ACTIVE = 'bg-bg-hover text-white font-semibold'
+const VIEW_TAB_INACTIVE = 'bg-bg text-white/60 hover:text-white hover:bg-line'
 
 
 
 const ICON =
-  'grid h-10 w-[46px] flex-none place-items-center rounded-none border-0 transition-colors duration-150 cursor-pointer'
+  'grid h-10 w-[46px] flex-none place-items-center rounded-bar border-0 transition-colors duration-150 cursor-pointer'
 const QUIET = 'text-text-faint hover:bg-bg-hover hover:text-text'
 
 interface Props {
@@ -211,7 +211,7 @@ export default React.memo(function TitleBar({
 
   const checkoutGitRef = useCallback(async (ref: string, isCommit: boolean): Promise<void> => {
     if (blockedCount > 0) {
-      setGitNotice(`Uncommitted: ${blockedCount} tracked file${blockedCount > 1 ? 's' : ''} вЂ” commit or discard changes before switching. Untracked files ride along.`)
+      setGitNotice(`Uncommitted: ${blockedCount} tracked file${blockedCount > 1 ? 's' : ''} — commit or discard changes before switching. Untracked files ride along.`)
       return
     }
     setGitBusyRef(ref)
@@ -237,7 +237,7 @@ export default React.memo(function TitleBar({
     const name = gitQuery.trim()
     if (!name) return
     if (blockedCount > 0) {
-      setGitNotice(`Uncommitted: ${blockedCount} tracked file${blockedCount > 1 ? 's' : ''} вЂ” commit or discard changes before switching. Untracked files ride along.`)
+      setGitNotice(`Uncommitted: ${blockedCount} tracked file${blockedCount > 1 ? 's' : ''} — commit or discard changes before switching. Untracked files ride along.`)
       return
     }
     setGitBusyRef(`new:${name}`)
@@ -419,7 +419,7 @@ export default React.memo(function TitleBar({
             title={
               gitStatus?.repo
                 ? `Git (${gitStatus.branch || 'HEAD'})\n${dirtyCount > 0 ? `${dirtyCount} changed file${dirtyCount > 1 ? 's' : ''}` : 'Working tree clean'}`
-                : 'Git вЂ” not a repository'
+                : 'Git — not a repository'
             }
           >
             <GitBranch
@@ -432,12 +432,12 @@ export default React.memo(function TitleBar({
             <span className="hidden min-[1000px]:inline max-w-[110px] truncate">
               {gitStatus?.repo ? gitStatus.branch || 'HEAD' : 'Git'}
             </span>
-            {dirtyCount > 0 && <span className="h-1.5 w-1.5 flex-none rounded-full bg-accent" />}
+            {dirtyCount > 0 && <span className="h-1.5 w-1.5 flex-none rounded-pill bg-accent" />}
           </button>
           </div>
 
           {gitOpen && (
-            <div className="absolute right-2 top-[38px] z-[60000] flex max-h-[70vh] w-[340px] flex-col rounded-[12px] border border-line-soft bg-bg-panel text-left shadow-2xl">
+            <div className="absolute right-2 top-[38px] z-[60000] flex max-h-[70vh] w-[340px] flex-col rounded-panel border border-line-soft bg-bg-panel text-left shadow-2xl">
               <div className="border-b border-line-soft p-3 pb-2">
                 <input
                   value={gitQuery}
@@ -447,15 +447,15 @@ export default React.memo(function TitleBar({
                       void createGitBranch()
                     }
                   }}
-                  placeholder="Search Orcpace branches"
+                  placeholder="Search branches and commits"
                   aria-label="Search branches and commits"
-                  className="w-full rounded-md border border-line-soft bg-bg-hover px-2 py-1.5 text-[12px] text-text placeholder:text-text-faint focus:border-accent focus:outline-none"
+                  className="w-full rounded-panel border border-line-soft bg-bg-hover px-2 py-1.5 text-[12px] text-text placeholder:text-text-faint focus:border-accent focus:outline-none"
                 />
                 {gitStatus?.repo && (
                   <div className="mt-1.5 flex items-center justify-between text-[11px] text-text-dim">
                     <span className="truncate">
                       {gitStatus.branch || 'HEAD'}
-                      {gitStatus.branch === 'HEAD' && gitHead && <span className="text-accent"> В· detached at {gitHead.slice(0, 8)}</span>}
+                      {gitStatus.branch === 'HEAD' && gitHead && <span className="text-accent"> · detached at {gitHead.slice(0, 8)}</span>}
                     </span>
                     <span className="flex-none">{dirtyCount ? `Uncommitted: ${dirtyCount} file${dirtyCount > 1 ? 's' : ''}` : 'clean'}</span>
                   </div>
@@ -463,13 +463,13 @@ export default React.memo(function TitleBar({
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto p-3 pt-2">
                 {gitNotice && (
-                  <p role="status" className="mb-2 rounded-md border border-accent/40 bg-accent/10 px-2 py-1.5 text-[11px] text-text">{gitNotice}</p>
+                  <p role="status" className="mb-2 rounded-panel border border-accent/40 bg-accent/10 px-2 py-1.5 text-[11px] text-text">{gitNotice}</p>
                 )}
                 {gitError && (
-                  <p role="alert" className="mb-2 break-words rounded-md border border-danger/40 bg-danger/10 px-2 py-1.5 text-[11px] text-danger">{gitError}</p>
+                  <p role="alert" className="mb-2 break-words rounded-panel border border-danger/40 bg-danger/10 px-2 py-1.5 text-[11px] text-danger">{gitError}</p>
                 )}
                 {!gitStatus ? (
-                  <p className="text-[12px] text-text-dim">Checking repositoryвЂ¦</p>
+                  <p className="text-[12px] text-text-dim">Checking repository…</p>
                 ) : !gitStatus.repo ? (
                   <div className="space-y-1 text-[12px]">
                     <p className="text-text-dim">This workspace is not a Git repository.</p>
@@ -480,7 +480,7 @@ export default React.memo(function TitleBar({
                     <div>
                       <div className="mb-1 text-[11px] font-semibold text-text-faint">Branches</div>
                       {gitLoading && gitBranches.length === 0 ? (
-                        <p className="text-text-dim">Loading branchesвЂ¦</p>
+                        <p className="text-text-dim">Loading branches…</p>
                       ) : gitBranches.length === 0 ? (
                         <p className="text-text-dim">No branches match.</p>
                       ) : (
@@ -494,15 +494,15 @@ export default React.memo(function TitleBar({
                                   disabled={busy || branch.current}
                                   onClick={() => void checkoutGitRef(branch.name, false)}
                                   title={blockedCount > 0 && !branch.current ? 'Commit or discard changes before switching' : `Checkout ${branch.name}`}
-                                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${branch.current ? 'bg-bg-hover text-text' : 'text-text-dim hover:bg-bg-hover hover:text-text'} disabled:cursor-default disabled:opacity-80`}
+                                  className={`flex w-full items-center gap-2 rounded-panel px-2 py-1.5 text-left transition-colors ${branch.current ? 'bg-bg-hover text-text' : 'text-text-dim hover:bg-bg-hover hover:text-text'} disabled:cursor-default disabled:opacity-80`}
                                 >
                                   <GitBranch size={13} className="flex-none text-text-faint" />
                                   <span className="min-w-0 flex-1 truncate font-medium">{branch.name}</span>
                                   {branch.current && dirtyCount > 0 && (
                                     <span className="flex-none text-[10px] text-text-dim">Uncommitted: {dirtyCount} file{dirtyCount > 1 ? 's' : ''}</span>
                                   )}
-                                  {branch.current && <span className="flex-none text-[13px] text-text">вњ“</span>}
-                                  {busy && <span className="flex-none text-[10px] text-text-dim">вЂ¦</span>}
+                                  {branch.current && <span className="flex-none text-[13px] text-text">✓</span>}
+                                  {busy && <span className="flex-none text-[10px] text-text-dim">…</span>}
                                 </button>
                               </li>
                             )
@@ -513,7 +513,7 @@ export default React.memo(function TitleBar({
                     <div>
                       <div className="mb-1 text-[11px] font-semibold text-text-faint">History</div>
                       {gitLoading && gitCommits.length === 0 ? (
-                        <p className="text-text-dim">Loading historyвЂ¦</p>
+                        <p className="text-text-dim">Loading history…</p>
                       ) : gitCommits.length === 0 ? (
                         <p className="text-text-dim">No commits match.</p>
                       ) : (
@@ -528,12 +528,12 @@ export default React.memo(function TitleBar({
                                   disabled={busy || isHead}
                                   onClick={() => void checkoutGitRef(commit.hash, true)}
                                   title={blockedCount > 0 && !isHead ? 'Commit or discard changes before switching' : `Checkout ${commit.short} (detached)`}
-                                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-text-dim transition-colors hover:bg-bg-hover hover:text-text disabled:cursor-default disabled:opacity-80"
+                                  className="flex w-full items-center gap-2 rounded-panel px-2 py-1.5 text-left text-text-dim transition-colors hover:bg-bg-hover hover:text-text disabled:cursor-default disabled:opacity-80"
                                 >
                                   <span className="flex-none font-mono text-[10px] text-accent">{commit.short}</span>
                                   <span className="min-w-0 flex-1 truncate" title={commit.subject}>{commit.subject}</span>
-                                  {isHead && <span className="flex-none text-[13px] text-text">вњ“</span>}
-                                  {busy && <span className="flex-none text-[10px] text-text-dim">вЂ¦</span>}
+                                  {isHead && <span className="flex-none text-[13px] text-text">✓</span>}
+                                  {busy && <span className="flex-none text-[10px] text-text-dim">…</span>}
                                 </button>
                               </li>
                             )
@@ -550,11 +550,11 @@ export default React.memo(function TitleBar({
                     type="button"
                     disabled={!gitQuery.trim() || gitBranches.some((b) => b.name === gitQuery.trim()) || gitBusyRef === `new:${gitQuery.trim()}`}
                     onClick={() => void createGitBranch()}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
+                    className="flex w-full items-center gap-2 rounded-panel px-2 py-1.5 text-left text-[12px] text-text-dim transition-colors hover:bg-bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     <span className="flex-none text-[14px]">+</span>
                     <span className="truncate">
-                      {gitQuery.trim() ? `Create and checkout new branch вЂњ${gitQuery.trim()}вЂќвЂ¦` : 'Create and checkout new branchвЂ¦'}
+                      {gitQuery.trim() ? `Create and checkout new branch “${gitQuery.trim()}”…` : 'Create and checkout new branch…'}
                     </span>
                   </button>
                 </div>
@@ -578,7 +578,7 @@ export default React.memo(function TitleBar({
                 QUIET whether or not the window is maximized, unlike the panel
                 toggles above. ON is the hover fill, so wearing it at rest made
                 this button look stuck under the cursor next to a plain
-                minimise and close вЂ” which is what it is, a window control, not
+                minimise and close — which is what it is, a window control, not
                 a toggle you read the state of. That state is already carried
                 three times over: the icon swaps, the label swaps, and
                 aria-pressed says it outright.

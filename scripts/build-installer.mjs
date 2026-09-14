@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { verifyConptyRuntime } from './conpty-runtime.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const dist = join(root, 'dist')
@@ -101,6 +102,8 @@ function verifyUnpackedRelease(packageJson) {
   ]
   const missing = requiredFiles.filter((file) => !existsSync(file))
   if (missing.length) throw new Error(`Unpacked release is incomplete:\n${missing.join('\n')}`)
+  verifyConptyRuntime(join(resources, 'app.asar.unpacked', 'node_modules', '@homebridge',
+    'node-pty-prebuilt-multiarch', 'build', 'Release', 'conpty'))
 
   const asar = readFileSync(join(resources, 'app.asar'))
 
