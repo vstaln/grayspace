@@ -1,4 +1,10 @@
-import type { CanvasWidget, CanvasDelta } from '../../../preload/api'
+import type { CanvasDelta } from '../../../preload/api'
+
+/** Minimal structural shape: renderer Widget and main CanvasWidget both satisfy it. */
+export interface VersionedWidget {
+  id: string
+  version?: number
+}
 
 export interface MergeContext {
   dirtyWidgetIds?: ReadonlySet<string>
@@ -14,8 +20,8 @@ export interface MergeContext {
  * - Preserves local unversioned widget if it has pending local modifications.
  */
 export function shouldApplyUpsert(
-  local: CanvasWidget | undefined,
-  incoming: CanvasWidget,
+  local: VersionedWidget | undefined,
+  incoming: VersionedWidget,
   context: MergeContext = {}
 ): boolean {
   if (!local) return true
@@ -42,11 +48,11 @@ export function shouldApplyUpsert(
  * Pure helper applying a CanvasDelta to a widgets array.
  * Returns the updated widgets array or original reference if no change occurred.
  */
-export function applyDeltaToWidgets(
-  prev: CanvasWidget[],
+export function applyDeltaToWidgets<TWidget extends VersionedWidget>(
+  prev: TWidget[],
   delta: CanvasDelta,
   context: MergeContext = {}
-): CanvasWidget[] {
+): TWidget[] {
   const { patch } = delta
 
   if (patch.op === 'upsert') {
@@ -60,7 +66,7 @@ export function applyDeltaToWidgets(
       if (context.suppressedWidgetIds?.has(incoming.id)) {
         return prev
       }
-      return [...prev, incoming]
+      return [...prev, incoming as unknown as TWidget]
     }
 
     const local = prev[idx]
@@ -69,7 +75,7 @@ export function applyDeltaToWidgets(
     }
 
     const next = [...prev]
-    next[idx] = incoming
+    next[idx] = incoming as unknown as TWidget
     return next
   }
 
@@ -93,7 +99,7 @@ export function applyDeltaToWidgets(
     }
 
     const next = [...prev]
-    next[idx] = { ...local, ...changes, version: delta.version ?? local.version }
+    next[idx] = { ...local, ...changes, version: delta.version ?? local.version } as TWidget
     return next
   }
 
@@ -112,7 +118,7 @@ export function applyDeltaToWidgets(
       'widgets' in patch.value &&
       Array.isArray((patch.value as { widgets?: unknown }).widgets)
     ) {
-      return (patch.value as { widgets: CanvasWidget[] }).widgets
+      return (patch.value as unknown as { widgets: TWidget[] }).widgets
     }
     return prev
   }

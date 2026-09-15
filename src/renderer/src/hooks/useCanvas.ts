@@ -14,6 +14,7 @@ import {
 import { clearTimerPersist } from '../lib/timerPersist'
 import { clearInitialCommand } from '../lib/pendingTerminalCommands'
 import { applyDeltaToWidgets } from '../lib/canvasDeltaMerge'
+import type { CanvasDelta } from '../../../preload/api'
 
 let localCounter = 0
 const makeLocalId = (kind: WidgetKind = 'terminal'): string => {
@@ -369,13 +370,10 @@ export function useCanvas() {
         if (snapshot.snapshotSeq) {
           lastDeltaSeqRef.current = Math.max(lastDeltaSeqRef.current, snapshot.snapshotSeq)
         }
-        if (window.api.canvas?.replay) {
-          void window.api.canvas.replay(0).then((rep) => {
-            if (rep?.lastSeq) {
-              lastDeltaSeqRef.current = Math.max(lastDeltaSeqRef.current, rep.lastSeq)
-            }
-          }).catch(() => {})
-        }
+        // The snapshot above predates anything committed while load() was in
+        // flight: replay from our cursor and apply what we missed instead of
+        // only bumping the cursor (which would drop those events forever).
+        catchUpDeltas(run)
       })
       .catch(() => {
 
@@ -386,6 +384,89 @@ export function useCanvas() {
         retryTimerRef.current = setTimeout(hydrate, 3000)
       })
   }, [])
+
+  // Applies one journal delta to local state. Deltas are a read-only fast
+  // path: the debounced canvas.save remains the single mutation gate, so this
+  // never writes back and never records history.
+  const applyIncomingDelta = useCallback((delta: CanvasDelta): void => {
+    if (!hydratedRef.current || !delta) return
+    // The journal is global across folders: traffic from another workspace
+    // must never rewrite this board.
+    if ((delta.workspaceDir ?? null) !== (workspaceDirRef.current ?? null)) return
+    if (delta.seq <= lastDeltaSeqRef.current) return
+    lastDeltaSeqRef.current = delta.seq
+    const { patch } = delta
+    if (patch.op === 'upsert' || patch.op === 'update' || patch.op === 'remove') {
+      // Echoes of our own not-yet-acked creates/deletes: acknowledge first.
+      if (patch.op === 'upsert' && pendingCreatesRef.current.has(patch.widget.id)) {
+        pendingCreatesRef.current.delete(patch.widget.id)
+      }
+      if (patch.op === 'remove' && pendingDeletesRef.current.has(patch.id)) {
+        pendingDeletesRef.current.delete(patch.id)
+      }
+      const context = {
+        dirtyWidgetIds: dirtyWidgetIdsRef.current,
+        pendingCreates: pendingCreatesRef.current,
+        pendingDeletes: pendingDeletesRef.current,
+        suppressedWidgetIds: suppressedWidgetIdsRef.current
+      }
+      setWidgets((prev) => applyDeltaToWidgets(prev, delta, context))
+      return
+    }
+    if (patch.op === 'replace') {
+      const value: unknown = patch.value
+      if (value && typeof value === 'object' && 'x' in value && 'y' in value && 'zoom' in value) {
+        if (!cameraDirtyRef.current) setCamera(value as Camera)
+        return
+      }
+      if (Array.isArray(value)) {
+        if (value.length === 0) return
+        const first = value[0] as Record<string, unknown> | null
+        if (first && typeof first === 'object' && 'points' in first) {
+          if (!strokesDirtyRef.current) setStrokes(value as Stroke[])
+          return
+        }
+        if (first && typeof first === 'object' && 'from' in first) {
+          if (!connectionsDirtyRef.current) setConnections(value as Connection[])
+          return
+        }
+        return
+      }
+      if (value && typeof value === 'object' && Array.isArray((value as { widgets?: unknown }).widgets)) {
+        // Import/transaction snapshot: wholesale take is only safe with
+        // nothing unsaved locally, otherwise our pending save supersedes it.
+        const hasLocalEdits =
+          widgetsDirtyRef.current || cameraDirtyRef.current ||
+          strokesDirtyRef.current || connectionsDirtyRef.current ||
+          dirtyWidgetIdsRef.current.size > 0 || pendingCreatesRef.current.size > 0 ||
+          pendingDeletesRef.current.size > 0 || widgetPatchRef.current.size > 0
+        if (!hasLocalEdits) hydrate()
+      }
+    }
+  }, [hydrate])
+
+  // Replays missed journal events after hydrate or reconnect. Moves the cursor
+  // past a truncated ring instead of walking it; the fresh snapshot (or the
+  // onChange full-sync fallback) already covers that state.
+  const catchUpDeltas = useCallback((run?: number): void => {
+    if (!hydratedRef.current || !window.api.canvas?.replay) return
+    const baseline = lastDeltaSeqRef.current
+    void window.api.canvas.replay(baseline).then((rep) => {
+      if (run !== undefined && run !== hydrationRunRef.current) return
+      if (!hydratedRef.current) return
+      if (!rep || !Array.isArray(rep.events)) return
+      if (rep.resetRequired) {
+        if (typeof rep.lastSeq === 'number') {
+          lastDeltaSeqRef.current = Math.max(lastDeltaSeqRef.current, rep.lastSeq)
+        }
+        return
+      }
+      for (const evt of rep.events) applyIncomingDelta(evt)
+      if (typeof rep.lastSeq === 'number') {
+        lastDeltaSeqRef.current = Math.max(lastDeltaSeqRef.current, rep.lastSeq)
+      }
+    }).catch(() => {})
+  }, [applyIncomingDelta])
 
   useEffect(() => {
     clearRemovedNoteStorage()
