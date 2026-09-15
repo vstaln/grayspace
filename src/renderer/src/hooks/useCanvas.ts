@@ -647,51 +647,18 @@ export function useCanvas() {
 
   useEffect(() => {
     if (!window.api.canvas?.onDelta) return
-    return window.api.canvas.onDelta((delta) => {
-      if (!hydratedRef.current || !delta) return
-      if (delta.seq <= lastDeltaSeqRef.current) return
-      lastDeltaSeqRef.current = delta.seq
-
-      setWidgets((prev) =>
-        applyDeltaToWidgets(prev, delta, {
-          dirtyWidgetIds: dirtyWidgetIdsRef.current,
-          pendingCreates: pendingCreatesRef.current,
-          pendingDeletes: pendingDeletesRef.current,
-          suppressedWidgetIds: suppressedWidgetIdsRef.current
-        })
-      )
-    })
-  }, [])
+    return window.api.canvas.onDelta((delta) => applyIncomingDelta(delta))
+  }, [applyIncomingDelta])
 
   useEffect(() => {
-    const onFocus = (): void => {
-      if (!hydratedRef.current || !window.api.canvas?.replay) return
-      void window.api.canvas.replay(lastDeltaSeqRef.current).then((replay) => {
-        if (!replay) return
-        if (replay.resetRequired) {
-          void hydrate()
-          return
-        }
-        if (Array.isArray(replay.events) && replay.events.length > 0) {
-          for (const evt of replay.events) {
-            if (evt.seq > lastDeltaSeqRef.current) {
-              lastDeltaSeqRef.current = evt.seq
-              setWidgets((prev) =>
-                applyDeltaToWidgets(prev, evt, {
-                  dirtyWidgetIds: dirtyWidgetIdsRef.current,
-                  pendingCreates: pendingCreatesRef.current,
-                  pendingDeletes: pendingDeletesRef.current,
-                  suppressedWidgetIds: suppressedWidgetIdsRef.current
-                })
-              )
-            }
-          }
-        }
-      }).catch(() => {})
-    }
+    const onFocus = (): void => catchUpDeltas()
     window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
-  }, [hydrate])
+    window.addEventListener('online', onFocus)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('online', onFocus)
+    }
+  }, [catchUpDeltas])
 
   const screenToWorld = useCallback((x: number, y: number, cam: Camera = cameraRef.current): Point => {
     return { x: (x - cam.x) / cam.zoom, y: (y - cam.y) / cam.zoom }

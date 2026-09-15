@@ -99,7 +99,7 @@ export function applyDeltaToWidgets<TWidget extends VersionedWidget>(
     }
 
     const next = [...prev]
-    next[idx] = { ...local, ...changes, version: delta.version ?? local.version } as TWidget
+    next[idx] = { ...local, ...changes, version: delta.version ?? local.version } as unknown as TWidget
     return next
   }
 

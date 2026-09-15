@@ -728,7 +728,7 @@ function OrcSpaceCanvas({
       // don't filter real mouse packets in that case.
       trackDrag(onMove, onEnd, e.pointerId > 0 ? e.pointerId : undefined)
     },
-    [canvas.bringToFront, canvas.updateWidget]
+    [canvas.bringToFront, canvas.updateWidget, canvas.suppressWidget]
   )
 
   const onResizeStart = useCallback(
@@ -743,6 +743,10 @@ function OrcSpaceCanvas({
       canvas.bringToFront(id)
       const widget = widgetsRef.current.find((w) => w.id === id)
       if (!widget || widget.maximized) return
+      // Resize commits every mousemove via updateWidget: suppress remote
+      // upserts for its duration, same as header drag, or a remote move
+      // lands mid-gesture and the release commit jumps.
+      canvas.suppressWidget(id, true)
 
       const startX = e.clientX
       const startY = e.clientY
@@ -772,9 +776,12 @@ function OrcSpaceCanvas({
         }
         canvas.updateWidget(id, { x, y, w, h })
       }
-      trackDrag(onMove, undefined, e.pointerId)
+      const onResizeEnd = (): void => {
+        canvas.suppressWidget(id, false)
+      }
+      trackDrag(onMove, onResizeEnd, e.pointerId)
     },
-    [canvas.bringToFront, canvas.updateWidget]
+    [canvas.bringToFront, canvas.updateWidget, canvas.suppressWidget]
   )
 
   const onWidgetFocus = useCallback((id: string): void => canvas.bringToFront(id), [canvas.bringToFront])
