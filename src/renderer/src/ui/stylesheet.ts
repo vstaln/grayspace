@@ -384,7 +384,7 @@ const componentsLayer: Sheet = {
 
 
     '&.is-terminal .widget-header-shell': {
-      background: palette.terminalGlass,
+      background: palette.terminalHeaderGlass,
       backdropFilter: frost.terminal,
       WebkitBackdropFilter: frost.terminal,
       boxShadow: 'none'

@@ -93,7 +93,10 @@ function xtermTheme(_appTheme: ThemeName, surface: 'canvas' | 'code'): ITheme {
   const isCanvas = surface === 'canvas'
   return {
     ...BASE_COLORS,
-    background: isCanvas ? 'transparent' : (surface === 'code' ? '#080808' : palette.terminalSolid),
+    // xterm's color parser rejects the CSS keyword `transparent` and falls
+    // back to opaque black. Use an 8-digit hex color so the viewport and DOM
+    // renderer keep a transparent background on canvas terminals.
+    background: isCanvas ? '#08080800' : (surface === 'code' ? '#080808' : palette.terminalSolid),
     cursorAccent: palette.wallpaperBase
   }
 }

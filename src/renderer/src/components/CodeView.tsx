@@ -611,6 +611,11 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
     setFeaturedId(null)
     setMaximizedId(null)
     setPendingRestore(null)
+    // New scope: any in-flight HTML-fullscreen promotion belongs to the old
+    // board. Without this, a browser left in fullscreen across a workspace
+    // switch would clear the new board's manual maximize on its late leave.
+    browserFullscreenActiveRef.current.clear()
+    browserFullscreenDroveRef.current.clear()
     void window.api.code
       .load()
       .then(async (snapshot) => {
@@ -1208,7 +1213,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
           />
         )}
         <div ref={threeWayContainerRef} className={`relative grid min-h-0 flex-1 gap-0 bg-bg-raise p-0 ${maximizedId ? 'overflow-hidden' : 'overflow-auto'}`}
-            style={sessions.length === 3 ? {
+            style={maximizedId ? { gridTemplateColumns: 'minmax(0, 1fr)', gridAutoRows: 'minmax(0, 1fr)' } : sessions.length === 3 ? {
               gridTemplateColumns: `minmax(0, ${threeWaySplit.col}fr) 2px minmax(0, ${100 - threeWaySplit.col}fr)`,
               gridTemplateRows: `minmax(0, ${threeWaySplit.row}fr) 2px minmax(0, ${100 - threeWaySplit.row}fr)`
             } : { gridTemplateColumns, gridAutoRows: 'minmax(180px, 1fr)' }}

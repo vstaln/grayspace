@@ -719,8 +719,11 @@ function OrcSpaceCanvas({
       }
     }
 
+    // Runs on every widgets change (not just length) so a kind change to a
+    // non-maximizable kind restores it immediately. Converges: the second run
+    // finds nothing to fix and issues no update.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [widgets.length])
+  }, [widgets])
 
   const onWidgetClose = useCallback(
     (id: string): void => {
@@ -1332,11 +1335,16 @@ function OrcSpaceCanvas({
     for (const widget of renderableWidgets) {
       if (widget.maximized) {
         const zoom = camera.zoom || 1
+        // mainSize is 0 on the very first paint (ResizeObserver hasn't fired
+        // yet) — fall back to the window so a maximized widget restored from
+        // storage doesn't flash at 0x0. Same fallback as clampToVisibleWorld.
+        const viewW = mainSize.w > 0 ? mainSize.w : window.innerWidth
+        const viewH = mainSize.h > 0 ? mainSize.h : window.innerHeight
         styles.set(widget.id, {
           left: -camera.x / zoom,
           top: (TITLE_BAR_HEIGHT - camera.y) / zoom,
-          width: mainSize.w / zoom,
-          height: Math.max(0, mainSize.h - TITLE_BAR_HEIGHT) / zoom,
+          width: viewW / zoom,
+          height: Math.max(0, viewH - TITLE_BAR_HEIGHT) / zoom,
           zIndex: 200
         })
         continue

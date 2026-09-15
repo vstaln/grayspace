@@ -20,6 +20,7 @@ export const palette = {
 
 
   terminalGlass: 'rgba(8, 8, 8, 0.20)',
+  terminalHeaderGlass: 'rgba(18, 18, 18, 0.35)',
 
   titleBar: {
     base: monochrome.base,
