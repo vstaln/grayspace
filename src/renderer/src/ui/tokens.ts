@@ -19,7 +19,7 @@ export const palette = {
 
 
 
-  terminalGlass: 'rgba(8, 8, 8, 0.50)',
+  terminalGlass: 'rgba(8, 8, 8, 0.20)',
 
   titleBar: {
     base: monochrome.base,
@@ -51,7 +51,7 @@ export const frost = {
   surface: 'blur(40px) saturate(150%)',
 
 
-  terminal: 'blur(20px) brightness(0.90)'
+  terminal: 'blur(20px)'
 } as const
 
 

@@ -87,7 +87,6 @@ export const WIDGET_H = 420
 
 
 export const NON_MAXIMIZABLE: ReadonlySet<WidgetKind> = new Set<WidgetKind>([
-  'files',
   'music-player',
   'orchestration'
 ])

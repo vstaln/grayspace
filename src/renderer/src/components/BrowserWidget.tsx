@@ -146,14 +146,18 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
       syncHistory()
     }
     const onEnterHtmlFullscreen = (event: Event): void => {
-      // Keep fullscreen inside OrcSpace. CodeView promotes this session so the
-      // browser fills the Code workspace instead of promoting the app window.
+      // Keep fullscreen inside OrcSpace. CodeView/canvas promote the session/
+      // widget so the browser fills its workspace instead of the app window.
+      // Without a promote handler there is nothing to emulate it with, so let
+      // the webview do its native fullscreen rather than swallowing it.
+      if (!onFullscreenChange) return
       event.preventDefault()
-      onFullscreenChange?.(true)
+      onFullscreenChange(true)
     }
     const onLeaveHtmlFullscreen = (event: Event): void => {
+      if (!onFullscreenChange) return
       event.preventDefault()
-      onFullscreenChange?.(false)
+      onFullscreenChange(false)
     }
     let crashReloads = 0
     const onCrashed = (): void => {
@@ -416,6 +420,23 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
             className="absolute inset-0 h-full w-full"
             style={media || isHome ? { visibility: 'hidden', pointerEvents: 'none' } : undefined}
           />
+          {isHome && !loadError && (
+            <div
+              className="absolute inset-0 flex items-center justify-center bg-bg px-6 text-center"
+              role="status"
+              aria-label="Browser home"
+            >
+              <div className="flex max-w-[360px] flex-col items-center">
+                <div className="mb-3 grid h-11 w-11 place-items-center rounded-panel border border-line-soft bg-bg-panel text-text-faint">
+                  <Search size={19} strokeWidth={1.6} />
+                </div>
+                <div className="text-[14px] font-medium text-text">Search the web</div>
+                <div className="mt-1.5 text-[11px] leading-relaxed text-text-faint">
+                  Enter a URL or search term in the address bar above.
+                </div>
+              </div>
+            </div>
+          )}
           {media && (
             <MediaViewer media={media} onClose={closeMedia} onOpenExternally={openExternally} />
           )}

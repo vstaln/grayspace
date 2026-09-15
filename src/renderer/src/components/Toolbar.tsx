@@ -42,6 +42,10 @@ interface Props {
   onTargetTerminalChange(id: string): void
   onCreateWidget(kind: import('../types').WidgetKind, initialCommand: string): void
   onSubmitCommand(id: string, command: string, mode: 'command' | 'message'): void
+  zoom?: number
+  onZoomIn?(): void
+  onZoomOut?(): void
+  onResetZoom?(): void
 }
 
 function ToolButton({ label, testId, active, disabled, onClick, children }: {
@@ -50,7 +54,7 @@ function ToolButton({ label, testId, active, disabled, onClick, children }: {
   return <button type="button" disabled={disabled} className={`grid h-8 w-8 flex-none place-items-center rounded-panel transition-colors duration-150 disabled:cursor-default disabled:opacity-35 ${active ? 'bg-bg-hover text-text' : 'text-text hover:bg-bg-hover'}`} onClick={onClick} title={label} aria-label={label} aria-disabled={disabled || undefined} data-testid={testId} {...(active !== undefined ? { 'aria-pressed': active } : {})}>{children}</button>
 }
 
-export default function Toolbar({ tool, onToolChange, hasStrokes, onClearStrokes, strokeColor, onStrokeColorChange, workspaceDir, onPickDir, terminals, targetTerminalId = '', commandPrefix, onTargetTerminalChange, onCreateWidget, onSubmitCommand }: Props): React.JSX.Element {
+export default function Toolbar({ tool, onToolChange, hasStrokes, onClearStrokes, strokeColor, onStrokeColorChange, workspaceDir, onPickDir, terminals, targetTerminalId = '', commandPrefix, onTargetTerminalChange, onCreateWidget, onSubmitCommand, zoom, onZoomIn, onZoomOut, onResetZoom }: Props): React.JSX.Element {
   const [showPalette, setShowPalette] = React.useState(false)
   const [command, setCommand] = React.useState('')
   const [mode, setMode] = React.useState<'command' | 'message'>('command')
@@ -116,7 +120,7 @@ export default function Toolbar({ tool, onToolChange, hasStrokes, onClearStrokes
     backdropFilter: 'blur(20px) brightness(0.94)',
     WebkitBackdropFilter: 'blur(20px) brightness(0.94)'
   } as React.CSSProperties
-  return <div className="fixed bottom-6 left-1/2 z-[300] flex h-12 w-[min(720px,calc(100vw-24px))] max-w-[calc(100vw-24px)] -translate-x-1/2 items-center gap-1 rounded-panel border border-line px-2 py-1 shadow-2xl glass:border-line-soft" style={shellStyle} role="toolbar" aria-label="Canvas Tools" aria-orientation="horizontal">
+  return <div className="fixed bottom-6 left-1/2 z-[300] flex h-12 w-[min(780px,calc(100vw-24px))] max-w-[calc(100vw-24px)] -translate-x-1/2 items-center gap-1 rounded-panel border border-line px-2 py-1 shadow-2xl glass:border-line-soft" style={shellStyle} role="toolbar" aria-label="Canvas Tools" aria-orientation="horizontal">
     {suggestions.length > 0 && (
       <div
         className="absolute bottom-[calc(100%+8px)] left-10 z-[320] min-w-[250px] overflow-hidden rounded-panel border border-line bg-bg-panel/95 p-1 shadow-2xl backdrop-blur-md"
@@ -186,6 +190,43 @@ export default function Toolbar({ tool, onToolChange, hasStrokes, onClearStrokes
     <button type="button" className="grid h-7 w-7 flex-none place-items-center rounded-pill text-text hover:bg-bg-hover" onClick={openSettings} aria-label="Settings" title="Settings">
       <Settings size={14} />
     </button>
+    {zoom !== undefined && (
+      <>
+        <span className="mx-0.5 h-5 w-px bg-bg-hover" aria-hidden="true" />
+        <div className="flex items-center gap-0.5" role="group" aria-label="Zoom controls">
+          <button
+            type="button"
+            className="grid h-7 w-6 place-items-center rounded-panel text-[12px] font-semibold text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+            onClick={onZoomOut}
+            title="Zoom out (-)"
+            aria-label="Zoom out"
+            data-testid="zoom-out"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            className="h-7 min-w-[38px] rounded-panel px-1 font-mono text-[10px] font-medium text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+            onClick={onResetZoom}
+            title="Reset zoom to 100% (0 / Home)"
+            aria-label="Reset zoom to 100%"
+            data-testid="zoom-reset"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <button
+            type="button"
+            className="grid h-7 w-6 place-items-center rounded-panel text-[12px] font-semibold text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+            onClick={onZoomIn}
+            title="Zoom in (+)"
+            aria-label="Zoom in"
+            data-testid="zoom-in"
+          >
+            +
+          </button>
+        </div>
+      </>
+    )}
     <span className="mx-0.5 h-5 w-px bg-bg-hover" aria-hidden="true" />
     <ToolButton label="Select" testId="tool-select" active={tool === 'select'} onClick={() => onToolChange('select')}><MousePointer2 size={15} /></ToolButton>
     <ToolButton label="Eraser — drag over strokes to erase" testId="tool-erase" active={tool === 'erase'} onClick={() => onToolChange('erase')}><Eraser size={16} /></ToolButton>

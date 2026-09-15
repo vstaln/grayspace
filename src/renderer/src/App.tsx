@@ -316,6 +316,17 @@ function OrcSpaceCanvas({
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null)
   const [isPanning, setIsPanning] = useState(false)
   const [canvasNotice, setCanvasNotice] = useState<string | null>(null)
+  const [selectionBox, setSelectionBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+
+  const onZoomIn = useCallback(() => {
+    setCamera((c) => ({ ...c, zoom: Math.min(4, c.zoom * 1.2) }))
+  }, [setCamera])
+  const onZoomOut = useCallback(() => {
+    setCamera((c) => ({ ...c, zoom: Math.max(0.2, c.zoom / 1.2) }))
+  }, [setCamera])
+  const onResetZoom = useCallback(() => {
+    setCamera((c) => ({ ...c, zoom: 1 }))
+  }, [setCamera])
   const panRafRef = useRef<number | null>(null)
   const panPendingRef = useRef<Camera | null>(null)
   useEffect(() => {
@@ -691,20 +702,9 @@ function OrcSpaceCanvas({
   }, [])
   const onToggleMaximize = useCallback(
     (id: string): void => {
-      const widget = widgetsRef.current.find((w) => w.id === id)
-      if (!widget) return
-
-
-      if (NON_MAXIMIZABLE.has((widget.kind ?? 'terminal') as WidgetKind)) return
-      const next = !widget.maximized
-
-      for (const other of widgetsRef.current) {
-        if (other.id !== id && other.maximized) canvas.updateWidget(other.id, { maximized: false })
-      }
-      canvas.updateWidget(id, { maximized: next })
-      canvas.bringToFront(id)
+      canvas.toggleMaximize(id)
     },
-    [canvas.updateWidget, canvas.bringToFront]
+    [canvas.toggleMaximize]
   )
 
 
@@ -837,8 +837,10 @@ function OrcSpaceCanvas({
 
 
   const handleCanvasShortcut = (e: KeyboardEvent | React.KeyboardEvent<HTMLElement>): void => {
+    const isGlobalZoom = (e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '=' || e.key === '-' || e.key === '0')
     const target = e.target as HTMLElement | null
     if (
+      !isGlobalZoom &&
       target &&
       target !== mainRef.current &&
       target.closest(
@@ -875,7 +877,7 @@ function OrcSpaceCanvas({
       }
       if (e.key === '0') {
         e.preventDefault()
-        setCamera({ x: 0, y: 0, zoom: 1 })
+        setCamera((c) => ({ ...c, zoom: 1 }))
         return
       }
 
@@ -943,7 +945,46 @@ function OrcSpaceCanvas({
       return
     }
 
-
+    if (tool === 'select' && e.button === 0) {
+      e.preventDefault()
+      const startX = e.clientX
+      const startY = e.clientY
+      let moved = false
+      trackDrag(
+        (ev) => {
+          if (!moved) {
+            if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 4) return
+            moved = true
+          }
+          const left = Math.min(startX, ev.clientX)
+          const top = Math.min(startY, ev.clientY)
+          const width = Math.abs(ev.clientX - startX)
+          const height = Math.abs(ev.clientY - startY)
+          setSelectionBox({ x: left, y: top, w: width, h: height })
+        },
+        () => {
+          setSelectionBox((currentBox) => {
+            if (currentBox && moved) {
+              const p1 = toWorld(currentBox.x, currentBox.y)
+              const p2 = toWorld(currentBox.x + currentBox.w, currentBox.y + currentBox.h)
+              const minX = Math.min(p1.x, p2.x)
+              const maxX = Math.max(p1.x, p2.x)
+              const minY = Math.min(p1.y, p2.y)
+              const maxY = Math.max(p1.y, p2.y)
+              const intersecting = widgetsRef.current.filter(
+                (w) => !(w.x + w.w < minX || w.x > maxX || w.y + w.h < minY || w.y > maxY)
+              )
+              if (intersecting.length > 0) {
+                const topOne = intersecting.reduce((best, cur) => (cur.z > best.z ? cur : best), intersecting[0])
+                canvas.bringToFront(topOne.id)
+              }
+            }
+            return null
+          })
+        }
+      )
+      return
+    }
 
     const wantsPan = tool === 'pan' ? e.button === 0 : e.button === 1 || (e.button === 0 && e.shiftKey)
     if (!wantsPan) return
@@ -1460,8 +1501,17 @@ function OrcSpaceCanvas({
             />
           ))}
         </div>
-        {
-}
+        {selectionBox && (
+          <div
+            className="pointer-events-none fixed z-[250] rounded border border-accent/70 bg-accent/10 backdrop-blur-[1px]"
+            style={{
+              left: selectionBox.x,
+              top: selectionBox.y,
+              width: selectionBox.w,
+              height: selectionBox.h
+            }}
+          />
+        )}
         {canvasNotice && (
           <div role="status" className="pointer-events-none absolute bottom-20 left-1/2 z-[300] -translate-x-1/2 rounded-panel border border-line bg-bg-panel/95 px-3 py-1.5 text-[11px] text-text shadow-lg">
             {canvasNotice}
@@ -1508,6 +1558,10 @@ function OrcSpaceCanvas({
         onTargetTerminalChange={onTargetTerminalChange}
         onCreateWidget={createWidgetFromCommand}
         onSubmitCommand={onSubmitCommand}
+        zoom={camera.zoom}
+        onZoomIn={onZoomIn}
+        onZoomOut={onZoomOut}
+        onResetZoom={onResetZoom}
       />
       </div>
     </div>

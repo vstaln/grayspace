@@ -3,6 +3,7 @@ import {
   Camera,
   CanvasTool,
   Connection,
+  NON_MAXIMIZABLE,
   Point,
   STROKE_COLORS,
   Stroke,
@@ -703,6 +704,57 @@ export function useCanvas() {
     [nextZ, updateWidget]
   )
 
+  // Single-writer toggle for maximize. App's old version read widgetsRef
+  // (stale until the next render) and issued separate batches, so two fast
+  // clicks read the same maximized=false and left the widget stuck maximized.
+  // This consults the pending RAF batch first and commits maximize +
+  // un-maximize-others + bring-to-front in one batch, so rapid toggles alternate.
+  const toggleMaximize = useCallback(
+    (id: string): void => {
+      const target = widgetsRef.current.find((w) => w.id === id)
+      if (!target) return
+      if (NON_MAXIMIZABLE.has((target.kind ?? 'terminal') as WidgetKind)) return
+      const pendingTarget = widgetPatchRef.current.get(id)
+      const currentlyMaximized = pendingTarget?.maximized ?? target.maximized === true
+      const next = !currentlyMaximized
+      recordHistory(`widget:${id}`)
+      widgetsDirtyRef.current = true
+      dirtyWidgetIdsRef.current.add(id)
+      const mergePatch = (wid: string, patch: Partial<Widget>): void => {
+        const prev = widgetPatchRef.current.get(wid)
+        widgetPatchRef.current.set(wid, prev ? { ...prev, ...patch } : patch)
+      }
+      for (const other of widgetsRef.current) {
+        if (other.id === id) continue
+        const pendingOther = widgetPatchRef.current.get(other.id)
+        const otherMaximized = pendingOther?.maximized ?? other.maximized === true
+        if (otherMaximized) {
+          dirtyWidgetIdsRef.current.add(other.id)
+          mergePatch(other.id, { maximized: false })
+        }
+      }
+      mergePatch(id, { maximized: next, z: nextZ() })
+      if (widgetRafRef.current !== null) return
+      widgetRafRef.current = requestAnimationFrame(() => {
+        widgetRafRef.current = null
+        const batch = widgetPatchRef.current
+        widgetPatchRef.current = new Map()
+        if (batch.size === 0) return
+        setWidgets((prev) => {
+          let nextWidgets: Widget[] | null = null
+          for (const [wid, patch] of batch) {
+            const idx = (nextWidgets ?? prev).findIndex((w) => w.id === wid)
+            if (idx < 0) continue
+            if (!nextWidgets) nextWidgets = prev.slice()
+            nextWidgets[idx] = { ...nextWidgets[idx], ...patch }
+          }
+          return nextWidgets ?? prev
+        })
+      })
+    },
+    [nextZ, recordHistory]
+  )
+
 
 
 
@@ -1021,6 +1073,7 @@ export function useCanvas() {
     removeWidget,
     updateWidget,
     bringToFront,
+    toggleMaximize,
     tool,
     setTool,
     strokes,

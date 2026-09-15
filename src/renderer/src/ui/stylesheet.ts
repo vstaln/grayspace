@@ -384,9 +384,9 @@ const componentsLayer: Sheet = {
 
 
     '&.is-terminal .widget-header-shell': {
-      background: 'rgba(18, 18, 18, 0.35)',
-      backdropFilter: 'blur(60px)',
-      WebkitBackdropFilter: 'blur(60px)',
+      background: palette.terminalGlass,
+      backdropFilter: frost.terminal,
+      WebkitBackdropFilter: frost.terminal,
       boxShadow: 'none'
     },
   },

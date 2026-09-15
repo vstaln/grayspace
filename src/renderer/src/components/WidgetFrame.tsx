@@ -153,6 +153,25 @@ function WidgetFrame({
 
 
   const canMaximize = !NON_MAXIMIZABLE.has((widget.kind ?? 'terminal') as WidgetKind)
+  // HTML-fullscreen inside a canvas browser (e.g. a video's fullscreen
+  // button) is emulated by maximizing the widget, mirroring CodeView. Track
+  // whether *we* drove the maximize so leaving fullscreen never clears a
+  // manual maximize the user made beforehand.
+  const browserFullscreenDroveRef = useRef(false)
+  const handleBrowserFullscreen = useCallback((active: boolean): void => {
+    if (active) {
+      if (widget.maximized) {
+        browserFullscreenDroveRef.current = false
+        return
+      }
+      browserFullscreenDroveRef.current = true
+      onToggleMaximize()
+    } else {
+      if (!browserFullscreenDroveRef.current) return
+      browserFullscreenDroveRef.current = false
+      if (widget.maximized) onToggleMaximize()
+    }
+  }, [widget.maximized, onToggleMaximize])
   const [agentMenuOpen, setAgentMenuOpen] = useState(false)
   const [persisted] = useState(() => (isTerminal ? loadPersistedAgent(widget.id) : { idx: 0, attached: false, launched: undefined as string | undefined }))
   const [agentIdx, setAgentIdx] = useState(() => agentSelectionByWidget.get(widget.id) ?? persisted.idx)
@@ -656,6 +675,7 @@ function WidgetFrame({
             attachmentMode={attachmentMode}
             agentId={launchedAgentId ?? (agent?.id === 'codex' ? 'codex' : undefined)}
             onProcessExit={onProcessExit ?? onClose}
+            onBrowserFullscreenChange={handleBrowserFullscreen}
           />
         </ErrorBoundary>
       </div>
@@ -689,13 +709,15 @@ function WidgetBody({
   workspaceDir,
   attachmentMode,
   agentId,
-  onProcessExit
+  onProcessExit,
+  onBrowserFullscreenChange
 }: {
   widget: Widget
   workspaceDir?: string | null
   attachmentMode: boolean
   agentId?: string
   onProcessExit: () => void
+  onBrowserFullscreenChange?: (active: boolean) => void
 }): React.JSX.Element {
   switch (widget.kind) {
     case 'timer':
@@ -709,7 +731,7 @@ function WidgetBody({
     case 'sys-monitor':
       return <SysMonitorWidget />
     case 'browser':
-      return <BrowserWidget widgetId={widget.id} />
+      return <BrowserWidget widgetId={widget.id} onFullscreenChange={onBrowserFullscreenChange} />
     case 'links':
       return <LinksWidget widgetId={widget.id} />
     case 'music-player':

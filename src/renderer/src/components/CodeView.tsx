@@ -1028,6 +1028,8 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
     }
     markLocalChange()
     handlerCacheRef.current.delete(id)
+    browserFullscreenActiveRef.current.delete(id)
+    browserFullscreenDroveRef.current.delete(id)
     sessionScopesRef.current.delete(id)
     setBackgroundSessions((current) => current.filter((session) => session.id !== id))
     forgetTerminalViewport(id)
@@ -1093,7 +1095,12 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
     onFocus: () => void
     onRename: (title: string) => void
     onToggleMaximize: () => void
+    onFullscreenChange: (active: boolean) => void
   }>>(new Map())
+  // Tracks HTML-fullscreen separately from the manual Expand/Restore button
+  // so leaving fullscreen never clears a maximize the user made themselves.
+  const browserFullscreenActiveRef = useRef<Set<string>>(new Set())
+  const browserFullscreenDroveRef = useRef<Set<string>>(new Set())
 
   const getSessionHandlers = (id: string) => {
 
@@ -1113,7 +1120,8 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
         onToggleMaximize: () => {
           markLocalChange()
           setMaximizedId((current) => (current === id ? null : id))
-        }
+        },
+        onFullscreenChange: (active: boolean) => handleBrowserFullscreen(id, active)
       }
     handlerCacheRef.current.set(id, handlers)
     return handlers
@@ -1121,9 +1129,17 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
 
   const handleBrowserFullscreen = useCallback((id: string, active: boolean): void => {
     if (active) {
+      browserFullscreenActiveRef.current.add(id)
+      // Already filling the workspace manually: stay maximized, but remember
+      // we did NOT drive it so leave-html-full-screen won't restore it away.
+      if (maximizedIdRef.current === id) return
+      browserFullscreenDroveRef.current.add(id)
       markLocalChange()
       setMaximizedId(id)
     } else {
+      browserFullscreenActiveRef.current.delete(id)
+      if (!browserFullscreenDroveRef.current.has(id)) return
+      browserFullscreenDroveRef.current.delete(id)
       setMaximizedId((current) => current === id ? null : current)
     }
   }, [markLocalChange])
@@ -1191,7 +1207,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
             onSkip={skipRestore}
           />
         )}
-        <div ref={threeWayContainerRef} className="relative grid min-h-0 flex-1 gap-0 overflow-auto bg-bg-raise p-0"
+        <div ref={threeWayContainerRef} className={`relative grid min-h-0 flex-1 gap-0 bg-bg-raise p-0 ${maximizedId ? 'overflow-hidden' : 'overflow-auto'}`}
             style={sessions.length === 3 ? {
               gridTemplateColumns: `minmax(0, ${threeWaySplit.col}fr) 2px minmax(0, ${100 - threeWaySplit.col}fr)`,
               gridTemplateRows: `minmax(0, ${threeWaySplit.row}fr) 2px minmax(0, ${100 - threeWaySplit.row}fr)`
@@ -1200,11 +1216,16 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
             {[...sessions, ...backgroundSessions.filter((session) => !sessions.some((item) => item.id === session.id))].map((session) => {
               const hidden = !sessions.some((item) => item.id === session.id)
               const handlers = getSessionHandlers(session.id)
+              const isMaximized = maximizedId === session.id
+              // A maximized card is `absolute inset-0`: any gridColumn/gridRow
+              // from placementForIndex would shrink its containing block to
+              // that cell (counts 3, 5, 6-20), so it must not receive it.
+              const placementStyle = isMaximized ? undefined : sessionPlacements.get(session.id)
               return (
                 <SessionCard
                   key={session.id}
                   session={session}
-                  style={hidden ? { display: 'none' } : sessionPlacements.get(session.id)}
+                  style={hidden ? { display: 'none' } : placementStyle}
                   onClose={handlers.onClose}
                   onProcessExit={handlers.onProcessExit}
                   onFocus={handlers.onFocus}
@@ -1217,13 +1238,13 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
                   dragging={draggedSessionId === session.id}
                   dropTarget={dropTargetId === session.id && draggedSessionId !== session.id}
                   promotable={false}
-                  maximized={maximizedId === session.id}
+                  maximized={isMaximized}
                   onToggleMaximize={handlers.onToggleMaximize}
-                  onFullscreenChange={(active) => handleBrowserFullscreen(session.id, active)}
+                  onFullscreenChange={handlers.onFullscreenChange}
                 />
               )
             })}
-            {sessions.length === 3 && <>
+            {sessions.length === 3 && !maximizedId && <>
               <div data-testid="code-resize-columns" onMouseDown={handleStartColumnResize}
                 style={{ gridColumn: '2', gridRow: '1 / 4' }}
                 className="z-10 cursor-col-resize hover:bg-bg-raise active:bg-bg-hover"
