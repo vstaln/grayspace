@@ -479,6 +479,26 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
     [startSplitDrag]
   )
 
+  const resetColumnSplit = useCallback((): void => {
+    setThreeWaySplit((prev) => {
+      const next = { ...prev, col: 50 }
+      try {
+        localStorage.setItem('orcspace:code-three-way-split', JSON.stringify(next))
+      } catch {}
+      return next
+    })
+  }, [])
+
+  const resetRowSplit = useCallback((): void => {
+    setThreeWaySplit((prev) => {
+      const next = { ...prev, row: 50 }
+      try {
+        localStorage.setItem('orcspace:code-three-way-split', JSON.stringify(next))
+      } catch {}
+      return next
+    })
+  }, [])
+
   const [featuredId, setFeaturedId] = useState<string | null>(null)
   const [maximizedId, setMaximizedId] = useState<string | null>(null)
   const featuredIdRef = useRef<string | null>(featuredId)
@@ -510,6 +530,23 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
     codeChangeSeqRef.current += 1
     dirtyRef.current = true
   }, [])
+
+  useEffect(() => {
+    if (!maximizedId) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        const target = e.target as HTMLElement | null
+        if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.isContentEditable || target.closest('.xterm'))) {
+          return
+        }
+        e.preventDefault()
+        markLocalChange()
+        setMaximizedId(null)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [maximizedId, markLocalChange])
 
   useEffect(() => {
     const flushSync = (): void => {
@@ -1250,14 +1287,60 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
               )
             })}
             {sessions.length === 3 && !maximizedId && <>
-              <div data-testid="code-resize-columns" onMouseDown={handleStartColumnResize}
+              <div
+                data-testid="code-resize-columns"
+                onMouseDown={handleStartColumnResize}
+                onDoubleClick={resetColumnSplit}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowLeft') {
+                    e.preventDefault()
+                    setThreeWaySplit((prev) => ({ ...prev, col: Math.max(20, prev.col - 5) }))
+                  } else if (e.key === 'ArrowRight') {
+                    e.preventDefault()
+                    setThreeWaySplit((prev) => ({ ...prev, col: Math.min(80, prev.col + 5) }))
+                  } else if (e.key === 'Home' || e.key === 'Enter') {
+                    e.preventDefault()
+                    resetColumnSplit()
+                  }
+                }}
+                tabIndex={0}
                 style={{ gridColumn: '2', gridRow: '1 / 4' }}
-                className="z-10 cursor-col-resize hover:bg-bg-raise active:bg-bg-hover"
-                role="separator" aria-label="Resize columns" />
-              <div data-testid="code-resize-rows" onMouseDown={handleStartRowResize}
+                className="group relative z-10 cursor-col-resize bg-line transition-colors hover:bg-line-soft active:bg-text-dim focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+                role="separator"
+                aria-label="Resize columns"
+                aria-valuenow={Math.round(threeWaySplit.col)}
+                aria-valuemin={20}
+                aria-valuemax={80}
+              >
+                <div className="absolute inset-y-0 -left-1 -right-1" />
+              </div>
+              <div
+                data-testid="code-resize-rows"
+                onMouseDown={handleStartRowResize}
+                onDoubleClick={resetRowSplit}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    setThreeWaySplit((prev) => ({ ...prev, row: Math.max(20, prev.row - 5) }))
+                  } else if (e.key === 'ArrowDown') {
+                    e.preventDefault()
+                    setThreeWaySplit((prev) => ({ ...prev, row: Math.min(80, prev.row + 5) }))
+                  } else if (e.key === 'Home' || e.key === 'Enter') {
+                    e.preventDefault()
+                    resetRowSplit()
+                  }
+                }}
+                tabIndex={0}
                 style={{ gridColumn: '3', gridRow: '2' }}
-                className="z-10 cursor-row-resize hover:bg-bg-raise active:bg-bg-hover"
-                role="separator" aria-label="Resize rows" />
+                className="group relative z-10 cursor-row-resize bg-line transition-colors hover:bg-line-soft active:bg-text-dim focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+                role="separator"
+                aria-label="Resize rows"
+                aria-valuenow={Math.round(threeWaySplit.row)}
+                aria-valuemin={20}
+                aria-valuemax={80}
+              >
+                <div className="absolute inset-x-0 -top-1 -bottom-1" />
+              </div>
             </>}
             {sessions.length === 0 && (
               <div className="flex min-h-full flex-1 items-center justify-center overflow-auto bg-bg-raise px-6 py-12">

@@ -559,20 +559,55 @@ export function SettingsModal({
 
             {tab === 'account' && (
               <div className="flex max-w-xl flex-col gap-8">
-                <div className="flex items-center gap-3.5 rounded-panel border border-line-soft bg-bg-raise p-4">
-                  <div className="grid h-11 w-11 flex-none place-items-center rounded-pill border border-line-soft bg-bg-raise text-[13px] font-medium text-text select-none">
-                    {(userName.trim() || settings.userName || 'you').slice(0, 2).toUpperCase()}
-                  </div>
-                  <div className="flex min-w-0 flex-1 flex-col gap-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="truncate text-sm text-text">
-                        {userName.trim() || settings.userName || 'you'}
-                      </span>
-                      <VerifiedBadge size={14} />
+                <div className="flex flex-col gap-3 rounded-panel border border-line-soft bg-bg-raise p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-center gap-3.5">
+                    <div className="grid h-11 w-11 flex-none place-items-center rounded-pill border border-line-soft bg-bg-panel text-[13px] font-medium text-text select-none">
+                      {(userName.trim() || settings.userName || 'you').slice(0, 2).toUpperCase()}
                     </div>
-                    <p className="text-[11px] text-text-faint">
-                      operator <span className="font-mono">user</span>
-                    </p>
+                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-medium text-text">
+                          {userName.trim() || settings.userName || 'you'}
+                        </span>
+                        <span className="inline-flex items-center gap-1 rounded-pill bg-bg-hover px-2 py-0.5 text-[10px] text-text-dim border border-line-soft">
+                          <span className="h-1.5 w-1.5 rounded-pill bg-ok" />
+                          Connected
+                        </span>
+                      </div>
+                      <p className="truncate text-[11px] text-text-faint">
+                        {userName.trim() ? `${userName.trim().toLowerCase().replace(/\s+/g, '.')}@orcspace.local` : 'operator@orcspace.local'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
+                    <button
+                      type="button"
+                      className="min-h-[30px] rounded-panel border border-line-soft px-2.5 py-1 text-[11px] text-text-dim outline-none transition-colors duration-150 hover:border-line hover:bg-bg-hover hover:text-text focus-visible:ring-1 focus-visible:ring-line"
+                      onClick={() => setNotice('Account is managed on this device.')}
+                    >
+                      Manage account
+                    </button>
+                    <button
+                      type="button"
+                      className="min-h-[30px] rounded-panel border border-line-soft px-2.5 py-1 text-[11px] text-text-dim outline-none transition-colors duration-150 hover:border-line hover:bg-bg-hover hover:text-text focus-visible:ring-1 focus-visible:ring-line"
+                      onClick={() => {
+                        setUserName('')
+                        setNotice('Ready to switch account. Enter a new name below.')
+                      }}
+                    >
+                      Switch account
+                    </button>
+                    <button
+                      type="button"
+                      className="min-h-[30px] rounded-panel border border-line-soft px-2.5 py-1 text-[11px] text-text-faint outline-none transition-colors duration-150 hover:border-line hover:bg-bg-hover hover:text-danger focus-visible:ring-1 focus-visible:ring-line"
+                      onClick={() => {
+                        void update({ userName: '' })
+                        setUserName('')
+                        setNotice('Signed out of local operator profile.')
+                      }}
+                    >
+                      Sign out
+                    </button>
                   </div>
                 </div>
 

@@ -725,6 +725,23 @@ function OrcSpaceCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [widgets])
 
+  useEffect(() => {
+    const maximizedWidget = widgets.find((w) => w.maximized)
+    if (!maximizedWidget) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        const target = e.target as HTMLElement | null
+        if (target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.isContentEditable || target.closest('.xterm'))) {
+          return
+        }
+        e.preventDefault()
+        canvas.toggleMaximize(maximizedWidget.id)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [widgets, canvas.toggleMaximize])
+
   const onWidgetClose = useCallback(
     (id: string): void => {
       const widget = widgetsRef.current.find((w) => w.id === id)
