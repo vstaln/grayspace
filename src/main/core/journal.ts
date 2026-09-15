@@ -14,6 +14,7 @@ export function computeEntryHash(
     at: number
     phase: JournalPhase
     actorId: string
+    commandId?: string
     type: string
     target: ResourceId
     payload?: unknown
@@ -27,6 +28,7 @@ export function computeEntryHash(
     at: entry.at,
     phase: entry.phase,
     actorId: entry.actorId,
+    ...(entry.commandId !== undefined ? { commandId: entry.commandId } : {}),
     type: entry.type,
     target: entry.target,
     version: entry.version ?? null,
@@ -101,6 +103,7 @@ export class Journal extends EventEmitter {
   append(input: {
     phase: JournalPhase
     actorId: string
+    commandId?: string
     type: string
     target: ResourceId
     payload?: unknown

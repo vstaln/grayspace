@@ -69,6 +69,9 @@ export function registerCanvasCommands({
         if (!id || id.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(id)) {
           throw new CommandError('invalid', 'widget id must be 1–128 chars of [A-Za-z0-9._:-]')
         }
+        // Keep the generated id in the committed payload so journal-backed
+        // canvas delta consumers can address the newly-created widget.
+        p.id = id
         if (canvas.widget(id)) throw new CommandError('conflict', `widget ${id} already exists`)
         const defaults = widgetType(p.kind)?.defaultSize
         try {

@@ -13,6 +13,7 @@ import {
 } from '../types'
 import { clearTimerPersist } from '../lib/timerPersist'
 import { clearInitialCommand } from '../lib/pendingTerminalCommands'
+import { applyDeltaToWidgets } from '../lib/canvasDeltaMerge'
 
 let localCounter = 0
 const makeLocalId = (kind: WidgetKind = 'terminal'): string => {
@@ -236,6 +237,16 @@ export function useCanvas() {
   strokesRef.current = strokes
   const connectionsRef = useRef(connections)
   connectionsRef.current = connections
+  const lastDeltaSeqRef = useRef(0)
+  const suppressedWidgetIdsRef = useRef<Set<string>>(new Set())
+
+  const suppressWidget = useCallback((id: string, suppressed: boolean): void => {
+    if (suppressed) {
+      suppressedWidgetIdsRef.current.add(id)
+    } else {
+      suppressedWidgetIdsRef.current.delete(id)
+    }
+  }, [])
 
   type CanvasHistorySnapshot = {
     widgets: Widget[]
@@ -355,6 +366,16 @@ export function useCanvas() {
 
 
         hydratedRef.current = true
+        if (snapshot.snapshotSeq) {
+          lastDeltaSeqRef.current = Math.max(lastDeltaSeqRef.current, snapshot.snapshotSeq)
+        }
+        if (window.api.canvas?.replay) {
+          void window.api.canvas.replay(0).then((rep) => {
+            if (rep?.lastSeq) {
+              lastDeltaSeqRef.current = Math.max(lastDeltaSeqRef.current, rep.lastSeq)
+            }
+          }).catch(() => {})
+        }
       })
       .catch(() => {
 
@@ -543,6 +564,54 @@ export function useCanvas() {
     })
   }, [])
 
+  useEffect(() => {
+    if (!window.api.canvas?.onDelta) return
+    return window.api.canvas.onDelta((delta) => {
+      if (!hydratedRef.current || !delta) return
+      if (delta.seq <= lastDeltaSeqRef.current) return
+      lastDeltaSeqRef.current = delta.seq
+
+      setWidgets((prev) =>
+        applyDeltaToWidgets(prev, delta, {
+          dirtyWidgetIds: dirtyWidgetIdsRef.current,
+          pendingCreates: pendingCreatesRef.current,
+          pendingDeletes: pendingDeletesRef.current,
+          suppressedWidgetIds: suppressedWidgetIdsRef.current
+        })
+      )
+    })
+  }, [])
+
+  useEffect(() => {
+    const onFocus = (): void => {
+      if (!hydratedRef.current || !window.api.canvas?.replay) return
+      void window.api.canvas.replay(lastDeltaSeqRef.current).then((replay) => {
+        if (!replay) return
+        if (replay.resetRequired) {
+          void hydrate()
+          return
+        }
+        if (Array.isArray(replay.events) && replay.events.length > 0) {
+          for (const evt of replay.events) {
+            if (evt.seq > lastDeltaSeqRef.current) {
+              lastDeltaSeqRef.current = evt.seq
+              setWidgets((prev) =>
+                applyDeltaToWidgets(prev, evt, {
+                  dirtyWidgetIds: dirtyWidgetIdsRef.current,
+                  pendingCreates: pendingCreatesRef.current,
+                  pendingDeletes: pendingDeletesRef.current,
+                  suppressedWidgetIds: suppressedWidgetIdsRef.current
+                })
+              )
+            }
+          }
+        }
+      }).catch(() => {})
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [hydrate])
+
   const screenToWorld = useCallback((x: number, y: number, cam: Camera = cameraRef.current): Point => {
     return { x: (x - cam.x) / cam.zoom, y: (y - cam.y) / cam.zoom }
   }, [])
@@ -665,6 +734,13 @@ export function useCanvas() {
     recordHistory(`widget:${id}`)
     widgetsDirtyRef.current = true
     dirtyWidgetIdsRef.current.add(id)
+    const currentWidget = widgetsRef.current.find((w) => w.id === id)
+    const baseVersion = currentWidget?.version
+
+    if (window.api.canvas?.updateWidget) {
+      void window.api.canvas.updateWidget(id, change, baseVersion).catch(() => {})
+    }
+
     const pending = widgetPatchRef.current.get(id)
     widgetPatchRef.current.set(id, pending ? { ...pending, ...change } : change)
     if (widgetRafRef.current !== null) return
@@ -1084,6 +1160,7 @@ export function useCanvas() {
     eraseAt,
     strokeColor,
     setStrokeColor,
-    connections
+    connections,
+    suppressWidget
   }
 }

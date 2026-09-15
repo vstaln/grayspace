@@ -550,13 +550,7 @@ function OrcSpaceCanvas({
     void updateSettings({ targetTerminalId: id || null })
   }, [updateSettings])
 
-
-
-
-
-
-
-
+  const [snapGuides, setSnapGuides] = useState<{ x?: number; y?: number } | null>(null)
 
   const onHeaderPointerDown = useCallback(
     (e: React.PointerEvent, id: string): void => {
@@ -587,14 +581,118 @@ function OrcSpaceCanvas({
         if (!dragging) {
           if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < 3) return
           dragging = true
+          canvas.suppressWidget(id, true)
           try { header.setPointerCapture(e.pointerId) } catch {}
         }
         const zoom = cameraRef.current.zoom || 1
-        latestX = origX + (ev.clientX - startX) / startZoom
-        latestY = Math.max(
+        const snapThreshold = 8 / zoom
+
+        const rawX = origX + (ev.clientX - startX) / startZoom
+        const rawY = Math.max(
           origY + (ev.clientY - startY) / startZoom,
           titleBarWorldY(cameraRef.current.y, zoom)
         )
+
+        let snappedX = rawX
+        let snappedY = rawY
+        let guideX: number | undefined
+        let guideY: number | undefined
+
+        if (!ev.altKey) {
+          const others = widgetsRef.current.filter((w) => w.id !== id && !w.maximized)
+          const myW = widget.w
+          const myH = widget.h
+          const myCenterX = rawX + myW / 2
+          const myCenterY = rawY + myH / 2
+
+          let bestDistX = snapThreshold
+          let bestDistY = snapThreshold
+
+          for (const other of others) {
+            const otherRight = other.x + other.w
+            const otherBottom = other.y + other.h
+            const otherCenterX = other.x + other.w / 2
+            const otherCenterY = other.y + other.h / 2
+
+            // X alignments
+            const dLeft = Math.abs(rawX - other.x)
+            if (dLeft < bestDistX) {
+              bestDistX = dLeft
+              snappedX = other.x
+              guideX = other.x
+            }
+            const dRight = Math.abs(rawX + myW - otherRight)
+            if (dRight < bestDistX) {
+              bestDistX = dRight
+              snappedX = otherRight - myW
+              guideX = otherRight
+            }
+            const dFlushRight = Math.abs(rawX - otherRight)
+            if (dFlushRight < bestDistX) {
+              bestDistX = dFlushRight
+              snappedX = otherRight
+              guideX = otherRight
+            }
+            const dFlushLeft = Math.abs(rawX + myW - other.x)
+            if (dFlushLeft < bestDistX) {
+              bestDistX = dFlushLeft
+              snappedX = other.x - myW
+              guideX = other.x
+            }
+            const dCenterX = Math.abs(myCenterX - otherCenterX)
+            if (dCenterX < bestDistX) {
+              bestDistX = dCenterX
+              snappedX = otherCenterX - myW / 2
+              guideX = otherCenterX
+            }
+
+            // Y alignments
+            const dTop = Math.abs(rawY - other.y)
+            if (dTop < bestDistY) {
+              bestDistY = dTop
+              snappedY = other.y
+              guideY = other.y
+            }
+            const dBottom = Math.abs(rawY + myH - otherBottom)
+            if (dBottom < bestDistY) {
+              bestDistY = dBottom
+              snappedY = otherBottom - myH
+              guideY = otherBottom
+            }
+            const dFlushBottom = Math.abs(rawY - otherBottom)
+            if (dFlushBottom < bestDistY) {
+              bestDistY = dFlushBottom
+              snappedY = otherBottom
+              guideY = otherBottom
+            }
+            const dFlushTop = Math.abs(rawY + myH - other.y)
+            if (dFlushTop < bestDistY) {
+              bestDistY = dFlushTop
+              snappedY = other.y - myH
+              guideY = other.y
+            }
+            const dCenterY = Math.abs(myCenterY - otherCenterY)
+            if (dCenterY < bestDistY) {
+              bestDistY = dCenterY
+              snappedY = otherCenterY - myH / 2
+              guideY = otherCenterY
+            }
+          }
+
+          // Also snap to center / origin (0, 0)
+          if (Math.abs(rawX) < bestDistX) {
+            snappedX = 0
+            guideX = 0
+          }
+          if (Math.abs(rawY) < bestDistY) {
+            snappedY = 0
+            guideY = 0
+          }
+        }
+
+        latestX = snappedX
+        latestY = Math.max(snappedY, titleBarWorldY(cameraRef.current.y, zoom))
+        setSnapGuides(guideX !== undefined || guideY !== undefined ? { x: guideX, y: guideY } : null)
 
         // Keep the pointer path on the compositor while the pointer is down.
         // Updating React state for every mouse packet forces the terminal and
@@ -606,7 +704,9 @@ function OrcSpaceCanvas({
         }
       }
       const onEnd = (): void => {
+        setSnapGuides(null)
         if (!dragging) return
+        canvas.suppressWidget(id, false)
         canvas.updateWidget(id, { x: latestX, y: latestY })
         if (shell?.isConnected) {
           // Let the rAF-batched state update paint before removing the preview.
@@ -1514,6 +1614,28 @@ function OrcSpaceCanvas({
         {
 }
         <div className="absolute inset-0 h-px w-px origin-top-left" style={worldTransform}>
+          {snapGuides?.x !== undefined && (
+            <div
+              data-testid="snap-guide-x"
+              className="pointer-events-none absolute z-[220] w-px -translate-x-1/2 bg-accent/70 shadow-[0_0_6px_rgba(255,255,255,0.35)]"
+              style={{
+                left: snapGuides.x,
+                top: -100000,
+                height: 200000
+              }}
+            />
+          )}
+          {snapGuides?.y !== undefined && (
+            <div
+              data-testid="snap-guide-y"
+              className="pointer-events-none absolute z-[220] h-px -translate-y-1/2 bg-accent/70 shadow-[0_0_6px_rgba(255,255,255,0.35)]"
+              style={{
+                top: snapGuides.y,
+                left: -100000,
+                width: 200000
+              }}
+            />
+          )}
           {renderableWidgets.map((w) => (
             <WidgetFrame
               key={w.id}

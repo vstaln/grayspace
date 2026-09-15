@@ -735,6 +735,7 @@ export class CommandFlow extends EventEmitter {
       const commitEntry = {
         phase: 'commit' as const,
         actorId: primaryActorId,
+        commandId: txId,
         type: 'flow.transact',
         target: 'system:transaction',
         payload: {
@@ -882,6 +883,7 @@ export class CommandFlow extends EventEmitter {
       const commitEntry = {
         phase: 'commit' as const,
         actorId: actor.id,
+        commandId: cmd.id,
         type: cmd.type,
         target: cmd.target,
         payload: cmd.payload,

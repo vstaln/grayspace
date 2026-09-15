@@ -129,6 +129,7 @@ export interface JournalEntry {
   at: number
   phase: JournalPhase
   actorId: string
+  commandId?: string
   type: string
   target: ResourceId
   payload?: unknown

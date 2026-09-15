@@ -16,6 +16,8 @@ import type {
   AgentConversation,
   BrowserApi,
   CanvasApi,
+  CanvasDelta,
+  CanvasDeltaReplay,
   CanvasSnapshot,
   CodeApi,
   CodeSnapshot,
@@ -276,11 +278,14 @@ const git: GitApi = {
 
 const canvas: CanvasApi = {
   load: (): Promise<CanvasSnapshot> => ipcRenderer.invoke('canvas:load'),
+  replay: (since?: number): Promise<CanvasDeltaReplay> => ipcRenderer.invoke('canvas:replay', since),
+  updateWidget: (id, patch, baseVersion) => ipcRenderer.invoke('canvas:update-widget', id, patch, baseVersion),
   save: (
     snapshot: unknown
   ): Promise<{ applied: number; skipped: number; removed: number } | { error: string }> =>
     ipcRenderer.invoke('canvas:save', snapshot),
-  onChange: (cb: (snapshot: CanvasSnapshot) => void): (() => void) => onBroadcast('canvas:onChange', cb)
+  onChange: (cb: (snapshot: CanvasSnapshot) => void): (() => void) => onBroadcast('canvas:onChange', cb),
+  onDelta: (cb: (delta: CanvasDelta) => void): (() => void) => onBroadcast('canvas:onDelta', cb)
 }
 
 const code: CodeApi = {

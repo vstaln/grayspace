@@ -447,6 +447,7 @@ export interface CanvasConnection {
 }
 
 export interface CanvasSnapshot {
+  snapshotSeq?: number
   schemaVersion: number
   widgets: CanvasWidget[]
   camera: { x: number; y: number; zoom: number }
@@ -455,9 +456,52 @@ export interface CanvasSnapshot {
   version: number
 }
 
+export type CanvasDeltaPatch =
+  | { op: 'upsert'; widget: CanvasWidget }
+  | { op: 'update'; id: string; changes: Partial<Pick<CanvasWidget, 'x' | 'y'>> }
+  | { op: 'remove'; id: string }
+  | {
+      op: 'replace'
+      value:
+        | { x: number; y: number; zoom: number }
+        | CanvasStroke[]
+        | CanvasConnection[]
+        | CanvasSnapshot
+    }
+
+export interface CanvasDelta {
+  schemaVersion: 1
+  eventId: string
+  canvasId: string
+  seq: number
+  workspaceDir: string | null
+  resourceId: string
+  version: number
+  actorId: string
+  commandId?: string
+  type: string
+  patch: CanvasDeltaPatch
+}
+
+export interface CanvasDeltaReplay {
+  schemaVersion: 1
+  workspaceDir: string | null
+  events: CanvasDelta[]
+  lastSeq: number
+  resetRequired: boolean
+  snapshot?: CanvasSnapshot
+}
+
 export interface CanvasApi {
   load(): Promise<CanvasSnapshot>
   onChange(cb: (snapshot: CanvasSnapshot) => void): () => void
+  onDelta(cb: (delta: CanvasDelta) => void): () => void
+  replay(since?: number): Promise<CanvasDeltaReplay>
+  updateWidget(
+    id: string,
+    patch: Partial<Omit<CanvasWidget, 'id' | 'version' | 'updatedAt'>>,
+    baseVersion?: number
+  ): Promise<CanvasWidget | { error: string; code?: string }>
 
 
 
