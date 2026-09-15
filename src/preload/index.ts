@@ -186,6 +186,7 @@ const workspace: WorkspaceApi = {
     folder ? ipcRenderer.invoke('workspace:delete-code', folder, id) : ipcRenderer.invoke('workspace:delete-code', id),
   selectCodeWorkspace: (id: string) => ipcRenderer.invoke('workspace:select-code', id),
   onCodeWorkspaceChange: (cb) => onBroadcast('workspace:onCodeWorkspaceChange', cb),
+  onCodeWorkspaceDeleted: (cb) => onBroadcast('workspace:onCodeWorkspaceDeleted', cb),
   onDirChange: (cb: (dir: string | null) => void): (() => void) =>
     onBroadcast('workspace:onDirChange', cb),
 

@@ -3,6 +3,20 @@ import { describe, test } from 'node:test'
 import { TerminalStreamBatcher } from './terminalBatcher.ts'
 
 describe('TerminalStreamBatcher (Frame Batching & High-Throughput Protection)', () => {
+  test('default delivery coalesces one I/O turn without waiting for a frame timer', async () => {
+    const batcher = new TerminalStreamBatcher()
+    const batches: string[] = []
+    batcher.on('batch', (_id, chunk) => batches.push(chunk))
+    batcher.push('input', 'a')
+    batcher.push('input', 'b')
+    assert.deepEqual(batches, [])
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.deepEqual(batches, ['ab'])
+    batcher.push('input', 'discarded')
+    batcher.dispose()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.deepEqual(batches, ['ab'])
+  })
   test('batches micro-chunks into single consolidated frame dispatch', async () => {
     const batcher = new TerminalStreamBatcher({ frameIntervalMs: 20 })
     const batches: Array<{ id: string; chunk: string }> = []

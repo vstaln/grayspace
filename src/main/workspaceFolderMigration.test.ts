@@ -44,6 +44,43 @@ const SESSION = {
 }
 
 describe('workspaces live in the folder they belong to', () => {
+  test('deleting a visited workspace releases only its sessions and never saves it again', async (t) => {
+    if (!stores) return t.skip('electron unavailable')
+    const folder = project()
+    const code = new stores.CodeStore()
+    const state = new stores.AppState()
+    try {
+      state.setWorkspaceDir(folder)
+      const first = state.codeWorkspaceState(folder).activeId
+      const firstScope = state.activeCodeWorkspaceScope(folder)
+      code.setWorkspaceScope(firstScope, undefined, folder)
+      code.save({ sessions: [SESSION] }, true)
+      assert.equal(code.snapshot().workspaceScope, firstScope)
+      const second = state.createCodeWorkspace(folder, 'Second')
+      assert.ok(!('error' in second))
+      const secondScope = state.activeCodeWorkspaceScope(folder)
+      code.setWorkspaceScope(secondScope, undefined, folder)
+      code.save({ sessions: [{ ...SESSION, id: 'second-session' }] }, true)
+      assert.ok(!('error' in state.deleteCodeWorkspace(folder, first)))
+      assert.deepEqual(code.forgetWorkspace(firstScope), [SESSION.id])
+      assert.deepEqual(code.snapshot().sessions.map((session) => session.id), ['second-session'])
+      // Delete the current slot too; switching must not flush its old contents.
+      code.save({ sessions: [{ ...SESSION, id: 'second-session', title: 'Pending save' }] })
+      assert.ok(!('error' in state.deleteCodeWorkspace(folder, second.id)))
+      assert.deepEqual(code.forgetWorkspace(secondScope), ['second-session'])
+      code.setWorkspaceScope('another-scope', undefined, undefined)
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      assert.equal(existsSync(sessionFile(folder, first)), false)
+      assert.equal(existsSync(sessionFile(folder, second.id)), false)
+    } finally {
+      code.dispose()
+      state.dispose()
+      forgetFolderStore(folder)
+      assert.ok(folder.startsWith(join(tmpdir(), 'orcspace-project-')))
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
   test('a folder gets its workspaces written into it', (t) => {
     if (!stores) return t.skip('electron unavailable')
     const folder = project()

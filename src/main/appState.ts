@@ -6,6 +6,7 @@ import { readStoreJson, sweepTempFiles, writeJsonAtomic } from './storage.ts'
 import { normalizeTerminalNameList } from './terminalNames.ts'
 import { getUserDataDir } from './userData.ts'
 import { notifyCanvasWorkspaceChanged } from './canvasState.ts'
+import { codeWorkspaceScope } from '../shared/codeWorkspace.ts'
 import {
   readFolderWorkspaces,
   removeFolderSessions,
@@ -236,7 +237,7 @@ export class AppState extends EventEmitter {
 
   activeCodeWorkspaceScope(folder = this.workspaceDir): string {
     const state = this.codeWorkspaceState(folder)
-    return `${codeFolderKey(folder)}\u0000${state.activeId}`
+    return codeWorkspaceScope(folder, state.activeId)
   }
 
   createCodeWorkspace(folder: string | undefined, rawName?: string): CodeWorkspace | { error: string } {

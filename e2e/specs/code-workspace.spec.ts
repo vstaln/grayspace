@@ -33,6 +33,49 @@ test('renaming a Code workspace keeps its browser session mounted', async () => 
   }
 })
 
+test('switching Code workspaces preserves the browser session URL', async () => {
+  const ctx = await launchOrcSpace()
+  try {
+    const { page } = ctx
+    await waitForCanvas(page)
+    await page.evaluate(async () => {
+      await window.api.workspace.create(`code-browser-switch-${Date.now()}`)
+    })
+
+    await page.getByRole('tab', { name: 'Code', exact: true }).click()
+    await page.getByTestId('code-view').getByRole('button', { name: 'Claude Code', exact: true }).click()
+    await page.getByTestId('code-launch').click()
+    await page.getByTestId('code-view').getByRole('button', { name: 'Open another CLI or browser', exact: true }).click()
+    await page.getByRole('dialog', { name: 'Launch Code Session' }).getByRole('button', { name: 'Browser', exact: true }).click()
+    await page.getByRole('dialog', { name: 'Launch Code Session' }).getByRole('button', { name: /Launch 1 widget/ }).click()
+
+    const codeView = page.getByTestId('code-view')
+    const browserSession = codeView.locator('[data-testid="code-session"][data-session-agent="browser"]')
+    const address = browserSession.getByRole('textbox', { name: 'Address and search' })
+    const target = `https://example.com/?orcspace=${Date.now()}`
+    await address.fill(target)
+    await address.press('Enter')
+    await expect(address).toHaveValue(target)
+
+    const firstWorkspaceId = await page.evaluate(async () => (await window.api.workspace.codeWorkspaces()).activeId)
+    await page.evaluate(async () => {
+      window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
+      await window.api.workspace.createCodeWorkspace(`Second-${Date.now()}`)
+    })
+    await expect(browserSession).toBeHidden()
+
+    await page.evaluate(async (id) => {
+      window.dispatchEvent(new CustomEvent('orcspace:before-code-workspace-switch'))
+      const result = await window.api.workspace.selectCodeWorkspace(id)
+      if ('error' in result) throw new Error(result.error)
+    }, firstWorkspaceId)
+    await expect(browserSession).toBeVisible()
+    await expect(browserSession.getByRole('textbox', { name: 'Address and search' })).toHaveValue(target)
+  } finally {
+    await closeOrcSpace(ctx)
+  }
+})
+
 test('browser session can expand to the full Code workspace', async () => {
   const ctx = await launchOrcSpace()
   try {
@@ -114,16 +157,33 @@ test('closing one of three terminals preserves the remaining scroll positions', 
       const command = `node -e "for(let i=0;i<300;i++)console.log('line '+i)"\r`
       await Promise.all(sessionIds.map((id) => window.api.terminal.write(id, command)))
     }, ids)
-    const viewports = codeView.locator('.xterm-viewport')
-    await expect.poll(() => viewports.evaluateAll((items) =>
-      items.every((item) => item.scrollHeight > item.clientHeight && item.scrollTop > 0)
-    )).toBe(true)
+    const rows = codeView.locator('.xterm-rows')
+    for (let i = 0; i < 3; i++) await expect(rows.nth(i)).toContainText('line 299')
+    // xterm 6 virtualizes scrollback; DOM scrollTop stays zero even when the
+    // terminal is scrolled. Check visible lines and preserve a real user scroll.
+    const firstLines = () => rows.evaluateAll((items) => items.map((item) => {
+      for (const row of Array.from(item.children)) {
+        const match = /^line (\d+)\s*$/.exec(row.textContent ?? '')
+        if (match) return Number(match[1])
+      }
+      return -1
+    }))
+    const bottom = await firstLines()
+    for (let i = 1; i < 3; i++) {
+      const box = await rows.nth(i).boundingBox()
+      if (!box) throw new Error('terminal rows are missing')
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await page.mouse.wheel(0, -800)
+    }
+    await expect.poll(async () => {
+      const lines = await firstLines()
+      return lines[1] > 0 && lines[1] < bottom[1] && lines[2] > 0 && lines[2] < bottom[2]
+    }).toBe(true)
+    const before = (await firstLines()).slice(1)
 
     await codeView.getByTestId('code-session').first().getByRole('button', { name: 'Close session' }).click()
     await expect(codeView.getByTestId('terminal-xterm')).toHaveCount(2)
-    await expect.poll(() => viewports.evaluateAll((items) =>
-      items.every((item) => item.scrollTop > 0)
-    )).toBe(true)
+    await expect.poll(firstLines).toEqual(before)
   } finally {
     await closeOrcSpace(ctx)
   }

@@ -29,7 +29,7 @@ const cachedSubmit = '\r'
 const APP_OWNED_MODE_RESET =
   '\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l' +
   '\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l' +
-  '\x1b[?2004l\x1b[?2026l\x1b[?25h\x1b[?7h'
+  '\x1b[?2004l\x1b[?2026l\x1b[?25h\x1b[?7h\x1b[?6l\x1b[4l\x1b[r'
 
 
 
@@ -134,7 +134,7 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       fontFamily: 'Consolas, "Cascadia Mono", monospace',
       lineHeight: 1,
       scrollback: 5000,
-      cursorBlink: false,
+      cursorBlink: true,
       cursorInactiveStyle: 'outline',
       convertEol: false,
 
@@ -169,26 +169,15 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
     term.loadAddon(unicode11)
     term.unicode.activeVersion = '11'
     const renderQueue = new TerminalRenderQueue((data, done) => term.write(data, done), () => scheduleFlush())
-    let flushRaf: number | null = null
-    let flushTimer: ReturnType<typeof setTimeout> | null = null
+    const flushChannel = new MessageChannel()
+    let flushScheduled = false
     // While a scrollback restore is streaming slice-by-slice, live output
     // stays queued so it can never be interleaved into the middle of the
     // history being replayed.
     let restoreInFlight = false
     let cancelRestore: (() => void) | undefined
-    let restoreWatchdog: ReturnType<typeof setTimeout> | null = null
-    const cancelScheduledFlush = (): void => {
-      if (flushRaf !== null) {
-        cancelAnimationFrame(flushRaf)
-        flushRaf = null
-      }
-      if (flushTimer !== null) {
-        clearTimeout(flushTimer)
-        flushTimer = null
-      }
-    }
     const flushWrites = (): void => {
-      cancelScheduledFlush()
+      flushScheduled = false
       if (!mounted) {
         renderQueue.dispose()
         return
@@ -197,13 +186,13 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       renderQueue.flush()
     }
     const scheduleFlush = (): void => {
-      if (flushRaf !== null || flushTimer !== null) return
-      flushRaf = requestAnimationFrame(flushWrites)
-      // RAF stops firing while the window is occluded/minimised. Without the
-      // timeout fallback the queue would grow unbounded and the eventual
-      // single giant write would freeze the UI thread (no typing, no Ctrl+C).
-      flushTimer = setTimeout(flushWrites, 120)
+      if (!mounted || flushScheduled) return
+      flushScheduled = true
+      // Parsing is not painting: xterm already paints on animation frames.
+      // An event task keeps echo prompt and also runs in hidden workspaces.
+      flushChannel.port2.postMessage(null)
     }
+    flushChannel.port1.onmessage = flushWrites
     const batchedWrite = (data: string): void => {
       renderQueue.push(data)
     }
@@ -212,21 +201,13 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
     // never blocked by a single huge write and ordering with later writes
     // (markers, live output) is preserved.
     const RESTORE_CHUNK_SIZE = 32768
-    // A restore that never reaches its last slice would leave the terminal
-    // permanently read-only behind a "Connecting…" overlay, because every
-    // exit from the slice chain used to be responsible for undoing the two
-    // flags it set. Both are now released from one place, and a generation
-    // counter makes sure a superseded chain can never release the flags that
-    // belong to the restore that replaced it.
+    // Completion comes from the parser callback, never from an elapsed delay.
+    // A superseded chain cannot complete a newer restore.
     let restoreGeneration = 0
     const endRestore = (generation: number): void => {
       if (generation !== restoreGeneration) return
       restoreGeneration += 1
       restoreInFlight = false
-      if (restoreWatchdog !== null) {
-        clearTimeout(restoreWatchdog)
-        restoreWatchdog = null
-      }
       if (!mounted) return
       renderQueue.pause(false)
       term.options.disableStdin = false
@@ -250,18 +231,6 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       term.options.disableStdin = true
       let offset = 0
       cancelRestore = () => endRestore(generation)
-      // xterm invokes the write callback from its parser; if a slice is ever
-      // dropped (a dispose racing the chain, a parser throw swallowed
-      // upstream) nothing else would ever re-enable input. Re-armed per
-      // slice, so it only fires when the chain has genuinely stalled.
-      const armWatchdog = (): void => {
-        if (restoreWatchdog !== null) clearTimeout(restoreWatchdog)
-        restoreWatchdog = setTimeout(() => {
-          restoreWatchdog = null
-          endRestore(generation)
-        }, 5000)
-      }
-
       const writeNext = (): void => {
         if (generation !== restoreGeneration || !mounted) {
           endRestore(generation)
@@ -276,9 +245,9 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
         const chunk = text.slice(offset, end)
         offset = end
         try {
-          armWatchdog()
           term.write(chunk, writeNext)
-        } catch {
+        } catch (error) {
+          console.error('terminal history restore failed', error)
           endRestore(generation)
         }
       }
@@ -371,8 +340,6 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
     })
 
     const dataUnsub = window.api.terminal.onData(id, (data) => batchedWrite(data))
-    let closeTimer: ReturnType<typeof setTimeout> | null = null
-    let initialCmdTimer: ReturnType<typeof setTimeout> | null = null
     let resizeSendRaf: number | null = null
     let resizeSendTimer: ReturnType<typeof setTimeout> | null = null
     let pendingResize: { cols: number; rows: number } | null = null
@@ -399,12 +366,7 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       // update stranded when frames stop.
       if (resizeSendTimer === null) resizeSendTimer = setTimeout(flushResize, 250)
     }
-    // A session can be announced as ended more than once — the engine's reader
-    // thread and its actor both report an exit when the actor stops first, and
-    // say so on the assumption that consumers ignore the second. This one did
-    // not: it printed the notice again and armed another 8s timer, and only
-    // the newest timer was ever cleared, so the earlier ones survived unmount
-    // and fired onProcessExit at a widget that was already gone.
+    // The reader and control thread can both report the same exit.
     let exitReported = false
     const exitUnsub = window.api.terminal.onExit(id, (code) => {
       if (exitReported) return
@@ -412,7 +374,7 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       clearInitialCommand(id)
       if (agentIdRef.current === 'codex' && agentId !== 'codex') agentIdRef.current = undefined
       term.write(`\r\n\x1b[90m[Process exited${typeof code === 'number' ? ` (code ${code})` : ''}]\x1b[0m\r\n`)
-      closeTimer = setTimeout(() => onProcessExitRef.current?.(), 8000)
+      onProcessExitRef.current?.()
     })
 
     let lockNotified = false
@@ -961,6 +923,20 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
         return
       }
       let viewportRestoredAfterWrite = false
+      const launchQueuedCommand = (): void => {
+        const queued = peekInitialCommand(id)
+        if (!mounted || exitReported || !queued) return
+        learnAgentFromCommand(queued)
+        void window.api.terminal.write(id, `${queued}${cachedSubmit}`).then((result) => {
+          if ('error' in result) {
+            if (mounted) term.write(`\r\n\x1b[31m[Failed to start command: ${result.error}]\x1b[0m\r\n`)
+            return
+          }
+          markInitialCommandDelivered(id)
+        }).catch(() => {
+          if (mounted) term.write('\r\n\x1b[31m[Failed to start command]\x1b[0m\r\n')
+        })
+      }
       if (result.scrollback) {
         // A reconnect can hand back up to ~512KB of scrollback. One write()
         // of that size blocks the UI thread (frozen input, stuck Ctrl+C), so
@@ -980,7 +956,10 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
         const marker = result.live
           ? ''
           : `${APP_OWNED_MODE_RESET}\r\n\x1b[90m[Session restored — new process started]\x1b[0m\r\n`
-        writePaced(`\x1b[0m${result.scrollback}${marker}`, () => restoreViewportAfterLayout())
+        writePaced(`\x1b[0m${result.scrollback}${marker}`, () => {
+          restoreViewportAfterLayout()
+          launchQueuedCommand()
+        })
         viewportRestoredAfterWrite = true
       }
 
@@ -1006,16 +985,7 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       // replacement always arrived to `live: true` and threw the command away.
       // That is why closing some code sessions left the survivors sitting at a
       // bare prompt with the agent never started.
-      const queued = peekInitialCommand(id)
-      if (queued) {
-        learnAgentFromCommand(queued)
-        initialCmdTimer = setTimeout(() => {
-          if (!mounted) return
-          // Cleared only now, at the point it actually goes to the pty.
-          markInitialCommandDelivered(id)
-          writePty(`${queued}${cachedSubmit}`)
-        }, 300)
-      }
+      if (!viewportRestoredAfterWrite) launchQueuedCommand()
       if (mounted && !restoreInFlight) setConnecting(false)
     }).catch(() => {
       // Leave the command queued: nothing was typed, so a retry still owes it.
@@ -1054,7 +1024,8 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
         line: activeBuffer.viewportY,
         atBottom: activeBuffer.viewportY >= activeBuffer.baseY
       })
-      cancelScheduledFlush()
+      flushChannel.port1.close()
+      flushChannel.port2.close()
       cancelRestore?.()
       renderQueue.dispose()
       pendingResize = null
@@ -1084,8 +1055,6 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       container.removeEventListener('focusout', onFocusOut)
       window.api.terminal.setFocused(false, id)
       window.api.terminal.detach(id)
-      if (closeTimer) clearTimeout(closeTimer)
-      if (initialCmdTimer) clearTimeout(initialCmdTimer)
       dataUnsub()
       exitUnsub()
       scrollDisposable.dispose()

@@ -151,7 +151,16 @@ try {
   }
   runNpm(['run', 'typecheck'])
   run(process.execPath, ['--test', 'scripts/release-security.test.cjs'])
-  if (!skipTests) runNpm(['test'])
+  if (!skipTests) {
+    // conpty.test.ts exercises the real Rust sidecar. Build it before the
+    // test phase; npm run build would otherwise do this too late and a clean
+    // checkout would fail despite having a working Rust toolchain.
+    run(process.execPath, ['scripts/ensure-native-engine.mjs'], {
+      ...process.env,
+      ORCSPACE_NATIVE_STRICT: '1'
+    })
+    runNpm(['test'])
+  }
   // Build once, then package only the NSIS installer. The old `dist` script
   // produced both NSIS and portable artifacts, which doubled the work and
   // could leave a stale installer in `dist` after a partial build.

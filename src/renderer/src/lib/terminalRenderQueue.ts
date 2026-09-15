@@ -11,23 +11,16 @@ export class TerminalRenderQueue {
   private readonly chunkSize: number
 
   /**
-   * `chunkSize` is what one frame hands to xterm's parser, so it sets the
-   * ceiling on throughput: one chunk is written per scheduled frame, the next
-   * only after the parser reports the previous one done. At 32KB that ceiling
-   * was ~1.9MB/s, and anything past it piled up in `pending` until the `limit`
-   * evicted the oldest bytes — which shows up as holes in the output plus the
-   * CAN + SGR-reset resync prefix, i.e. the scrollback loses its colour.
-   *
-   * 128KB per frame is ~7.7MB/s, comfortably above what an agent streaming a
-   * diff produces, and still small enough that a single parse does not show up
-   * as a dropped frame. The larger backlog then absorbs a burst instead of
-   * discarding it; eviction stays as the last resort it was meant to be.
+   * Each event task hands one bounded chunk to the parser. Smaller chunks
+   * leave time for keyboard and paint events; callbacks provide backpressure.
+   * Scheduling is independent of animation frames, so throughput is not
+   * capped at one chunk per display refresh.
    */
   constructor(
     write: (data: string, done: () => void) => void,
     schedule: () => void,
     limit = 2 * 1024 * 1024,
-    chunkSize = 128 * 1024
+    chunkSize = 32 * 1024
   ) {
     this.write = write
     this.schedule = schedule

@@ -13,7 +13,6 @@ use std::collections::HashMap;
 use std::io::{self, BufRead, BufWriter, Write};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 use ui::OrcSpaceApp;
 
 fn main() -> Result<()> {
@@ -22,13 +21,13 @@ fn main() -> Result<()> {
         .filter(|value| value.len() >= 32)
         .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
 
-    let manager = TerminalManager::new(token.clone());
     if std::env::args().any(|arg| arg == "--engine") {
         if let Err(error) = process_job::contain_engine_process() {
             eprintln!("engine process containment unavailable: {error}");
         }
-        return run_engine(manager);
+        return run_engine(TerminalManager::streaming(token));
     }
+    let manager = TerminalManager::new(token.clone());
     persist_control_token(&token)
         .map_err(|error| anyhow::anyhow!("cannot publish control token: {error}"))?;
     let control = ControlServer::start(manager.clone(), token).map_err(anyhow::Error::msg)?;
@@ -149,6 +148,7 @@ fn run_engine(manager: TerminalManager) -> Result<()> {
     // Only the output thread touches stdout. A full OS pipe must never hold
     // the command loop hostage while it is trying to interrupt or dispose.
     let (output, responses) = mpsc::sync_channel::<Vec<u8>>(4096);
+    let output = EngineOutput { sender: output, manager: manager.clone() };
     emit(&output, &EngineEvent::Ready)?;
 
     let pump_manager = manager.clone();
@@ -161,10 +161,8 @@ fn run_engine(manager: TerminalManager) -> Result<()> {
                     pump_manager.dispose_all();
                     return;
                 }
-                // Wakes as soon as a PTY produces output; the timeout only
-                // bounds how long the thread sleeps when everything is idle.
                 let batch: Vec<EngineEvent> = pump_manager
-                    .wait_events(Duration::from_millis(10))
+                    .wait_events()
                     .into_iter()
                     .map(|event| match event {
                         TerminalEvent::Output { id, data } => EngineEvent::Data { id, data },
@@ -284,12 +282,17 @@ fn handle_engine_command(
     Ok(())
 }
 
-type EngineOutput = mpsc::SyncSender<Vec<u8>>;
+struct EngineOutput {
+    sender: mpsc::SyncSender<Vec<u8>>,
+    manager: TerminalManager,
+}
 
 fn emit(output: &EngineOutput, event: &EngineEvent) -> Result<()> {
     let mut encoded = serde_json::to_vec(event)?;
     encoded.push(b'\n');
-    output.try_send(encoded).map_err(|error| anyhow::anyhow!("engine response queue unavailable: {error}"))
+    output.sender.try_send(encoded).map_err(|error| anyhow::anyhow!("engine response queue unavailable: {error}"))?;
+    output.manager.notify_response();
+    Ok(())
 }
 
 fn flush_responses(writer: &mut impl Write, responses: &mpsc::Receiver<Vec<u8>>) -> Result<()> {
@@ -317,6 +320,7 @@ mod tests {
     fn commands_finish_while_stdout_is_not_being_drained() {
         let manager = TerminalManager::new("test".to_owned());
         let (output, responses) = mpsc::sync_channel(2);
+        let output = EngineOutput { sender: output, manager: manager.clone() };
         // No output consumer: handling a command must still finish.
         for _ in 0..2 {
             handle_engine_command(&manager, EngineCommand::Write {

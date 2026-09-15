@@ -76,6 +76,7 @@ export interface WorkspaceApi {
   deleteCodeWorkspace(id: string, folder?: string): Promise<CodeWorkspaceState | { error: string }>
   selectCodeWorkspace(id: string): Promise<CodeWorkspaceState | { error: string }>
   onCodeWorkspaceChange(cb: (state: CodeWorkspaceState) => void): () => void
+  onCodeWorkspaceDeleted(cb: (scope: string) => void): () => void
   onDirChange(cb: (dir: string | null) => void): () => void
   recent(): Promise<RecentDir[]>
   openRecent(path: string): Promise<string | { error: string }>
@@ -478,6 +479,7 @@ export interface CodeSession {
 export type WorkView = 'canvas' | 'code'
 
 export interface CodeSnapshot {
+  workspaceScope?: string
   schemaVersion: number
   sessions: CodeSession[]
   featuredId: string | null
@@ -497,8 +499,8 @@ export interface AgentConversation {
 export interface CodeApi {
   load(): Promise<CodeSnapshot>
   conversations(dir?: string): Promise<AgentConversation[]>
-  save(snapshot: { sessions?: CodeSession[]; featuredId?: string | null; maximizedId?: string | null; activeView?: WorkView | null; workspaceDir?: string | null; codeWorkspaceId?: string }): Promise<{ ok: boolean; snapshot?: CodeSnapshot; discarded?: boolean } | { error: string }>
-  saveSync?(snapshot: { sessions?: CodeSession[]; featuredId?: string | null; maximizedId?: string | null; activeView?: WorkView | null; workspaceDir?: string | null; codeWorkspaceId?: string }): { ok: boolean } | { error: string }
+  save(snapshot: { sessions?: CodeSession[]; featuredId?: string | null; maximizedId?: string | null; activeView?: WorkView | null; workspaceDir?: string | null; codeWorkspaceId?: string; workspaceScope?: string }): Promise<{ ok: boolean; snapshot?: CodeSnapshot; discarded?: boolean } | { error: string }>
+  saveSync?(snapshot: { sessions?: CodeSession[]; featuredId?: string | null; maximizedId?: string | null; activeView?: WorkView | null; workspaceDir?: string | null; codeWorkspaceId?: string; workspaceScope?: string }): { ok: boolean } | { error: string }
   onChange(cb: (snapshot: CodeSnapshot) => void): () => void
 }
 

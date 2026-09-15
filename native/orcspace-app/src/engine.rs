@@ -95,6 +95,7 @@ pub struct TerminalManager {
 
 #[derive(Debug)]
 struct Inner {
+    retain_scrollback: bool,
     terminals: Mutex<HashMap<String, TerminalHandle>>,
     events: Mutex<EventQueue>,
     /// Signalled whenever output lands, so the engine's drain thread reacts
@@ -106,6 +107,7 @@ struct Inner {
 
 #[derive(Debug, Default)]
 struct EventQueue {
+    notified: bool,
     items: VecDeque<TerminalEvent>,
     bytes: usize,
     /// Terminal ids that had output dropped or trimmed under pressure.
@@ -159,6 +161,7 @@ enum ControlCommand {
     /// Sent by the writer thread when the PTY can no longer be written to, so
     /// the actor tears the session down exactly as it does for a dispose.
     WriterFailed,
+    ChildExited,
 }
 
 #[derive(Debug, Default)]
@@ -193,8 +196,17 @@ pub struct DeliveryReceipt {
 
 impl TerminalManager {
     pub fn new(token: String) -> Self {
+        Self::with_scrollback(token, true)
+    }
+
+    pub fn streaming(token: String) -> Self {
+        Self::with_scrollback(token, false)
+    }
+
+    fn with_scrollback(token: String, retain_scrollback: bool) -> Self {
         Self {
             inner: Arc::new(Inner {
+                retain_scrollback,
                 terminals: Mutex::new(HashMap::new()),
                 events: Mutex::new(EventQueue::default()),
                 events_ready: Condvar::new(),
@@ -398,6 +410,7 @@ impl TerminalManager {
         let actor_inner = Arc::downgrade(&self.inner);
         let actor_pending = Arc::clone(&pending_input);
         let actor_id = id.clone();
+        let actor_exit_tx = control_tx.clone();
         thread::Builder::new()
             .name(format!("orcspace-pty-actor-{id}"))
             .spawn(move || {
@@ -410,6 +423,7 @@ impl TerminalManager {
                     actor_inner,
                     actor_pending,
                     actor_id,
+                    actor_exit_tx,
                 )
             })
             .map_err(|error| {
@@ -562,13 +576,19 @@ impl TerminalManager {
     /// Blocking drain, used by the headless engine so output is forwarded the
     /// moment it is read instead of on a polling tick — and so forwarding can
     /// never end up queued behind command handling.
-    pub fn wait_events(&self, timeout: Duration) -> Vec<TerminalEvent> {
+    pub fn notify_response(&self) {
+        lock_recover(&self.inner.events).notified = true;
+        self.inner.events_ready.notify_one();
+    }
+
+    pub fn wait_events(&self) -> Vec<TerminalEvent> {
         let queue = lock_recover(&self.inner.events);
-        let (mut queue, _) = self
+        let mut queue = self
             .inner
             .events_ready
-            .wait_timeout_while(queue, timeout, |queue| queue.items.is_empty())
+            .wait_while(queue, |queue| queue.items.is_empty() && !queue.notified)
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        queue.notified = false;
         take_events(&mut queue)
     }
 
@@ -751,10 +771,35 @@ fn run_actor(
     inner: Weak<Inner>,
     pending_input: Arc<AtomicUsize>,
     id: String,
+    exit_tx: mpsc::Sender<ControlCommand>,
 ) {
     let mut disposed = false;
-    while let Ok(command) = rx.recv() {
+    let mut natural_exit = false;
+    let mut killer = child.clone_killer();
+    // The OS signals process exit directly. ConPTY's reader may not reach EOF
+    // until this actor closes the master, so it cannot be our exit detector.
+    let waiter = thread::Builder::new()
+        .name(format!("orcspace-pty-wait-{id}"))
+        .spawn(move || {
+            let result = child.wait();
+            let _ = exit_tx.send(if result.is_ok() {
+                ControlCommand::ChildExited
+            } else {
+                ControlCommand::WriterFailed
+            });
+        });
+    if let Err(error) = &waiter {
+        eprintln!("wait terminal {id}: {error}");
+        if let Some(pid) = child_pid { kill_process_tree(pid); }
+        let _ = killer.kill();
+    }
+    while waiter.is_ok() {
+        let Ok(command) = rx.recv() else { break; };
         match command {
+            ControlCommand::ChildExited => {
+                natural_exit = true;
+                break;
+            }
             ControlCommand::Resize { cols, rows } => {
                 if let Err(error) = master.resize(PtySize {
                     rows,
@@ -784,8 +829,7 @@ fn run_actor(
                 if let Some(pid) = child_pid {
                     kill_process_tree(pid);
                 }
-                let _ = child.kill();
-                let _ = child.wait();
+                let _ = killer.kill();
                 disposed = true;
                 break;
             }
@@ -796,14 +840,14 @@ fn run_actor(
     // the master, including on a broken writer rather than explicit disposal.
     if !disposed {
         if let Some(pid) = child_pid { kill_process_tree(pid); }
-        let _ = child.kill();
+        let _ = killer.kill();
     }
     // Closes the PTY, which ends the reader thread and releases the writer
     // thread if it is still parked inside a write.
     drop(master);
     pending_input.store(0, Ordering::Release);
     lock_recover(&state).alive = false;
-    if !disposed {
+    if !disposed && !natural_exit {
         // The reader thread announces the ordinary end of a session, but it
         // only notices once the PTY reaches EOF. When the actor stops first
         // (broken writer, dropped handle) nothing else would ever tell the
@@ -1070,7 +1114,7 @@ fn read_output(
             if count == 0 { break; }
             continue;
         }
-        {
+        if inner.retain_scrollback {
             let mut current = lock_recover(&state);
             current.output.push_str(&data);
             if current.output.len() > MAX_SCROLLBACK + SCROLLBACK_SLACK {
@@ -1222,12 +1266,13 @@ impl ControlServer {
 
     /// Starts on an explicit path. A test — or a second instance — uses this to
     /// stay off the real socket.
+    #[cfg(test)]
     pub fn start_at(
         manager: TerminalManager,
         token: String,
         path: String,
     ) -> Result<Self, String> {
-        let storage = PathBuf::from(format!("{path}.orchestration.json"));
+        let storage = std::env::temp_dir().join(format!("orcspace-test-{}.json", uuid::Uuid::new_v4()));
         Self::start_at_with_storage(manager, token, path, storage)
     }
 
@@ -1749,6 +1794,32 @@ mod tests {
     }
 
     #[test]
+    fn streaming_keeps_every_output_byte_without_a_second_history() {
+        let manager = super::TerminalManager::streaming("test".to_owned());
+        let state = Arc::new(std::sync::Mutex::new(super::TerminalState::default()));
+        let expected = "hello\r\n".repeat(200_000);
+        super::read_output(Box::new(std::io::Cursor::new(expected.clone())), Arc::clone(&state),
+            Arc::clone(&manager.inner), "test".to_owned());
+        assert_eq!(state.lock().unwrap().output.capacity(), 0);
+        let events = manager.drain_events();
+        let actual: String = events.iter().filter_map(|event| match event {
+            TerminalEvent::Output { data, .. } => Some(data.as_str()),
+            _ => None,
+        }).collect();
+        assert_eq!(actual, expected);
+        assert!(matches!(events.last(), Some(TerminalEvent::Exited { .. })));
+    }
+
+    #[test]
+    fn response_notification_survives_until_the_pump_waits() {
+        let manager = super::TerminalManager::streaming("test".to_owned());
+        manager.notify_response();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || { tx.send(manager.wait_events()).unwrap(); });
+        assert!(rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap().is_empty());
+    }
+
+    #[test]
     fn utf8_split_across_reads_is_preserved_and_invalid_input_is_bounded() {
         let mut decoder = super::Utf8Stream::default();
         let expected = "Привет 🌍 世界";
@@ -1767,6 +1838,7 @@ mod tests {
     #[test]
     fn output_pressure_drops_old_output_but_never_an_exit() {
         let inner = Arc::new(super::Inner {
+            retain_scrollback: true,
             terminals: std::sync::Mutex::new(std::collections::HashMap::new()),
             events: std::sync::Mutex::new(EventQueue::default()),
             events_ready: std::sync::Condvar::new(),

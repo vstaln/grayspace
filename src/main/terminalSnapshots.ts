@@ -189,7 +189,7 @@ export class TerminalSnapshots {
 
 
 
-    const text = tail(preserveSgr(input.scrollback), MAX_SCROLLBACK_BYTES)
+    const text = tail(preserveSgr(input.scrollback, true), MAX_SCROLLBACK_BYTES)
     return {
       text,
       entry: {

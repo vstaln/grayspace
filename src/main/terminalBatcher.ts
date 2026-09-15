@@ -27,10 +27,11 @@ export class TerminalStreamBatcher extends EventEmitter {
    */
   private readonly resyncPending = new Set<string>()
   private timer: NodeJS.Timeout | null = null
+  private immediate: NodeJS.Immediate | null = null
 
   constructor(options: BatcherOptions = {}) {
     super()
-    this.frameIntervalMs = options.frameIntervalMs ?? 16
+    this.frameIntervalMs = options.frameIntervalMs ?? 0
     this.maxBatchBytes = options.maxBatchBytes ?? 32 * 1024
     this.maxPendingBytes = options.maxPendingBytes ?? 256 * 1024
   }
@@ -100,7 +101,16 @@ export class TerminalStreamBatcher extends EventEmitter {
   }
 
   private ensureTimer(): void {
-    if (this.timer !== null) return
+    if (this.timer !== null || this.immediate !== null) return
+    if (this.frameIntervalMs <= 0) {
+      // Coalesce the current I/O turn without delaying keyboard echo by a frame.
+      this.immediate = setImmediate(() => {
+        this.immediate = null
+        this.flushAll()
+      })
+      this.immediate.unref?.()
+      return
+    }
     this.timer = setTimeout(() => {
       this.timer = null
       this.flushAll()
@@ -128,6 +138,10 @@ export class TerminalStreamBatcher extends EventEmitter {
   }
 
   flushAll(): void {
+    if (this.immediate !== null) {
+      clearImmediate(this.immediate)
+      this.immediate = null
+    }
     if (this.timer !== null) {
       clearTimeout(this.timer)
       this.timer = null
@@ -142,6 +156,10 @@ export class TerminalStreamBatcher extends EventEmitter {
   }
 
   dispose(): void {
+    if (this.immediate !== null) {
+      clearImmediate(this.immediate)
+      this.immediate = null
+    }
     if (this.timer !== null) {
       clearTimeout(this.timer)
       this.timer = null

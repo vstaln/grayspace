@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { codeWorkspaceScope } from '../../../shared/codeWorkspace'
 import { Check, Copy, FolderOpen, Maximize2, Minimize2, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
 import TerminalWidget, { forgetTerminalViewport } from './TerminalWidget'
 import BrowserWidget from './BrowserWidget'
@@ -331,7 +332,7 @@ const SessionCard = React.memo(function SessionCard({
       </div>
       <div className="min-h-0 flex-1 bg-bg">
         {isBrowserSession(session)
-          ? <BrowserWidget onFullscreenChange={onFullscreenChange} />
+          ? <BrowserWidget widgetId={session.id} onFullscreenChange={onFullscreenChange} />
           : <TerminalWidget id={session.id} surface="code" attachmentMode agentId={terminalAgentId(session)} onProcessExit={onProcessExit} />}
       </div>
     </div>
@@ -352,6 +353,10 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
   pendingRestoreRef.current = pendingRestore
   const sessionsRef = useRef<Session[]>(sessions)
   sessionsRef.current = sessions
+  const [backgroundSessions, setBackgroundSessions] = useState<Session[]>([])
+  const backgroundSessionsRef = useRef(backgroundSessions)
+  backgroundSessionsRef.current = backgroundSessions
+  const sessionScopesRef = useRef(new Map<string, string>())
   const [launcherOpen, setLauncherOpen] = useState(false)
   /**
    * The folder sessions run in. `null` while it is still being read, so the
@@ -497,6 +502,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const codeWorkspaceIdRef = useRef('code-default')
   const codeWorkspaceFolderRef = useRef<string | null>(null)
+  const currentScope = (): string => codeWorkspaceScope(codeWorkspaceFolderRef.current, codeWorkspaceIdRef.current)
   const codeChangeSeqRef = useRef(0)
   const dirtyRef = useRef(false)
 
@@ -524,7 +530,8 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
         })),
         featuredId: featuredIdRef.current,
         maximizedId: maximizedIdRef.current,
-        codeWorkspaceId: codeWorkspaceIdRef.current
+        codeWorkspaceId: codeWorkspaceIdRef.current,
+        workspaceScope: currentScope()
       }
       if (typeof window.api.code.saveSync === 'function') {
         try {
@@ -569,14 +576,15 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
       if (!isBrowserSession(session)) queueInitialCommandOnce(session.id, session.agent.command)
     }
     const ids = new Set(start.map((session) => session.id))
+    const visibleIds = new Set([...ids, ...sessionsRef.current.map((session) => session.id)])
     // Answered: switching to another workspace and back does not ask again.
-    answeredRestoreRef.current.add(codeWorkspaceIdRef.current)
+    answeredRestoreRef.current.add(currentScope())
     setPendingRestore(null)
     // A session started from the launcher while the question was open belongs
     // to the board too — answering must not take it away.
     setSessions((current) => [...start, ...current.filter((session) => !ids.has(session.id))])
-    setFeaturedId(pending.featuredId && ids.has(pending.featuredId) ? pending.featuredId : null)
-    setMaximizedId(pending.maximizedId && ids.has(pending.maximizedId) ? pending.maximizedId : null)
+    setFeaturedId(pending.featuredId && visibleIds.has(pending.featuredId) ? pending.featuredId : null)
+    setMaximizedId(pending.maximizedId && visibleIds.has(pending.maximizedId) ? pending.maximizedId : null)
     // Whatever was let go has to leave the saved board too.
     hydratedRef.current = true
     dirtyRef.current = true
@@ -593,6 +601,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
     }
     dirtyRef.current = false
     const run = ++hydrationRunRef.current
+    const scope = currentScope()
     const changesAtStart = codeChangeSeqRef.current
     hydratedRef.current = false
 
@@ -606,6 +615,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
       .load()
       .then(async (snapshot) => {
         if (run !== hydrationRunRef.current) return
+        if (snapshot.workspaceScope && snapshot.workspaceScope !== scope) return
         if (codeChangeSeqRef.current !== changesAtStart) {
           hydratedRef.current = true
 
@@ -637,6 +647,16 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
           } catch {}
         }
 
+        if (run !== hydrationRunRef.current || currentScope() !== scope) return
+        if (codeChangeSeqRef.current !== changesAtStart) {
+          hydratedRef.current = true
+          setSessions((current) => [...current])
+          return
+        }
+        // Running sessions retain their command and exit status; history
+        // discovery is only allowed to upgrade sessions not already mounted.
+        const retained = new Map(backgroundSessionsRef.current.map((session) => [session.id, session]))
+        restored = restored.map((session) => retained.get(session.id) ?? session)
         let maxCounter = 0
         for (const s of restored) {
           const c = extractCounter(s.id)
@@ -648,10 +668,15 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
         // opening a folder must not launch a dozen agent CLIs on its own.
         // Asked once per workspace per run, so switching back and forth does
         // not keep asking about a board that has already been answered for.
-        const workspaceKey = codeWorkspaceIdRef.current
-        if (needsRestorePrompt(restored) && !answeredRestoreRef.current.has(workspaceKey)) {
+        const workspaceKey = scope
+        const retainedIds = new Set(backgroundSessionsRef.current.map((session) => session.id))
+        const unmounted = restored.filter((session) => !retainedIds.has(session.id))
+        if (needsRestorePrompt(unmounted) && !answeredRestoreRef.current.has(workspaceKey)) {
+          const running = restored.filter((session) => retainedIds.has(session.id))
+          setSessions(running)
+          setBackgroundSessions((current) => current.filter((session) => !running.some((item) => item.id === session.id)))
           setPendingRestore({
-            sessions: restored,
+            sessions: unmounted,
             featuredId: snapshot.featuredId ?? null,
             maximizedId: snapshot.maximizedId ?? null
           })
@@ -662,11 +687,12 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
         }
 
         for (const session of restored) {
-          if (session.status === 'active' && !isBrowserSession(session)) {
+          if (session.status === 'active' && !isBrowserSession(session) && !retainedIds.has(session.id)) {
             queueInitialCommandOnce(session.id, session.agent.command)
           }
         }
         setSessions(restored)
+        setBackgroundSessions((current) => current.filter((session) => !restored.some((item) => item.id === session.id)))
         setFeaturedId(snapshot.featuredId ?? null)
         setMaximizedId(snapshot.maximizedId ?? null)
         hydratedRef.current = true
@@ -680,16 +706,19 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
 
   useEffect(() => {
     let mounted = true
+    let workspaceEventReceived = false
     void window.api.workspace
       .codeWorkspaces()
       .then((state) => {
-        if (!mounted) return
+        if (!mounted || workspaceEventReceived) return
         codeWorkspaceIdRef.current = state.activeId
         codeWorkspaceFolderRef.current = state.folder
         hydrate()
       })
-      .catch(() => { if (mounted) hydrate() })
+      .catch(() => { if (mounted && !workspaceEventReceived) hydrate() })
     const unbindWorkspace = window.api.workspace.onCodeWorkspaceChange((state) => {
+      workspaceEventReceived = true
+      const previousScope = currentScope()
       const scopeChanged =
         codeWorkspaceIdRef.current !== state.activeId ||
         codeWorkspaceFolderRef.current !== state.folder
@@ -698,12 +727,43 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
       // A rename also broadcasts the workspace state. Keep mounted sessions
       // alive for metadata-only changes; hydrate only when the saved slot
       // actually changes.
-      if (scopeChanged) hydrate()
+      if (scopeChanged) {
+        // Keep the emulator parsing output and answering device queries while
+        // its workspace is hidden. The PTY alone cannot answer those queries.
+        const outgoing = sessionsRef.current
+        for (const session of outgoing) sessionScopesRef.current.set(session.id, previousScope)
+        setBackgroundSessions((current) => [...current.filter((session) => !outgoing.some((item) => item.id === session.id)), ...outgoing])
+        sessionsRef.current = []
+        hydrate()
+      }
+    })
+    const unbindDeleted = window.api.workspace.onCodeWorkspaceDeleted((scope) => {
+      const removed = new Set(Array.from(sessionScopesRef.current)
+        .filter(([, owner]) => owner === scope).map(([id]) => id))
+      if (scope === currentScope()) {
+        for (const session of sessionsRef.current) removed.add(session.id)
+        sessionsRef.current = []
+        hydratedRef.current = false
+        hydrationRunRef.current += 1
+        if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+        setSessions([])
+        setPendingRestore(null)
+      }
+      setBackgroundSessions((current) => current.filter((session) => !removed.has(session.id)))
+      answeredRestoreRef.current.delete(scope)
+      for (const id of removed) {
+        sessionScopesRef.current.delete(id)
+        clearInitialCommand(id)
+        forgetTerminalViewport(id)
+        forgetAgentSelection(id)
+      }
     })
     return () => {
       mounted = false
       hydrationRunRef.current += 1
       unbindWorkspace()
+      unbindDeleted()
       if (saveTimerRef.current !== null) {
         clearTimeout(saveTimerRef.current)
         saveTimerRef.current = null
@@ -720,9 +780,10 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
     }
     dirtyRef.current = true
     const workspaceIdAtSchedule = codeWorkspaceIdRef.current
+    const scopeAtSchedule = currentScope()
     const timer = setTimeout(() => {
       saveTimerRef.current = null
-      if (codeWorkspaceIdRef.current !== workspaceIdAtSchedule) return
+      if (currentScope() !== scopeAtSchedule) return
       const payload = {
         sessions: sessions.map((s) => ({
           id: s.id,
@@ -734,7 +795,8 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
         })),
         featuredId,
         maximizedId,
-        codeWorkspaceId: workspaceIdAtSchedule
+        codeWorkspaceId: workspaceIdAtSchedule,
+        workspaceScope: scopeAtSchedule
       }
       dirtyRef.current = false
       void window.api.code.save(payload).catch(() => {})
@@ -750,6 +812,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
   useEffect(() => {
     return window.api.code.onChange((snapshot) => {
       if (!snapshot || !Array.isArray(snapshot.sessions)) return
+      if (snapshot.workspaceScope && snapshot.workspaceScope !== currentScope()) return
 
 
 
@@ -780,9 +843,6 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
 
 
 
-      setTimeout(() => {
-        if (skipNextSaveRef.current) skipNextSaveRef.current = false
-      }, 0)
     })
   }, [])
 
@@ -968,6 +1028,8 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
     }
     markLocalChange()
     handlerCacheRef.current.delete(id)
+    sessionScopesRef.current.delete(id)
+    setBackgroundSessions((current) => current.filter((session) => session.id !== id))
     forgetTerminalViewport(id)
     forgetAgentSelection(id)
     // The session is gone; an undelivered launch command must not survive to
@@ -980,6 +1042,10 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
 
   const finishSession = useCallback((id: string): void => {
     clearInitialCommand(id)
+    setBackgroundSessions((current) => current.map((session) =>
+      session.id === id ? { ...session, status: 'finished' } : session
+    ))
+    if (!sessionsRef.current.some((session) => session.id === id)) return
     markLocalChange()
     setSessions((current) => current.map((session) =>
       session.id === id ? { ...session, status: 'finished' } : session
@@ -1131,13 +1197,14 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
               gridTemplateRows: `minmax(0, ${threeWaySplit.row}fr) 2px minmax(0, ${100 - threeWaySplit.row}fr)`
             } : { gridTemplateColumns, gridAutoRows: 'minmax(180px, 1fr)' }}
           >
-            {sessions.map((session) => {
+            {[...sessions, ...backgroundSessions.filter((session) => !sessions.some((item) => item.id === session.id))].map((session) => {
+              const hidden = !sessions.some((item) => item.id === session.id)
               const handlers = getSessionHandlers(session.id)
               return (
                 <SessionCard
                   key={session.id}
                   session={session}
-                  style={sessionPlacements.get(session.id)}
+                  style={hidden ? { display: 'none' } : sessionPlacements.get(session.id)}
                   onClose={handlers.onClose}
                   onProcessExit={handlers.onProcessExit}
                   onFocus={handlers.onFocus}

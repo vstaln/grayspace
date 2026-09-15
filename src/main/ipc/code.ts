@@ -65,7 +65,8 @@ export function registerCodeIpc(deps: IpcDeps): void {
 
       const stamped = typeof input.codeWorkspaceId === 'string' ? input.codeWorkspaceId : undefined
       const activeId = deps.code.activeWorkspaceId()
-      const matches = stamped === undefined || stamped === activeId
+      const matches = (stamped === undefined || stamped === activeId) &&
+        (input.workspaceScope === undefined || input.workspaceScope === deps.code.activeWorkspaceScope())
       if (!matches) return { ok: true, discarded: true }
 
       const { workspaceDir: _legacyWorkspaceDir, codeWorkspaceId: _codeWorkspaceId, ...rest } = input
@@ -84,7 +85,8 @@ export function registerCodeIpc(deps: IpcDeps): void {
       }
       const stamped = typeof input.codeWorkspaceId === 'string' ? input.codeWorkspaceId : undefined
       const activeId = deps.code.activeWorkspaceId()
-      const matches = stamped === undefined || stamped === activeId
+      const matches = (stamped === undefined || stamped === activeId) &&
+        (input.workspaceScope === undefined || input.workspaceScope === deps.code.activeWorkspaceScope())
       if (matches) {
         const { workspaceDir: _legacyWorkspaceDir, codeWorkspaceId: _codeWorkspaceId, ...rest } = input
         deps.code.save(rest as { sessions?: unknown; featuredId?: unknown; maximizedId?: unknown; activeView?: unknown }, true)

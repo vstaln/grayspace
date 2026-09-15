@@ -22,6 +22,7 @@ export interface CodeSession {
 export type WorkView = 'canvas' | 'code'
 
 export interface CodeSnapshot {
+  workspaceScope?: string
   schemaVersion: number
   sessions: CodeSession[]
   featuredId: string | null
@@ -100,6 +101,23 @@ export class CodeStore extends EventEmitter {
   private workspaceScope = 'code-default'
   private legacyFolder: string | undefined
   private folder: string | undefined
+  private readonly workspaceSessions = new Map<string, string[]>()
+  private readonly deletedScopes = new Set<string>()
+
+  forgetWorkspace(scope: string): string[] {
+    this.deletedScopes.add(scope)
+    const ids = scope === this.workspaceScope && this.loaded
+      ? Array.from(this.sessions.keys())
+      : this.workspaceSessions.get(scope) ?? []
+    this.workspaceSessions.delete(scope)
+    if (scope === this.workspaceScope) {
+      if (this.saveTimer !== null) clearTimeout(this.saveTimer)
+      this.saveTimer = null
+      this.loaded = false
+      this.sessions.clear()
+    }
+    return ids
+  }
 
   constructor() { super() }
 
@@ -205,7 +223,9 @@ export class CodeStore extends EventEmitter {
 
   snapshot(): CodeSnapshot {
     this.ensure()
+    this.workspaceSessions.set(this.workspaceScope, Array.from(this.sessions.keys()))
     return {
+      workspaceScope: this.workspaceScope,
       schemaVersion: CODE_SCHEMA_VERSION,
       sessions: Array.from(this.sessions.values()),
       featuredId: this.featuredId,
@@ -349,11 +369,16 @@ export class CodeStore extends EventEmitter {
 
 
     const file = this.file
+    const scope = this.workspaceScope
     this.writeChain = this.writeChain
       .catch(() => {})
       .then(async (): Promise<boolean> => {
-        if (seq <= this.syncFlushSeq) return false
+        if (seq <= this.syncFlushSeq || this.deletedScopes.has(scope)) return false
         await writeJsonAtomicAsync(file, snapshot)
+        if (this.deletedScopes.has(scope)) {
+          await fs.promises.rm(file, { force: true })
+          return false
+        }
         return true
       })
       .then((wrote) => {
@@ -370,6 +395,7 @@ export class CodeStore extends EventEmitter {
         }
       })
       .catch((err: unknown) => {
+        if (this.deletedScopes.has(scope)) return
         // Same fallback as the synchronous path: a folder that cannot take the
         // write must not cost the user their layout.
         if (this.demoteToUserData(err)) {

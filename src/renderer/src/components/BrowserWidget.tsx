@@ -53,7 +53,7 @@ function readUrl(widgetId: string | undefined): string {
 }
 
 export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange }: {
-  widgetId?: string
+  widgetId: string
   onFullscreenChange?: (active: boolean) => void
 }): React.JSX.Element {
   const [url, setUrl] = useState(() => readUrl(widgetId))

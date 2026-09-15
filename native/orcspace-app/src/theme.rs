@@ -49,10 +49,11 @@ pub mod status {
 }
 
 /// Measurements the renderer depends on. A widget's header is a fixed 34
-/// logical pixels — the drag target — and the corner radius is 10.
+/// logical pixels — the drag target — and its radius comes from the shared
+/// `radiusPanel` token.
 pub mod geometry {
-    /// Widget corner radius, matching `rounded-[10px]`.
-    pub const WIDGET_RADIUS: f32 = 10.0;
+    /// Widget corner radius, matching `rounded-panel` / `radiusPanel: 12px`.
+    pub const WIDGET_RADIUS: f32 = 12.0;
     /// Widget header height, matching `h-[34px]`.
     pub const HEADER_HEIGHT: f32 = 34.0;
     /// The ring around a widget is one *device* pixel in the DOM; at canvas
@@ -141,10 +142,8 @@ mod tests {
         assert!(source.contains("sidebarExpanded: '200px'"));
     }
 
-    /// A widget's radius and header height are not in tokens.ts — they are
-    /// Tailwind classes on the frame itself, which is where this checks them.
-    /// `radiusPanel` is 12px and belongs to menus and panels, not to widgets;
-    /// reading it as the widget radius would round every widget wrong.
+    /// The frame uses the shared panel radius token; the native canvas must
+    /// follow that token instead of keeping a second, drifting radius.
     #[test]
     fn the_widget_chrome_matches_the_frame_component() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -152,9 +151,11 @@ mod tests {
         let Ok(source) = std::fs::read_to_string(path) else {
             return;
         };
+        assert!(source.contains("rounded-panel"), "the widget no longer uses the shared panel radius");
+        let Some(tokens) = tokens_source() else { return };
         assert!(
-            source.contains("rounded-[10px]"),
-            "the widget radius moved; this draws {}",
+            tokens.contains("radiusPanel: '12px'"),
+            "the shared panel radius moved; this draws {}",
             geometry::WIDGET_RADIUS
         );
         assert!(

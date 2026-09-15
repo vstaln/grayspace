@@ -139,7 +139,7 @@ export function stripAnsi(text: string): string {
 
 
 
-export function preserveSgr(text: string): string {
+export function preserveSgr(text: string, preserveCursor = false): string {
   const parts: string[] = []
   let plainFrom = 0
   let i = 0
@@ -157,7 +157,7 @@ export function preserveSgr(text: string): string {
       i += 2
       while (i < n && !isFinal(text.charCodeAt(i))) i += 1
       if (i < n) {
-        const keep = text[i] === 'm'
+        const keep = text[i] === 'm' || (preserveCursor && /^[0-9;]*[ABCDEFGHJKLMPSTX`abdefrsu@]$/.test(text.slice(start + 2, i + 1)))
         i += 1
         cut(start, i, keep)
       } else {
@@ -170,7 +170,7 @@ export function preserveSgr(text: string): string {
       i += 1
       while (i < n && !isFinal(text.charCodeAt(i))) i += 1
       if (i < n) {
-        const keep = text[i] === 'm'
+        const keep = text[i] === 'm' || (preserveCursor && /^[0-9;]*[ABCDEFGHJKLMPSTX`abdefrsu@]$/.test(text.slice(start + 1, i + 1)))
         i += 1
         cut(start, i, keep)
       } else {
@@ -195,6 +195,11 @@ export function preserveSgr(text: string): string {
     if (text[i] === '\x1b' && i + 1 < n) {
       const next = text[i + 1]
       const start = i
+      if ('78DEM'.includes(next)) {
+        i += 2
+        cut(start, i, preserveCursor)
+        continue
+      }
       if (next === ']') {
         i += 2
         while (i < n && text[i] !== '\x07' && text[i] !== '\x9c' && !(text[i] === '\x1b' && text[i + 1] === '\\')) i += 1
@@ -204,7 +209,9 @@ export function preserveSgr(text: string): string {
         while (i < n && text[i] !== '\x9c' && !(text[i] === '\x1b' && text[i + 1] === '\\')) i += 1
         if (i < n) i += text[i] === '\x9c' ? 1 : 2
       } else {
-        i += next === '[' || next === ']' ? 2 : Math.min(3, n - i)
+        i += 1
+        while (i < n && text.charCodeAt(i) >= 0x20 && text.charCodeAt(i) <= 0x2f) i += 1
+        if (i < n) i += 1
       }
       cut(start, i)
       continue

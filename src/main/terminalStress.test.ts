@@ -4,6 +4,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { resolve } from 'node:path'
 import { createRustPtySidecar, type RustPtySidecar } from './rustPtySidecar.ts'
 import { defaultShell } from './config.ts'
+import { stripAnsi } from './ansi.ts'
 
 const delay = (ms: number) => new Promise<void>((done) => setTimeout(done, ms))
 async function until(predicate: () => boolean, message: string, timeout = 10_000) {
@@ -52,6 +53,32 @@ async function cleanup(sidecar: RustPtySidecar, pids: Iterable<number>) {
     if (running(pid)) { try { process.kill(pid) } catch {} }
   }
 }
+
+test('natural shell exit is reported without waiting for another terminal command', { timeout: 20_000 }, async (t) => {
+  const sidecar = createRustPtySidecar()
+  if (!sidecar) return t.skip('build the native engine to run stress checks')
+  const observed = observe(sidecar)
+  const exited = new Set<string>()
+  let outputAtExit = ''
+  sidecar.on('exit', (id: string) => {
+    exited.add(id)
+    if (id === 'ending') outputAtExit = observed.output.get(id) ?? ''
+  })
+  try {
+    for (const id of ['ending', 'survivor']) {
+      assert.ok(sidecar.spawn({ id, shell: defaultShell(), cols: 100, rows: 24, cwd: process.cwd(), env: {} }).ok)
+    }
+    await until(() => observed.output.get('ending')?.includes('>') === true, 'shell is ready')
+    assert.ok((await sidecar.write('ending', 'echo LAST_BEFORE_EXIT\rexit\r')).ok)
+    await until(() => exited.has('ending'), 'natural shell exit reaches the renderer', 5000)
+    assert.match(stripAnsi(outputAtExit), /\r?\nLAST_BEFORE_EXIT\r?\n/)
+    assert.equal(exited.has('survivor'), false)
+    assert.ok((await sidecar.write('survivor', 'echo SURVIVOR_OK\r')).ok)
+    await until(() => observed.output.get('survivor')?.includes('SURVIVOR_OK') === true, 'other shell still works')
+  } finally {
+    await cleanup(sidecar, [])
+  }
+})
 
 test('real engine handles concurrent unicode output, input and session reuse', { timeout: 30_000 }, async (t) => {
   const sidecar = createRustPtySidecar()

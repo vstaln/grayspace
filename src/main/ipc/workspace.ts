@@ -4,6 +4,7 @@ import { dialog, ipcMain } from './shims.ts'
 import type { IpcDeps } from './types.ts'
 import { isLocalPath } from '../media.ts'
 import { getUserDataDir } from '../userData.ts'
+import { codeWorkspaceScope } from '../../shared/codeWorkspace.ts'
 
 export function registerWorkspaceIpc(deps: IpcDeps): void {
   ipcMain.handle('workspace:get-dir', () => deps.getWorkspaceDir() ?? null)
@@ -115,6 +116,10 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     }
     const result = deps.state.deleteCodeWorkspace(folder, id)
     if ('error' in result) return result
+    const scope = codeWorkspaceScope(folder, id)
+    const terminalIds = deps.code.forgetWorkspace(scope)
+    for (const terminalId of terminalIds) deps.terminals.dispose(terminalId)
+    deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceDeleted', scope)
     if (result.workspaces.length === 0) {
       deps.state.removeRecent(folder ?? '')
       if (folder === deps.getWorkspaceDir()) deps.setWorkspaceDir(undefined)

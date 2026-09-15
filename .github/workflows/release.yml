@@ -72,6 +72,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Prepare native engine for Windows integration tests
+        if: runner.os == 'Windows'
+        run: node scripts/ensure-native-engine.mjs
+        env:
+          ORCSPACE_NATIVE_STRICT: '1'
+
       - name: Unit tests
         run: npm test
 
