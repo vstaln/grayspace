@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { AlertTriangle, MessageSquareText, X } from 'lucide-react'
 import { Terminal, ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
@@ -6,12 +7,38 @@ import '@xterm/xterm/css/xterm.css'
 import { ThemeName, useTheme } from '../theme'
 import { attachmentAgent, imagePasteShortcut, insertAttachments, isTerminalPasteShortcut } from '../lib/terminalAttachments'
 import { clearInitialCommand, markInitialCommandDelivered, peekInitialCommand } from '../lib/pendingTerminalCommands'
+import { initialCommandVerdict } from '../lib/initialCommandGate'
 import { IS_MAC } from '../lib/platform'
-import { TerminalRenderQueue } from '../lib/terminalRenderQueue'
+import { TERMINAL_OUTPUT_RESYNC, TerminalRenderQueue } from '../lib/terminalRenderQueue'
+import { isPointerScaled, pointerScale, unscalePointer } from '../lib/terminalPointerScale'
 import { palette } from '../ui/tokens'
+import { captureTerminalInput, EMPTY_TERMINAL_PROMPT_CAPTURE } from '../lib/terminalPromptCapture'
+import {
+  createStartupProbe,
+  readStartupOutput,
+  STARTUP_WATCH_MS,
+  type StartupProbe
+} from '../lib/terminalStartupFailure'
 
 
 const cachedSubmit = '\r'
+
+/**
+ * Trailing debounce for geometry updates sent to the pty. The local xterm is
+ * still fitted immediately so the view always matches its container — only
+ * the notification to the shell is delayed.
+ *
+ * This exists because of ConPTY: every pty resize makes it repaint the whole
+ * viewport (`ESC[H ESC[K \r\n <prompt> ESC[K (\r\n ESC[K)*rows`, cursor back
+ * to the prompt). The repaint is generated for the size the pty *currently*
+ * has. While a widget is being drag-resized the xterm already moved on to a
+ * newer size by the time the repaint arrives, so the repaint's newlines
+ * overflow the viewport and scroll — each one parks another copy of the
+ * prompt in the scrollback (the "new lines appear while stretching" bug).
+ * Coalescing a drag into one trailing resize means the repaint arrives while
+ * the xterm is stable at that same size and redraws in place, cleanly.
+ */
+const RESIZE_SEND_DELAY_MS = 150
 
 /**
  * Turns off every private mode that belongs to a *running foreground
@@ -50,6 +77,7 @@ export function forgetTerminalViewport(id: string): void {
 interface Props {
   id: string
   surface?: 'canvas' | 'code'
+  title?: string
   agentId?: string
   /**
    * Accepted and persisted per widget, but nothing in here reads it yet — the
@@ -58,6 +86,7 @@ interface Props {
    * a feature that is still being built, not to dead code.
    */
   attachmentMode?: boolean
+  flipped?: boolean
   onProcessExit?: () => void
 }
 
@@ -101,9 +130,13 @@ function xtermTheme(_appTheme: ThemeName, surface: 'canvas' | 'code'): ITheme {
   }
 }
 
-function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Props): React.JSX.Element {
+function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = false, onProcessExit }: Props): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
+  const flippedRef = useRef(flipped)
+  flippedRef.current = flipped
+  const titleRef = useRef(title)
+  titleRef.current = title
   const agentIdRef = useRef(attachmentAgent(agentId ?? ''))
   // An explicit launcher selection is authoritative. Without this guard a
   // prompt such as "explain codex" typed into Claude could be mistaken for a
@@ -116,7 +149,48 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
 
 
   const [connecting, setConnecting] = useState(true)
+  /**
+   * An agent that died during startup rather than a terminal that is broken.
+   * It is state, not a line written into the terminal, because the failing
+   * agent has usually cleared the screen on its way out — anything written
+   * there goes with it, which is how this looked like a black card.
+   */
+  const [startupFailure, setStartupFailure] = useState<string | null>(null)
+  const [lastPrompt, setLastPrompt] = useState('')
   const { theme } = useTheme()
+
+  const rememberPrompt = useCallback((value: string): void => {
+    const next = value.replace(/\s+/g, ' ').trim().slice(0, 12_000)
+    if (!next) return
+    setLastPrompt(next)
+    void window.api.terminal.setLastPrompt(id, next).catch(() => {})
+  }, [id])
+
+  useEffect(() => {
+    let mounted = true
+    void window.api.terminal.list().then((items) => {
+      const prompt = items.find((item) => item.id === id)?.lastPrompt
+      if (mounted && prompt) setLastPrompt(prompt)
+    }).catch(() => {})
+    const off = window.api.terminal.onPrompt(id, (prompt) => setLastPrompt(prompt))
+    return () => {
+      mounted = false
+      off()
+    }
+  }, [id])
+
+  useEffect(() => {
+    if (!flipped) {
+      // Coming back from the prompt card: hand typing focus back to the shell
+      // so the cursor blinks right away instead of staying an outline.
+      termRef.current?.focus()
+      return
+    }
+    const container = containerRef.current
+    const focused = document.activeElement
+    if (container && focused instanceof HTMLElement && container.contains(focused)) focused.blur()
+    window.api.terminal.setFocused(false, id)
+  }, [flipped, id])
 
   const onProcessExitRef = useRef(onProcessExit)
   onProcessExitRef.current = onProcessExit
@@ -325,6 +399,16 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       requestAnimationFrame(() => restoreResizeAnchor(generation))
       resizeRestoreTimer = setTimeout(() => restoreResizeAnchor(generation), 150)
     }
+    // Every geometry change must go through here: fit the xterm to its
+    // container now (the view is always live) while the scroll position the
+    // user was reading is pinned across the reflow. The pty itself learns
+    // the new size later via the debounced queueResize from onResize.
+    const fitPreservingViewport = (): void => {
+      if (!mounted || container.clientWidth === 0 || container.clientHeight === 0) return
+      const anchor = captureViewportAnchor()
+      fit.fit()
+      scheduleResizeAnchorRestore(anchor)
+    }
     const writeParsedDisposable = term.onWriteParsed(() => {
       if (!resizeAnchor || performance.now() > resizeRestoreUntil) return
       const generation = resizeAnchorGeneration
@@ -342,20 +426,40 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       })
     })
 
-    const dataUnsub = window.api.terminal.onData(id, (data) => batchedWrite(data))
-    let resizeSendRaf: number | null = null
+    // Launch-failure watch. Armed the moment the agent command is typed and
+    // disarmed by the first verdict or by the window closing, so ordinary
+    // agent output — which can quote any of these phrases — is never read as
+    // a failure.
+    let startupWatchUntil = 0
+    let startupProbe: StartupProbe | null = null
+    const watchStartupOutput = (chunk: string): void => {
+      if (!startupProbe) return
+      if (Date.now() > startupWatchUntil) {
+        startupProbe = null
+        return
+      }
+      const message = readStartupOutput(startupProbe, chunk)
+      if (!message) return
+      startupProbe = null
+      if (mounted) setStartupFailure(message)
+    }
+
+    const dataUnsub = window.api.terminal.onData(id, (data) => {
+      watchStartupOutput(data)
+      batchedWrite(data)
+    })
+    // Trailing-edge only: a drag produces dozens of geometries per second and
+    // ConPTY repaints the whole viewport for each pty resize it receives (see
+    // RESIZE_SEND_DELAY_MS). Intermediate sizes are coalesced into
+    // pendingResize and only the settled size is ever sent, so a repaint can
+    // never arrive for a size the xterm already left behind. A plain timer
+    // (no rAF gate) also fires when frames stop, so an update is never
+    // stranded.
     let resizeSendTimer: ReturnType<typeof setTimeout> | null = null
     let pendingResize: { cols: number; rows: number } | null = null
     let lastSentResize: { cols: number; rows: number } | null = null
     const flushResize = (): void => {
-      if (resizeSendRaf !== null) {
-        cancelAnimationFrame(resizeSendRaf)
-        resizeSendRaf = null
-      }
-      if (resizeSendTimer !== null) {
-        clearTimeout(resizeSendTimer)
-        resizeSendTimer = null
-      }
+      resizeSendTimer = null
       const next = pendingResize
       pendingResize = null
       if (!next || (lastSentResize?.cols === next.cols && lastSentResize?.rows === next.rows)) return
@@ -364,10 +468,8 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
     }
     const queueResize = (cols: number, rows: number): void => {
       pendingResize = { cols, rows }
-      if (resizeSendRaf === null) resizeSendRaf = requestAnimationFrame(flushResize)
-      // Same RAF-starvation hazard as output writes: never leave a geometry
-      // update stranded when frames stop.
-      if (resizeSendTimer === null) resizeSendTimer = setTimeout(flushResize, 250)
+      if (resizeSendTimer !== null) clearTimeout(resizeSendTimer)
+      resizeSendTimer = setTimeout(flushResize, RESIZE_SEND_DELAY_MS)
     }
     // The reader and control thread can both report the same exit.
     let exitReported = false
@@ -376,7 +478,7 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       exitReported = true
       clearInitialCommand(id)
       if (agentIdRef.current === 'codex' && agentId !== 'codex') agentIdRef.current = undefined
-      term.write(`\r\n\x1b[90m[Process exited${typeof code === 'number' ? ` (code ${code})` : ''}]\x1b[0m\r\n`)
+      term.write(`${APP_OWNED_MODE_RESET}\r\n\x1b[90m[Process exited${typeof code === 'number' ? ` (code ${code})` : ''}]\x1b[0m\r\n`)
       onProcessExitRef.current?.()
     })
 
@@ -398,26 +500,23 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
         }
       })
     }
-    let typedCommand = ''
-    const learnAgentFromCommand = (command: string): void => {
-      if (agentIdentityLockedRef.current) return
+    let promptCapture = EMPTY_TERMINAL_PROMPT_CAPTURE
+    const learnAgentFromCommand = (command: string): boolean => {
+      if (agentIdentityLockedRef.current) return false
       const detected = attachmentAgent(command)
-      if (!detected) return
+      if (!detected) return false
       agentIdRef.current = detected
       agentIdentityLockedRef.current = true
+      return true
     }
     term.onData((data) => {
       // Replayed device queries must not send historical replies to a live shell.
       if (restoreInFlight) return
-      if (data === '\r' || data === '\n') {
-        learnAgentFromCommand(typedCommand)
-        typedCommand = ''
-      } else if (data === '\x7f' || data === '\b') {
-        typedCommand = typedCommand.slice(0, -1)
-      } else if (data === '\x15' || data === '\x03') {
-        typedCommand = ''
-      } else if (!data.includes('\x1b')) {
-        typedCommand = `${typedCommand}${data}`.slice(-128)
+      const captured = captureTerminalInput(promptCapture, data)
+      promptCapture = captured.capture
+      for (const submitted of captured.submitted) {
+        const launchedAgent = learnAgentFromCommand(submitted.command)
+        if (!launchedAgent) rememberPrompt(submitted.prompt)
       }
       writePty(data)
     })
@@ -575,6 +674,25 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       return true
     })
 
+    const focusShell = (): void => {
+      if (!mounted || flippedRef.current) return
+      try { term.focus() } catch {}
+    }
+    // Clicking the empty viewport padding below the last row must still land
+    // in the shell: xterm's own click-to-focus only covers its screen
+    // element, and the focusable widget frame around us otherwise keeps the
+    // mousedown default focus for itself. The deferred pass runs after that
+    // default, without preventing anything, so selection and drags keep
+    // working untouched.
+    const onPointerDownFocus = (event: PointerEvent): void => {
+      if (event.button !== 0) return
+      const target = event.target as HTMLElement | null
+      if (target?.closest('button, input, [role="menu"]')) return
+      focusShell()
+      requestAnimationFrame(() => focusShell())
+    }
+    container.addEventListener('pointerdown', onPointerDownFocus)
+
     try {
       term.open(container)
       if (container.clientWidth > 0 && container.clientHeight > 0) fit.fit()
@@ -583,7 +701,14 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
 
 
 
-      if (surface === 'canvas') term.focus()
+      if (surface === 'canvas') {
+        // A fresh terminal must blink right away like a native one. The open
+        // is synchronous but first paint (and a startup overlay teardown) can
+        // still move focus afterwards, so re-assert past it.
+        term.focus()
+        requestAnimationFrame(() => focusShell())
+        window.setTimeout(() => focusShell(), 80)
+      }
     } catch (err) {
       console.error('failed to initialise terminal widget', err)
       term.write('\r\n\x1b[31m[Terminal could not be initialised; retrying is safe]\x1b[0m\r\n')
@@ -592,13 +717,76 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
 
 
 
+    // xterm reads a pointer position as a cell by dividing its offset inside
+    // getBoundingClientRect() by the cell size. The rect is measured on screen
+    // and therefore carries the canvas camera's zoom; the cell size is laid
+    // out and does not. On a zoomed canvas every click was read that many rows
+    // and columns too far, so a selection — and a click inside a TUI that
+    // tracks the mouse — landed away from the pointer. See terminalPointerScale.
+    const screenElement = container.querySelector('.xterm-screen') as HTMLElement | null
+    const rewritten = new WeakSet<MouseEvent>()
+    const currentScale = (): number =>
+      screenElement ? pointerScale(screenElement.getBoundingClientRect().width, screenElement.offsetWidth) : 1
+    const needsRewrite = (event: MouseEvent): boolean =>
+      !!screenElement && !rewritten.has(event) && isPointerScaled(currentScale())
+    const relay = (event: MouseEvent, target: EventTarget): void => {
+      const rect = screenElement!.getBoundingClientRect()
+      const { clientX, clientY } = unscalePointer(rect, currentScale(), event.clientX, event.clientY)
+      const clone = new MouseEvent(event.type, {
+        bubbles: true,
+        cancelable: event.cancelable,
+        composed: true,
+        view: window,
+        detail: event.detail,
+        button: event.button,
+        buttons: event.buttons,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+        clientX,
+        clientY
+      })
+      rewritten.add(clone)
+      target.dispatchEvent(clone)
+    }
+    let selectionDrag = false
+    const endSelectionDrag = (): void => {
+      if (!selectionDrag) return
+      selectionDrag = false
+      document.removeEventListener('mousemove', onDocumentMouse, true)
+      document.removeEventListener('mouseup', onDocumentMouse, true)
+    }
+    // A selection drag keeps going outside the widget, and xterm follows it on
+    // the document rather than on its own element.
+    function onDocumentMouse(event: MouseEvent): void {
+      if (!selectionDrag) return
+      if (needsRewrite(event)) {
+        event.stopPropagation()
+        relay(event, document)
+      }
+      if (event.type === 'mouseup') endSelectionDrag()
+    }
+    const onContainerMouse = (event: MouseEvent): void => {
+      if (!needsRewrite(event)) return
+      event.stopPropagation()
+      relay(event, event.target ?? container)
+      if (event.type === 'mousedown' && event.button === 0 && !selectionDrag) {
+        selectionDrag = true
+        document.addEventListener('mousemove', onDocumentMouse, true)
+        document.addEventListener('mouseup', onDocumentMouse, true)
+      }
+    }
+    for (const type of ['mousedown', 'mousemove', 'dblclick']) {
+      container.addEventListener(type, onContainerMouse as EventListener, true)
+    }
+
     const handleResize = (): void => {
-      if (!mounted || container.clientWidth === 0 || container.clientHeight === 0) return
-      try { fit.fit() } catch {}
+      try { fitPreservingViewport() } catch {}
     }
     const handleResolution = (): void => {
       if (!mounted) return
-      try { fit.fit() } catch {}
+      try { fitPreservingViewport() } catch {}
     }
     window.addEventListener('resize', handleResize)
     const mediaQuery = window.matchMedia('(resolution: 96dpi)')
@@ -901,7 +1089,7 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
 
 
 
-    void window.api.terminal.create(id, term.cols, term.rows).then((result) => {
+    void window.api.terminal.create(id, term.cols, term.rows, titleRef.current).then((result) => {
 
 
 
@@ -929,6 +1117,20 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       const launchQueuedCommand = (): void => {
         const queued = peekInitialCommand(id)
         if (!mounted || exitReported || !queued) return
+        if (
+          initialCommandVerdict({
+            live: result.live === true,
+            bufferType: term.buffer.active.type === 'alternate' ? 'alternate' : 'normal',
+            mouseTracking: term.modes.mouseTrackingMode
+          }) === 'already-running'
+        ) {
+          // Something already owns this terminal — typing here would put the
+          // command into its input, not run it. The agent it would have
+          // started is the thing already running, so the command is done.
+          learnAgentFromCommand(queued)
+          markInitialCommandDelivered(id)
+          return
+        }
         learnAgentFromCommand(queued)
         void window.api.terminal.write(id, `${queued}${cachedSubmit}`).then((result) => {
           if ('error' in result) {
@@ -936,6 +1138,10 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
             return
           }
           markInitialCommandDelivered(id)
+          if (!mounted) return
+          setStartupFailure(null)
+          startupProbe = createStartupProbe(queued)
+          startupWatchUntil = Date.now() + STARTUP_WATCH_MS
         }).catch(() => {
           if (mounted) term.write('\r\n\x1b[31m[Failed to start command]\x1b[0m\r\n')
         })
@@ -954,10 +1160,11 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
         // emulator is now left in, above all, mouse-tracking mode — so every
         // pointer move over the widget types an SGR mouse report straight into
         // the prompt (`^[[<35;40;18M…`), which is unusable and looks like the
-        // terminal has been corrupted. A live re-attach is left alone: there
-        // the modes belong to a process that really is still running.
+        // terminal has been corrupted. A live re-attach gets the narrower
+        // interaction reset: history cannot reliably reconstruct its current
+        // mouse mode, while its bracketed-paste and screen modes stay intact.
         const marker = result.live
-          ? ''
+          ? TERMINAL_OUTPUT_RESYNC
           : `${APP_OWNED_MODE_RESET}\r\n\x1b[90m[Session restored — new process started]\x1b[0m\r\n`
         writePaced(`\x1b[0m${result.scrollback}${marker}`, () => {
           restoreViewportAfterLayout()
@@ -968,9 +1175,7 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
 
       if (result.live && container.clientWidth > 0 && container.clientHeight > 0) {
         try {
-          const anchor = captureViewportAnchor()
-          fit.fit()
-          scheduleResizeAnchorRestore(anchor)
+          fitPreservingViewport()
         } catch {
 
         }
@@ -1004,14 +1209,8 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       if (resizeRaf !== null) cancelAnimationFrame(resizeRaf)
       resizeRaf = requestAnimationFrame(() => {
         resizeRaf = null
-        if (!mounted || container.clientWidth === 0 || container.clientHeight === 0) return
         try {
-
-
-
-          const anchor = captureViewportAnchor()
-          fit.fit()
-          scheduleResizeAnchorRestore(anchor)
+          fitPreservingViewport()
         } catch (err) {
 
           console.warn('terminal resize skipped', err)
@@ -1032,10 +1231,6 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       cancelRestore?.()
       renderQueue.dispose()
       pendingResize = null
-      if (resizeSendRaf !== null) {
-        cancelAnimationFrame(resizeSendRaf)
-        resizeSendRaf = null
-      }
       if (resizeSendTimer !== null) {
         clearTimeout(resizeSendTimer)
         resizeSendTimer = null
@@ -1044,6 +1239,11 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       resizeAnchorGeneration++
       if (resizeRestoreTimer) clearTimeout(resizeRestoreTimer)
       observer.disconnect()
+      endSelectionDrag()
+      for (const type of ['mousedown', 'mousemove', 'dblclick']) {
+        container.removeEventListener(type, onContainerMouse as EventListener, true)
+      }
+      container.removeEventListener('pointerdown', onPointerDownFocus)
       window.removeEventListener('resize', handleResize)
       mediaQuery.removeEventListener('change', handleResolution)
       document.removeEventListener('keydown', onKeyShortcut)
@@ -1077,21 +1277,55 @@ function TerminalWidget({ id, surface = 'canvas', agentId, onProcessExit }: Prop
       }
       if (termRef.current === term) termRef.current = null
     }
-  }, [id, surface])
+  }, [id, surface, rememberPrompt])
 
   return (
-    <div
-      ref={containerRef}
-      className={`term-shell term relative h-full w-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
-        surface === 'canvas' ? 'is-canvas-term p-0' : 'is-code-term px-1.5 py-0.5'
-      }`}
-      data-testid="terminal-xterm"
-    >
-      {connecting && (
-        <div role="status" className="pointer-events-none absolute inset-0 grid place-items-center">
-          <span className="animate-pulse rounded-panel bg-bg-raise px-2.5 py-1 text-[11px] text-text-faint">
-            Connecting…
-          </span>
+    <div className="relative h-full w-full overflow-hidden">
+      <div
+        ref={containerRef}
+        className={`term-shell term relative h-full w-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60 ${
+          surface === 'canvas' ? 'is-canvas-term p-0' : 'is-code-term px-1.5 py-0.5'
+        } ${flipped ? 'invisible pointer-events-none' : ''}`}
+        data-testid="terminal-xterm"
+        aria-hidden={flipped}
+      >
+        {connecting && (
+          <div role="status" className="pointer-events-none absolute inset-0 grid place-items-center">
+            <span className="animate-pulse rounded-panel bg-bg-raise px-2.5 py-1 text-[11px] text-text-faint">
+              Connecting…
+            </span>
+          </div>
+        )}
+      </div>
+      {startupFailure && !flipped && (
+        <div
+          role="alert"
+          data-testid="terminal-startup-failure"
+          className="pointer-events-auto absolute inset-x-1.5 top-1.5 z-20 flex items-start gap-2 rounded-panel border border-danger/40 bg-bg-panel/95 px-2.5 py-2 text-[11px] leading-snug text-text shadow-[0_8px_26px_rgba(0,0,0,0.35)]"
+        >
+          <AlertTriangle size={14} className="mt-[1px] flex-none text-danger" aria-hidden="true" />
+          <span className="min-w-0 flex-1">{startupFailure}</span>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => setStartupFailure(null)}
+            className="flex-none rounded-panel px-1 text-text-faint transition-colors hover:text-text"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+      {flipped && (
+        <div
+          className="absolute inset-0 flex items-center justify-center overflow-auto bg-bg px-[8%] py-[7%] text-center"
+          data-testid="terminal-flip-card"
+        >
+          <div className="flex max-h-full max-w-[900px] items-center gap-3 text-text">
+            <MessageSquareText size={18} className="flex-none text-text-dim" aria-hidden="true" />
+            <p className={`m-0 whitespace-pre-wrap break-words font-medium leading-snug ${lastPrompt ? 'text-[clamp(14px,2vw,26px)]' : 'text-sm text-text-faint'}`}>
+              {lastPrompt || 'No user prompt yet'}
+            </p>
+          </div>
         </div>
       )}
     </div>

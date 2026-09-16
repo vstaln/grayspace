@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Check, Globe2, Rocket, Terminal, X } from 'lucide-react'
+import { AlertTriangle, Check, Globe2, Rocket, Terminal, X } from 'lucide-react'
 import ClaudeIcon from './ClaudeIcon'
 import CodexIcon from './CodexIcon'
 import GrokIcon from './GrokIcon'
@@ -7,6 +7,8 @@ import AntigravityIcon from './AntigravityIcon'
 import OpenCodeIcon from './OpenCodeIcon'
 import CursorIcon from './CursorIcon'
 import KimiIcon from './KimiIcon'
+import { useFocusTrap } from '../hooks/useFocusTrap'
+import { launchMemoryWarning } from '../lib/launchMemory'
 
 export const MAX_CODE_SESSIONS = 32
 export const CODE_LAUNCH_COUNTS = [1, 2, 4, 6, 8, 10, 12] as const
@@ -46,7 +48,21 @@ export default function CodeLauncher({
   const [selectedAgentId, setSelectedAgentId] = useState<string>('claude')
   const [count, setCount] = useState(1)
   const [customCommand, setCustomCommand] = useState('')
+  // Read once, when the dialog opens: the figure only has to be right at the
+  // moment the user decides how many sessions to start.
+  const [freeMemory, setFreeMemory] = useState(0)
   const dialogRef = useRef<HTMLElement>(null)
+  useFocusTrap(dialogRef, true)
+
+  useEffect(() => {
+    let alive = true
+    void window.api.system.stats().then((stats) => {
+      if (alive && 'freeMem' in stats) setFreeMemory(stats.freeMem)
+    }).catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -71,6 +87,10 @@ export default function CodeLauncher({
       : baseAgent
 
   const launchCount = Math.min(count, remaining)
+  // A browser widget is a webview inside this process, not an agent CLI, so
+  // the per-agent estimate does not apply to it.
+  const memoryWarning =
+    selectedAgentId === 'browser' ? null : launchMemoryWarning(freeMemory, launchCount)
   const canLaunch =
     (selectedAgentId !== 'custom' || customCommand.trim().length > 0) &&
     launchCount > 0 &&
@@ -197,6 +217,16 @@ export default function CodeLauncher({
                 <span className="text-danger"> (capped: {remaining} left)</span>
               )}
             </p>
+            {memoryWarning && (
+              <p
+                role="status"
+                data-testid="code-launch-memory-warning"
+                className="flex items-start gap-1.5 text-[11px] leading-snug text-danger"
+              >
+                <AlertTriangle size={12} className="mt-[2px] flex-none" aria-hidden="true" />
+                <span>{memoryWarning}</span>
+              </p>
+            )}
           </div>
         </div>
 
