@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, History, Play, X } from 'lucide-react'
 import type { CodeAgent } from './CodeLauncher'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 import {
   defaultChoice,
   restoreRowTitle,
@@ -40,6 +41,8 @@ export default function RestoreSessionsDialog({
 }: Props): React.JSX.Element {
   const [chosen, setChosen] = useState<Set<string>>(() => defaultChoice(sessions))
   const restoreRef = useRef<HTMLButtonElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useFocusTrap(dialogRef, true)
 
   const startable = useMemo(() => sessions.filter(startsAgent), [sessions])
   const count = useMemo(
@@ -69,6 +72,7 @@ export default function RestoreSessionsDialog({
 
   return (
     <div
+      ref={dialogRef}
       className="absolute inset-0 z-30 grid place-items-center bg-black/55 px-4 py-6"
       role="dialog"
       aria-modal="true"

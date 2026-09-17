@@ -31,9 +31,14 @@ const nativeStorageCore = ((): NativeStorageCore | null => {
     const nativeDir = electronApp?.isPackaged
       ? join(process.resourcesPath, 'native', 'storage-core')
       : join(storageModuleDir, '../../native/storage-core')
+    const platformArch = `${process.platform}-${process.arch}`
+    if (!fs.readdirSync(nativeDir).some((name) => name.endsWith('.node') && name.includes(platformArch))) {
+      return null
+    }
     return require(nativeDir) as NativeStorageCore
   } catch (error) {
-    console.warn('[native] storage-core unavailable; using the async JS atomic-write fallback.', error)
+    const reason = error instanceof Error ? error.message : String(error)
+    console.warn(`[native] storage-core unavailable; using the async JS atomic-write fallback (${reason})`)
     return null
   }
 })()
@@ -43,16 +48,7 @@ const nativeStorageCore = ((): NativeStorageCore | null => {
 
 
 
-export function sanitizeScrollbackNative(text: string, limit: number): string | null {
-  const fn = nativeStorageCore?.sanitizeScrollback
-  if (typeof fn !== 'function') return null
-  try {
-    return fn.call(nativeStorageCore, text, limit)
-  } catch (error) {
-    console.warn('[native] sanitizeScrollback failed; using the JS fallback.', error)
-    return null
-  }
-}
+
 
 
 

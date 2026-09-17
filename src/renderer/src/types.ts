@@ -3,7 +3,7 @@
 
 
 
-export type WidgetKind = 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration' | 'chat'
+export type WidgetKind = 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'image' | 'links' | 'music-player' | 'orchestration' | 'chat'
 
 export interface Widget {
   id: string
@@ -15,6 +15,10 @@ export interface Widget {
   h: number
   z: number
   maximized?: boolean
+
+  /** Durable media-store reference for an Image widget. */
+  imagePath?: string
+  imageName?: string
 
 
 
@@ -99,6 +103,7 @@ export const WIDGET_DEFAULTS: Record<WidgetKind, { title: string; w: number; h: 
   files: { title: 'Files', w: 580, h: 480 },
   'sys-monitor': { title: 'System Monitor', w: 460, h: 380 },
   browser: { title: 'Browser', w: 720, h: 480 },
+  image: { title: 'Image', w: 560, h: 420 },
   links: { title: 'Links', w: 420, h: 360 },
   'music-player': { title: 'Music Player', w: 460, h: 420 },
   orchestration: { title: 'Orchestration', w: 520, h: 560 },
@@ -139,15 +144,3 @@ export function clampWidgetSize(
     h: Math.min(Math.max(h, MIN_H), max?.h ?? Number.POSITIVE_INFINITY)
   }
 }
-
-export function coerceWidgetSize(w: number, h: number, vw: number, vh: number): { w: number; h: number } {
-  const maxW = Math.max(MIN_W, (vw || 0) - 32)
-  const maxH = Math.max(MIN_H, (vh || 0) - 32)
-  return {
-    w: Math.min(Math.max(w, MIN_W), maxW),
-    h: Math.min(Math.max(h, MIN_H), maxH)
-  }
-}
-
-
-export const clampDefaultSize = coerceWidgetSize

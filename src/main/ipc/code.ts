@@ -2,6 +2,7 @@ import { ipcMain } from './shims.ts'
 import { listAgentConversations, type AgentConversation } from '../agentSessions.ts'
 import type { AgentConversation as ExposedConversation } from '../../preload/api.ts'
 import type { IpcDeps } from './types.ts'
+import { authorizeWorkspacePath, canonicalActiveWorkspacePath } from './workspacePath.ts'
 
 /**
  * The renderer sees its own copy of this shape (the preload bridge cannot
@@ -24,6 +25,15 @@ void _conversationShapesAgree
 const CONVERSATION_CACHE_MS = 3_000
 const CONVERSATION_CACHE_MAX = 8
 const conversationCache = new Map<string, { at: number; pending: Promise<AgentConversation[]> }>()
+
+function recentWorkspaceEntries(deps: IpcDeps): readonly { path: string }[] {
+  try {
+    const recent = deps.state.get().recent
+    return Array.isArray(recent) ? recent : []
+  } catch {
+    return []
+  }
+}
 
 function cachedConversations(dir: string): Promise<AgentConversation[]> {
   const now = Date.now()
@@ -50,7 +60,12 @@ export function registerCodeIpc(deps: IpcDeps): void {
   ipcMain.handle('code:load', () => deps.code.load())
 
   ipcMain.handle('code:conversations', async (_e, dir: unknown) => {
-    const folder = typeof dir === 'string' && dir.trim() ? dir : deps.getWorkspaceDir()
+    let folder = canonicalActiveWorkspacePath(deps.getWorkspaceDir())
+    if (dir !== undefined && dir !== null && dir !== '') {
+      const authorized = authorizeWorkspacePath(dir, deps.getWorkspaceDir(), recentWorkspaceEntries(deps))
+      if (!authorized) return []
+      folder = authorized.canonical
+    }
     if (!folder) return []
     return cachedConversations(folder)
   })

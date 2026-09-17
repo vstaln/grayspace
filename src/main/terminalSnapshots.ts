@@ -14,6 +14,7 @@ export interface TerminalSnapshot {
   id: string
   title: string
   cwd: string
+  lastPrompt?: string
 
   bytes: number
   savedAt: number
@@ -103,7 +104,7 @@ export class TerminalSnapshots {
 
 
 
-  save(input: { id: string; title: string; cwd: string; scrollback: string }): void {
+  save(input: { id: string; title: string; cwd: string; scrollback: string; lastPrompt?: string }): void {
     this.ensure()
     this.generations.set(input.id, (this.generations.get(input.id) ?? 0) + 1)
     const { text, entry } = this.prepare(input)
@@ -130,7 +131,7 @@ export class TerminalSnapshots {
 
 
 
-  saveAsync(input: { id: string; title: string; cwd: string; scrollback: string }): void {
+  saveAsync(input: { id: string; title: string; cwd: string; scrollback: string; lastPrompt?: string }): void {
     this.ensure()
 
 
@@ -177,7 +178,7 @@ export class TerminalSnapshots {
     this.scheduleFlush()
   }
 
-  private prepare(input: { id: string; title: string; cwd: string; scrollback: string }): {
+  private prepare(input: { id: string; title: string; cwd: string; scrollback: string; lastPrompt?: string }): {
     text: string
     entry: TerminalSnapshot
   } {
@@ -196,6 +197,7 @@ export class TerminalSnapshots {
         id: input.id,
         title: input.title,
         cwd: input.cwd,
+        ...(input.lastPrompt?.trim() ? { lastPrompt: input.lastPrompt.replace(/\s+/g, ' ').trim().slice(0, 12_000) } : {}),
         bytes: Buffer.byteLength(text),
         savedAt: Date.now()
       }

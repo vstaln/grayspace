@@ -15,6 +15,8 @@ import ClaudeIcon from './ClaudeIcon'
 import CodexIcon from './CodexIcon'
 import GrokIcon from './GrokIcon'
 import { monochrome } from '../ui/tokens'
+import { WIDGET_CATALOG } from '../lib/widgetCatalog'
+import { DEFAULT_IMAGE_INSERT_SHORTCUT, formatShortcut, shortcutFromEvent } from '../lib/keyboardShortcut'
 
 interface Props {
   workspaceDir: string | null
@@ -89,19 +91,6 @@ const SETTINGS_TAB_HINTS: Record<SettingsTab, string> = {
   appearance: 'Theme, shell and what the canvas right-click menu offers.',
   ai: 'Connect an AI account once, then use its subscription in every AI Chat widget.'
 }
-
-const FAVORITE_WIDGETS = [
-  ['terminal', 'Terminal', 'Shell in the current workspace'],
-  ['files', 'Files', 'Browse workspace files'],
-  ['sys-monitor', 'System Monitor', 'CPU, RAM and processes'],
-  ['timer', 'Timer', 'Countdown or stopwatch'],
-  ['planner', 'Planner', 'Daily agenda and checklist'],
-  ['orchestration', 'Orchestration', 'The agent fleet: tasks, workers and their questions'],
-  ['browser', 'Browser', 'Embedded web page'],
-  ['links', 'Links', 'Saved links'],
-  ['music-player', 'Music Player', 'Stream YouTube, Yandex Music, Spotify or MP3 links'],
-  ['chat', 'AI Chat', 'Chat with an authenticated model']
-] as const
 
 const AI_PROVIDERS: Array<{ id: ChatProvider; label: string; hint: string; Icon: React.ComponentType<{ size?: number }> }> = [
   { id: 'chatgpt', label: 'ChatGPT', hint: 'Codex account and subscription', Icon: CodexIcon },
@@ -235,6 +224,8 @@ export function SettingsModal({
   const [tab, setTab] = useState<SettingsTab>('account')
   const [userName, setUserName] = useState('')
   const [favoriteNamesText, setFavoriteNamesText] = useState('')
+  const [imageShortcut, setImageShortcut] = useState(DEFAULT_IMAGE_INSERT_SHORTCUT)
+  const [recordingImageShortcut, setRecordingImageShortcut] = useState(false)
   const nameEntries = favoriteNamesText.split(/[\n,]+/).map((name) => name.trim()).filter(Boolean)
   const favoriteNames = normalizeTerminalNameList(nameEntries)
   const namesError = nameEntries.some((name) => !normalizeTerminalName(name))
@@ -256,6 +247,10 @@ export function SettingsModal({
   useEffect(() => {
     if (open) setFavoriteNamesText((settings.favoriteTerminalNames ?? []).join('\n'))
   }, [open, settings.favoriteTerminalNames])
+
+  useEffect(() => {
+    if (open) setImageShortcut(settings.imageInsertShortcut || DEFAULT_IMAGE_INSERT_SHORTCUT)
+  }, [open, settings.imageInsertShortcut])
 
   const saveFavoriteNames = async (): Promise<void> => {
     if (namesError || busy) return
@@ -495,9 +490,57 @@ export function SettingsModal({
                   </div>
                 </Section>
 
+                <Section title="Image widget hotkey" hint="Copy an image, then press this shortcut anywhere on the canvas to pin it for your agent.">
+                  <div className="flex items-center gap-2">
+                    <input
+                      data-testid="image-widget-hotkey"
+                      aria-label="Image widget hotkey"
+                      readOnly
+                      value={recordingImageShortcut ? 'Press keys…' : formatShortcut(imageShortcut)}
+                      onFocus={() => setRecordingImageShortcut(true)}
+                      onBlur={() => setRecordingImageShortcut(false)}
+                      onKeyDown={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        if (event.key === 'Escape') {
+                          setRecordingImageShortcut(false)
+                          event.currentTarget.blur()
+                          return
+                        }
+                        const next = shortcutFromEvent(event.nativeEvent)
+                        if (!next) {
+                          setNotice('Use at least one modifier, for example Ctrl+Shift+I.')
+                          return
+                        }
+                        setImageShortcut(next)
+                        setRecordingImageShortcut(false)
+                        event.currentTarget.blur()
+                        void update({ imageInsertShortcut: next }).then((ok) => {
+                          setNotice(ok ? 'Image widget hotkey saved.' : 'Failed to save image widget hotkey.')
+                        })
+                      }}
+                      className="h-9 w-44 rounded-panel border border-line-soft bg-transparent px-3 text-xs text-text outline-none focus:border-line"
+                    />
+                    <button
+                      type="button"
+                      className={BTN_QUIET}
+                      disabled={imageShortcut === DEFAULT_IMAGE_INSERT_SHORTCUT}
+                      onClick={() => {
+                        setImageShortcut(DEFAULT_IMAGE_INSERT_SHORTCUT)
+                        void update({ imageInsertShortcut: DEFAULT_IMAGE_INSERT_SHORTCUT }).then((ok) => {
+                          setNotice(ok ? 'Image widget hotkey reset.' : 'Failed to reset image widget hotkey.')
+                        })
+                      }}
+                    >
+                      Reset
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-text-faint">Current: <kbd className="rounded border border-line px-1 py-0.5 font-mono">{formatShortcut(imageShortcut)}</kbd></p>
+                </Section>
+
                 <Section title="Right-click menu" hint="Which widgets appear when you right-click the canvas.">
                   <div className="-mx-2 flex flex-col">
-                    {FAVORITE_WIDGETS.map(([id, label, hint]) => {
+                    {WIDGET_CATALOG.map(({ kind: id, label, hint }) => {
                       const selected = (settings.favoriteWidgets ?? []).includes(id)
                       return (
                         <label
@@ -571,11 +614,11 @@ export function SettingsModal({
                         </span>
                         <span className="inline-flex items-center gap-1 rounded-pill bg-bg-hover px-2 py-0.5 text-[10px] text-text-dim border border-line-soft">
                           <span className="h-1.5 w-1.5 rounded-pill bg-ok" />
-                          Connected
+                          Local profile
                         </span>
                       </div>
                       <p className="truncate text-[11px] text-text-faint">
-                        {userName.trim() ? `${userName.trim().toLowerCase().replace(/\s+/g, '.')}@orcspace.local` : 'operator@orcspace.local'}
+                        Local-only profile on this device
                       </p>
                     </div>
                   </div>
@@ -1351,7 +1394,7 @@ export default React.memo(function Sidebar({
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-1 min-w-0">
                 <span className="truncate text-[11px] font-medium text-text">{avatarName}</span>
-                <VerifiedBadge size={12} />
+                <VerifiedBadge size={12} title="Local profile" />
               </span>
               <span className="block text-[9px] text-text-faint">Account</span>
             </span>

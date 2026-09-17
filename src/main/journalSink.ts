@@ -3,6 +3,7 @@ import { promises as fsp } from 'fs'
 import { dirname } from 'path'
 import { randomBytes } from 'crypto'
 import type { JournalEntry, JournalSink } from './core/index.ts'
+import { notifyPersistError } from './persistNotifier.ts'
 
 
 export const JOURNAL_SCHEMA_VERSION = 1
@@ -82,6 +83,7 @@ export class FileJournalSink implements JournalSink {
       this.bytes = fs.existsSync(this.file) ? fs.statSync(this.file).size : 0
     } catch (err) {
       console.error('cannot prepare journal file', err)
+      notifyPersistError('journal', err)
     }
   }
 
@@ -123,6 +125,7 @@ export class FileJournalSink implements JournalSink {
 
       this.requeue(chunk)
       console.error('failed to append to the command journal', err)
+      notifyPersistError('journal', err)
       failed = true
     }
     this.writing = false
@@ -212,6 +215,7 @@ export class FileJournalSink implements JournalSink {
 
         this.requeue(chunk)
         console.error('failed to append to the command journal', retryErr)
+        notifyPersistError('journal', retryErr)
         this.scheduleRetry()
         return false
       }
@@ -338,35 +342,73 @@ export class FileJournalSink implements JournalSink {
 
 
 
+const JOURNAL_TAIL_MIN_BYTES = 64 * 1024
+const JOURNAL_TAIL_MAX_INITIAL_BYTES = 4 * 1024 * 1024
+const JOURNAL_ESTIMATED_ENTRY_BYTES = 512
+
 export function readJournalTail(file: string, limit = 2_000): { lastSeq: number; entries: JournalEntry[] } {
-  let text: string
+  let handle: number
+  let size: number
   try {
-    text = fs.readFileSync(file, 'utf8')
+    handle = fs.openSync(file, 'r')
+    size = fs.fstatSync(handle).size
   } catch {
     return { lastSeq: 0, entries: [] }
   }
-  const entries: JournalEntry[] = []
 
+  const maxEntries = Number.isFinite(limit)
+    ? Math.max(0, Math.trunc(limit))
+    : limit === Infinity ? Infinity : 0
+  try {
+    if (size === 0) return { lastSeq: 0, entries: [] }
+    const estimatedTailBytes = Math.min(
+      JOURNAL_TAIL_MAX_INITIAL_BYTES,
+      Math.max(JOURNAL_TAIL_MIN_BYTES, maxEntries * JOURNAL_ESTIMATED_ENTRY_BYTES)
+    )
+    let windowBytes = Math.min(size, estimatedTailBytes)
+    for (;;) {
+      const start = size - windowBytes
+      const buffer = Buffer.allocUnsafe(windowBytes)
+      let bytesRead = 0
+      while (bytesRead < windowBytes) {
+        const count = fs.readSync(handle, buffer, bytesRead, windowBytes - bytesRead, start + bytesRead)
+        if (count === 0) break
+        bytesRead += count
+      }
 
+      let text = buffer.subarray(0, bytesRead).toString('utf8')
+      if (start > 0) {
+        const firstNewline = text.indexOf('\n')
+        text = firstNewline < 0 ? '' : text.slice(firstNewline + 1)
+      }
 
+      const entries: JournalEntry[] = []
+      let lastSeq = 0
+      let validEntries = 0
+      const needed = Math.max(1, maxEntries)
+      const lines = text.split('\n')
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        const line = lines[i]
+        if (!line.trim()) continue
+        try {
+          const entry = JSON.parse(line) as JournalEntry
+          if (typeof entry.seq !== 'number' || typeof entry.type !== 'string') continue
+          if (entry.seq > lastSeq) lastSeq = entry.seq
+          if (entries.length < maxEntries) entries.push(entry)
+          validEntries += 1
+          if (validEntries >= needed) break
+        } catch {
 
+        }
+      }
 
-
-  const lines = text.split('\n')
-  let lastSeq = 0
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i]
-    if (!line.trim()) continue
-    try {
-      const entry = JSON.parse(line) as JournalEntry
-      if (typeof entry.seq !== 'number' || typeof entry.type !== 'string') continue
-      if (entry.seq > lastSeq) lastSeq = entry.seq
-      if (entries.length < limit) entries.push(entry)
-    } catch {
-
-
+      if (validEntries >= needed || start === 0) {
+        entries.reverse()
+        return { lastSeq, entries }
+      }
+      windowBytes = Math.min(size, windowBytes * 2)
     }
+  } finally {
+    fs.closeSync(handle)
   }
-  entries.reverse()
-  return { lastSeq, entries }
 }

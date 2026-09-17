@@ -12,6 +12,7 @@ import { createCore } from './core/index.ts'
 import { FileJournalSink, readJournalTail } from './journalSink.ts'
 import type { Core } from './core/index.ts'
 import { createRustPtySidecar } from './rustPtySidecar.ts'
+import { RendererStateStore } from './rendererState.ts'
 
 export interface AppStores {
   core: Core
@@ -23,6 +24,7 @@ export interface AppStores {
   code: CodeStore
   planner: PlannerStore
   orchestration: OrchestrationStore
+  rendererState: RendererStateStore
   journalFile: string
 }
 
@@ -53,6 +55,7 @@ export function createAppStores(): AppStores {
   )
   const planner = new PlannerStore()
   const orchestration = new OrchestrationStore()
+  const rendererState = new RendererStateStore()
 
   return {
     core,
@@ -64,6 +67,7 @@ export function createAppStores(): AppStores {
     code,
     planner,
     orchestration,
+    rendererState,
     journalFile
   }
 }

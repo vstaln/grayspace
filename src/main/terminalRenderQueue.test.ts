@@ -16,8 +16,10 @@ test('slow xterm parser receives only one bounded chunk at a time', () => {
   assert.equal(writes.length, 1)
   parsed()
   queue.flush()
-  assert.ok(writes[1].startsWith('\x18\x1b[0m'))
-  assert.ok(writes[1].length <= 8 + 5)
+  const prefix = '\x18\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l' +
+    '\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?2026l\x1b[?25h\x1b[0m'
+  assert.ok(writes[1].startsWith(prefix))
+  assert.ok(writes[1].length <= 8 + prefix.length)
   queue.dispose()
   parsed()
   queue.push('ignored')

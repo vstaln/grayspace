@@ -223,3 +223,54 @@ fn folding_a_real_journal_matches_typescript() {
         actual_widgets.len()
     );
 }
+
+/// An image widget has to survive the fold with the two fields that make it an
+/// image at all.
+///
+/// `sanitize_widget` drops a widget whose kind it does not recognise — not just
+/// the kind, the whole widget — so a `WIDGET_KINDS` list that has fallen behind
+/// the TypeScript one makes every widget of the missing kind vanish on replay.
+/// And because `widget.update` rebuilds the widget from `widget_to_value`
+/// before applying the patch, any field missing from that round trip is erased
+/// by the first move or resize.
+#[test]
+fn an_image_widget_keeps_its_source_across_create_and_update() {
+    let entry = |seq: u64, entry_type: &str, payload: Value| JournalEntry {
+        seq,
+        at: 1_789_000_000_000 + seq,
+        phase: "commit".to_owned(),
+        actor_id: "user".to_owned(),
+        entry_type: entry_type.to_owned(),
+        target: "widget:img1".to_owned(),
+        payload: Some(payload),
+        version: Some(seq as i64),
+        error: None,
+        prev_hash: None,
+        hash: None,
+    };
+    let entries = vec![
+        entry(
+            1,
+            "widget.create",
+            serde_json::json!({
+                "id": "img1",
+                "title": "shot.png",
+                "kind": "image",
+                "x": 10.0, "y": 20.0, "w": 320.0, "h": 240.0, "z": 3.0,
+                "imagePath": "C:\\shots\\shot.png",
+                "imageName": "shot.png"
+            }),
+        ),
+        entry(2, "widget.update", serde_json::json!({ "x": 40.0 })),
+    ];
+
+    let state = fold(entries.iter(), CanvasState::default(), Clock(1_789_000_000_000.0));
+    let widgets = list_widgets(&state);
+
+    assert_eq!(widgets.len(), 1, "the image widget must survive the fold");
+    let widget = widgets[0];
+    assert_eq!(widget.kind.as_deref(), Some("image"));
+    assert_eq!(widget.x, 40.0, "the update must apply");
+    assert_eq!(widget.image_path.as_deref(), Some("C:\\shots\\shot.png"), "the update must not erase the source");
+    assert_eq!(widget.image_name.as_deref(), Some("shot.png"));
+}

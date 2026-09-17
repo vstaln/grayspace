@@ -15,6 +15,7 @@ import { USER_ACTOR_ID } from './shared.ts'
 import type { IpcDeps } from './types.ts'
 import { registerWindowIpc } from './window.ts'
 import { registerWorkspaceIpc } from './workspace.ts'
+import { registerRendererStateIpc } from './rendererState.ts'
 
 export { USER_ACTOR_ID } from './shared.ts'
 export {
@@ -50,6 +51,7 @@ export function registerIpc(deps: IpcDeps): void {
   registerOrchestrationIpc(deps)
   registerBrowserIpc(deps)
   registerChatIpc(deps)
+  registerRendererStateIpc(deps)
 }
 
 export type { Core }

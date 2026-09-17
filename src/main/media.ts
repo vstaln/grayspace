@@ -44,8 +44,6 @@ const AUDIO_MIME_BY_EXT: Record<string, string> = {
   wma: 'audio/x-ms-wma'
 }
 
-export const AUDIO_EXTENSIONS = Object.keys(AUDIO_MIME_BY_EXT)
-
 const VIDEO_MIME_BY_EXT: Record<string, string> = {
   mp4: 'video/mp4',
   m4v: 'video/mp4',
@@ -59,8 +57,6 @@ const VIDEO_MIME_BY_EXT: Record<string, string> = {
   mpg: 'video/mpeg',
   mpeg: 'video/mpeg'
 }
-
-export const VIDEO_EXTENSIONS = Object.keys(VIDEO_MIME_BY_EXT)
 
 const DOC_MIME_BY_EXT: Record<string, string> = {
   pdf: 'application/pdf',
@@ -95,8 +91,6 @@ const DOC_MIME_BY_EXT: Record<string, string> = {
   cmd: 'text/plain',
   ps1: 'text/plain'
 }
-
-export const DOC_EXTENSIONS = Object.keys(DOC_MIME_BY_EXT)
 
 export const MEDIA_MIME_BY_EXT: Record<string, string> = {
   ...MIME_BY_EXT,
@@ -387,44 +381,7 @@ export function resolveInWorkspaceSync(input: string, workspaceDir: string | und
   }
 }
 
-export async function resolveInWorkspace(
-  input: string,
-  workspaceDir: string | undefined | null
-): Promise<string | null> {
-  if (typeof input !== 'string' || !input.trim()) return null
-  if (typeof workspaceDir !== 'string' || !workspaceDir.trim()) return null
-  const raw = input.trim()
-  if (!isLocalPath(raw)) return null
-  if (!isLocalPath(workspaceDir.trim())) return null
-  let rootReal: string
-  try {
-    rootReal = await fs.promises.realpath(resolve(workspaceDir.trim()))
-  } catch {
-    return null
-  }
-  const abs = resolve(raw)
-  try {
-    const direct = await fs.promises.realpath(abs)
-    return isPathWithinRoot(direct, rootReal) ? direct : null
-  } catch {
-    // Nearest existing ancestor for not-yet-existing paths.
-    let cursor = abs
-    const parts: string[] = []
-    for (;;) {
-      const parent = dirname(cursor)
-      if (parent === cursor) return null
-      parts.unshift(cursor.slice(parent.length).replace(/^[/\\]+/, ''))
-      cursor = parent
-      try {
-        const parentReal = await fs.promises.realpath(cursor)
-        const canonical = join(parentReal, ...parts)
-        return isPathWithinRoot(canonical, rootReal) ? canonical : null
-      } catch {
-        continue
-      }
-    }
-  }
-}
+
 
 
 

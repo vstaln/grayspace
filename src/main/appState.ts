@@ -6,6 +6,7 @@ import { readStoreJson, sweepTempFiles, writeJsonAtomic } from './storage.ts'
 import { normalizeTerminalNameList } from './terminalNames.ts'
 import { getUserDataDir } from './userData.ts'
 import { notifyCanvasWorkspaceChanged } from './canvasState.ts'
+import { notifyPersistError } from './persistNotifier.ts'
 import { codeWorkspaceScope } from '../shared/codeWorkspace.ts'
 import {
   readFolderWorkspaces,
@@ -76,6 +77,7 @@ export interface AppSettings {
   favoriteWidgets?: string[]
 
   favoriteTerminalNames?: string[]
+  imageInsertShortcut?: string
 }
 
 export interface LocalModelSettings {
@@ -147,8 +149,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   aiModel: 'gpt-5.6-sol',
   aiReasoningEffort: 'medium',
   aiConnectedProviders: [],
-  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'links', 'music-player', 'chat'],
-  favoriteTerminalNames: []
+  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'image', 'links', 'music-player', 'chat'],
+  favoriteTerminalNames: [],
+  imageInsertShortcut: 'Mod+Shift+I'
 }
 
 const MAX_RECENT = 12
@@ -190,6 +193,7 @@ export class AppState extends EventEmitter {
     settings: { ...DEFAULT_SETTINGS }
   }
   private loaded = false
+  private tempSweepScheduled = false
   private get file(): string { return join(getUserDataDir(), 'workspace-state.json') }
 
   get(): AppStateShape {
@@ -449,11 +453,17 @@ export class AppState extends EventEmitter {
       this.state.settings.localModel = merged
     }
     if (Array.isArray(patch.favoriteWidgets)) {
-      const allowed = new Set(['terminal', 'timer', 'planner', 'orchestration', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'chat'])
+      const allowed = new Set(['terminal', 'timer', 'planner', 'orchestration', 'files', 'sys-monitor', 'browser', 'image', 'links', 'music-player', 'chat'])
       this.state.settings.favoriteWidgets = [...new Set(patch.favoriteWidgets.filter((kind): kind is string => typeof kind === 'string' && allowed.has(kind)))].slice(0, 32)
     }
     if (Array.isArray(patch.favoriteTerminalNames)) {
       this.state.settings.favoriteTerminalNames = normalizeTerminalNameList(patch.favoriteTerminalNames)
+    }
+    if (typeof patch.imageInsertShortcut === 'string') {
+      const shortcut = patch.imageInsertShortcut.trim().slice(0, 64)
+      if (shortcut === '' || /^[A-Za-z]+(?:\+[A-Za-z0-9]+){1,4}$/.test(shortcut)) {
+        this.state.settings.imageInsertShortcut = shortcut || DEFAULT_SETTINGS.imageInsertShortcut
+      }
     }
     this.commit()
     return this.publicSettings()
@@ -550,13 +560,16 @@ export class AppState extends EventEmitter {
   private ensure(): void {
     if (this.loaded) return
 
+    if (!this.tempSweepScheduled) {
+      this.tempSweepScheduled = true
+      const dataDir = dirname(this.file)
+      setImmediate(() => {
+        try {
+          sweepTempFiles(dataDir)
+        } catch {
 
-
-
-    try {
-      sweepTempFiles(dirname(this.file))
-    } catch {
-
+        }
+      })
     }
     const raw = readStoreJson<Partial<AppStateShape> & { codeWorkspaces?: unknown; activeCodeWorkspaceId?: unknown }>(this.file, {})
     const persistedSettings = { ...(raw.settings || {}) } as Record<string, unknown>
@@ -649,6 +662,7 @@ export class AppState extends EventEmitter {
 
 
       console.error('failed to persist workspace state', err)
+      notifyPersistError('workspace-state', err)
     }
     this.emit('change', this.get())
   }

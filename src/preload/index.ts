@@ -35,6 +35,7 @@ import type {
   PlanItem,
   PlannerApi,
   RecentDir,
+  RendererStateApi,
   SettingsApi,
   SystemApi,
   SystemStats,
@@ -118,14 +119,15 @@ const browser: BrowserApi = {
 }
 
 const terminal: TerminalApi = {
-  list: (): Promise<Array<{ id: string; title: string; cwd: string }>> => ipcRenderer.invoke('terminal:list'),
+  list: (): Promise<Array<{ id: string; title: string; cwd: string; lastPrompt?: string }>> => ipcRenderer.invoke('terminal:list'),
   create: (
     id: string,
     cols?: number,
-    rows?: number
+    rows?: number,
+    title?: string
   ): Promise<
     { ok: boolean; error?: string; scrollback?: string; live?: boolean } | { error: string }
-  > => ipcRenderer.invoke('terminal:create', id, cols, rows),
+  > => ipcRenderer.invoke('terminal:create', id, cols, rows, title),
   write: (id: string, data: string): Promise<{ ok: true } | { error: string; code?: string }> =>
     ipcRenderer.invoke('terminal:write', id, data),
   resize: (id: string, cols: number, rows: number): void =>
@@ -136,10 +138,13 @@ const terminal: TerminalApi = {
   dispose: (id: string): Promise<unknown> => ipcRenderer.invoke('terminal:dispose', id),
   setTitle: (id: string, title: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('terminal:set-title', id, title),
+  setLastPrompt: (id: string, prompt: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('terminal:set-last-prompt', id, prompt),
   detach: (id: string): void => ipcRenderer.send('terminal:detach', id),
   setFocused: (focused: boolean, id: string): void => ipcRenderer.send('terminal:focus', focused, id),
   onData: (id: string, cb: (data: string) => void): (() => void) => onScoped('terminal:onData', id, cb),
   onExit: (id: string, cb: (exitCode: number) => void): (() => void) => onScoped('terminal:onExit', id, cb),
+  onPrompt: (id: string, cb: (prompt: string) => void): (() => void) => onScoped('terminal:onPrompt', id, cb),
   onBackendError: (cb: (message: string) => void): (() => void) => onBroadcast('terminal:onBackendError', cb)
 }
 
@@ -163,7 +168,7 @@ const media: MediaApi = {
 
 const control: ControlApi = {
   onAddWidget: (
-    cb: (payload: { id: string; title: string; kind?: string; x?: number; y?: number; from?: string | null }) => void
+    cb: (payload: { id: string; title: string; kind?: string; x?: number; y?: number; from?: string | null; imagePath?: string; imageName?: string }) => void
   ): (() => void) => onBroadcast('control:add-widget', cb),
   onRemoveWidget: (cb: (id: string) => void): (() => void) => onBroadcast('control:remove-widget', cb),
   onRenameWidget: (cb: (payload: { id: string; title: string }) => void): (() => void) =>
@@ -326,6 +331,13 @@ const system: SystemApi = {
     onBroadcast('system:persistError', cb)
 }
 
+const rendererState: RendererStateApi = {
+  load: () => ipcRenderer.invoke('renderer-state:load'),
+  replace: (values) => ipcRenderer.invoke('renderer-state:replace', values),
+  set: (key, value) => ipcRenderer.invoke('renderer-state:set', key, value),
+  remove: (key) => ipcRenderer.invoke('renderer-state:remove', key)
+}
+
 contextBridge.exposeInMainWorld('api', {
   terminal,
   control,
@@ -340,6 +352,7 @@ contextBridge.exposeInMainWorld('api', {
   git,
   fs,
   system,
+  rendererState,
   browser,
   window: windowControls
 })

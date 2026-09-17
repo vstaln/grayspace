@@ -27,7 +27,39 @@ import { fileURLToPath } from 'node:url'
 
 const TOKEN_HEADER = 'x-orcspace-token'
 
-const ORC_VERSION = '2.0.5'
+const ORC_VERSION = '2.0.10'
+
+let cachedCandidateDirs
+function candidateDirs() {
+  if (cachedCandidateDirs) return cachedCandidateDirs
+  const seen = new Set()
+  cachedCandidateDirs = [
+    path.join(process.cwd(), '.dev-user-data'),
+    process.env.ORCSPACE_DEV_USER_DATA,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'OrcSpace') : null,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'Orcspace') : null,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'orcspace') : null,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'com.orcspace.app') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'OrcSpace') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Orcspace') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'orcspace') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'com.orcspace.app') : null,
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.dev-user-data'),
+    path.join(os.homedir(), '.config', 'OrcSpace'),
+    path.join(os.homedir(), '.config', 'Orcspace'),
+    path.join(os.homedir(), '.config', 'orcspace'),
+    path.join(os.homedir(), 'Library', 'Application Support', 'OrcSpace'),
+    path.join(os.homedir(), 'Library', 'Application Support', 'Orcspace')
+  ].flatMap((dir) => {
+    if (!dir) return []
+    const resolved = path.resolve(dir)
+    const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved
+    if (seen.has(key)) return []
+    seen.add(key)
+    return [resolved]
+  })
+  return cachedCandidateDirs
+}
 
 
 
@@ -52,26 +84,7 @@ function getAllCandidateTokens(stopAtFirst = false) {
     if (stopAtFirst) return tokens
   }
 
-  const candidateDirs = [
-    path.join(process.cwd(), '.dev-user-data'),
-    process.env.ORCSPACE_DEV_USER_DATA,
-    process.env.APPDATA ? path.join(process.env.APPDATA, 'OrcSpace') : null,
-    process.env.APPDATA ? path.join(process.env.APPDATA, 'Orcspace') : null,
-    process.env.APPDATA ? path.join(process.env.APPDATA, 'orcspace') : null,
-    process.env.APPDATA ? path.join(process.env.APPDATA, 'com.orcspace.app') : null,
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'OrcSpace') : null,
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Orcspace') : null,
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'orcspace') : null,
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'com.orcspace.app') : null,
-    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.dev-user-data'),
-    path.join(os.homedir(), '.config', 'OrcSpace'),
-    path.join(os.homedir(), '.config', 'Orcspace'),
-    path.join(os.homedir(), '.config', 'orcspace'),
-    path.join(os.homedir(), 'Library', 'Application Support', 'OrcSpace'),
-    path.join(os.homedir(), 'Library', 'Application Support', 'Orcspace')
-  ].filter(Boolean)
-
-  for (const dir of candidateDirs) {
+  for (const dir of candidateDirs()) {
     try {
       const tokenPath = path.join(dir, 'control-token')
       if (fs.existsSync(tokenPath)) {
@@ -125,25 +138,6 @@ function getDiscoveredTargets() {
     }
   }
 
-  const candidateDirs = [
-    path.join(process.cwd(), '.dev-user-data'),
-    process.env.ORCSPACE_DEV_USER_DATA,
-    process.env.APPDATA ? path.join(process.env.APPDATA, 'OrcSpace') : null,
-    process.env.APPDATA ? path.join(process.env.APPDATA, 'Orcspace') : null,
-    process.env.APPDATA ? path.join(process.env.APPDATA, 'orcspace') : null,
-    process.env.APPDATA ? path.join(process.env.APPDATA, 'com.orcspace.app') : null,
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'OrcSpace') : null,
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Orcspace') : null,
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'orcspace') : null,
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'com.orcspace.app') : null,
-    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.dev-user-data'),
-    path.join(os.homedir(), '.config', 'OrcSpace'),
-    path.join(os.homedir(), '.config', 'Orcspace'),
-    path.join(os.homedir(), '.config', 'orcspace'),
-    path.join(os.homedir(), 'Library', 'Application Support', 'OrcSpace'),
-    path.join(os.homedir(), 'Library', 'Application Support', 'Orcspace')
-  ].filter(Boolean)
-
   const targets = []
   const seen = new Set()
   const addTarget = (target) => {
@@ -153,7 +147,7 @@ function getDiscoveredTargets() {
     targets.push(target)
   }
 
-  for (const dir of candidateDirs) {
+  for (const dir of candidateDirs()) {
     try {
       const runtimePath = path.join(dir, 'runtime.json')
       if (fs.existsSync(runtimePath)) {
@@ -318,6 +312,7 @@ async function requestTarget({ target, method, path, headers, body, signal, time
           path: `${url.pathname}${url.search}`
         }),
         method,
+        agent: url?.protocol === 'https:' ? httpsAgent : httpAgent,
         headers: { ...headers, ...(serializedBody === undefined ? {} : { 'Content-Length': Buffer.byteLength(serializedBody) }) },
         timeout: timeoutMs
       }, (res) => {
@@ -362,6 +357,12 @@ async function requestTarget({ target, method, path, headers, body, signal, time
     })
   }
 }
+
+// Reuse the control connection for commands that make several API calls
+// (context, doctor, status, etc.). The agents are destroyed when the CLI
+// finishes so a one-shot invocation still exits immediately.
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 8, maxFreeSockets: 2 })
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 8, maxFreeSockets: 2 })
 
 async function call(method, path, body, options = {}) {
   const initialTokens = workingToken ? [workingToken] : getCandidateTokens()
@@ -490,7 +491,10 @@ const planLine = (value) => {
   if (value?.id) return `  ${value.id}  [${value.done ? 'done' : 'open'}]  ${value.title ?? ''}`
   return value?.ok === true ? 'ok' : undefined
 }
-const widgetLine = (widget) => `  ${widget.id}  [${widget.kind}]  ${widget.title ?? widget.cwd ?? ''}${widget.alive === false ? '  (exited)' : ''}`
+const widgetLine = (widget) => {
+  const line = `  ${widget.id}  [${widget.kind}]  ${widget.title ?? widget.cwd ?? ''}${widget.alive === false ? '  (exited)' : ''}`
+  return widget.kind === 'image' && widget.imagePath ? `${line}\n    source: ${widget.imagePath}` : line
+}
 const canvasLine = (value) => {
   const widgets = Array.isArray(value) ? value : value?.widgets
   if (Array.isArray(widgets)) return widgets.length ? widgets.map(widgetLine).join('\n') : '  (no widgets)'
@@ -601,7 +605,7 @@ WORKER (dispatched agent reporting)
 
 THE APP & CANVAS
   orc plan list | create | update | toggle [<id>]         planner day tasks (create accepts --attachments)
-  orc canvas list | place | move | rename | close         canvas widgets & viewport
+  orc canvas list | place | image | move | rename | close canvas widgets & viewport
   orc terminal open | send <id> <text> | read | close     direct terminal management
   orc git status | commit --message "..."                 git audit integration
   orc journal [--since N]                                 event audit log
@@ -654,7 +658,7 @@ const COMMAND_HELP = {
   reset: 'orc reset [--tasks] [--messages] [--all] --yes — destructive reset of orchestration state.',
   doctor: 'orc doctor — diagnostics & connectivity check.',
   terminal: 'orc terminal open | send <id> <text> | read | close — direct terminal management.',
-  canvas: 'orc canvas list | place | move | rename | focus | close — canvas widgets & viewport.',
+  canvas: 'orc canvas list | place | image | move | rename | focus | close — canvas widgets & viewport.',
   plan: 'orc plan list | create | update | done | toggle | delete [<id>] — planner day tasks.',
   git: 'orc git status | commit --message "..." — git audit integration.',
   journal: 'orc journal [--since N] — event audit log.',
@@ -1267,7 +1271,12 @@ async function main(argv) {
         ? String(pick(flags, 'text', 'message', 'body') ?? positional[2] ?? '')
         : require1(pick(flags, 'text', 'message', 'body') ?? positional[2], 'tell needs "text to type"')
       return emit(
-        await post('/orchestration/workers/tell', { to, text, ...(images ? { images } : {}) }),
+        await post('/orchestration/workers/tell', {
+          to,
+          text,
+          confirmDelivery: true,
+          ...(images ? { images } : {})
+        }),
         (result) =>
           (result.mode
             ? `${result.images?.length ?? 1} image(s) attached to ${to} via ${result.mode}${result.agent ? ` (${result.agent})` : ''}`
@@ -1394,8 +1403,26 @@ async function canvas(action, flags, positional = []) {
     case undefined:
       return get('/widgets')
     case 'place':
-      return post('/widgets', {
-        kind: require1(pick(flags, 'kind') ?? positional[2], 'canvas place needs --kind'),
+      {
+        const kind = require1(pick(flags, 'kind') ?? positional[2], 'canvas place needs --kind')
+        if (kind === 'image' && (pick(flags, 'path', 'image', 'file') ?? positional[3])) {
+          return post('/canvas/image', {
+            path: pick(flags, 'path', 'image', 'file') ?? positional[3],
+            title: pick(flags, 'title'),
+            x: num(pick(flags, 'x')),
+            y: num(pick(flags, 'y'))
+          })
+        }
+        return post('/widgets', {
+        kind,
+        title: pick(flags, 'title'),
+        x: num(pick(flags, 'x')),
+        y: num(pick(flags, 'y'))
+        })
+      }
+    case 'image':
+      return post('/canvas/image', {
+        path: require1(pick(flags, 'path', 'image', 'file') ?? positional[2], 'canvas image needs <path>'),
         title: pick(flags, 'title'),
         x: num(pick(flags, 'x')),
         y: num(pick(flags, 'y'))
@@ -1417,7 +1444,7 @@ async function canvas(action, flags, positional = []) {
       requireConfirm(flags, 'canvas close', id)
       return call('DELETE', `/widgets/${enc(require1(id, 'canvas close needs <id>'))}`, { agentId: AGENT_ID })
     default:
-      throw new OrcError(`canvas: unknown action "${action}" (list|place|rename|move|focus|close)`, 'invalid')
+      throw new OrcError(`canvas: unknown action "${action}" (list|place|image|rename|move|focus|close)`, 'invalid')
   }
 }
 
@@ -1509,4 +1536,7 @@ main(process.argv.slice(2)).catch(async (err) => {
     http_404: 5
   }
   process.exitCode = codeMap[err.code] ?? 1
+}).finally(() => {
+  httpAgent.destroy()
+  httpsAgent.destroy()
 })

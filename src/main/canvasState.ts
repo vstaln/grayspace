@@ -21,7 +21,7 @@ export const CANVAS_SCHEMA_VERSION = 3
 
 export const CANVAS_SNAPSHOT_INTERVAL = 50
 
-export type WidgetKind = 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration' | 'chat'
+export type WidgetKind = 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'image' | 'links' | 'music-player' | 'orchestration' | 'chat'
 
 export interface CanvasWidget {
   id: string
@@ -33,6 +33,10 @@ export interface CanvasWidget {
   h: number
   z: number
   maximized?: boolean
+
+  /** Durable media-store reference for an Image widget. */
+  imagePath?: string
+  imageName?: string
 
   version: number
   updatedAt: number
@@ -127,13 +131,15 @@ const isNum = (value: unknown): value is number => typeof value === 'number' && 
 
 
 
-const WIDGET_KINDS = new Set<string>(['terminal', 'timer', 'planner', 'files', 'sys-monitor', 'browser', 'links', 'music-player', 'orchestration', 'chat'])
+const WIDGET_KINDS = new Set<string>(['terminal', 'timer', 'planner', 'files', 'sys-monitor', 'browser', 'image', 'links', 'music-player', 'orchestration', 'chat'])
 
 export function sanitizeWidget(value: unknown): CanvasWidget | null {
   const w = value as Record<string, unknown>
   if (!w || typeof w.id !== 'string' || typeof w.title !== 'string') return null
   if (!isNum(w.x) || !isNum(w.y) || !isNum(w.w) || !isNum(w.h) || !isNum(w.z)) return null
   if (w.kind !== undefined && !WIDGET_KINDS.has(String(w.kind))) return null
+  const imagePath = typeof w.imagePath === 'string' && w.imagePath.length <= 4096 ? w.imagePath : undefined
+  const imageName = typeof w.imageName === 'string' && w.imageName.length <= 256 ? w.imageName : undefined
   return {
     id: w.id,
     title: w.title,
@@ -144,6 +150,8 @@ export function sanitizeWidget(value: unknown): CanvasWidget | null {
     h: w.h,
     z: w.z,
     maximized: w.maximized === true,
+    ...(imagePath ? { imagePath } : {}),
+    ...(imageName ? { imageName } : {}),
     version: isNum(w.version) && w.version > 0 ? w.version : 1,
     updatedAt: isNum(w.updatedAt) ? w.updatedAt : Date.now()
   }
@@ -652,6 +660,29 @@ export class CanvasStore extends EventEmitter {
       connections: this.connections,
       version: this.canvasVersions.current(CANVAS_TARGET_ID, overlayId)
     }
+  }
+
+  persistSnapshotForWorkspace(workspaceDir: string | undefined, input: unknown): void {
+    if (!input || typeof input !== 'object') throw new Error('invalid canvas snapshot')
+    const raw = input as Record<string, unknown>
+    const data = migrate(raw)
+    const widgets = new Map<string, CanvasWidget>()
+    for (const entry of data.widgets) {
+      const widget = sanitizeWidget(entry)
+      if (widget) widgets.set(widget.id, widget)
+      if (widgets.size >= MAX_WIDGETS) break
+    }
+    const snapshot = {
+      snapshotSeq: Number(raw.snapshotSeq) || 0,
+      schemaVersion: CANVAS_SCHEMA_VERSION,
+      widgets: Array.from(widgets.values()),
+      camera: sanitizeCamera(data.camera),
+      strokes: sanitizeStrokes(data.strokes),
+      connections: liveConnections(sanitizeConnections(data.connections), widgets),
+      version: isNum(data.version) && data.version > 0 ? data.version : 1
+    }
+    const file = join(getUserDataDir(), `workspace-canvas-${this.workspaceSlot(workspaceDir)}.json`)
+    writeJsonAtomic(file, snapshot)
   }
 
   widget(id: string, overlayId?: string): CanvasWidget | undefined {

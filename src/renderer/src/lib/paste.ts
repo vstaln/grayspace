@@ -64,16 +64,3 @@ export function pasteHasImage(event: ClipboardEvent): boolean {
   }
   return false
 }
-
-
-export function insertAt(
-  value: string,
-  start: number,
-  end: number,
-  text: string
-): { value: string; caret: number } {
-  return {
-    value: value.slice(0, start) + text + value.slice(end),
-    caret: start + text.length
-  }
-}

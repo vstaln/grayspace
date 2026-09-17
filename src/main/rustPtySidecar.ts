@@ -4,7 +4,6 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EventEmitter } from 'node:events'
 import * as electron from 'electron'
-import { rustPtyWorkingDirectory } from './conpty.ts'
 
 export interface RustPtySpawnOptions {
   id: string
@@ -38,6 +37,7 @@ const MAX_ENGINE_STDIN_BUFFER_BYTES = 1 * 1024 * 1024
 // under a millisecond — this only bounds how long a caller waits if the
 // engine has wedged without exiting.
 const WRITE_ACK_TIMEOUT_MS = 4_000
+const SPAWN_ACK_TIMEOUT_MS = 8_000
 
 interface PendingWrite {
   terminalId: string
@@ -61,6 +61,10 @@ export class RustPtySidecar extends EventEmitter {
   private sessionCounter = 0
   private readonly sessions = new Map<string, string>()
   private readonly sessionOwners = new Map<string, string>()
+  // spawn() only confirms that the command reached the engine. Keep the
+  // request pending until the engine reports whether PTY creation succeeded.
+  private readonly pendingSpawns = new Set<string>()
+  private readonly pendingSpawnTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly pendingWrites = new Map<string, PendingWrite>()
   // Short cooldown after a lost ACK drains already queued input failures
   // quickly. Fresh input can retry afterwards; Ctrl+C is always allowed.
@@ -69,7 +73,11 @@ export class RustPtySidecar extends EventEmitter {
   private constructor(binary: string) {
     super()
     this.child = spawn(binary, ['--engine'], {
-      cwd: rustPtyWorkingDirectory(),
+      // portable-pty loads a local `conpty.dll` before the system copy. The
+      // bundled OpenConsole host can pause for ~3s during shell startup on
+      // Windows, so keep the sidecar outside that directory and let it use
+      // the native system ConPTY instead.
+      cwd: dirname(binary),
       env: { ...process.env, ORCSPACE_RUST_ENGINE: '1' },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true
@@ -91,6 +99,8 @@ export class RustPtySidecar extends EventEmitter {
     })
     this.child.on('exit', (code) => {
       clearTimeout(this.closeTimer)
+      this.clearAllPendingSpawns()
+      this.forgetAllSessions()
       this.failAllPendingWrites('rust engine exited before acknowledging the write')
       if (!this.closing && !this.backendFailureSignalled) {
         this.backendFailureSignalled = true
@@ -137,6 +147,17 @@ export class RustPtySidecar extends EventEmitter {
       this.failTerminalWrites(options.id, 'terminal session replaced')
       this.sessions.set(options.id, wireId)
       this.sessionOwners.set(wireId, options.id)
+      this.clearPendingSpawn(options.id)
+      this.pendingSpawns.add(options.id)
+      const timer = setTimeout(() => {
+        if (!this.pendingSpawns.delete(options.id)) return
+        this.pendingSpawnTimers.delete(options.id)
+        this.send({ type: 'dispose', id: wireId })
+        this.forgetSession(options.id, wireId)
+        this.emit('spawn-error', options.id, new Error('rust engine did not confirm terminal spawn in time'))
+      }, SPAWN_ACK_TIMEOUT_MS)
+      timer.unref?.()
+      this.pendingSpawnTimers.set(options.id, timer)
     }
     return result
   }
@@ -211,6 +232,38 @@ export class RustPtySidecar extends EventEmitter {
     }
   }
 
+  private clearPendingSpawn(id: string): boolean {
+    const pending = this.pendingSpawns.delete(id)
+    const timer = this.pendingSpawnTimers.get(id)
+    if (timer) {
+      clearTimeout(timer)
+      this.pendingSpawnTimers.delete(id)
+    }
+    return pending
+  }
+
+  private clearAllPendingSpawns(): void {
+    for (const timer of this.pendingSpawnTimers.values()) clearTimeout(timer)
+    this.pendingSpawnTimers.clear()
+    this.pendingSpawns.clear()
+  }
+
+  private forgetSession(ownerId: string, wireId?: string): void {
+    const currentWireId = this.sessions.get(ownerId)
+    if (wireId && currentWireId !== wireId) return
+    if (currentWireId) {
+      this.sessions.delete(ownerId)
+      this.sessionOwners.delete(currentWireId)
+    } else if (wireId) {
+      this.sessionOwners.delete(wireId)
+    }
+  }
+
+  private forgetAllSessions(): void {
+    this.sessions.clear()
+    this.sessionOwners.clear()
+  }
+
   private failTerminalWrites(id: string, message: string): void {
     this.unacknowledged.delete(id)
     for (const [requestId, pending] of this.pendingWrites) {
@@ -231,6 +284,7 @@ export class RustPtySidecar extends EventEmitter {
     if (result.ok) {
       this.sessions.delete(id)
       this.sessionOwners.delete(wireId)
+      this.clearPendingSpawn(id)
       this.failTerminalWrites(id, 'terminal disposed')
     }
     return result
@@ -252,6 +306,7 @@ export class RustPtySidecar extends EventEmitter {
     if (this.shutdownSent) return
     this.shutdownSent = true
     this.closing = true
+    this.clearAllPendingSpawns()
     this.failAllPendingWrites('rust engine is shutting down')
     try {
       this.send({ type: 'shutdown' })
@@ -272,6 +327,8 @@ export class RustPtySidecar extends EventEmitter {
   }
 
   private signalBackendFailure(error: Error): void {
+    this.clearAllPendingSpawns()
+    this.forgetAllSessions()
     this.failAllPendingWrites(error.message || 'rust engine failed')
     if (this.closing || this.backendFailureSignalled) return
     this.backendFailureSignalled = true
@@ -342,10 +399,12 @@ export class RustPtySidecar extends EventEmitter {
       return
     }
     if (!event || typeof event !== 'object') return
-    if ('id' in event && typeof event.id === 'string' && event.id.startsWith('orcpty:')) {
-      const owner = this.sessionOwners.get(event.id)
-      if (!owner || this.sessions.get(owner) !== event.id) return
-      event.id = owner
+    const eventId = 'id' in event && typeof event.id === 'string' ? event.id : undefined
+    const wireId = eventId?.startsWith('orcpty:') ? eventId : undefined
+    if (wireId) {
+      const owner = this.sessionOwners.get(wireId)
+      if (!owner || this.sessions.get(owner) !== wireId) return
+      if ('id' in event) event.id = owner
     }
     if (event.type === 'data' && (typeof event.id !== 'string' || typeof event.data !== 'string')) return
     if (event.type === 'data') this.emit('data', event.id, event.data)
@@ -354,7 +413,9 @@ export class RustPtySidecar extends EventEmitter {
       // exit for terminal `undefined` — which matches no session and reached
       // listeners as a phantom teardown.
       if (typeof event.id !== 'string') return
+      this.clearPendingSpawn(event.id)
       this.failTerminalWrites(event.id, 'terminal exited')
+      this.forgetSession(event.id, wireId)
       this.emit('exit', event.id, typeof event.code === 'number' ? event.code : 0)
     } else if (event.type === 'response') {
       const requestId = event.requestId ?? event.request_id
@@ -362,6 +423,12 @@ export class RustPtySidecar extends EventEmitter {
       // already given up on, and including a rejection — proves the engine
       // is still talking about it, so it goes back in circulation.
       if (event.id) this.unacknowledged.delete(event.id)
+      if (!requestId && typeof event.id === 'string' && this.clearPendingSpawn(event.id)) {
+        if (!event.ok) {
+          this.emit('spawn-error', event.id, new Error(event.error || 'rust engine failed to spawn terminal'))
+        }
+        return
+      }
       if (requestId) {
         const pending = this.pendingWrites.get(requestId)
         if (pending) {

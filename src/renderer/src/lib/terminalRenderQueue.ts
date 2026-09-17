@@ -1,3 +1,8 @@
+export const TERMINAL_OUTPUT_RESYNC =
+  '\x18\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l' +
+  '\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l' +
+  '\x1b[?2026l\x1b[?25h\x1b[0m'
+
 // Bound both the application queue and the data handed to xterm's parser.
 export class TerminalRenderQueue {
   private pending = ''
@@ -51,7 +56,7 @@ export class TerminalRenderQueue {
     if (this.disposed || this.paused || this.busy || !this.pending) return
     let end = Math.min(this.chunkSize, this.pending.length)
     if (end < this.pending.length && isLowSurrogate(this.pending.charCodeAt(end))) end -= 1
-    const prefix = this.dropped ? '\x18\x1b[0m' : ''
+    const prefix = this.dropped ? TERMINAL_OUTPUT_RESYNC : ''
     const data = prefix + this.pending.slice(0, end)
     this.pending = this.pending.slice(end)
     this.dropped = false

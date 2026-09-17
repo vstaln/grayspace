@@ -166,14 +166,3 @@ export function sanitizeUrl(url: string, fallback: string | null = null, options
 export function safeHref(url: string, options?: SanitizeOptions): string | null {
   return sanitizeUrl(url, null, options)
 }
-
-
-
-
-
-
-export function linkTargetFor(url: string): '_blank' | undefined {
-  const proto = normalizeProtocol(url.trim())
-  if (proto === 'mailto:' || proto === 'tel:') return undefined
-  return '_blank'
-}

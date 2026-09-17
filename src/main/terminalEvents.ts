@@ -49,6 +49,7 @@ export function setupTerminalEvents(deps: {
       id,
       title: info?.title || id,
       cwd: info?.cwd || '',
+      lastPrompt: info?.lastPrompt,
       scrollback: recent
     })
   }
@@ -98,6 +99,7 @@ export function setupTerminalEvents(deps: {
           id,
           title: info?.title || id,
           cwd: info?.cwd || '',
+          lastPrompt: info?.lastPrompt,
           scrollback: full
         })
       }
@@ -105,6 +107,9 @@ export function setupTerminalEvents(deps: {
   })
   terminals.on('title', (id: string, title: string) => {
     send('control:rename-widget', { id, title })
+  })
+  terminals.on('prompt', (id: string, prompt: string) => {
+    send('terminal:onPrompt', id, prompt)
   })
   // The per-write correlation (RustPtySidecar.write) already surfaces a
   // rejected keystroke inline in its own terminal. This is the remaining
@@ -114,11 +119,11 @@ export function setupTerminalEvents(deps: {
   terminals.on('backend-error', (error: unknown) => {
     send('terminal:onBackendError', error instanceof Error ? error.message : String(error))
   })
-  terminals.on('release', (info: { id: string; title: string; cwd: string; scrollback: string }) => {
+  terminals.on('release', (info: { id: string; title: string; cwd: string; scrollback: string; lastPrompt?: string }) => {
     cancelSnapshotTimer(info.id)
     terminalBatcher.flush(info.id)
     if (isShuttingDown()) return
-    snapshots.saveAsync({ id: info.id, title: info.title, cwd: info.cwd, scrollback: info.scrollback })
+    snapshots.saveAsync({ id: info.id, title: info.title, cwd: info.cwd, lastPrompt: info.lastPrompt, scrollback: info.scrollback })
   })
   planner.on('change', (items) => send('planner:onChange', items))
   canvas.on('change', (snapshot) => send('canvas:onChange', snapshot))

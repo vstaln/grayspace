@@ -20,10 +20,15 @@ export function registerTerminalIpc(deps: IpcDeps): void {
   const send = makeSend(deps.core)
 
   ipcMain.handle('terminal:list', () =>
-    deps.terminals.list().map((terminal) => ({ id: terminal.id, title: terminal.title, cwd: terminal.cwd }))
+    deps.terminals.list().map((terminal) => ({
+      id: terminal.id,
+      title: terminal.title,
+      cwd: terminal.cwd,
+      lastPrompt: terminal.lastPrompt
+    }))
   )
 
-  ipcMain.handle('terminal:create', async (_e, id: string, cols?: number, rows?: number) => {
+  ipcMain.handle('terminal:create', async (_e, id: string, cols?: number, rows?: number, title?: string) => {
 
 
 
@@ -35,7 +40,8 @@ export function registerTerminalIpc(deps: IpcDeps): void {
     // A delayed failure must not consume a replacement widget's mount.
     markTerminalMounted(id)
     try {
-      return unwrap(await send<{ ok: boolean; error?: string }>('terminal.spawn', `terminal:${id}`, { cols, rows }))
+      const payload = title === undefined ? { cols, rows } : { cols, rows, title }
+      return unwrap(await send<{ ok: boolean; error?: string }>('terminal.spawn', `terminal:${id}`, payload))
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
@@ -90,6 +96,13 @@ export function registerTerminalIpc(deps: IpcDeps): void {
     if (!clean) return { ok: false, error: 'invalid terminal id or title' }
     deps.terminals.setTitle(id, clean)
     deps.getWindow()?.webContents.send('control:rename-widget', { id, title: clean })
+    return { ok: true }
+  })
+  ipcMain.handle('terminal:set-last-prompt', (_e, id: string, prompt: string) => {
+    if (typeof id !== 'string' || !TERMINAL_ID.test(id) || typeof prompt !== 'string') {
+      return { ok: false, error: 'invalid terminal id or prompt' }
+    }
+    deps.terminals.rememberPrompt(id, prompt)
     return { ok: true }
   })
 

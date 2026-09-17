@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { patchWindowsPtyAgents } from '../scripts/patch-pty.mjs'
@@ -15,9 +15,10 @@ import { ensureConptyRuntime } from '../scripts/conpty-runtime.mjs'
 // a missing Rust toolchain costs speed, never function (src/main/storage.ts
 // and src/main/ansi.ts catch the load error).
 const CRATES = ['canvas-core', 'storage-core']
-const ELECTRON_VERSION = '43.3.0'
-
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
+const electronVersion = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).devDependencies?.electron
+const ELECTRON_VERSION = electronVersion?.match(/\d+\.\d+\.\d+/)?.[0] ?? '43.3.0'
+const NATIVE_PLATFORM_ARCH = `${process.platform}-${process.arch}`
 
 
 
@@ -123,8 +124,10 @@ const napi = existsSync(localBin) ? localBin : process.platform === 'win32' ? 'n
 const failed = []
 for (const crate of CRATES) {
   const crateDir = join(repoRoot, 'native', crate)
-  const hasNode = existsSync(crateDir) && readdirSync(crateDir).some((f) => f.endsWith('.node'))
-  if (hasNode && existsSync(join(crateDir, 'loader.cjs')) && !process.env.FORCE_NATIVE_REBUILD) {
+  const hasMatchingNode = existsSync(crateDir) && readdirSync(crateDir).some((f) =>
+    f.endsWith('.node') && f.includes(NATIVE_PLATFORM_ARCH)
+  )
+  if (hasMatchingNode && existsSync(join(crateDir, 'loader.cjs')) && !process.env.FORCE_NATIVE_REBUILD) {
     continue
   }
   const result = spawnSync(napi, ['build', '--platform', '--release'], {

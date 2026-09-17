@@ -7,6 +7,11 @@ import { launchOrcSpace, waitForCanvas, closeOrcSpace, type OrcSpaceFixture } fr
 
 let ctx: OrcSpaceFixture
 
+async function openToolbarSettings(page: OrcSpaceFixture['page']): Promise<void> {
+  await page.getByTestId('toolbar-more').click()
+  await page.getByTestId('toolbar-overflow-menu').getByRole('menuitem', { name: 'Settings', exact: true }).click()
+}
+
 test.beforeAll(async () => {
   ctx = await launchOrcSpace()
   await waitForCanvas(ctx.page)
@@ -19,7 +24,7 @@ test.afterAll(async () => {
 test('settings modal opens and switches tabs', async () => {
   const { page } = ctx
 
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await openToolbarSettings(page)
   const modal = page.getByTestId('settings-modal')
   await expect(modal).toBeVisible()
 
@@ -46,7 +51,7 @@ test('account opens one settings dialog and Escape closes it', async () => {
 
 test('favorite names validate, persist, name new terminals and can be cleared', async () => {
   const { page } = ctx
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await openToolbarSettings(page)
   const modal = page.getByTestId('settings-modal')
   const names = modal.getByRole('textbox', { name: 'Favorite terminal names', exact: true })
   const save = modal.getByRole('button', { name: 'Save names', exact: true })
@@ -58,18 +63,18 @@ test('favorite names validate, persist, name new terminals and can be cleared', 
   await expect(modal.getByText('Favorite terminal names saved.', { exact: true })).toBeVisible()
   await page.reload()
   await waitForCanvas(page)
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await openToolbarSettings(page)
   await expect(names).toHaveValue('Arthur\nHENRY')
   await modal.getByRole('button', { name: 'Close settings', exact: true }).click()
   await page.getByRole('button', { name: 'Add terminal', exact: true }).click()
   await expect(page.getByTestId('widget-title')).toHaveText('Arthur')
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await openToolbarSettings(page)
   await names.fill('')
   await save.click()
   await expect(modal.getByText('Favorite terminal names saved.', { exact: true })).toBeVisible()
   await page.reload()
   await waitForCanvas(page)
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await openToolbarSettings(page)
   await expect(names).toHaveValue('')
   await modal.getByRole('button', { name: 'Close settings', exact: true }).click()
 })

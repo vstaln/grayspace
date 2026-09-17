@@ -48,8 +48,8 @@ export function registerCanvasIpc(deps: IpcDeps): void {
       const current = deps.getWorkspaceDir() ?? null
       const intended = stamped === undefined ? current : stamped ?? null
       if (intended !== current) {
-        console.warn(`canvas:save discarded — workspace changed ${String(intended)} → ${String(current)}`)
-        return { ok: true, discarded: true }
+        deps.canvas.persistSnapshotForWorkspace(intended ?? undefined, snapshot)
+        return { ok: true, historical: true }
       }
       if (snapshot && typeof snapshot === 'object' && 'widgets' in snapshot && !Array.isArray((snapshot as { widgets?: unknown }).widgets)) {
         return { error: 'invalid canvas snapshot' }

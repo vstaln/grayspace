@@ -17,12 +17,20 @@ import { NEW } from './commands/index.ts'
 import { applyLoopbackCors, isLoopbackRequest, secretsEqual } from './netGuard.ts'
 import { APP_VERSION, buildPresence, buildSnapshot } from './linkSnapshot.ts'
 import type { AppState } from './appState.ts'
-import { ActorRateLimiter, fileResource, parseResource, type ActorType, type CommandErrorCode, type CommandResult, type Core } from './core/index.ts'
+import { ActorRateLimiter, type ActorType, type CommandErrorCode, type CommandResult, type Core } from './core/index.ts'
 import { resolveImage } from './imageAttachments.ts'
 import { hasImageExtension, hasAudioExtension, hasVideoExtension, hasDocExtension, importFile, isLocalPath } from './media.ts'
-
-const MAX_BODY_BYTES = 1_000_000
-const BODY_TIMEOUT_MS = 30_000
+import {
+  clampInt,
+  localDayKey,
+  normalizeLockResource,
+  readJson,
+  safeDecode,
+  sendJson,
+  shiftLocalDay,
+  uniqueProjects
+} from './control/protocol.ts'
+import { waitForInbox, waitForReply } from './control/waiters.ts'
 
 
 
@@ -71,7 +79,6 @@ function rateLimitedPresence(): boolean {
   presenceTimes.push(now)
   return false
 }
-
 /** The bucket a request is charged to. */
 export function rateLimitKey(agentIdRaw: unknown): string {
   const agentId = String(agentIdRaw ?? '').trim()
@@ -80,7 +87,6 @@ export function rateLimitKey(agentIdRaw: unknown): string {
   // unnamed callers, and lumping them together is safer than exempting them.
   return agentId ? `agent:${agentId}` : 'anonymous'
 }
-
 /**
  * Whether this caller has spent its budget.
  *
@@ -455,7 +461,14 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
     const others = canvas
       .listWidgets()
       .filter((w) => w.kind !== 'terminal')
-      .map((w) => ({ id: w.id, title: w.title, kind: w.kind, version: w.version }))
+      .map((w) => ({
+        id: w.id,
+        title: w.title,
+        kind: w.kind,
+        version: w.version,
+        ...(w.imagePath ? { imagePath: w.imagePath } : {}),
+        ...(w.imageName ? { imageName: w.imageName } : {})
+      }))
     const sinceRaw = Number(url.searchParams.get('since') || Math.max(0, core.journal.lastSeq - 40))
     const since = Number.isFinite(sinceRaw) && sinceRaw >= 0 ? sinceRaw : Math.max(0, core.journal.lastSeq - 40)
     return sendJson(
@@ -717,7 +730,7 @@ async function routeOrchestration(ctx: DomainContext): Promise<boolean> {
               images,
               text: String(body.text ?? ''),
               pressEnter: body.pressEnter !== false,
-              confirmDelivery: body.confirmDelivery === true,
+              confirmDelivery: body.confirmDelivery !== false,
               deliveryTimeoutMs: typeof body.deliveryTimeoutMs === 'number' ? body.deliveryTimeoutMs : undefined
             })
           )
@@ -931,7 +944,14 @@ async function routeCanvas(ctx: DomainContext): Promise<boolean> {
     const others = canvas
       .listWidgets()
       .filter((w) => w.kind !== 'terminal')
-      .map((w) => ({ id: w.id, title: w.title, kind: w.kind, version: w.version }))
+      .map((w) => ({
+        id: w.id,
+        title: w.title,
+        kind: w.kind,
+        version: w.version,
+        ...(w.imagePath ? { imagePath: w.imagePath } : {}),
+        ...(w.imageName ? { imageName: w.imageName } : {})
+      }))
     const shells = terminals.list().map((t) => ({ ...t, kind: 'terminal' as const }))
     return sendJson(res, 200, { widgets: [...shells, ...others] })
   }
@@ -990,12 +1010,16 @@ async function routeCanvas(ctx: DomainContext): Promise<boolean> {
     )
   }
 
-  if (method === 'POST' && parts[0] === 'canvas' && parts[1] === 'media') {
+  if (method === 'POST' && parts[0] === 'canvas' && (parts[1] === 'media' || parts[1] === 'image')) {
     const body = await readJson(req)
     const source = String(body.path ?? body.image ?? body.file ?? '').trim()
     if (!source) return sendJson(res, 400, { error: 'canvas media needs a file path', code: 'invalid' })
     if (!isLocalPath(source)) {
       return sendJson(res, 400, { error: `path must be absolute and local: ${source}`, code: 'invalid' })
+    }
+    const imageWidget = parts[1] === 'image'
+    if (imageWidget && !hasImageExtension(source)) {
+      return sendJson(res, 400, { error: `${source} is not an image`, code: 'invalid' })
     }
     let file: { name: string; path: string }
     try {
@@ -1004,22 +1028,32 @@ async function routeCanvas(ctx: DomainContext): Promise<boolean> {
       return sendJson(res, 400, { error: err instanceof Error ? err.message : String(err), code: 'invalid' })
     }
     const created = await submit<{ id: string; title: string }>(body, 'widget.create', NEW.widget, {
-      kind: 'browser',
+      kind: imageWidget ? 'image' : 'browser',
       title: typeof body.title === 'string' && body.title.trim() ? body.title.trim() : basename(source),
       x: typeof body.x === 'number' ? body.x : undefined,
-      y: typeof body.y === 'number' ? body.y : undefined
+      y: typeof body.y === 'number' ? body.y : undefined,
+      ...(imageWidget ? { imagePath: file.path, imageName: file.name } : {})
     })
     if (!created.ok) return reply(created)
-    deps.broadcast?.('control:open-media', {
-      widgetId: created.data.id,
-      path: file.path,
-      name: basename(source),
-      mediaUrl: `orc://media/${file.name}`,
-      kind: mediaKindOf(source)
-    })
+    if (!imageWidget) {
+      deps.broadcast?.('control:open-media', {
+        widgetId: created.data.id,
+        path: file.path,
+        name: basename(source),
+        mediaUrl: `orc://media/${file.name}`,
+        kind: mediaKindOf(source)
+      })
+    }
     return sendJson(res, 201, {
       ok: true,
-      data: { id: created.data.id, title: created.data.title, path: file.path, kind: mediaKindOf(source) }
+      data: {
+        id: created.data.id,
+        title: created.data.title,
+        path: file.path,
+        name: file.name,
+        kind: mediaKindOf(source),
+        widgetKind: imageWidget ? 'image' : 'browser'
+      }
     })
   }
 
@@ -1112,224 +1146,8 @@ function runTarget(runId: unknown): string {
   const id = String(runId ?? '').trim()
   if (!id) return NEW.run
 
-
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) {
     throw Object.assign(new Error('invalid runId'), { statusCode: 400 })
   }
   return `run:${id}`
-}
-
-function clampInt(raw: string | null, fallback: number, min: number, max: number): number {
-  const parsed = Number(raw)
-  if (!Number.isFinite(parsed)) return fallback
-  return Math.min(max, Math.max(min, Math.trunc(parsed)))
-}
-
-
-function safeDecode(part: string): string | null {
-  try {
-    return decodeURIComponent(part)
-  } catch {
-    return null
-  }
-}
-
-
-let activeWaiters = 0
-const MAX_WAITERS = 50
-
-function overloadedWaiters(): boolean {
-  return activeWaiters >= MAX_WAITERS
-}
-
-function waitForInbox(
-  orchestration: OrchestrationStore,
-  agentId: string,
-  filter: { runId?: string; types?: MessageType[]; includeAcked?: boolean; limit?: number },
-  timeoutMs: number,
-  req: http.IncomingMessage
-): Promise<{ messages: unknown[]; overloaded: boolean }> {
-
-
-  if (overloadedWaiters()) return Promise.resolve({ messages: orchestration.inbox(agentId, filter), overloaded: true })
-  activeWaiters += 1
-  return new Promise((resolve) => {
-    let done = false
-    const finish = (value: unknown[]): void => {
-      if (done) return
-      done = true
-      activeWaiters = Math.max(0, activeWaiters - 1)
-      clearTimeout(timer)
-      orchestration.off('message', onMessage)
-      req.off('close', onClose)
-      resolve({ messages: value, overloaded: false })
-    }
-    const onMessage = (message?: { runId?: string; type?: MessageType }): void => {
-      if (message) {
-        if (filter.runId && message.runId !== filter.runId) return
-        if (filter.types?.length && message.type && !filter.types.includes(message.type)) return
-      }
-      const found = orchestration.inbox(agentId, filter)
-      if (found.length > 0) finish(found)
-    }
-    const onClose = (): void => finish([])
-    const timer = setTimeout(() => finish([]), timeoutMs)
-    timer.unref?.()
-    orchestration.on('message', onMessage)
-    req.on('close', onClose)
-    onMessage()
-  })
-}
-
-function waitForReply(
-  orchestration: OrchestrationStore,
-  askId: string,
-  timeoutMs: number,
-  req: http.IncomingMessage
-): Promise<{ reply: unknown; overloaded: boolean }> {
-  if (overloadedWaiters()) return Promise.resolve({ reply: orchestration.replyTo(askId) ?? null, overloaded: true })
-  activeWaiters += 1
-  return new Promise((resolve) => {
-    let done = false
-    const finish = (value: unknown): void => {
-      if (done) return
-      done = true
-      activeWaiters = Math.max(0, activeWaiters - 1)
-      clearTimeout(timer)
-      orchestration.off('message', onMessage)
-      req.off('close', onClose)
-      resolve({ reply: value, overloaded: false })
-    }
-    const onMessage = (): void => {
-      const found = orchestration.replyTo(askId)
-      if (found) finish(found)
-    }
-    const onClose = (): void => finish(null)
-    const timer = setTimeout(() => finish(null), timeoutMs)
-    timer.unref?.()
-    orchestration.on('message', onMessage)
-    req.on('close', onClose)
-    onMessage()
-  })
-}
-
-function readJson(req: http.IncomingMessage): Promise<Json> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let bytes = 0
-    let settled = false
-    const fail = (statusCode: number, message: string): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      chunks.length = 0
-      try {
-        req.destroy()
-      } catch {}
-      const error = new Error(message) as Error & { statusCode: number }
-      error.statusCode = statusCode
-      reject(error)
-    }
-    const timer = setTimeout(() => fail(408, 'request body timed out'), BODY_TIMEOUT_MS)
-    timer.unref?.()
-    req.on('close', () => {
-      if (!settled && !req.complete) fail(499, 'client closed request')
-    })
-    req.on('data', (chunk: Buffer) => {
-      if (settled) return
-      bytes += chunk.length
-      if (bytes > MAX_BODY_BYTES) {
-        fail(413, 'request body too large')
-        return
-      }
-      chunks.push(chunk)
-    })
-    req.on('end', () => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (chunks.length === 0) return resolve({})
-      try {
-        const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'), (k: string, v: unknown) =>
-          k === '__proto__' || k === 'prototype' || k === 'constructor' ? undefined : v
-        )
-        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-          const error = new Error('request body must be a JSON object') as Error & { statusCode: number }
-          error.statusCode = 400
-          reject(error)
-          return
-        }
-        resolve(parsed as Json)
-      } catch {
-        const error = new Error('request body must be valid JSON') as Error & { statusCode: number }
-        error.statusCode = 400
-        reject(error)
-      }
-    })
-    req.on('error', (err) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      reject(err)
-    })
-  })
-}
-
-function normalizeLockResource(raw: unknown): string {
-  const text = String(raw ?? '').trim()
-  const parsed = parseResource(text)
-  if (parsed?.scheme === 'file') return fileResource(parsed.id)
-  if (/^[A-Za-z]:[\\/]/.test(text) || text.includes('\\') || text.startsWith('/')) return fileResource(text)
-  return text
-}
-
-/**
- * Writes a JSON response and reports that the request was handled.
- *
- * The `true` is what lets each route domain be a function that returns whether
- * it answered: every branch already ends in `return sendJson(...)`, so the
- * handled/not-handled decision needs no extra bookkeeping and cannot drift out
- * of step with the response.
- */
-function sendJson(res: http.ServerResponse, status: number, data: unknown): true {
-  if (res.headersSent || res.destroyed || res.writableEnded) return true
-  const body = JSON.stringify(data)
-  try {
-    res.writeHead(status, {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Content-Length': Buffer.byteLength(body),
-      'X-Content-Type-Options': 'nosniff',
-      'Cache-Control': 'no-store'
-    })
-    res.end(body)
-  } catch {
-
-  }
-  return true
-}
-
-function localDayKey(d = new Date()): string {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-
-function shiftLocalDay(key: string, delta: number): string {
-  const [y, m, d] = key.split('-').map(Number)
-  const date = new Date(y, m - 1, d)
-  date.setDate(date.getDate() + delta)
-  return localDayKey(date)
-}
-
-function uniqueProjects(items: { project?: string }[]): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const item of items) {
-    const p = item.project?.trim()
-    if (!p || seen.has(p)) continue
-    seen.add(p)
-    out.push(p)
-  }
-  return out
 }

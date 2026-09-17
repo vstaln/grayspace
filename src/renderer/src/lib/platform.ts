@@ -22,23 +22,15 @@ export const IS_MAC: boolean =
 
 
 
-export function hasPrimaryModifier(
-  event: Pick<KeyboardEvent, 'ctrlKey' | 'metaKey'> | Pick<MouseEvent, 'ctrlKey' | 'metaKey'>
-): boolean {
-  return IS_MAC ? event.metaKey : event.ctrlKey
-}
+export const IS_WINDOWS: boolean =
+  typeof navigator !== 'undefined' &&
 
 
-
-
-
-
-
-export function hasSecondaryModifier(
-  event: Pick<KeyboardEvent, 'ctrlKey' | 'metaKey'>
-): boolean {
-  return IS_MAC ? event.ctrlKey : event.metaKey
-}
+  (((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+    navigator.platform ??
+    '')
+    .toLowerCase()
+    .includes('win'))
 
 
 export const PRIMARY_KEY_LABEL = IS_MAC ? '⌘' : 'Ctrl'

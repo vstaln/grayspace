@@ -119,7 +119,7 @@ export function detectRunning(title: string, tail: string | null): string | unde
   if (!tail) return undefined
   const text = tail
     .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ' ')
-    // Same linear-matching rule as normalizeDeliveryText in terminals.ts: the
+    // Same linear-matching rule as normalizeDeliveryText in terminalDelivery.ts: the
     // body must not be able to swallow a following OSC introducer, or a tail
     // full of unterminated ESC] pairs (what `cat` on a binary leaves behind)
     // makes this quadratic. Bounded to 4KB here rather than 50KB, so it was

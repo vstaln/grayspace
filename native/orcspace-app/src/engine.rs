@@ -7,6 +7,7 @@ use axum::{
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use orcspace_app::queue::ActorRateLimiter;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
     fs,
@@ -48,6 +49,8 @@ const MAX_PENDING_EVENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PENDING_INPUT_BYTES: usize = 1024 * 1024;
 const MAX_HTTP_BODY_BYTES: usize = 2 * 1024 * 1024;
 const SUBMIT_GAP: Duration = Duration::from_millis(200);
+/// DSR cursor-position report for row 1, column 1 — a fresh PTY's cursor.
+const CONPTY_CURSOR_REPORT: &[u8] = b"\x1b[1;1R";
 /// How long a single write into a PTY may stay in flight before the terminal
 /// is treated as no longer reading its input.
 ///
@@ -353,10 +356,11 @@ impl TerminalManager {
             Ok(reader) => reader,
             Err(error) => abandon_child!(child, format!("clone pty reader: {error}")),
         };
-        let writer = match pair.master.take_writer() {
+        let mut writer = match pair.master.take_writer() {
             Ok(writer) => writer,
             Err(error) => abandon_child!(child, format!("take pty writer: {error}")),
         };
+        prime_conpty_handshake(&mut writer);
         let state = Arc::new(Mutex::new(TerminalState {
             alive: true,
             cwd: state_cwd,
@@ -506,6 +510,11 @@ impl TerminalManager {
         self.write_text(id, text, true)
     }
 
+    pub fn write_message(&self, id: &str, text: &str) -> Result<DeliveryReceipt, String> {
+        let bytes = encode_terminal_message_input(text)?;
+        self.write_encoded(id, bytes, true)
+    }
+
     pub fn write_text(
         &self,
         id: &str,
@@ -513,6 +522,15 @@ impl TerminalManager {
         press_enter: bool,
     ) -> Result<DeliveryReceipt, String> {
         let bytes = encode_terminal_input(text, false)?;
+        self.write_encoded(id, bytes, press_enter)
+    }
+
+    fn write_encoded(
+        &self,
+        id: &str,
+        bytes: Vec<u8>,
+        press_enter: bool,
+    ) -> Result<DeliveryReceipt, String> {
         let count = bytes.len() + usize::from(press_enter);
         let handle = self.handle(id)?;
         let (tx, rx) = mpsc::channel();
@@ -688,6 +706,30 @@ fn push_terminal_input(id: &str, handle: &TerminalHandle, input: TerminalInput) 
 /// carry the byte somewhere inside it.
 fn is_interrupt(data: &[u8]) -> bool {
     data.len() <= MAX_INTERRUPT_INPUT_BYTES && data.contains(&INTERRUPT_BYTE)
+}
+
+/// Answer ConPTY's startup cursor-position query before anyone asks.
+///
+/// ConPTY opens a session by emitting a DSR query (`ESC [ 6 n`) and then
+/// holding back *every* byte the shell produces until a terminal answers it.
+/// Our answer used to come from xterm.js: the query travelled engine ->
+/// Electron main -> renderer -> parser, and the reply travelled all the way
+/// back. That round trip waits on the widget being mounted, on the output
+/// batcher, and on any scrollback restore in flight — which is why a terminal
+/// window appeared instantly but sat blank for seconds before the prompt.
+///
+/// A fresh PTY's cursor is at 1;1, so the reply is known up front and is sent
+/// here, before the writer thread even starts. xterm.js still answers the same
+/// query when it parses it; ConPTY's input parser consumes cursor reports and
+/// discards the late duplicate, so the shell never sees it as typed input.
+///
+/// Windows only: on a Unix pty the master has no such handshake and these
+/// bytes would land in the shell's stdin as literal text.
+fn prime_conpty_handshake(writer: &mut Box<dyn Write + Send>) {
+    if !cfg!(windows) {
+        return;
+    }
+    let _ = writer.write_all(CONPTY_CURSOR_REPORT).and_then(|_| writer.flush());
 }
 
 /// The one thread that writes into a PTY.
@@ -1190,8 +1232,18 @@ impl Utf8Stream {
 /// UTF-8, rendering as a wall of replacement characters that reads as a
 /// frozen or broken terminal even though the process is running fine.
 ///
-/// cmd.exe intentionally receives no setup command so it opens directly on
-/// its first prompt row. PowerShell keeps its non-printing UTF-8 setup.
+/// Both shells therefore get a silent `chcp 65001`, matching what the node-pty
+/// fallback sends (windowsShellArgs in src/main/terminal/terminalEnvironment.ts).
+/// cmd.exe was once given a bare `/K` on the grounds that a setup command moves
+/// its first prompt row — it does not, because cmd clears the viewport as it
+/// starts either way, and the cost of leaving it out was measurable: `type` on
+/// a UTF-8 file printed `Привет` on this very machine,
+/// because the console decoded those bytes as CP866.
+///
+/// This only matters for programs that write bytes straight to stdout. Anything
+/// going through the console API (cmd's own `echo`, Node's console.log) is
+/// converted by Windows and looks correct at any code page, which is exactly
+/// why the gap survived so long.
 fn windows_utf8_shell_args(shell: &str) -> Vec<&'static str> {
     #[cfg(windows)]
     {
@@ -1199,7 +1251,7 @@ fn windows_utf8_shell_args(shell: &str) -> Vec<&'static str> {
         if lower.contains("powershell") || lower.contains("pwsh") {
             vec!["-NoLogo", "-NoExit", "-Command", "chcp 65001 > $null"]
         } else {
-            vec!["/K"]
+            vec!["/K", "chcp 65001 >nul"]
         }
     }
     #[cfg(not(windows))]
@@ -1236,6 +1288,23 @@ fn encode_terminal_input(text: &str, press_enter: bool) -> Result<Vec<u8>, Strin
     if press_enter {
         bytes.push(b'\r');
     }
+    Ok(bytes)
+}
+
+fn encode_terminal_message_input(text: &str) -> Result<Vec<u8>, String> {
+    let line = text.replace("\r\n", "\n").replace('\r', "\n");
+    if line.trim().is_empty() {
+        return Err("message must contain non-whitespace text".to_owned());
+    }
+    if line
+        .bytes()
+        .any(|byte| (byte < b' ' && byte != b'\t' && byte != b'\n') || byte == 0x7f)
+    {
+        return Err("message contains unsafe terminal control characters".to_owned());
+    }
+    let mut bytes = b"\x1b[200~".to_vec();
+    bytes.extend_from_slice(line.as_bytes());
+    bytes.extend_from_slice(b"\x1b[201~");
     Ok(bytes)
 }
 
@@ -1487,7 +1556,7 @@ async fn tell_worker(
     let manager = state.manager.clone();
     let to = request.to.clone();
     let text = request.text.clone();
-    let receipt = tokio::task::spawn_blocking(move || manager.write_line(&to, &text))
+    let receipt = tokio::task::spawn_blocking(move || manager.write_message(&to, &text))
         .await
         .map_err(|error| bad_request(format!("delivery task failed: {error}")))?
         .map_err(bad_request)?;
@@ -1710,11 +1779,21 @@ fn authenticate(headers: &HeaderMap, token: &str) -> Result<(), (StatusCode, Str
         .get(TOKEN_HEADER)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    if supplied == token {
+    if constant_time_token_eq(supplied, token) {
         Ok(())
     } else {
         Err((StatusCode::UNAUTHORIZED, "invalid control token".to_owned()))
     }
+}
+
+fn constant_time_token_eq(supplied: &str, expected: &str) -> bool {
+    let supplied_hash = Sha256::digest(supplied.as_bytes());
+    let expected_hash = Sha256::digest(expected.as_bytes());
+    supplied_hash
+        .iter()
+        .zip(expected_hash.iter())
+        .fold(0_u8, |diff, (left, right)| diff | (left ^ right))
+        == 0
 }
 
 fn bad_request(error: String) -> (StatusCode, String) {
@@ -1724,8 +1803,9 @@ fn bad_request(error: String) -> (StatusCode, String) {
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_terminal_input, take_events, windows_utf8_shell_args, EventQueue, TerminalEvent,
-        WriteRequest, MAX_PENDING_EVENT_BYTES, RESYNC_PREFIX,
+        constant_time_token_eq, encode_terminal_input, encode_terminal_message_input, take_events,
+        windows_utf8_shell_args, EventQueue, TerminalEvent, WriteRequest, MAX_PENDING_EVENT_BYTES,
+        RESYNC_PREFIX,
     };
     use serde_json::json;
     use std::sync::atomic::AtomicU64;
@@ -1738,12 +1818,36 @@ mod tests {
         assert_eq!(encode_terminal_input("a", false).unwrap(), b"a");
     }
 
+    #[test]
+    fn message_input_uses_bracketed_paste_markers() {
+        assert_eq!(
+            encode_terminal_message_input("hello\r\nworld").unwrap(),
+            b"\x1b[200~hello\nworld\x1b[201~"
+        );
+    }
+
+    #[test]
+    fn message_input_rejects_bracketed_paste_terminators() {
+        assert!(encode_terminal_message_input("safe\x1b[201~echo unsafe").is_err());
+    }
+
+    #[test]
+    fn control_tokens_are_compared_without_early_exit() {
+        assert!(constant_time_token_eq("secret", "secret"));
+        assert!(!constant_time_token_eq("secret", "secrex"));
+        assert!(!constant_time_token_eq("", "secret"));
+    }
+
     #[cfg(windows)]
     #[test]
-    fn cmd_starts_without_setup_args() {
-        // cmd.exe receives no startup command, keeping its prompt on row one.
+    fn cmd_starts_with_utf8_setup_args() {
+        // Both cmd and PowerShell configure UTF-8 code page on startup.
         let cmd = windows_utf8_shell_args(r"C:\Windows\System32\cmd.exe");
-        assert_eq!(cmd, vec!["/K"], "cmd.exe must open directly on its first prompt row");
+        assert_eq!(
+            cmd,
+            vec!["/K", "chcp 65001 >nul"],
+            "cmd.exe must configure UTF-8 code page"
+        );
 
         let ps = windows_utf8_shell_args(r"C:\...\WindowsPowerShell\v1.0\powershell.exe");
         assert!(

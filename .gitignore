@@ -64,6 +64,7 @@ playwright/.cache/
 # Rust build output
 native/target/
 native/pty-core/
+native/*/*.node
 
 # Audit screens & temporary review outputs
 .audit-screens*/

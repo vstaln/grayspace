@@ -16,6 +16,7 @@ import type {
   MediaApi,
   OrchestrationApi,
   PlannerApi,
+  RendererStateApi,
   SettingsApi,
   SystemApi,
   TerminalApi,
@@ -34,6 +35,7 @@ declare global {
       media: MediaApi
       orchestration: OrchestrationApi
       planner: PlannerApi
+      rendererState: RendererStateApi
       canvas: CanvasApi
       code: CodeApi
       git: GitApi

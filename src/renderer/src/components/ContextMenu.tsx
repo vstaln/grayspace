@@ -1,7 +1,8 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Clipboard, Cpu, FolderOpen, Globe, ListTodo, MessageCircle, Music2, Network, Terminal, Timer } from 'lucide-react'
-import { Point } from '../types'
+import { Clipboard, Cpu, FolderOpen, Globe, Image as ImageIcon, ListTodo, MessageCircle, Music2, Network, Terminal, Timer } from 'lucide-react'
+import { Point, WidgetKind } from '../types'
+import { WIDGET_CATALOG } from '../lib/widgetCatalog'
 
 interface Props {
   at: Point
@@ -11,6 +12,7 @@ interface Props {
   onPickTimer: () => void
   onPickPlanner: () => void
   onPickBrowser: () => void
+  onPickImage: () => void
   onPickLinks: () => void
   onPickMusicPlayer: () => void
   onPickOrchestration: () => void
@@ -30,6 +32,20 @@ interface Item {
   group?: 'widget' | 'panel'
 }
 
+const WIDGET_ICONS: Record<WidgetKind, React.ReactNode> = {
+  terminal: <Terminal size={15} className="text-accent" />,
+  files: <FolderOpen size={15} className="text-accent" />,
+  'sys-monitor': <Cpu size={15} className="text-accent" />,
+  timer: <Timer size={15} className="text-accent" />,
+  planner: <ListTodo size={15} className="text-accent" />,
+  orchestration: <Network size={15} className="text-accent" />,
+  browser: <Globe size={15} className="text-accent" />,
+  image: <ImageIcon size={15} className="text-accent" />,
+  links: <Clipboard size={15} className="text-accent" />,
+  'music-player': <Music2 size={15} className="text-accent" />,
+  chat: <MessageCircle size={15} className="text-accent" />
+}
+
 export default function ContextMenu({
   at,
   onPickTerminal,
@@ -38,6 +54,7 @@ export default function ContextMenu({
   onPickTimer,
   onPickPlanner,
   onPickBrowser,
+  onPickImage,
   onPickLinks,
   onPickMusicPlayer,
   onPickOrchestration,
@@ -56,78 +73,31 @@ export default function ContextMenu({
 
 
   const items: Item[] = useMemo(
-    () => [
-      {
-        id: 'terminal',
-        label: 'Terminal',
-        hint: 'Shell in current workspace',
-        icon: <Terminal size={15} className="text-accent" />,
-        onSelect: onPickTerminal
-      },
-      {
-        id: 'files',
-        label: 'Files',
-        hint: 'Browse workspace files and folders',
-        icon: <FolderOpen size={15} className="text-accent" />,
-        onSelect: onPickFiles
-      },
-      {
-        id: 'sys-monitor',
-        label: 'System Monitor',
-        hint: 'CPU, RAM & process statistics',
-        icon: <Cpu size={15} className="text-accent" />,
-        onSelect: onPickSysMonitor
-      },
-      {
-        id: 'timer',
-        label: 'Timer',
-        hint: 'Countdown or stopwatch for deep work',
-        icon: <Timer size={15} className="text-accent" />,
-        onSelect: onPickTimer
-      },
-      {
-        id: 'planner',
-        label: 'Planner',
-        hint: 'Daily agenda checklist and plan',
-        icon: <ListTodo size={15} className="text-accent" />,
-        onSelect: onPickPlanner
-      },
-      {
-        id: 'browser',
-        label: 'Browser',
-        hint: 'Embedded web page pinned to the canvas',
-        icon: <Globe size={15} className="text-accent" />,
-        onSelect: onPickBrowser
-      },
-      {
-        id: 'links',
-        label: 'Links',
-        hint: 'Save links and copy them in one click',
-        icon: <Clipboard size={15} className="text-accent" />,
-        onSelect: onPickLinks
-      },
-      {
-        id: 'music-player',
-        label: 'Music Player',
-        hint: 'Stream YouTube, Yandex, Spotify or MP3 links',
-        icon: <Music2 size={15} className="text-accent" />,
-        onSelect: onPickMusicPlayer
-      },
-      {
-        id: 'orchestration',
-        label: 'Orchestration',
-        hint: 'Watch the agent fleet: tasks, workers and their questions',
-        icon: <Network size={15} className="text-accent" />,
-        onSelect: onPickOrchestration
-      },
-      {
-        id: 'chat',
-        label: 'AI Chat',
-        hint: 'Chat with an authenticated model',
-        icon: <MessageCircle size={15} className="text-accent" />,
-        onSelect: onPickChat
+    () => {
+      const actions: Record<WidgetKind, () => void> = {
+        terminal: onPickTerminal,
+        files: onPickFiles,
+        'sys-monitor': onPickSysMonitor,
+        timer: onPickTimer,
+        planner: onPickPlanner,
+        orchestration: onPickOrchestration,
+        browser: onPickBrowser,
+        image: onPickImage,
+        links: onPickLinks,
+        'music-player': onPickMusicPlayer,
+        chat: onPickChat
       }
-    ].filter((item) => (favoriteWidgets ? favoriteWidgets.includes(item.id) : true)),
+      return WIDGET_CATALOG
+        .map((entry) => ({
+          id: entry.kind,
+          label: entry.label,
+          hint: entry.hint,
+          icon: WIDGET_ICONS[entry.kind],
+          onSelect: actions[entry.kind],
+          group: 'widget' as const
+        }))
+        .filter((item) => favoriteWidgets.includes(item.id))
+    },
     [
       onPickTerminal,
       onPickFiles,
@@ -135,6 +105,7 @@ export default function ContextMenu({
       onPickTimer,
       onPickPlanner,
       onPickBrowser,
+      onPickImage,
       onPickLinks,
       onPickMusicPlayer,
       onPickOrchestration,

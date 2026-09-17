@@ -20,6 +20,7 @@ import BrowserWidget from './BrowserWidget'
 import LinksWidget from './LinksWidget'
 import MusicPlayerWidget from './MusicPlayerWidget'
 import ChatWidget from './ChatWidget'
+import ImageWidget from './ImageWidget'
 import ErrorBoundary from './ErrorBoundary'
 import { NON_MAXIMIZABLE, RESIZE_HANDLES, ResizeDir, Widget, WidgetKind } from '../types'
 import { copyText } from '../lib/clipboard'
@@ -42,6 +43,7 @@ interface Props {
   onProcessExit: () => void
   onKeyDown: (e: React.KeyboardEvent) => void
   workspaceDir?: string | null
+  terminalsFlipped: boolean
 }
 
 const AGENTS = [
@@ -145,7 +147,8 @@ function WidgetFrame({
   onClose,
   onProcessExit,
   onKeyDown,
-  workspaceDir
+  workspaceDir,
+  terminalsFlipped
 }: Props): React.JSX.Element {
   const isTerminal = !widget.kind || widget.kind === 'terminal'
 
@@ -394,13 +397,32 @@ function WidgetFrame({
     }
   }, [agentMenuOpen])
 
+  const refocusTerminal = (shell: HTMLElement | null): void => {
+    if (!shell) return
+    // The shell itself is focusable (tabIndex), so the mousedown default that
+    // follows this pointerdown re-focuses the shell and drops the helper
+    // textarea xterm actually types into. Re-assert after paint so keystrokes
+    // land in the shell. Skipped when focus already sits in the textarea or
+    // left the widget entirely (e.g. a context menu took it).
+    requestAnimationFrame(() => {
+      if (!shell.isConnected) return
+      const active = document.activeElement
+      if (active instanceof HTMLElement && shell.contains(active) && !active.classList.contains('xterm-helper-textarea')) {
+        const termEl = shell.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
+        termEl?.focus()
+      }
+    })
+  }
+
   const handlePointerDown = (e: React.PointerEvent): void => {
     onFocus()
     if (isTerminal && !editing) {
       const target = e.target as HTMLElement | null
       if (!target?.closest('button, input, [role="menu"]')) {
-        const termEl = (e.currentTarget as HTMLElement).querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
+        const shell = e.currentTarget as HTMLElement
+        const termEl = shell.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
         termEl?.focus()
+        refocusTerminal(shell)
       }
     }
   }
@@ -410,8 +432,10 @@ function WidgetFrame({
     if (isTerminal && !editing) {
       const target = e.target as HTMLElement | null
       if (!target?.closest('button, input, [role="menu"]')) {
-        const termEl = (e.currentTarget.parentElement as HTMLElement)?.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
+        const shell = e.currentTarget.parentElement as HTMLElement | null
+        const termEl = shell?.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
         termEl?.focus()
+        refocusTerminal(shell)
       }
     }
   }
@@ -676,6 +700,7 @@ function WidgetFrame({
             agentId={launchedAgentId ?? (agent?.id === 'codex' ? 'codex' : undefined)}
             onProcessExit={onProcessExit ?? onClose}
             onBrowserFullscreenChange={handleBrowserFullscreen}
+            terminalsFlipped={terminalsFlipped}
           />
         </ErrorBoundary>
       </div>
@@ -710,7 +735,8 @@ function WidgetBody({
   attachmentMode,
   agentId,
   onProcessExit,
-  onBrowserFullscreenChange
+  onBrowserFullscreenChange,
+  terminalsFlipped
 }: {
   widget: Widget
   workspaceDir?: string | null
@@ -718,6 +744,7 @@ function WidgetBody({
   agentId?: string
   onProcessExit: () => void
   onBrowserFullscreenChange?: (active: boolean) => void
+  terminalsFlipped: boolean
 }): React.JSX.Element {
   switch (widget.kind) {
     case 'timer':
@@ -732,6 +759,8 @@ function WidgetBody({
       return <SysMonitorWidget />
     case 'browser':
       return <BrowserWidget widgetId={widget.id} onFullscreenChange={onBrowserFullscreenChange} />
+    case 'image':
+      return <ImageWidget path={widget.imagePath} name={widget.imageName} />
     case 'links':
       return <LinksWidget widgetId={widget.id} />
     case 'music-player':
@@ -739,7 +768,7 @@ function WidgetBody({
     case 'chat':
       return <ChatWidget widgetId={widget.id} workspaceDir={workspaceDir} />
     default:
-      return <TerminalWidget id={widget.id} surface="canvas" attachmentMode={attachmentMode} agentId={agentId} onProcessExit={onProcessExit} />
+      return <TerminalWidget id={widget.id} title={widget.title} surface="canvas" attachmentMode={attachmentMode} agentId={agentId} flipped={terminalsFlipped} onProcessExit={onProcessExit} />
   }
 }
 
@@ -758,6 +787,7 @@ function areWidgetFramePropsEqual(prev: Props, next: Props): boolean {
     prev.active === next.active &&
     prev.editing === next.editing &&
     prev.workspaceDir === next.workspaceDir &&
+    prev.terminalsFlipped === next.terminalsFlipped &&
     prev.onClose === next.onClose &&
     prev.onFocus === next.onFocus &&
     prev.onStartEditing === next.onStartEditing &&

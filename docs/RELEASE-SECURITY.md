@@ -22,9 +22,8 @@ For macOS, build arm64 and x64 separately on matching hosts/runtimes. Sign Windo
 releases and sign/notarize macOS releases using your release credentials; none
 are added by these changes. Unsigned local builds are for verification.
 
-`pack:archive` is disabled because it distributed the entire source tree.
-Previously generated source ZIPs and `.command` installers are not retroactively
-protected and must not be distributed. Use the binary installer paths instead.
+Source-tree archives and `.command` installers are not distribution artifacts and
+are no longer generated. Use the binary installer paths instead.
 
 Checks: `npm run typecheck:node`, `node --test scripts/release-security.test.cjs`,
 `npx electron-vite build`, then the startup E2E test and electron-builder packaging.

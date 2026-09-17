@@ -73,7 +73,9 @@ describe('TerminalStreamBatcher (Frame Batching & High-Throughput Protection)', 
     batcher.push('term-3', '😀'.repeat(100))
     batcher.flush('term-3')
     assert.equal(batches.length, 1)
-    const payload = batches[0].chunk.startsWith('\x1b[0m') ? batches[0].chunk.slice(4) : batches[0].chunk
+    const prefix = '\x18\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l' +
+      '\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?2026l\x1b[?25h\x1b[0m'
+    const payload = batches[0].chunk.startsWith(prefix) ? batches[0].chunk.slice(prefix.length) : batches[0].chunk
     assert.ok(Buffer.byteLength(payload, 'utf8') <= 100)
     assert.ok(!/[\ud800-\udbff]$/.test(payload))
     assert.ok(!/^[\udc00-\udfff]/.test(payload))
@@ -93,7 +95,9 @@ describe('TerminalStreamBatcher (Frame Batching & High-Throughput Protection)', 
     batcher.flush('term-9')
 
     assert.equal(batches.length, 1)
-    assert.ok(batches[0].chunk.startsWith('\x1b[0m'))
+    assert.ok(batches[0].chunk.startsWith('\x18\x1b[?9l\x1b[?1000l'))
+    assert.ok(batches[0].chunk.includes('\x1b[?1006l'))
+    assert.ok(batches[0].chunk.includes('\x1b[?2026l'))
     assert.ok(batches[0].chunk.includes('bbbbbbbbbb'))
     assert.ok(!batches[0].chunk.includes('a'))
 

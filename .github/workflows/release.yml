@@ -72,6 +72,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Verify release version metadata
+        run: npm run check:version
+
       - name: Prepare native engine for Windows integration tests
         if: runner.os == 'Windows'
         run: node scripts/ensure-native-engine.mjs
