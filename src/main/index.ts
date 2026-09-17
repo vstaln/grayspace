@@ -58,6 +58,7 @@ const {
   code,
   planner,
   orchestration,
+  rendererState,
 } = createAppStores()
 
 let controlServer: { close(): void } | null = null
@@ -109,6 +110,7 @@ setupLifecycle({
   code,
   core,
   orchestration,
+  rendererState,
   state,
   getControlServer: () => controlServer,
   setControlServer: (v) => { controlServer = v },
@@ -195,6 +197,7 @@ app.whenReady().then(() => {
     orchestration,
     canvas,
     code,
+    rendererState,
     state,
     getWindow: () => getMainWindow(),
     getWorkspaceDir: () => state.workspaceDir,

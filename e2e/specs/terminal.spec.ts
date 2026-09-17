@@ -21,6 +21,9 @@ let ctx: OrcSpaceFixture
 test.beforeAll(async () => {
   ctx = await launchOrcSpace()
   await waitForCanvas(ctx.page)
+  const directory = await ctx.page.evaluate((workspaceName) => window.api.workspace.create(workspaceName), `e2e-${Date.now()}`)
+  if (typeof directory !== 'string') throw new Error('test workspace was not created')
+  await expect.poll(() => ctx.page.evaluate(() => window.api.workspace.getDir())).toBe(directory)
 })
 
 test.afterAll(async () => {
@@ -85,6 +88,65 @@ test('a terminal spawns from the canvas menu, runs a command, and closes for rea
   await expect
     .poll(async () => (await listTerminals(ctx)).some((t) => t.id === id), { timeout: 10_000 })
     .toBe(false)
+})
+
+test('Flip terminals shows the latest submitted prompt and restores the live terminal', async () => {
+  const { page } = ctx
+  const knownBefore = (await listTerminals(ctx)).map((terminal) => terminal.id)
+  await openTerminalFromCanvas()
+  await waitForTerminalShell(ctx, page, knownBefore)
+
+  const frame = terminalFrame(page)
+  const prompt = `flip-prompt-${Date.now()}`
+  await frame.getByTestId('terminal-xterm').click()
+  await frame.locator('textarea').focus()
+  await page.keyboard.type(prompt)
+  await page.keyboard.press('Enter')
+
+  const toggle = page.getByTestId('titlebar-flip-terminals')
+  if (await toggle.getAttribute('aria-pressed') === 'true') await toggle.click()
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  await expect(frame.getByTestId('terminal-flip-card')).toContainText(prompt)
+  await expect(frame.getByTestId('terminal-xterm')).toBeHidden()
+
+  await toggle.click()
+  await expect(frame.getByTestId('terminal-flip-card')).toHaveCount(0)
+  await expect(frame.getByTestId('terminal-xterm')).toBeVisible()
+  await closeTerminal(page)
+})
+
+test('a new terminal gets its name before Undo handles the creation', async () => {
+  const { page } = ctx
+  const knownBefore = (await listTerminals(ctx)).map((t) => t.id)
+  await openTerminalFromCanvas()
+  await waitForTerminalShell(ctx, page, knownBefore)
+
+  const frame = terminalFrame(page)
+  const title = await frame.getByTestId('widget-title').textContent()
+  expect(title?.trim()).toBeTruthy()
+  expect(title?.trim()).not.toMatch(/^Terminal \d+$/i)
+
+  await page.getByTestId('titlebar-undo').click()
+  await expect(frame).toHaveCount(0)
+})
+
+test('a new terminal opens without a multi-second startup pause', async () => {
+  const { page } = ctx
+  const startedAt = Date.now()
+  const knownBefore = (await listTerminals(ctx)).map((t) => t.id)
+  await openTerminalFromCanvas()
+  const frame = terminalFrame(page)
+  await frame.waitFor({ state: 'visible' })
+  const widgetVisibleAt = Date.now()
+  const id = await waitForTerminalShell(ctx, page, knownBefore)
+  const shellReadyAt = Date.now()
+  const shellAfterWidgetMs = shellReadyAt - widgetVisibleAt
+  console.log(JSON.stringify({ widgetVisibleMs: widgetVisibleAt - startedAt, shellReadyMs: shellReadyAt - startedAt, shellAfterWidgetMs, id }))
+  expect(shellReadyAt - startedAt).toBeLessThan(1_500)
+  await frame.getByTestId('widget-close').click()
+  await page.getByTestId('confirm-accept').click()
+  await expect(frame).toHaveCount(0)
 })
 
 test('the agent-launch button types the CLI command into the shell', async () => {
@@ -177,7 +239,7 @@ test('three Code terminals can be resized in both directions', async () => {
   while (await page.getByRole('button', { name: 'Close session' }).count()) {
     await page.getByRole('button', { name: 'Close session' }).first().click()
   }
-  await page.getByRole('button', { name: 'Other CLI', exact: true }).click()
+  await page.getByRole('button', { name: 'Other CLI or browser', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Launch Code Session' })
   await dialog.getByRole('button', { name: 'Other CLI', exact: true }).click()
   await dialog.getByRole('textbox').fill('cmd /d')
@@ -224,7 +286,7 @@ test('Code paste is delivered only to the focused terminal', async () => {
   const { page } = ctx
 
   await page.getByRole('tab', { name: 'Code' }).click()
-  await page.getByRole('button', { name: 'Other CLI', exact: true }).click()
+  await page.getByRole('button', { name: 'Other CLI or browser', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Launch Code Session' })
   await dialog.getByRole('button', { name: 'Other CLI', exact: true }).click()
   await dialog.getByRole('textbox').fill('cmd /d')

@@ -131,6 +131,8 @@ impl OrcSpaceApp {
                     h: 380.0,
                     z: next_z,
                     maximized: false,
+                    image_path: None,
+                    image_name: None,
                     version: 1.0,
                     updated_at: 0.0,
                 });

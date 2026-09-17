@@ -193,17 +193,6 @@ export function cancelPendingProcessTreeSweeps(): void {
   sweepInFlight = false
 }
 
-
-export function pendingSweepRoots(): number[] {
-  return Array.from(pendingRoots.keys())
-}
-
-
-
-
-
-
-
 export function buildSweepScript(
   roots: number | Array<{ pid: number; requestedAt: number }>,
   notCreatedAfterMs?: number

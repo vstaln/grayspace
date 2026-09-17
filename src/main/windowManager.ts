@@ -242,7 +242,9 @@ export function setupWebContentsHandlers(sendFn: (channel: string, ...args: unkn
         const src = String((params as Record<string, unknown>).src ?? '')
         if (!src) return
         const proto = new URL(src).protocol
-        if (proto !== 'http:' && proto !== 'https:' && src !== 'about:blank') e.preventDefault()
+        // file: is allowed so a browser widget restored on a local page
+        // (the user navigated there themselves) comes back to it.
+        if (proto !== 'http:' && proto !== 'https:' && proto !== 'file:' && src !== 'about:blank') e.preventDefault()
       } catch {
         e.preventDefault()
       }
@@ -272,6 +274,12 @@ export function setupWebContentsHandlers(sendFn: (channel: string, ...args: unkn
       try {
         const proto = new URL(url).protocol
         ok = proto === 'http:' || proto === 'https:'
+        // A page may only follow links into file: if it is itself a local
+        // page, so browsing a local site works while a remote page still
+        // cannot pull the webview onto the user's disk. Navigation the user
+        // drives from the address bar goes through loadURL, which does not
+        // emit this event at all.
+        if (!ok && proto === 'file:') ok = contents.getURL().startsWith('file://')
       } catch {
         ok = false
       }
@@ -296,9 +304,11 @@ export function setupWebContentsHandlers(sendFn: (channel: string, ...args: unkn
       if (isDestroyed || contents.isDestroyed()) return { action: 'deny' }
       try {
         const parsed = new URL(url)
-        if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+        // As with will-navigate, only a local page may open a local page.
+        const isLocalFromLocal = parsed.protocol === 'file:' && contents.getURL().startsWith('file://')
+        if (parsed.protocol === 'https:' || parsed.protocol === 'http:' || isLocalFromLocal) {
           if (parsed.username || parsed.password) return { action: 'deny' }
-          if (!parsed.hostname || url.length > 2048) return { action: 'deny' }
+          if ((!parsed.hostname && !isLocalFromLocal) || url.length > 2048) return { action: 'deny' }
           const now = Date.now()
           // Same-URL dedup (350ms) first: a repeated click on one link that
           // gets deduped away must not itself spend the popup budget below,

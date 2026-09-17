@@ -2,6 +2,7 @@ import { EventEmitter } from 'events'
 import { join } from 'path'
 import { readStoreJson, writeJsonAtomic, writeJsonAtomicAsync } from './storage.ts'
 import { getUserDataDir } from './userData.ts'
+import { notifyPersistError } from './persistNotifier.ts'
 import {
   CommandError,
   VersionRegistry,
@@ -297,6 +298,7 @@ export class PlannerStore extends EventEmitter {
       this.eventsSinceSnapshot = 0
     } catch (err) {
       console.error('failed to persist planner', err)
+      notifyPersistError('planner', err)
     }
   }
 
@@ -321,6 +323,7 @@ export class PlannerStore extends EventEmitter {
           await writeJsonAtomicAsync(this.file, snapshot)
         } catch (err) {
           console.error('failed to persist planner', err)
+          notifyPersistError('planner', err)
           return
         }
         if (seq <= this.syncFlushedSeq) {
@@ -329,12 +332,16 @@ export class PlannerStore extends EventEmitter {
             this.syncFlushedSeq = this.writeSeq
           } catch (err) {
             console.error('failed to persist planner', err)
+            notifyPersistError('planner', err)
           }
         } else {
           this.eventsSinceSnapshot = 0
         }
       })
-      .catch((err) => console.error('planner flushAsync chain broke', err))
+      .catch((err) => {
+        console.error('planner flushAsync chain broke', err)
+        notifyPersistError('planner', err)
+      })
   }
 
   dispose(): void {

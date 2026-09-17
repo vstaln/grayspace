@@ -47,13 +47,6 @@ const GROUPS = {
       { path: 'dist/OrcSpace-Setup-2.0.0-x64.zip', why: 'superseded by 2.0.1', rebuild: null }
     ]
   },
-  'video-ad': {
-    title: 'video-ad dependencies and renders',
-    entries: [
-      { path: 'video-ad/node_modules', why: 'installed dependencies', rebuild: 'npm ci --prefix video-ad' },
-      { path: 'video-ad/out', why: 'rendered output', rebuild: 'npm run build --prefix video-ad' }
-    ]
-  },
   'test-results': {
     title: 'Playwright result directories from past runs',
     // test-results/ itself (the directory Playwright writes to) is deliberately

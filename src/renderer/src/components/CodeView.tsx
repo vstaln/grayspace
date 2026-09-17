@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { codeWorkspaceScope } from '../../../shared/codeWorkspace'
-import { Check, Copy, FolderOpen, Maximize2, Minimize2, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
+import { ArrowLeftRight, Check, Copy, FolderOpen, Maximize2, Minimize2, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
 import TerminalWidget, { forgetTerminalViewport } from './TerminalWidget'
 import BrowserWidget from './BrowserWidget'
 import CodeLauncher, { CODE_AGENTS, CODE_LAUNCH_COUNTS, MAX_CODE_SESSIONS, CodeAgent } from './CodeLauncher'
 import ResumeAgents from './ResumeAgents'
 import RestoreSessionsDialog from './RestoreSessionsDialog'
 import { needsRestorePrompt, splitRestore } from '../lib/restorePrompt'
+import { codeGridLayout, type CodeLayoutMode } from '../lib/codeLayout'
 import { upgradeSessionsToResume, type AgentConversation } from '../lib/agentConversations'
 import { clearInitialCommand, queueInitialCommand, queueInitialCommandOnce } from '../lib/pendingTerminalCommands'
 import { forgetAgentSelection } from './WidgetFrame'
@@ -94,11 +95,59 @@ function clampSplit(value: unknown, fallback: number): number {
     : fallback
 }
 
+function setCodeDragImage(event: React.DragEvent, title: string): void {
+  const preview = document.createElement('div')
+  preview.className = 'code-drag-preview'
+  preview.setAttribute('aria-hidden', 'true')
+
+  const mark = document.createElement('span')
+  mark.className = 'code-drag-preview-mark'
+  mark.textContent = '↔'
+
+  const label = document.createElement('span')
+  label.textContent = title
+  preview.append(mark, label)
+  document.body.appendChild(preview)
+  event.dataTransfer.setDragImage(preview, 16, 16)
+  window.setTimeout(() => preview.remove(), 0)
+}
+
+function CodeDragCue({ source, target }: { source: Session; target: Session | null }): React.JSX.Element {
+  const sourceTitle = source.title || source.agent.label
+  const targetTitle = target ? target.title || target.agent.label : null
+  const AgentIcon = source.agent.Icon
+
+  return (
+    <div
+      className="pointer-events-none absolute inset-x-0 top-4 z-30 flex justify-center code-drag-cue"
+      data-testid="code-drag-cue"
+      role="status"
+      aria-live="polite"
+      aria-label={targetTitle ? `Swap ${sourceTitle} with ${targetTitle}` : `Drag ${sourceTitle} to swap`}
+    >
+      <div className="flex max-w-[min(360px,calc(100%-24px))] items-center gap-2 rounded-pill border border-text/35 bg-text/10 px-2 py-1 text-text shadow-[0_8px_26px_rgba(0,0,0,0.28)] backdrop-blur-md">
+        <span className="grid h-5 w-5 flex-none place-items-center rounded-pill border border-text/30 bg-text/10">
+          <AgentIcon size={12} />
+        </span>
+        <span className="max-w-[220px] truncate text-[11px] font-medium tracking-[0.01em]">
+          {sourceTitle}
+        </span>
+        <span className="flex items-center gap-1 border-l border-text/25 pl-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-text/75">
+          <ArrowLeftRight size={12} strokeWidth={2.2} />
+          Swap
+        </span>
+      </div>
+    </div>
+  )
+}
+
 interface Props {
 
 
   active: boolean
   sidebarCollapsed: boolean
+  terminalsFlipped: boolean
+  layoutMode: CodeLayoutMode
 }
 
 const SessionCard = React.memo(function SessionCard({
@@ -118,7 +167,8 @@ const SessionCard = React.memo(function SessionCard({
   onFullscreenChange,
   dragging,
   dropTarget,
-  style
+  style,
+  terminalsFlipped
 }: {
   session: Session
   onClose(): void
@@ -138,6 +188,7 @@ const SessionCard = React.memo(function SessionCard({
   dragging?: boolean
   dropTarget?: boolean
   style?: React.CSSProperties
+  terminalsFlipped: boolean
 }): React.JSX.Element {
   const [editing, setEditing] = useState(false)
   const [nameCopied, setNameCopied] = useState(false)
@@ -161,7 +212,7 @@ const SessionCard = React.memo(function SessionCard({
         isBrowserSession(session) ? 'bg-bg-panel' : 'code-terminal-shell'
       } ${
         maximized ? 'absolute inset-0 z-20 rounded-bar' : ''
-      } ${dragging ? 'opacity-45' : ''} ${dropTarget ? 'ring-2 ring-accent ring-inset' : ''}`}
+      } ${dragging ? 'opacity-65 ring-2 ring-text/70 ring-inset bg-text/5' : ''} ${dropTarget ? 'ring-2 ring-text/70 ring-inset bg-text/5' : ''}`}
       style={style}
       onDragOver={(e) => {
         if (editing || maximized) return
@@ -200,6 +251,7 @@ const SessionCard = React.memo(function SessionCard({
           e.dataTransfer.effectAllowed = 'move'
           e.dataTransfer.setData('text/session-id', session.id)
           e.dataTransfer.setData('text/plain', session.id)
+          setCodeDragImage(e, displayTitle)
           onDragStart(session.id)
         }}
         onDragEnd={(e) => {
@@ -333,13 +385,13 @@ const SessionCard = React.memo(function SessionCard({
       <div className="min-h-0 flex-1 bg-bg">
         {isBrowserSession(session)
           ? <BrowserWidget widgetId={session.id} onFullscreenChange={onFullscreenChange} />
-          : <TerminalWidget id={session.id} surface="code" attachmentMode agentId={terminalAgentId(session)} onProcessExit={onProcessExit} />}
+          : <TerminalWidget id={session.id} surface="code" attachmentMode agentId={terminalAgentId(session)} flipped={terminalsFlipped} onProcessExit={onProcessExit} />}
       </div>
     </div>
   )
 })
 
-export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX.Element {
+export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, layoutMode }: Props): React.JSX.Element {
   const [sessions, setSessions] = useState<Session[]>([])
   /**
    * A saved board waiting to be answered for: which of these terminals should
@@ -555,7 +607,7 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
         clearTimeout(saveTimerRef.current)
         saveTimerRef.current = null
       }
-      dirtyRef.current = false
+      const seqAtSave = codeChangeSeqRef.current
       const payload = {
         sessions: sessionsRef.current.map((session) => ({
           id: session.id,
@@ -572,10 +624,13 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
       }
       if (typeof window.api.code.saveSync === 'function') {
         try {
-          window.api.code.saveSync(payload)
+          const result = window.api.code.saveSync(payload)
+          if ('ok' in result && result.ok && codeChangeSeqRef.current === seqAtSave) dirtyRef.current = false
         } catch {}
       } else {
-        void window.api.code.save(payload).catch(() => {})
+        void window.api.code.save(payload).then((result) => {
+          if ('ok' in result && result.ok && codeChangeSeqRef.current === seqAtSave) dirtyRef.current = false
+        }).catch(() => {})
       }
     }
 
@@ -840,8 +895,10 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
         codeWorkspaceId: workspaceIdAtSchedule,
         workspaceScope: scopeAtSchedule
       }
-      dirtyRef.current = false
-      void window.api.code.save(payload).catch(() => {})
+      const seqAtSave = codeChangeSeqRef.current
+      void window.api.code.save(payload).then((result) => {
+        if ('ok' in result && result.ok && codeChangeSeqRef.current === seqAtSave) dirtyRef.current = false
+      }).catch(() => {})
     }, 800)
     saveTimerRef.current = timer
     return () => {
@@ -1123,13 +1180,20 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
   }, [])
 
   const handleDragOver = useCallback((id: string): void => {
-    setDropTargetId(id)
-  }, [])
+    setDropTargetId(id === draggedSessionId ? null : id)
+  }, [draggedSessionId])
 
   const handleDragEnd = useCallback((): void => {
     setDraggedSessionId(null)
     setDropTargetId(null)
   }, [])
+
+  const draggedSession = draggedSessionId
+    ? sessions.find((session) => session.id === draggedSessionId) ?? null
+    : null
+  const dropTargetSession = dropTargetId
+    ? sessions.find((session) => session.id === dropTargetId && session.id !== draggedSessionId) ?? null
+    : null
 
   const handlerCacheRef = useRef<Map<string, {
     onClose: () => void
@@ -1213,15 +1277,58 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
 
 
 
+  // An explicit layout mode owns the whole grid; `auto` leaves the per-count
+  // layout below (and its 3-way splitters) exactly as it was.
+  const explicitLayout = useMemo(
+    () => codeGridLayout(layoutMode, sessions.length, Math.max(0, sessions.findIndex((s) => s.id === featuredId))),
+    [layoutMode, sessions, featuredId]
+  )
+
   const sessionPlacements = useMemo(() => {
     const placements = new Map<string, React.CSSProperties>()
 
+    if (explicitLayout) {
+      sessions.forEach((session, index) => {
+        placements.set(session.id, { ...explicitLayout.placement(index), order: index })
+      })
+      return placements
+    }
+
     sessions.forEach((session, index) => {
-      const style = placementForIndex(sessions.length, index)
-      if (Object.keys(style).length > 0) placements.set(session.id, style)
+      // `order` carries the slot for the layouts placementForIndex leaves to
+      // auto-placement (1, 2, 4 and >20 sessions). Grid auto-placement follows
+      // order-modified document order, so a swap is a style change rather than
+      // a DOM move — see stableCardOrder below for why that matters.
+      placements.set(session.id, { ...placementForIndex(sessions.length, index), order: index })
     })
     return placements
-  }, [sessions])
+  }, [sessions, explicitLayout])
+
+  /**
+   * The order the cards are *rendered in*, which is deliberately not the order
+   * they are laid out in.
+   *
+   * Swapping two sessions reorders the `sessions` array, and rendering straight
+   * from it made React reorder the matching DOM nodes. A `<webview>` does not
+   * survive that: detaching and re-attaching it destroys the guest process and
+   * the page reloads from scratch — a video that had been playing for a minute
+   * came back at zero. A terminal pays the same price in a PTY reconnect.
+   *
+   * So the DOM keeps every card at the position it first mounted at, for as
+   * long as the session exists, and the visible arrangement is expressed purely
+   * through the grid placement above.
+   */
+  const domOrderRef = useRef<string[]>([])
+  const stableCardOrder = useMemo(() => {
+    const present = [...sessions, ...backgroundSessions.filter((session) => !sessions.some((item) => item.id === session.id))]
+    const byId = new Map(present.map((session) => [session.id, session] as const))
+    const kept = domOrderRef.current.filter((id) => byId.has(id))
+    for (const session of present) {
+      if (!kept.includes(session.id)) kept.push(session.id)
+    }
+    domOrderRef.current = kept
+    return kept.map((id) => byId.get(id)!)
+  }, [sessions, backgroundSessions])
 
   const availableSessionSlots = Math.max(0, MAX_CODE_SESSIONS - sessions.length)
   const selectedSessionCount = Math.min(
@@ -1250,12 +1357,13 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
           />
         )}
         <div ref={threeWayContainerRef} className={`relative grid min-h-0 flex-1 gap-0 bg-bg-raise p-0 ${maximizedId ? 'overflow-hidden' : 'overflow-auto'}`}
-            style={maximizedId ? { gridTemplateColumns: 'minmax(0, 1fr)', gridAutoRows: 'minmax(0, 1fr)' } : sessions.length === 3 ? {
+            style={maximizedId ? { gridTemplateColumns: 'minmax(0, 1fr)', gridAutoRows: 'minmax(0, 1fr)' } : explicitLayout ? explicitLayout.container : sessions.length === 3 ? {
               gridTemplateColumns: `minmax(0, ${threeWaySplit.col}fr) 2px minmax(0, ${100 - threeWaySplit.col}fr)`,
               gridTemplateRows: `minmax(0, ${threeWaySplit.row}fr) 2px minmax(0, ${100 - threeWaySplit.row}fr)`
             } : { gridTemplateColumns, gridAutoRows: 'minmax(180px, 1fr)' }}
           >
-            {[...sessions, ...backgroundSessions.filter((session) => !sessions.some((item) => item.id === session.id))].map((session) => {
+            {draggedSession && <CodeDragCue source={draggedSession} target={dropTargetSession} />}
+            {stableCardOrder.map((session) => {
               const hidden = !sessions.some((item) => item.id === session.id)
               const handlers = getSessionHandlers(session.id)
               const isMaximized = maximizedId === session.id
@@ -1283,10 +1391,11 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
                   maximized={isMaximized}
                   onToggleMaximize={handlers.onToggleMaximize}
                   onFullscreenChange={handlers.onFullscreenChange}
+                  terminalsFlipped={terminalsFlipped}
                 />
               )
             })}
-            {sessions.length === 3 && !maximizedId && <>
+            {sessions.length === 3 && !maximizedId && !explicitLayout && <>
               <div
                 data-testid="code-resize-columns"
                 onMouseDown={handleStartColumnResize}
@@ -1459,6 +1568,16 @@ export default function CodeView({ active, sidebarCollapsed }: Props): React.JSX
                           )
                         })}
                       </div>
+
+                      <button
+                        type="button"
+                        onClick={openLauncher}
+                        data-testid="code-open-launcher"
+                        className="mb-8 flex h-10 w-full items-center justify-center gap-2 rounded-panel border border-line-soft bg-bg-panel text-[12px] text-text-dim transition-colors hover:border-line hover:bg-bg-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
+                      >
+                        <TerminalIcon size={14} />
+                        Other CLI or browser
+                      </button>
 
                       {selectedAgentIds.length > 0 && (
                         <>

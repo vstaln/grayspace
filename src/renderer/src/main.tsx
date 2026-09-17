@@ -5,6 +5,7 @@ import App from './App'
 
 import 'virtual:uno.css'
 import { installStyles } from './ui'
+import { installDurableLocalStorage } from './lib/durableLocalStorage'
 
 installStyles()
 
@@ -80,4 +81,13 @@ function Startup(): React.JSX.Element | null {
   return dismissed ? null : <StartupWordmark preview={STARTUP_PREVIEW} onComplete={complete} />
 }
 
-ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(<>{!STARTUP_PREVIEW && <App />}<Startup /></>)
+async function start(): Promise<void> {
+  try {
+    await installDurableLocalStorage(window.api.rendererState)
+  } catch (error) {
+    console.warn('durable widget storage is unavailable; continuing with Chromium storage', error)
+  }
+  ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(<>{!STARTUP_PREVIEW && <App />}<Startup /></>)
+}
+
+void start()

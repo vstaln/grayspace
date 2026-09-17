@@ -29,13 +29,17 @@ pub const MAX_STROKE_POINTS: usize = 200_000;
 pub const MAX_POINTS_PER_STROKE: usize = 10_000;
 pub const MAX_CONNECTIONS: usize = 2_000;
 
-const WIDGET_KINDS: [&str; 10] = [
+/// Must stay in step with WIDGET_KINDS in src/main/canvasState.ts: a kind this
+/// list does not know is not merely ignored, it makes sanitize_widget drop the
+/// whole widget, so a replay silently loses every widget of that kind.
+const WIDGET_KINDS: [&str; 11] = [
     "terminal",
     "timer",
     "planner",
     "files",
     "sys-monitor",
     "browser",
+    "image",
     "links",
     "music-player",
     "orchestration",
@@ -53,6 +57,11 @@ pub struct Widget {
     pub h: f64,
     pub z: f64,
     pub maximized: bool,
+    /// An image widget is nothing without these: they are what it displays.
+    /// widget.update rebuilds the widget from widget_to_value before merging
+    /// the patch, so anything missing here is erased by the next update.
+    pub image_path: Option<String>,
+    pub image_name: Option<String>,
     pub version: f64,
     pub updated_at: f64,
 }
@@ -160,6 +169,15 @@ pub fn sanitize_widget(value: &Value, clock: Clock) -> Option<Widget> {
         }
     };
 
+    // Bounds counted in UTF-16 units, which is what `String.length` means on
+    // the TypeScript side these limits are mirrored from.
+    let image_path = text(object.get("imagePath"))
+        .filter(|value| value.encode_utf16().count() <= 4096)
+        .map(str::to_owned);
+    let image_name = text(object.get("imageName"))
+        .filter(|value| value.encode_utf16().count() <= 256)
+        .map(str::to_owned);
+
     let version = match num(object.get("version")) {
         Some(v) if v > 0.0 => v,
         _ => 1.0,
@@ -176,6 +194,8 @@ pub fn sanitize_widget(value: &Value, clock: Clock) -> Option<Widget> {
         h,
         z,
         maximized: object.get("maximized") == Some(&Value::Bool(true)),
+        image_path,
+        image_name,
         version,
         updated_at,
     })
@@ -429,6 +449,12 @@ fn widget_to_value(widget: &Widget) -> Value {
     object.insert("h".into(), json_number(widget.h));
     object.insert("z".into(), json_number(widget.z));
     object.insert("maximized".into(), Value::Bool(widget.maximized));
+    if let Some(path) = &widget.image_path {
+        object.insert("imagePath".into(), Value::String(path.clone()));
+    }
+    if let Some(name) = &widget.image_name {
+        object.insert("imageName".into(), Value::String(name.clone()));
+    }
     object.insert("version".into(), json_number(widget.version));
     object.insert("updatedAt".into(), json_number(widget.updated_at));
     Value::Object(object)

@@ -72,12 +72,6 @@ export function markInitialCommandDelivered(id: string): void {
   capOldest(delivered, MAX_DELIVERED_IDS)
 }
 
-export function takeInitialCommand(id: string): string | undefined {
-  const command = pending.get(id)
-  if (command !== undefined) pending.delete(id)
-  return command
-}
-
 /** The terminal is gone for good; nothing should ever be typed into it. */
 export function clearInitialCommand(id: string): void {
   pending.delete(id)

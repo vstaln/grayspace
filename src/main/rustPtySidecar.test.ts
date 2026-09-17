@@ -10,6 +10,8 @@ function simulatedSidecar() {
       write: (line: string) => { packets.push(JSON.parse(line)); return true } } },
     stdoutBuffer: '', writeRequestCounter: 0, sessionCounter: 0,
     sessions: new Map(), sessionOwners: new Map(),
+    pendingSpawns: new Set(),
+    pendingSpawnTimers: new Map(),
     pendingWrites: new Map(), unacknowledged: new Map()
   }) as RustPtySidecar
   // Access the wire parser without launching a process for timeout tests.
@@ -76,12 +78,51 @@ test('session exit resolves outstanding writes immediately and malformed events 
   assert.equal((await pending).ok, false)
 })
 
+test('natural session exit releases its wire-id mappings', () => {
+  const { sidecar, packets, receive } = simulatedSidecar()
+  const id = 'naturally-exited'
+  sidecar.spawn({ id, shell: defaultShell(), cols: 80, rows: 24, cwd: process.cwd(), env: {} })
+  const wireId = packets[0].id
+  receive({ type: 'exit', id: wireId })
+
+  const sessions = Reflect.get(sidecar, 'sessions') as Map<string, string>
+  const sessionOwners = Reflect.get(sidecar, 'sessionOwners') as Map<string, string>
+  assert.equal(sessions.has(id), false)
+  assert.equal(sessionOwners.has(wireId), false)
+})
+
+test('spawn timeout releases its abandoned wire-id mapping', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { sidecar, packets } = simulatedSidecar()
+  const id = 'spawn-timeout'
+  sidecar.spawn({ id, shell: defaultShell(), cols: 80, rows: 24, cwd: process.cwd(), env: {} })
+  const wireId = packets[0].id
+
+  t.mock.timers.tick(8_001)
+
+  const sessions = Reflect.get(sidecar, 'sessions') as Map<string, string>
+  const sessionOwners = Reflect.get(sidecar, 'sessionOwners') as Map<string, string>
+  assert.equal(sessions.has(id), false)
+  assert.equal(sessionOwners.has(wireId), false)
+})
+
 test('failed backend cannot accept a new spawn or falsely recover the terminal', async () => {
   const { sidecar, packets } = simulatedSidecar()
   Reflect.set(sidecar, 'backendFailureSignalled', true)
   assert.equal(sidecar.spawn({ id: 'test', shell: defaultShell(), cols: 80, rows: 24, cwd: process.cwd(), env: {} }).ok, false)
   assert.equal((await sidecar.write('test', 'x')).ok, false)
   assert.equal(packets.length, 0)
+})
+
+test('engine spawn rejection reaches the terminal owner', () => {
+  const { sidecar, packets, receive } = simulatedSidecar()
+  const errors: Array<{ id: string; message: string }> = []
+  sidecar.on('spawn-error', (id, error) => errors.push({ id, message: error.message }))
+  const id = 'spawn-failure'
+  assert.equal(sidecar.spawn({ id, shell: defaultShell(), cols: 80, rows: 24, cwd: process.cwd(), env: {} }).ok, true)
+
+  receive({ type: 'response', id: packets[0].id, ok: false, error: 'invalid working directory' })
+  assert.deepEqual(errors, [{ id, message: 'invalid working directory' }])
 })
 
 /**

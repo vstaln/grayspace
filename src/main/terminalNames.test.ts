@@ -2,6 +2,8 @@ import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
 import {
   isDefaultTerminalTitle,
+  isAutomaticTerminalName,
+  isLegacyNumberedAutomaticTerminalName,
   makeUniqueTitle,
   normalizeTerminalName,
   normalizeTerminalNameList,
@@ -43,6 +45,15 @@ describe('terminalNames', () => {
     assert.match(randomTerminalName(), /^[A-Z][a-z]+$/)
   })
 
+  test('recognizes names reserved for automatic terminal titles', () => {
+    assert.equal(isAutomaticTerminalName('Jonathan'), true)
+    assert.equal(isAutomaticTerminalName('jonathan'), true)
+    assert.equal(isAutomaticTerminalName('backend'), false)
+    assert.equal(isLegacyNumberedAutomaticTerminalName('Jonathan-2'), true)
+    assert.equal(isLegacyNumberedAutomaticTerminalName('Jonathan-1'), false)
+    assert.equal(isLegacyNumberedAutomaticTerminalName('backend-2'), false)
+  })
+
   test('pickTerminalName prefers the first free favorite', () => {
     assert.equal(pickTerminalName({ favorites: ['backend', 'frontend'], taken: [] }), 'backend')
     assert.equal(pickTerminalName({ favorites: ['backend', 'frontend'], taken: ['BACKEND'] }), 'frontend')
@@ -58,7 +69,7 @@ describe('terminalNames', () => {
     assert.notEqual(long, 'a'.repeat(32))
   })
 
-  test('pickTerminalName falls back to random and then to a suffix', () => {
+  test('pickTerminalName never adds numeric suffixes to automatic names', () => {
     const random = pickTerminalName({ favorites: [], taken: [], rand: () => 0 })
     assert.equal(random, 'James')
     assert.equal(pickTerminalName({ taken: ['JAMES'], rand: () => 0 }), 'Henry')
@@ -69,6 +80,9 @@ describe('terminalNames', () => {
       taken.push(name)
     }
     assert.equal(new Set(taken).size, 64)
-    assert.equal(pickTerminalName({ taken, rand: () => 0 }), 'James-2')
+    const overflow = pickTerminalName({ taken, rand: () => 0 })
+    assert.equal(overflow, 'JamesHenry')
+    assert.match(overflow, /^[A-Z][a-z]+[A-Z][a-z]+$/)
+    assert.doesNotMatch(overflow, /\d/)
   })
 })

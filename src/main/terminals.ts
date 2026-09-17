@@ -3,15 +3,38 @@ import * as os from 'os'
 import * as fs from 'fs'
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch'
 import type { IPty } from '@homebridge/node-pty-prebuilt-multiarch'
-import { windowsPtyOptions } from './conpty.ts'
+import { bundledWindowsPtyOptions, windowsPtyOptions } from './conpty.ts'
 import { OUTPUT_BUFFER_LIMIT, MAX_TERMINAL_WRITE_BYTES, defaultShell } from './config.ts'
 import { CommandError } from './core/index.ts'
 import { killProcessTree } from './procTree.ts'
-import { orcTerminalEnv } from './orcCli.ts'
 import { TerminalRingBuffer } from './terminalBuffer.ts'
-import { isDefaultTerminalTitle, makeUniqueTitle, pickTerminalName } from './terminalNames.ts'
+import {
+  isAutomaticTerminalName,
+  isDefaultTerminalTitle,
+  isLegacyNumberedAutomaticTerminalName,
+  makeUniqueTitle,
+  pickTerminalName
+} from './terminalNames.ts'
 import type { RustPtySpawnOptions, RustPtySidecar } from './rustPtySidecar.ts'
-
+import {
+  codeTerminalColorEnv as resolveCodeTerminalColorEnv,
+  isPositiveInt as isPositiveTerminalInt,
+  safeOrcTerminalEnv as resolveOrcTerminalEnv,
+  terminalBaseEnv as resolveTerminalBaseEnv,
+  windowsShellArgs as resolveWindowsShellArgs
+} from './terminal/terminalEnvironment.ts'
+import {
+  compactDeliveryText as compactTerminalDeliveryText,
+  deliveryDelay as waitForDelivery,
+  isDeadSessionError as isDeadTerminalSessionError,
+  isStalledInputError as isStalledTerminalInputError,
+  normalizeDeliveryText as normalizeTerminalDeliveryText,
+  pasteMarkerMatches as matchesPasteMarker,
+  takeInputTurn as awaitInputTurn,
+  SUBMIT_BURST_GAP_MS as TERMINAL_SUBMIT_BURST_GAP_MS,
+  SUBMIT_SETTLE_MAX_MS as TERMINAL_SUBMIT_SETTLE_MAX_MS,
+  SUBMIT_SETTLE_QUIET_MS as TERMINAL_SUBMIT_SETTLE_QUIET_MS
+} from './terminal/terminalDelivery.ts'
 export const MAX_TERMINALS = 32
 
 
@@ -21,85 +44,15 @@ export const MAX_TERMINALS = 32
 
 
 
-function terminalBaseEnv(env: Record<string, string>): Record<string, string> {
-  const copy: Record<string, string> = {}
-  for (const [key, value] of Object.entries(env)) {
-    const upper = key.toUpperCase()
-
-
-    if (
-      upper === 'PATH' ||
-      upper === 'NO_COLOR' ||
-      upper === 'FORCE_COLOR' ||
-      upper === 'TERM' ||
-      upper === 'COLORTERM' ||
-      upper === 'COLORFGBG'
-    ) continue
-    copy[key] = value
-  }
-  return copy
-}
-
-
-
-
-
-
-
-function codeTerminalColorEnv(id: string): Record<string, string> {
-  if (!id.startsWith('code-')) return {}
-  return {
-    CLICOLOR: '1',
-    CLICOLOR_FORCE: '1',
-    ANSICON: '1',
-    ConEmuANSI: 'ON'
-  }
-}
-
-/**
- * Startup arguments for Windows shells.
- *
- * ConPTY gives a new console the system's legacy OEM codepage (866 or 1251 on
- * a Russian install), not UTF-8. A child that prints non-ASCII text then emits
- * bytes xterm.js cannot decode, and the terminal fills with replacement
- * characters — unreadable enough to look broken even though the process is
- * fine. The `LANG`/`LC_ALL` vars set alongside do not cover this: Windows
- * console apps take their encoding from the console, not the environment.
- *
- * cmd.exe gets a silent `chcp 65001` (output nulled, prompt stays on its
- * first row) so non-ASCII output decodes instead of filling with U+FFFD.
- * PowerShell keeps its non-printing UTF-8 setup.
- * No-op off Windows, where a pty is a plain byte stream.
- */
-export function windowsShellArgs(windowsShell: 'cmd' | 'powershell'): string[] {
-  if (process.platform !== 'win32') return []
-  return windowsShell === 'powershell'
-    ? ['-NoLogo', '-NoExit', '-Command', 'chcp 65001 > $null']
-    : ['/K', 'chcp 65001 >nul']
-}
-
-function safeOrcTerminalEnv(id: string): Record<string, string> {
-  try {
-    return orcTerminalEnv(id)
-  } catch {
-    // The terminal must remain usable even while the Electron control
-    // channel is unavailable (for example during startup or recovery).
-    // The shell can still run normally; OrcSpace integration will be
-    // restored on the next spawn once the control channel is ready.
-    const path = process.env.PATH ?? process.env.Path ?? ''
-    return {
-      ...(path ? { PATH: path } : {}),
-      ORCSPACE_AGENT_ID: id,
-      ORCSPACE_NODE: process.execPath
-    }
-  }
-}
+export { windowsShellArgs } from './terminal/terminalEnvironment.ts'
+export { isDeadSessionError, isStalledInputError } from './terminal/terminalDelivery.ts'
 
 export interface TerminalInfo {
   id: string
   title: string
   cwd: string
   alive: boolean
+  lastPrompt?: string
 }
 
 export interface SpawnResult {
@@ -148,6 +101,8 @@ interface TerminalRecord {
   ptyDisposers: { dispose(): void }[]
   title: string
   cwd: string
+
+  lastPrompt?: string
 
 
 
@@ -237,6 +192,7 @@ export class TerminalManager extends EventEmitter {
     this.rustPty = options.rustPty ?? null
     this.rustPty?.on('data', (id: string, chunk: string) => this.handleRustOutput(id, chunk))
     this.rustPty?.on('exit', (id: string, code: number) => this.handleRustExit(id, code))
+    this.rustPty?.on('spawn-error', (id: string, error: Error) => this.handleRustSpawnError(id, error))
     this.rustPty?.on('request-error', (id: string, error: Error) => this.handleRustRequestError(id, error))
     this.rustPty?.on('backend-error', (error: Error) => this.emit('backend-error', error))
     this.rustPty?.on('backend-exit', (code: number) => this.handleRustBackendExit(code))
@@ -310,7 +266,10 @@ export class TerminalManager extends EventEmitter {
     const taken = this.takenTitles()
     const title =
       explicit && !isDefaultTerminalTitle(explicit)
-        ? makeUniqueTitle(explicit, taken)
+        ? isLegacyNumberedAutomaticTerminalName(explicit) ||
+          (isAutomaticTerminalName(explicit) && taken.has(explicit.toLowerCase()))
+          ? this.assignAutoName()
+          : makeUniqueTitle(explicit, taken)
         : this.assignAutoName()
     const record: TerminalRecord = {
       pty: null,
@@ -340,7 +299,13 @@ export class TerminalManager extends EventEmitter {
   }
 
   private toInfo(id: string, record: TerminalRecord): TerminalInfo {
-    return { id, title: record.title, cwd: record.cwd, alive: record.pty !== null || record.nativeAlive }
+    return {
+      id,
+      title: record.title,
+      cwd: record.cwd,
+      alive: record.pty !== null || record.nativeAlive,
+      ...(record.lastPrompt ? { lastPrompt: record.lastPrompt } : {})
+    }
   }
 
   has(id: string): boolean {
@@ -350,6 +315,15 @@ export class TerminalManager extends EventEmitter {
   isRunning(id: string): boolean {
     const record = this.terminals.get(id)
     return record?.pty != null || record?.nativeAlive === true
+  }
+
+  /**
+   * Stop input that belongs to a previous PTY session from crossing a restart.
+   * The queue intentionally waits for an in-flight write, so the epoch check
+   * is the boundary that prevents its successor from reaching a new shell.
+   */
+  private invalidateInput(id: string): void {
+    this.inputEpochs.set(id, Symbol())
   }
 
 
@@ -366,7 +340,7 @@ export class TerminalManager extends EventEmitter {
 
 
 
-  spawn(id: string, cols?: number, rows?: number, cwd?: string): SpawnResult {
+  spawn(id: string, cols?: number, rows?: number, cwd?: string, title?: string): SpawnResult {
     if (typeof id !== 'string' || !TERMINAL_ID.test(id))
       return { ok: false, error: 'invalid terminal id' }
 
@@ -378,7 +352,7 @@ export class TerminalManager extends EventEmitter {
     if (record && (record.pty || record.nativeAlive)) {
 
 
-      if (isPositiveInt(cols) && isPositiveInt(rows)) {
+      if (isPositiveTerminalInt(cols) && isPositiveTerminalInt(rows)) {
         if (record.pty) {
           try {
             record.pty.resize(cols, rows)
@@ -400,26 +374,34 @@ export class TerminalManager extends EventEmitter {
           return { ok: false, error: `terminal limit reached (${MAX_TERMINALS})` }
         }
       }
+      const requestedTitle = title?.trim()
+      const initialTitle = requestedTitle && !isDefaultTerminalTitle(requestedTitle)
+        ? isLegacyNumberedAutomaticTerminalName(requestedTitle) ||
+          (isAutomaticTerminalName(requestedTitle) && this.takenTitles(id).has(requestedTitle.toLowerCase()))
+          ? this.assignAutoName(id)
+          : makeUniqueTitle(requestedTitle, this.takenTitles(id))
+        : this.assignAutoName(id)
       record = {
         pty: null,
         nativeAlive: false,
         ptyDisposers: [],
-        title: id,
+        title: initialTitle,
         cwd: this.resolveCwd(cwd),
         output: new TerminalRingBuffer({ maxBytes: OUTPUT_BUFFER_LIMIT }),
         readOffset: 0,
         lastDataAt: 0
       }
       this.terminals.set(id, record)
-      record.title = this.assignAutoName(id)
-      this.emit('title', id, record.title)
+      if (!requestedTitle || isDefaultTerminalTitle(requestedTitle) || record.title !== requestedTitle) {
+        this.emit('title', id, record.title)
+      }
     } else if (cwd && !record.pty && !record.nativeAlive) {
 
       const resolved = this.resolveCwd(cwd)
       if (resolved !== record.cwd) record.cwd = resolved
     }
 
-    if (isPositiveInt(cols) && isPositiveInt(rows)) {
+    if (isPositiveTerminalInt(cols) && isPositiveTerminalInt(rows)) {
       record.cols = cols
       record.rows = rows
     }
@@ -433,6 +415,7 @@ export class TerminalManager extends EventEmitter {
       record.exited = false
       record.exitedAt = undefined
     }
+    this.invalidateInput(id)
 
     if (this.rustPty) {
       const result = this.rustPty.spawn(this.rustSpawnOptions(id, record, cols, rows))
@@ -445,17 +428,20 @@ export class TerminalManager extends EventEmitter {
       console.warn(`[rust-engine] spawn failed for ${id}; using node-pty fallback`, result.error)
     }
 
+    return this.spawnNodePty(id, record, cols, rows)
+  }
+
+  private spawnNodePty(id: string, record: TerminalRecord, cols?: number, rows?: number): SpawnResult {
     try {
       const windowsShell = this.getWindowsShell()
-      const child = pty.spawn(defaultShell(windowsShell), windowsShellArgs(windowsShell), {
-        ...(process.platform === 'win32' ? windowsPtyOptions : {}),
+      const spawnOptions = {
         name: 'xterm-256color',
-        cols: isPositiveInt(cols) ? cols : 80,
-        rows: isPositiveInt(rows) ? rows : 24,
+        cols: isPositiveTerminalInt(cols) ? cols : 80,
+        rows: isPositiveTerminalInt(rows) ? rows : 24,
         cwd: record.cwd,
         env: {
-          ...terminalBaseEnv(process.env as Record<string, string>),
-          ...safeOrcTerminalEnv(id),
+          ...resolveTerminalBaseEnv(process.env as Record<string, string>),
+          ...resolveOrcTerminalEnv(id),
           ORCSPACE: '1',
           ORCSPACE_TERMINAL_ID: id,
           TERM: 'xterm-256color',
@@ -466,9 +452,23 @@ export class TerminalManager extends EventEmitter {
           TERM_PROGRAM_VERSION: '2.0.4',
           LANG: process.env.LANG || 'en_US.UTF-8',
           LC_ALL: process.env.LC_ALL || process.env.LANG || 'en_US.UTF-8',
-          ...codeTerminalColorEnv(id)
+          ...resolveCodeTerminalColorEnv(id)
         }
-      })
+      }
+      let child: IPty
+      try {
+        child = pty.spawn(defaultShell(windowsShell), resolveWindowsShellArgs(windowsShell), {
+          ...spawnOptions,
+          ...(process.platform === 'win32' ? windowsPtyOptions : {})
+        })
+      } catch (error) {
+        if (process.platform !== 'win32') throw error
+        console.warn('system ConPTY unavailable; using bundled ConPTY fallback', error)
+        child = pty.spawn(defaultShell(windowsShell), resolveWindowsShellArgs(windowsShell), {
+          ...spawnOptions,
+          ...bundledWindowsPtyOptions
+        })
+      }
       record.pty = child
       record.rootPid = child.pid
       this.preferredId = id
@@ -500,8 +500,8 @@ export class TerminalManager extends EventEmitter {
     rows?: number
   ): RustPtySpawnOptions {
     const env = {
-      ...terminalBaseEnv(process.env as Record<string, string>),
-      ...safeOrcTerminalEnv(id),
+      ...resolveTerminalBaseEnv(process.env as Record<string, string>),
+      ...resolveOrcTerminalEnv(id),
       ORCSPACE: '1',
       ORCSPACE_TERMINAL_ID: id,
       TERM: 'xterm-256color',
@@ -512,13 +512,13 @@ export class TerminalManager extends EventEmitter {
       TERM_PROGRAM_VERSION: '2.0.4',
       LANG: process.env.LANG || 'en_US.UTF-8',
       LC_ALL: process.env.LC_ALL || process.env.LANG || 'en_US.UTF-8',
-      ...codeTerminalColorEnv(id)
+      ...resolveCodeTerminalColorEnv(id)
     }
     return {
       id,
       shell: defaultShell(this.getWindowsShell()),
-      cols: isPositiveInt(cols) ? cols : 80,
-      rows: isPositiveInt(rows) ? rows : 24,
+      cols: isPositiveTerminalInt(cols) ? cols : 80,
+      rows: isPositiveTerminalInt(rows) ? rows : 24,
       cwd: record.cwd,
       env
     }
@@ -536,15 +536,39 @@ export class TerminalManager extends EventEmitter {
     const current = this.terminals.get(id)
     if (!current || !current.nativeAlive) return
     current.nativeAlive = false
+    this.invalidateInput(id)
     current.exited = true
     current.exitedAt = Date.now()
     this.emit('exit', id, exitCode)
+  }
+
+  private handleRustSpawnError(id: string, error: Error): void {
+    const current = this.terminals.get(id)
+    if (!current || !current.nativeAlive) return
+    current.nativeAlive = false
+    this.invalidateInput(id)
+    // The sidecar acknowledges the command before portable-pty has finished
+    // creating the child, so this failure arrives after spawn() already
+    // returned. Keep the widget alive by taking the same node-pty fallback as
+    // the synchronous failure path instead of reporting a dead terminal.
+    current.output.clear()
+    current.readOffset = 0
+    const fallback = this.spawnNodePty(id, current, current.cols, current.rows)
+    if (fallback.ok) {
+      console.warn(`[rust-engine] async spawn failed for ${id}; using node-pty fallback`, error)
+      return
+    }
+    current.exited = true
+    current.exitedAt = Date.now()
+    this.emit('backend-error', error)
+    this.emit('exit', id, 1)
   }
 
   private handleRustBackendExit(exitCode: number): void {
     for (const [id, record] of this.terminals) {
       if (!record.nativeAlive) continue
       record.nativeAlive = false
+      this.invalidateInput(id)
       record.exited = true
       record.exitedAt = Date.now()
       if (this.shuttingDown) {
@@ -564,20 +588,21 @@ export class TerminalManager extends EventEmitter {
     if (!id) return
     const current = this.terminals.get(id)
     if (!current || !current.nativeAlive) return
-    if (isStalledInputError(error)) {
+    if (isStalledTerminalInputError(error)) {
       // The child stopped reading its stdin. The widget already prints this
       // inline, in the terminal it happened to, which is where it belongs —
       // a second copy as a global toast would fire on every keystroke the
       // user tries afterwards.
       return
     }
-    if (isDeadSessionError(error)) {
+    if (isDeadTerminalSessionError(error)) {
       // The engine is telling us this session no longer exists. Keeping the
       // record marked alive is what made a wedged terminal look hung forever:
       // every keystroke was accepted and silently dropped, and only closing
       // the widget helped. Report it as an exit so the widget says so and can
       // recover on its own.
       current.nativeAlive = false
+      this.invalidateInput(id)
       current.exited = true
       current.exitedAt = Date.now()
       this.emit('backend-error', error)
@@ -679,18 +704,27 @@ export class TerminalManager extends EventEmitter {
   private serializeInput<T>(id: string, operation: () => T | Promise<T>): Promise<T | { ok: false; error: string }> {
     const previous = this.inputTails.get(id) ?? Promise.resolve()
     const epoch = this.inputEpochs.get(id)
-    const current = takeInputTurn(previous).then(
+    const current = awaitInputTurn(previous).then(
       () => this.inputEpochs.get(id) === epoch ? operation() : { ok: false as const, error: 'input interrupted' },
       () => ({ ok: false as const, error: 'terminal input queue timed out' })
     )
-    const settled = current.then(
-      () => undefined,
-      () => undefined
-    )
+    // The tail waits for the previous turn as well as this one. takeInputTurn
+    // gives up on a stalled predecessor after INPUT_QUEUE_STALL_MS, but "gave
+    // up waiting" is not "the predecessor finished": settling the tail on the
+    // timeout alone handed the queue to the next caller while the write ahead
+    // of it was still in flight, and the two inputs interleaved in the shell —
+    // half of one command typed into the middle of another. The timed-out turn
+    // is still refused; it just no longer pulls the queue out from under the
+    // write it was waiting for.
+    const settled = Promise.allSettled([previous, current]).then(() => undefined)
     this.inputTails.set(id, settled)
-    return current.finally(() => {
+    // Dropping the entry is keyed to the tail, not to this turn: forgetting it
+    // while the predecessor was still running would hand the next caller a
+    // fresh, already-resolved queue — the very overlap the tail exists to stop.
+    void settled.then(() => {
       if (this.inputTails.get(id) === settled) this.inputTails.delete(id)
     })
+    return current
   }
 
 
@@ -748,15 +782,15 @@ export class TerminalManager extends EventEmitter {
    * can never hold a delivery open.
    */
   private async waitBeforeSubmit(id: string, signal?: AbortSignal): Promise<boolean> {
-    if (!(await deliveryDelay(SUBMIT_BURST_GAP_MS, signal))) return false
+    if (!(await waitForDelivery(TERMINAL_SUBMIT_BURST_GAP_MS, signal))) return false
     const record = this.terminals.get(id)
     if (!record) return true
-    const deadline = Date.now() + SUBMIT_SETTLE_MAX_MS
+    const deadline = Date.now() + TERMINAL_SUBMIT_SETTLE_MAX_MS
     for (;;) {
       const quietFor = Date.now() - record.lastDataAt
-      const remaining = Math.min(SUBMIT_SETTLE_QUIET_MS - quietFor, deadline - Date.now())
+      const remaining = Math.min(TERMINAL_SUBMIT_SETTLE_QUIET_MS - quietFor, deadline - Date.now())
       if (remaining <= 0) return true
-      if (!(await deliveryDelay(remaining, signal))) return false
+      if (!(await waitForDelivery(remaining, signal))) return false
     }
   }
 
@@ -771,10 +805,15 @@ export class TerminalManager extends EventEmitter {
     const record = this.terminals.get(id)
     if (!record || !this.isRunning(id)) return { ok: false, error: `terminal ${id} is not running` }
 
+    // Agent TUIs, including OpenCode, distinguish a pasted prompt from shell
+    // input through the bracketed-paste markers. Without them a long message
+    // delivered by `orc tell` can be interpreted as a `$ ...` shell command.
     const pastedText = text.replace(/\r\n?/g, '\n')
-    const multiline = pastedText.includes('\n')
-    const input = multiline ? `\x1b[200~${pastedText}\x1b[201~` : pastedText
-    const expected = normalizeDeliveryText(pastedText)
+    if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(pastedText)) {
+      return { ok: false, error: 'message contains unsafe terminal control characters' }
+    }
+    const input = `\x1b[200~${pastedText}\x1b[201~`
+    const expected = normalizeTerminalDeliveryText(pastedText)
     if (!expected) return { ok: false, error: 'message has no visible text' }
     const expectedLength = pastedText.length
     const offset = record.output.globalOffset
@@ -803,14 +842,21 @@ export class TerminalManager extends EventEmitter {
       if (!record || !this.isRunning(id)) return false
       const from = Math.max(offset, record.output.startOffset)
       const output = record.output.read(from, OUTPUT_BUFFER_LIMIT).data
-      const normalized = normalizeDeliveryText(output)
+      const normalized = normalizeTerminalDeliveryText(output)
       if (!normalized || !expected) return false
-      if (expected.length >= 8 && normalized.includes(expected)) return true
+      if (expected.length >= 8) {
+        if (normalized.includes(expected)) return true
+        // Wrapped by the target's composer: compare with the seams removed.
+        const compactExpected = compactTerminalDeliveryText(expected)
+        if (compactExpected.length >= 8 && compactTerminalDeliveryText(normalized).includes(compactExpected)) {
+          return true
+        }
+      }
       // Short commands ("ls", "ok") collide with prose already on screen:
       // require a token boundary so "ls" inside "false" is not a delivery.
       const escaped = expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       if (expected.length < 8 && new RegExp(`(^|\\W)${escaped}(\\W|$)`).test(normalized)) return true
-      return pasteMarkerMatches(normalized, expectedLength)
+      return matchesPasteMarker(normalized, expectedLength)
     }
     if (matches()) return Promise.resolve(true)
     if (signal?.aborted) return Promise.resolve(false)
@@ -887,6 +933,15 @@ export class TerminalManager extends EventEmitter {
     this.emit('title', id, record.title)
   }
 
+  rememberPrompt(id: string, prompt: string): void {
+    const record = this.terminals.get(id)
+    if (!record) return
+    const next = prompt.replace(/\s+/g, ' ').trim().slice(0, 12_000)
+    if (!next || next === record.lastPrompt) return
+    record.lastPrompt = next
+    this.emit('prompt', id, next)
+  }
+
 
 
 
@@ -902,7 +957,7 @@ export class TerminalManager extends EventEmitter {
   }
 
   resize(id: string, cols: number, rows: number): void {
-    if (!isPositiveInt(cols) || !isPositiveInt(rows)) return
+    if (!isPositiveTerminalInt(cols) || !isPositiveTerminalInt(rows)) return
     const current = this.terminals.get(id)
     if (current) {
       current.cols = cols
@@ -990,6 +1045,7 @@ export class TerminalManager extends EventEmitter {
     current.pty = null
     current.rootPid = undefined
     current.ptyDisposers = []
+    this.invalidateInput(id)
     current.exited = true
     current.exitedAt = Date.now()
 
@@ -1028,19 +1084,20 @@ export class TerminalManager extends EventEmitter {
   release(
     id: string,
     options: ReleaseOptions = {}
-  ): { id: string; title: string; cwd: string; scrollback: string } | null {
+  ): { id: string; title: string; cwd: string; scrollback: string; lastPrompt?: string } | null {
     const record = this.terminals.get(id)
     if (!record) return null
     const scrollback = record.output.toString()
 
 
     const wasRunning = this.isRunning(id)
+    this.invalidateInput(id)
     try {
       record.pty?.kill()
     } catch {
 
     }
-    if (record.nativeAlive) this.rustPty?.dispose(id)
+    this.rustPty?.dispose(id)
 
 
 
@@ -1062,7 +1119,7 @@ export class TerminalManager extends EventEmitter {
 
 
     if (wasRunning && options.killDescendants !== false) killProcessTree(record.rootPid)
-    const info = { id, title: record.title, cwd: record.cwd, scrollback }
+    const info = { id, title: record.title, cwd: record.cwd, scrollback, lastPrompt: record.lastPrompt }
     this.emit('release', info)
     return info
   }
@@ -1153,116 +1210,8 @@ export class TerminalManager extends EventEmitter {
 }
 
 
-/**
- * True when a Rust-engine error means the session itself is gone rather than
- * one operation having failed. These are the engine's own wordings for "the
- * writer thread is no longer there" and "I have no such terminal"; both mean
- * nothing typed into this terminal will ever reach a shell again.
- */
-export function isDeadSessionError(error: { message?: string } | string): boolean {
-  const message = (typeof error === 'string' ? error : error?.message ?? '').toLowerCase()
-  return message.includes('actor stopped') || message.includes('unknown terminal')
-}
-
-/**
- * True when the engine refused input because the child stopped reading its
- * stdin — the terminal is wedged, not gone.
- *
- * Deliberately not part of isDeadSessionError: the shell is still running and
- * still producing output, and reporting an exit here would be a lie the
- * recovery path cannot make true. A respawn would reach the engine's existing,
- * still-live entry for that id and hand the widget the same wedged PTY back,
- * now labelled healthy. The honest handling is to say input is not getting
- * through — which the widget prints inline — and let Ctrl+C (escalated inside
- * the engine) or closing the widget resolve it.
- */
-export function isStalledInputError(error: { message?: string } | string): boolean {
-  const message = (typeof error === 'string' ? error : error?.message ?? '').toLowerCase()
-  return message.includes('is not reading input')
-}
-
-/**
- * Wait for the previous input on this terminal, but not forever.
- *
- * Input is serialised per terminal so two writers cannot interleave their
- * bytes, and that queue used to be unbounded: against a terminal that had
- * stopped reading, every keystroke waited out its own full ack timeout
- * strictly after the one before it, so a handful of them added up to most of
- * a minute of apparent silence. Expired input is rejected, never run out of
- * order alongside an earlier write that may still complete.
- */
-function takeInputTurn(previous: Promise<void>): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('terminal input queue timed out')), INPUT_QUEUE_STALL_MS)
-    timer.unref?.()
-    void previous
-      .catch(() => undefined)
-      .then(() => {
-        clearTimeout(timer)
-        resolve()
-      })
-  })
-}
-
-/** How long a keystroke waits behind the one before it. See takeInputTurn. */
-const INPUT_QUEUE_STALL_MS = 5_000
-
 export function normalizeDeliveryText(value: string): string {
-  return String(value ?? '')
-    // The body class excludes every terminator byte (ESC included), so a match
-    // can only run forward. The previous `[^\x07]*` swallowed any following
-    // OSC introducers and then backtracked over them one at a time hunting a
-    // terminator that was not there — quadratic in the input. And the input is
-    // up to OUTPUT_BUFFER_LIMIT bytes of arbitrary terminal output, re-scanned
-    // on a timer for the whole of every delivery. `cat` on a binary file is
-    // enough to trigger it: 50KB of unterminated ESC] pairs measured ~600ms of
-    // blocked main thread per scan, on the thread that pumps every PTY.
-    // Terminator set matches the hand-written scanner in ansi.ts; it is
-    // optional so a sequence cut off by the ring buffer still costs one pass.
-    .replace(/\x1b\][^\x07\x9c\x1b]*(?:\x07|\x9c|\x1b\\)?/g, '')
-    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
+  return normalizeTerminalDeliveryText(value)
 }
-
-function pasteMarkerMatches(value: string, expectedLength: number): boolean {
-  const marker = /\[\s*pasted\s+(?:content|text)\b([^\]\r\n]*)\]/gi
-  for (const match of value.matchAll(marker)) {
-    const body = match[1] ?? ''
-    const explicitLength = body.match(/(\d[\d,]*)\s*(?:chars?|characters?)\b/i)?.[1]
-    const candidate = explicitLength ?? [...body.matchAll(/\d[\d,]*/g)].at(-1)?.[0]
-    if (candidate && Number(candidate.replace(/,/g, '')) === expectedLength) return true
-  }
-  return false
-}
-
-/** Minimum gap between a typed message and its Enter. See waitBeforeSubmit. */
-const SUBMIT_BURST_GAP_MS = 120
-/** Additional quiet the target must show after that floor. */
-const SUBMIT_SETTLE_QUIET_MS = 60
-/** Hard cap on the extra settle wait, so a noisy terminal cannot stall a send. */
-const SUBMIT_SETTLE_MAX_MS = 500
-
-function deliveryDelay(ms: number, signal?: AbortSignal): Promise<boolean> {
-  return new Promise((resolve) => {
-    if (signal?.aborted) return resolve(false)
-    const onAbort = (): void => {
-      clearTimeout(timer)
-      resolve(false)
-    }
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort)
-      resolve(true)
-    }, ms)
-    timer.unref?.()
-    signal?.addEventListener('abort', onAbort, { once: true })
-  })
-}
-
-function isPositiveInt(value: unknown): value is number {
-  return Number.isInteger(value) && (value as number) > 0
-}
-
 
 export const TERMINAL_ID = /^[A-Za-z0-9_-]{1,128}$/

@@ -47,7 +47,7 @@ function readUrl(widgetId: string | undefined): string {
   if (!widgetId) return HOME_URL
   try {
     const raw = localStorage.getItem(`orcspace-browser-url:${widgetId}`)
-    if (raw && (raw.startsWith('http://') || raw.startsWith('https://'))) return raw
+    if (raw && (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('file://'))) return raw
   } catch {}
   return HOME_URL
 }
@@ -68,6 +68,10 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
   const [viewEl, setViewEl] = useState<Webview | null>(null)
   const retryCountRef = useRef(0)
   const [initialUrl] = useState(url)
+  // A webview with no src is never attached: it emits no dom-ready and every
+  // loadURL on it throws. At home it gets about:blank so it is ready to
+  // navigate the moment the user enters an address.
+  const initialBrowserUrl = initialUrl === HOME_URL ? 'about:blank' : initialUrl
 
   useEffect(() => {
     if (!editing && !media) setAddress(url)
@@ -128,7 +132,15 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
     }
     const onFail = (event: Event): void => {
       const e = event as Event & { errorCode?: number; errorDescription?: string; isMainFrame?: boolean }
-      if (e.errorCode === -3 || e.isMainFrame === false) return
+      if (e.isMainFrame === false) return
+      // ERR_ABORTED is not worth an error banner (Stop, or a superseded
+      // navigation), but the spinner must still come down — otherwise an
+      // aborted main-frame load leaves the widget loading forever.
+      if (e.errorCode === -3) {
+        setLoading(false)
+        syncHistory()
+        return
+      }
       setLoading(false)
       setLoadError(e.errorDescription || 'server unreachable')
       syncHistory()
@@ -137,12 +149,12 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
       const navUrl = (event as Event & { url?: string }).url
 
 
-      if (navUrl && !navUrl.startsWith('data:')) setUrl(navUrl)
+      if (navUrl && navUrl !== 'about:blank' && !navUrl.startsWith('data:')) setUrl(navUrl)
       syncHistory()
     }
     const onInPage = (event: Event): void => {
       const e = event as Event & { url?: string; isMainFrame?: boolean }
-      if (e.isMainFrame && e.url && !e.url.startsWith('data:')) setUrl(e.url)
+      if (e.isMainFrame && e.url && e.url !== 'about:blank' && !e.url.startsWith('data:')) setUrl(e.url)
       syncHistory()
     }
     const onEnterHtmlFullscreen = (event: Event): void => {
@@ -263,7 +275,7 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
   const navigate = useCallback((value: string): void => {
     const target = toNavigationUrl(value)
     if (!target) {
-      setLoadError('URL must start with http:// or https://')
+      setLoadError('Enter a web address, a search, or a local file path')
       return
     }
     setUrl(target)
@@ -272,7 +284,26 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
     setLoadError(null)
     setEditing(false)
     setMedia(null)
-    void viewRef.current?.loadURL(target).catch(() => {})
+    const view = viewRef.current
+    if (!view) {
+      setLoading(false)
+      return
+    }
+    const fail = (err: unknown): void => {
+      setLoading(false)
+      setLoadError(err instanceof Error ? err.message : 'Could not load URL')
+    }
+    try {
+      // loadURL throws synchronously (it does not reject) while the guest is
+      // not ready yet; the src attribute navigates it in that window.
+      void Promise.resolve(view.loadURL(target)).catch(fail)
+    } catch {
+      try {
+        view.src = target
+      } catch (err) {
+        fail(err)
+      }
+    }
   }, [])
 
   const isHome = !media && (() => {
@@ -285,8 +316,9 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
   })()
   const host = hostOf(url)
     const isHttps = url.startsWith('https://')
+    const isLocalFile = url.startsWith('file://')
     const navError = !url && !media && address.trim() && (
-      'URL must start with http:// or https://'
+      'Enter a web address, a search, or a local file path'
     )
 
     return (
@@ -326,7 +358,7 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
             onSubmit={(e) => { e.preventDefault(); navigate(address) }}
           >
             <div className="pointer-events-none absolute left-2.5 flex items-center text-text-faint">
-              {isHttps ? <Lock size={10} strokeWidth={2} /> : <Search size={10} strokeWidth={2} />}
+              {isLocalFile ? <FileText size={10} strokeWidth={2} /> : isHttps ? <Lock size={10} strokeWidth={2} /> : <Search size={10} strokeWidth={2} />}
             </div>
             <input
               value={isHome && (address === HOME_URL || address === `${HOME_URL}/`) ? '' : address}
@@ -415,7 +447,7 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
             ref={setViewRef}
             partition={BROWSER_PARTITION}
             allowpopups={'true' as unknown as boolean}
-            src={initialUrl}
+            src={initialBrowserUrl}
             aria-label="Browser"
             className="absolute inset-0 h-full w-full"
             style={media || isHome ? { visibility: 'hidden', pointerEvents: 'none' } : undefined}

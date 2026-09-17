@@ -26,7 +26,7 @@ export interface CommandDeps {
 
 
 
-  requestWidget(info: { id: string; title: string; kind?: string; x?: number; y?: number; from?: string | null }): void
+  requestWidget(info: { id: string; title: string; kind?: string; x?: number; y?: number; from?: string | null; imagePath?: string; imageName?: string }): void
   requestWidgetRemoval(id: string): void
   requestWidgetRename?(id: string, title: string): void
 

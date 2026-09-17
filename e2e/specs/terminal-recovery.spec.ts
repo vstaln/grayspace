@@ -18,6 +18,19 @@ test('a crashed renderer reconnects to the same running shell', async () => {
     // Typed echo may contain cursor-position sequences between characters.
     // The screen, rather than a stripped byte stream, is the observable result.
     await expect(terminalFrame(page).locator('.xterm-rows')).toContainText(marker)
+    // The canvas save is debounced by about a second. Crashing before it lands
+    // leaves the main process with no widget to hand back, so the reload comes
+    // up on an empty canvas and this test measures save timing instead of shell
+    // recovery — which is what made it fail while recovery itself worked.
+    await expect
+      .poll(
+        () => page.evaluate(async (widgetId) => {
+          const snapshot = await window.api.canvas.load()
+          return snapshot.widgets.some((widget) => widget.id === widgetId)
+        }, id),
+        { message: 'the terminal widget must reach the main process before the crash' }
+      )
+      .toBe(true)
     await ctx.app.evaluate(({ BrowserWindow }) => new Promise<void>((resolve) => {
       const contents = BrowserWindow.getAllWindows()[0].webContents
       contents.once('did-finish-load', () => resolve())

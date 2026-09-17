@@ -6,6 +6,7 @@ import type { PlannerStore } from '../plannerStore.ts'
 import type { OrchestrationStore } from '../orchestration/store.ts'
 import type { AppState, SettingsPatch } from '../appState.ts'
 import type { Core } from '../core/index.ts'
+import type { RendererStateStore } from '../rendererState.ts'
 
 
 export interface IpcDeps {
@@ -17,6 +18,7 @@ export interface IpcDeps {
   canvas: CanvasStore
   code: CodeStore
   state: AppState
+  rendererState: RendererStateStore
   getWindow(): BrowserWindow | null
   getWorkspaceDir(): string | undefined
   setWorkspaceDir(dir: string | undefined): void

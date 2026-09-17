@@ -24,18 +24,6 @@ export function provider(url: string): Provider | null {
   return null
 }
 
-export function isSupportedAudioUrl(url: string): boolean {
-  try {
-    const trimmed = url.trim()
-    if (trimmed.startsWith('orc://media/') || trimmed.startsWith('data:audio/') || trimmed.startsWith('blob:')) return true
-    const u = new URL(url)
-    const ext = u.pathname.split('.').pop()?.split('?')[0]?.toLowerCase() ?? ''
-    return SUPPORTED_AUDIO_EXTS.has(ext)
-  } catch {
-    return false
-  }
-}
-
 const DATA_URL_CAP = 2 * 1024 * 1024
 
 export function sanitizeAudioSrc(url: string): string | null {

@@ -3,7 +3,10 @@ import {
   ArrowLeft,
   ArrowRight,
   Copy,
+  Eye,
+  EyeOff,
   GitBranch,
+  LayoutGrid,
   Minus,
   PanelLeft,
   Square,
@@ -11,6 +14,8 @@ import {
 } from 'lucide-react'
 import type { GitBranch as GitBranchInfo, GitCommit as GitCommitInfo, GitStatus } from '../../../preload/index.d'
 import { IS_MAC } from '../lib/platform'
+import type { ArrangeMode } from '../lib/canvasLayout'
+import type { CodeLayoutMode } from '../lib/codeLayout'
 
 export type WorkView = 'canvas' | 'code'
 
@@ -38,26 +43,56 @@ const ICON =
   'grid h-10 w-[46px] flex-none place-items-center rounded-bar border-0 transition-colors duration-150 cursor-pointer'
 const QUIET = 'text-text-faint hover:bg-bg-hover hover:text-text'
 
+const CANVAS_ARRANGE_ITEMS: ReadonlyArray<{ mode: ArrangeMode; label: string; hint: string }> = [
+  { mode: 'grid', label: 'Grid', hint: 'Equal tiles in a square grid' },
+  { mode: 'tiny', label: 'Tiny', hint: 'Small tiles, as many per row as fit' },
+  { mode: 'focus', label: 'Focus', hint: 'Active widget large, the rest beside it' },
+  { mode: 'free', label: 'Free', hint: 'Back to where you dragged them' }
+]
+
+// Code lays its terminals out in a CSS grid rather than on free coordinates,
+// so the modes differ: Auto is the per-count layout the view ships with, and
+// there is nothing for Tiny or Free to mean.
+const CODE_ARRANGE_ITEMS: ReadonlyArray<{ mode: CodeLayoutMode; label: string; hint: string }> = [
+  { mode: 'auto', label: 'Auto', hint: 'Built-in layout for the session count' },
+  { mode: 'grid', label: 'Grid', hint: 'Equal cards in a square grid' },
+  { mode: 'columns', label: 'Columns', hint: 'One column per terminal' },
+  { mode: 'rows', label: 'Rows', hint: 'One row per terminal' },
+  { mode: 'focus', label: 'Focus', hint: 'Last used terminal large, rest beside it' }
+]
+
 interface Props {
   activeView: WorkView
   onViewChange: (view: WorkView) => void
+  arrangeMode: ArrangeMode
+  onArrange: (mode: ArrangeMode) => void
+  codeLayoutMode: CodeLayoutMode
+  onCodeLayout: (mode: CodeLayoutMode) => void
   codeSidebarCollapsed: boolean
   onToggleCodeSidebar: () => void
   canUndo: boolean
   canRedo: boolean
   onUndo: () => void
   onRedo: () => void
+  terminalsFlipped: boolean
+  onToggleTerminalsFlipped: () => void
 }
 
 export default React.memo(function TitleBar({
   activeView,
   onViewChange,
+  arrangeMode,
+  onArrange,
+  codeLayoutMode,
+  onCodeLayout,
   codeSidebarCollapsed,
   onToggleCodeSidebar,
   canUndo,
   canRedo,
   onUndo,
-  onRedo
+  onRedo,
+  terminalsFlipped,
+  onToggleTerminalsFlipped
 }: Props): React.JSX.Element {
   const [maximized, setMaximized] = useState(false)
   const [flash, setFlash] = useState<string | null>(null)
@@ -71,7 +106,32 @@ export default React.memo(function TitleBar({
   const [gitError, setGitError] = useState<string | null>(null)
   const [gitNotice, setGitNotice] = useState<string | null>(null)
   const [gitBusyRef, setGitBusyRef] = useState<string | null>(null)
+  const [arrangeOpen, setArrangeOpen] = useState(false)
   const rightIslandRef = useRef<HTMLDivElement>(null)
+
+  // Each view arranges different things, so switching views closes the menu
+  // rather than leaving the other view's options on screen.
+  useEffect(() => {
+    setArrangeOpen(false)
+  }, [activeView])
+
+  useEffect(() => {
+    if (!arrangeOpen) return
+    const onDown = (e: MouseEvent): void => {
+      if (rightIslandRef.current && !rightIslandRef.current.contains(e.target as Node)) {
+        setArrangeOpen(false)
+      }
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setArrangeOpen(false)
+    }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [arrangeOpen])
 
   useEffect(() => {
     if (!gitOpen) return
@@ -279,6 +339,12 @@ export default React.memo(function TitleBar({
   }, [])
 
 
+  const isCodeView = activeView === 'code'
+  const arrangeItems: ReadonlyArray<{ mode: string; label: string; hint: string }> =
+    isCodeView ? CODE_ARRANGE_ITEMS : CANVAS_ARRANGE_ITEMS
+  const activeArrangeMode: string = isCodeView ? codeLayoutMode : arrangeMode
+  const arrangeLabel = isCodeView ? 'Arrange terminals' : 'Arrange widgets'
+
   const noDrag = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
 
   return (
@@ -402,6 +468,69 @@ export default React.memo(function TitleBar({
       <div className="flex h-10 min-w-0 items-center justify-end" style={noDrag}>
         <div className="h-full flex-1" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
         <div ref={rightIslandRef} className={`${ISLAND} relative gap-0`}>
+          <div className={`${VIEW_SWITCH} mr-1`}>
+            <button
+              type="button"
+              className={`${VIEW_TAB} gap-1.5 px-[9px] ${terminalsFlipped ? VIEW_TAB_ACTIVE : VIEW_TAB_INACTIVE}`}
+              onClick={onToggleTerminalsFlipped}
+              aria-pressed={terminalsFlipped}
+              data-testid="titlebar-flip-terminals"
+              title={terminalsFlipped ? 'Show terminals' : 'Flip terminals to latest prompts'}
+            >
+              {terminalsFlipped ? <Eye size={14} /> : <EyeOff size={14} />}
+              <span>{terminalsFlipped ? 'Show terminals' : 'Flip terminals'}</span>
+            </button>
+          </div>
+          <div className="relative mr-1">
+            <div className={VIEW_SWITCH}>
+              <button
+                type="button"
+                aria-haspopup="menu"
+                aria-expanded={arrangeOpen}
+                aria-label={arrangeLabel}
+                title={arrangeLabel}
+                className={`${VIEW_TAB} gap-1.5 px-[8px] ${arrangeOpen ? VIEW_TAB_ACTIVE : VIEW_TAB_INACTIVE}`}
+                onClick={() => {
+                  setGitOpen(false)
+                  setArrangeOpen((open) => !open)
+                }}
+              >
+                <LayoutGrid size={14} className="flex-none" />
+              </button>
+            </div>
+            {arrangeOpen && (
+              <div
+                role="menu"
+                aria-label={arrangeLabel}
+                className="absolute right-0 top-[36px] z-[60000] w-[210px] rounded-panel border border-line-soft bg-bg-panel p-1 text-left shadow-2xl"
+              >
+                {arrangeItems.map((item) => {
+                  const checked = item.mode === activeArrangeMode
+                  return (
+                    <button
+                      key={item.mode}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={checked}
+                      title={item.hint}
+                      onClick={() => {
+                        setArrangeOpen(false)
+                        if (activeView === 'code') onCodeLayout(item.mode as CodeLayoutMode)
+                        else onArrange(item.mode as ArrangeMode)
+                      }}
+                      className={`flex w-full items-center gap-2 rounded-panel px-2 py-1.5 text-left text-[12px] transition-colors ${checked ? 'bg-bg-hover text-text' : 'text-text-dim hover:bg-bg-hover hover:text-text'}`}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">{item.label}</span>
+                        <span className="block truncate text-[10px] text-text-faint">{item.hint}</span>
+                      </span>
+                      {checked && <span className="flex-none text-[13px] text-text">✓</span>}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
           {}
           <div className={`${VIEW_SWITCH} title-bar-git-switch`}>
           <button
@@ -410,6 +539,7 @@ export default React.memo(function TitleBar({
             aria-expanded={gitOpen}
             className={`${VIEW_TAB} title-bar-git gap-1.5 ${gitOpen ? VIEW_TAB_ACTIVE : VIEW_TAB_INACTIVE}`}
             onClick={() => {
+              setArrangeOpen(false)
               setGitOpen((open) => {
                 if (!open) setGitQuery('')
                 return !open

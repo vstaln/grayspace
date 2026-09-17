@@ -31,25 +31,9 @@ const types = new Map<WidgetKind, WidgetType>()
 export function registerWidgetType(type: WidgetType): void {
   types.set(type.kind, type)
 }
-
 export function widgetType(kind: WidgetKind | undefined): WidgetType | undefined {
   return kind ? types.get(kind) : undefined
 }
-
-export function widgetTypes(): WidgetType[] {
-  return Array.from(types.values())
-}
-
-
-
-
-
-
-export function widgetMayRun(kind: WidgetKind | undefined, command: string): boolean {
-  const type = widgetType(kind)
-  return !!type && type.commands.includes(command)
-}
-
 
 export function registerBuiltinWidgets(): void {
   registerWidgetType({
@@ -87,6 +71,12 @@ export function registerBuiltinWidgets(): void {
     kind: 'browser',
     label: 'Browser',
     defaultSize: { w: 720, h: 480 },
+    commands: ['widget.update', 'widget.remove']
+  })
+  registerWidgetType({
+    kind: 'image',
+    label: 'Image',
+    defaultSize: { w: 560, h: 420 },
     commands: ['widget.update', 'widget.remove']
   })
   registerWidgetType({

@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { parseOutput, parseError } from './chat.ts'
+import { appendProviderOutput, MAX_PROVIDER_OUTPUT, parseOutput, parseError } from './chat.ts'
+
+test('bounds provider output to 4 MiB per stream', () => {
+  const first = appendProviderOutput('', 'a'.repeat(MAX_PROVIDER_OUTPUT - 8))
+  const bounded = appendProviderOutput(first, 'b'.repeat(32))
+  assert.equal(Buffer.byteLength(bounded), MAX_PROVIDER_OUTPUT)
+  assert.match(bounded.slice(-32), /^b+$/)
+
+  const unicode = appendProviderOutput('', '😀'.repeat(Math.ceil(MAX_PROVIDER_OUTPUT / 4) + 1))
+  assert.ok(Buffer.byteLength(unicode) <= MAX_PROVIDER_OUTPUT)
+})
 
 test('parseOutput deduplicates streaming Codex item updates without repeating text', () => {
   const jsonl = [

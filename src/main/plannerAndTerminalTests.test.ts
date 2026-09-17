@@ -216,10 +216,17 @@ describe('TerminalSnapshots - public API', () => {
     assert.equal(all.length, 2)
   })
 
-  test('scrollback survives a disk round-trip', () => {
-    snapshots.save({ id: 'term-disk', title: 'Disk', cwd: '/', scrollback: 'persist me' })
+  test('scrollback and the latest prompt survive a disk round-trip', () => {
+    snapshots.save({
+      id: 'term-disk',
+      title: 'Disk',
+      cwd: '/',
+      scrollback: 'persist me',
+      lastPrompt: '  review\nthis   code  '
+    })
     snapshots.flushNow()
     const reloaded = new TerminalSnapshots()
     assert.equal(reloaded.scrollback('term-disk'), 'persist me')
+    assert.equal(reloaded.get('term-disk')?.lastPrompt, 'review this code')
   })
 })

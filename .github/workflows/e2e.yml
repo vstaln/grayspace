@@ -5,6 +5,9 @@ name: E2E
 # needs no extra services there, so the job runs on windows-latest.
 
 on:
+  push:
+    branches: [main, master]
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -22,8 +25,6 @@ jobs:
       - name: Install app dependencies
         run: npm ci
 
-      # `npm run build` runs `prebuild` → `npm run build:mcp` first, which
-      # installs and builds the sibling repo materialized above.
       - name: Build the app
         run: npm run build
 

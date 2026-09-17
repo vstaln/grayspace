@@ -14,7 +14,9 @@ import {
 import { clearTimerPersist } from '../lib/timerPersist'
 import { clearInitialCommand } from '../lib/pendingTerminalCommands'
 import { applyDeltaToWidgets } from '../lib/canvasDeltaMerge'
+import { fitSpawnSize } from '../lib/canvasLayout'
 import type { CanvasDelta } from '../../../preload/api'
+import { pickTerminalName } from '../../../main/terminalNames.ts'
 
 let localCounter = 0
 const makeLocalId = (kind: WidgetKind = 'terminal'): string => {
@@ -49,16 +51,6 @@ interface StrokeBounds {
 
 const strokeBoundsCache = new Map<string, StrokeBounds>()
 const MAX_BOUNDS_CACHE_ENTRIES = 5000
-
-export function invalidateStrokeBounds(strokeId?: string): void {
-  if (strokeId === undefined) {
-    strokeBoundsCache.clear()
-    return
-  }
-  for (const key of Array.from(strokeBoundsCache.keys())) {
-    if (key === strokeId || key.startsWith(`${strokeId}:`)) strokeBoundsCache.delete(key)
-  }
-}
 
 function strokeBounds(stroke: Stroke): StrokeBounds {
   const pts = stroke.points
@@ -97,9 +89,8 @@ function strokeBounds(stroke: Stroke): StrokeBounds {
 
 /**
  * Every localStorage key namespaced by widget id, cleared when that widget is
- * removed. The two browser entries were missing, so closing a browser widget
- * left its address (and, for dropped media, a JSON blob) behind permanently —
- * one pair per browser widget ever opened, for the life of the install.
+ * removed. The browser entries are shared by canvas widgets and Code browser
+ * sessions; the hydration sweep below keeps both kinds of live ids.
  *
  * That matters beyond the wasted space: localStorage has a hard quota, and
  * every write in this app is wrapped in `try {} catch {}`. Once the quota is
@@ -108,8 +99,8 @@ function strokeBounds(stroke: Stroke): StrokeBounds {
  * per-widget key belongs in this list.
  */
 /**
- * Per-widget keys that only ever belong to a canvas widget, so "no widget with
- * this id" is proof the entry is garbage and it is safe to sweep on hydration.
+ * Per-widget keys that can be swept when their owner is absent from both the
+ * canvas snapshot and the Code-session snapshot.
  */
 const PRUNABLE_WIDGET_PREFIXES = [
   'orcspace-links:',
@@ -159,19 +150,18 @@ const WIDGET_STORAGE_PREFIXES = [...PRUNABLE_WIDGET_PREFIXES, ...AGENT_STORAGE_P
  * Drop per-widget storage whose widget is no longer on the canvas.
  *
  * `removeWidget` clears these keys going forward, but installs that ran before
- * the browser prefixes were listed there still carry an entry for every
- * browser widget they ever closed, and nothing else would ever collect them.
- * Runs once per hydration against the freshly loaded widget set, which is the
- * only point where "not on the canvas" is reliably known.
+ * the browser prefixes were listed there still carry old entries. Runs once
+ * per hydration against the freshly loaded canvas and Code owner sets, which
+ * is the only point where an entry can be classified as orphaned safely.
  */
-function pruneOrphanWidgetStorage(liveWidgetIds: Set<string>): void {
+function pruneOrphanWidgetStorage(liveStorageIds: Set<string>): void {
   try {
     for (let i = localStorage.length - 1; i >= 0; i -= 1) {
       const key = localStorage.key(i)
       if (!key) continue
       const prefix = PRUNABLE_WIDGET_PREFIXES.find((candidate) => key.startsWith(candidate))
       if (!prefix) continue
-      if (!liveWidgetIds.has(key.slice(prefix.length))) localStorage.removeItem(key)
+      if (!liveStorageIds.has(key.slice(prefix.length))) localStorage.removeItem(key)
     }
   } catch {
 
@@ -193,33 +183,24 @@ function clearRemovedNoteStorage(): void {
 const makeConnectionId = (): string => `conn-${Date.now()}-${++localCounter}`
 
 
-const TERMINAL_TITLE = /^Terminal (\d+)$/
+interface UseCanvasOptions {
+  favoriteTerminalNames?: string[]
+}
 
-
-
-
-
-
-
-
-
-function nextTerminalNumber(widgets: Widget[]): number {
-  const taken = new Set<number>()
-  for (const widget of widgets) {
-    if (widget.kind && widget.kind !== 'terminal') continue
-    const match = TERMINAL_TITLE.exec(widget.title)
-    if (match) taken.add(Number(match[1]))
-  }
-  let n = 1
-  while (taken.has(n)) n += 1
-  return n
+export interface WidgetMediaMetadata {
+  imagePath?: string
+  imageName?: string
 }
 
 
 
 
 
-export function useCanvas() {
+
+
+
+
+export function useCanvas({ favoriteTerminalNames = [] }: UseCanvasOptions = {}) {
   const [widgets, setWidgets] = useState<Widget[]>([])
   const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, zoom: 1 })
   const [tool, setTool] = useState<CanvasTool>('select')
@@ -309,10 +290,23 @@ export function useCanvas() {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const workspaceDirRef = useRef<string | null>(null)
   const workspaceSyncSeqRef = useRef(0)
+  const widgetPatchRef = useRef<Map<string, Partial<Widget>>>(new Map())
+  const widgetRafRef = useRef<number | null>(null)
 
 
 
   const canvasChangeSeqRef = useRef(0)
+
+  const pendingWidgetsSnapshot = useCallback((): Widget[] => {
+    const batch = widgetPatchRef.current
+    if (batch.size === 0) return widgetsRef.current
+    const next = widgetsRef.current.map((widget) => {
+      const patch = batch.get(widget.id)
+      return patch ? { ...widget, ...patch } : widget
+    })
+    widgetsRef.current = next
+    return next
+  }, [])
 
   function resetCanvasHistory(): void {
     historyPastRef.current = []
@@ -342,8 +336,11 @@ export function useCanvas() {
     const changesAtStart = canvasChangeSeqRef.current
     hydratedRef.current = false
     skipNextSaveRef.current = true
-    void window.api.canvas.load()
-      .then((snapshot) => {
+    const codeLoad = typeof window.api.code?.load === 'function'
+      ? window.api.code.load().catch(() => null)
+      : Promise.resolve(null)
+    void Promise.all([window.api.canvas.load(), codeLoad])
+      .then(([snapshot, codeSnapshot]) => {
         if (run !== hydrationRunRef.current) return
         if (canvasChangeSeqRef.current === changesAtStart) {
           setWidgets(snapshot.widgets)
@@ -357,7 +354,17 @@ export function useCanvas() {
           // ahead of the load, the snapshot is stale and its widget list
           // would read a just-created widget as an orphan and delete the
           // storage it is about to use.
-          pruneOrphanWidgetStorage(new Set(snapshot.widgets.map((w) => w.id)))
+          const liveStorageIds = new Set(snapshot.widgets.map((w) => w.id))
+          // Code browser sessions use the same per-widget browser storage as
+          // canvas browser widgets, but their ids are not in the canvas
+          // snapshot. Keep those ids live during the canvas sweep or a
+          // workspace hydration will erase their URL and dropped media.
+          if (codeSnapshot && Array.isArray(codeSnapshot.sessions)) {
+            for (const session of codeSnapshot.sessions) {
+              if (session && typeof session.id === 'string') liveStorageIds.add(session.id)
+            }
+          }
+          pruneOrphanWidgetStorage(liveStorageIds)
         }
 
         const maxZ = snapshot.widgets.reduce((max, w) => Math.max(max, w.z), 0)
@@ -488,6 +495,32 @@ export function useCanvas() {
       })
     const unbindDir = window.api.workspace.onDirChange((dir) => {
       if (workspaceDirRef.current === dir) return
+      const previousDir = workspaceDirRef.current
+      const hasLocalEdits =
+        widgetsDirtyRef.current || cameraDirtyRef.current || strokesDirtyRef.current || connectionsDirtyRef.current ||
+        dirtyWidgetIdsRef.current.size > 0 || pendingCreatesRef.current.size > 0 ||
+        pendingDeletesRef.current.size > 0 || widgetPatchRef.current.size > 0
+      if (widgetRafRef.current !== null) {
+        cancelAnimationFrame(widgetRafRef.current)
+        widgetRafRef.current = null
+      }
+      const widgetsForPreviousWorkspace = pendingWidgetsSnapshot()
+      if (hasLocalEdits) {
+        const payload = {
+          // updateWidget/toggleMaximize batch React state in a RAF. Include
+          // that pending batch before switching slots so the last drag is not
+          // persisted to neither workspace.
+          widgets: widgetsForPreviousWorkspace,
+          camera: cameraRef.current,
+          strokes: strokesRef.current,
+          connections: connectionsRef.current,
+          workspaceDir: previousDir ?? undefined
+        }
+        void window.api.canvas.save(payload).catch((err) => console.warn('failed to preserve canvas before workspace switch', err))
+      }
+      // The batch belongs to the old workspace. Do not let hydrate's new slot
+      // inherit it after the old snapshot has been queued for persistence.
+      widgetPatchRef.current.clear()
       workspaceSyncSeqRef.current += 1
       workspaceDirRef.current = dir
       hydrate()
@@ -523,7 +556,7 @@ export function useCanvas() {
         widgetPatchRef.current.clear()
       }
     }
-  }, [hydrate])
+  }, [hydrate, pendingWidgetsSnapshot])
 
   useEffect(() => {
     if (!hydratedRef.current) return
@@ -665,7 +698,7 @@ export function useCanvas() {
   }, [])
 
   const addWidget = useCallback(
-    (point: Point, id: string = makeLocalId(), title?: string, kind: WidgetKind = 'terminal'): boolean => {
+    (point: Point, id: string = makeLocalId(), title?: string, kind: WidgetKind = 'terminal', media?: WidgetMediaMetadata): boolean => {
       const defaults = WIDGET_DEFAULTS[kind]
 
 
@@ -698,31 +731,39 @@ export function useCanvas() {
       }
       widgetsDirtyRef.current = true
       dirtyWidgetIdsRef.current.add(id)
-      const widgetTitle = title || (kind === 'terminal' ? `Terminal ${nextTerminalNumber(current)}` : defaults.title)
+      const widgetTitle = title || (kind === 'terminal'
+        ? pickTerminalName({
+          favorites: favoriteTerminalNames,
+          taken: current.filter((widget) => !widget.kind || widget.kind === 'terminal').map((widget) => widget.title)
+        })
+        : defaults.title)
+      // A fresh widget opens fully inside the visible area: on a small app
+      // window the kind default would spawn cropped. On roomy viewports this
+      // is exactly the default, so existing behaviour does not change.
+      const spawnSize = fitSpawnSize(kind, window.innerWidth, window.innerHeight, cameraRef.current.zoom)
+      const widget: Widget = {
+        id,
+        title: widgetTitle,
+        kind,
+        x: point.x - 16,
+        y: point.y - 16,
+        w: spawnSize.w,
+        h: spawnSize.h,
+        z,
+        version: 0,
+        ...(media?.imagePath ? { imagePath: media.imagePath } : {}),
+        ...(media?.imageName ? { imageName: media.imageName } : {})
+      }
+      // Keep the synchronous ref ahead of React's queued updater. Workspace
+      // changes can arrive before the updater or the persistence debounce.
+      widgetsRef.current = [...current, widget]
       setWidgets((prev) => {
         if (prev.some((widget) => widget.id === id)) return prev
-        return [
-          ...prev,
-          {
-            id,
-
-
-
-
-            title: widgetTitle,
-            kind,
-            x: point.x - 16,
-            y: point.y - 16,
-            w: defaults.w,
-            h: defaults.h,
-            z,
-            version: 0
-          }
-        ]
+        return [...prev, widget]
       })
       return true
     },
-    [nextZ, recordHistory]
+    [favoriteTerminalNames, nextZ, recordHistory]
   )
 
 
@@ -765,6 +806,7 @@ export function useCanvas() {
         console.warn(`terminal ${id} dispose deferred`, err)
       })
     }
+    widgetsRef.current = widgetsRef.current.filter((widget) => widget.id !== id)
     setWidgets((prev) => prev.filter((w) => w.id !== id))
 
 
@@ -775,11 +817,8 @@ export function useCanvas() {
 
 
 
-  const widgetPatchRef = useRef<Map<string, Partial<Widget>>>(new Map())
-  const widgetRafRef = useRef<number | null>(null)
-
-  const updateWidget = useCallback((id: string, change: Partial<Widget>): void => {
-    recordHistory(`widget:${id}`)
+  /** The widget write itself; history is the caller's business. */
+  const applyWidgetPatch = useCallback((id: string, change: Partial<Widget>): void => {
     widgetsDirtyRef.current = true
     dirtyWidgetIdsRef.current.add(id)
     const currentWidget = widgetsRef.current.find((w) => w.id === id)
@@ -791,6 +830,7 @@ export function useCanvas() {
 
     const pending = widgetPatchRef.current.get(id)
     widgetPatchRef.current.set(id, pending ? { ...pending, ...change } : change)
+    widgetsRef.current = widgetsRef.current.map((widget) => widget.id === id ? { ...widget, ...change } : widget)
     if (widgetRafRef.current !== null) return
     widgetRafRef.current = requestAnimationFrame(() => {
       widgetRafRef.current = null
@@ -808,7 +848,25 @@ export function useCanvas() {
         return next ?? prev
       })
     })
-  }, [recordHistory])
+  }, [])
+
+  const updateWidget = useCallback((id: string, change: Partial<Widget>): void => {
+    recordHistory(`widget:${id}`)
+    applyWidgetPatch(id, change)
+  }, [applyWidgetPatch, recordHistory])
+
+  /**
+   * Moves or resizes many widgets as one edit: a canvas-wide arrange must be a
+   * single Undo step, not one per widget.
+   */
+  const updateWidgets = useCallback((
+    patches: ReadonlyArray<{ id: string; change: Partial<Widget> }>,
+    historyKey = 'canvas'
+  ): void => {
+    if (patches.length === 0) return
+    recordHistory(historyKey)
+    for (const patch of patches) applyWidgetPatch(patch.id, patch.change)
+  }, [applyWidgetPatch, recordHistory])
 
   const bringToFront = useCallback(
     (id: string): void => {
@@ -858,6 +916,7 @@ export function useCanvas() {
         }
       }
       mergePatch(id, { maximized: next, z: nextZ() })
+      pendingWidgetsSnapshot()
       if (widgetRafRef.current !== null) return
       widgetRafRef.current = requestAnimationFrame(() => {
         widgetRafRef.current = null
@@ -876,7 +935,7 @@ export function useCanvas() {
         })
       })
     },
-    [nextZ, recordHistory]
+    [nextZ, pendingWidgetsSnapshot, recordHistory]
   )
 
 
@@ -1127,7 +1186,7 @@ export function useCanvas() {
   }, [redoCanvas, undoCanvas])
 
   useEffect(() => {
-    const offAdd = window.api.control.onAddWidget(({ id, title, kind, x, y, from }) => {
+    const offAdd = window.api.control.onAddWidget(({ id, title, kind, x, y, from, imagePath, imageName }) => {
 
 
 
@@ -1143,7 +1202,7 @@ export function useCanvas() {
 
       const requestedKind = typeof kind === 'string' ? kind : undefined
       if (requestedKind === 'note' || (requestedKind && !(requestedKind in WIDGET_DEFAULTS))) return
-      const added = addWidget(point, id, title, (requestedKind as WidgetKind | undefined) ?? 'terminal')
+      const added = addWidget(point, id, title, (requestedKind as WidgetKind | undefined) ?? 'terminal', { imagePath, imageName })
       // The in-app paths report a full canvas; this one used to drop the
       // request on the floor, so `orc canvas add` at the cap looked like the
       // CLI had simply not run.
@@ -1170,7 +1229,10 @@ export function useCanvas() {
     })
     const offRemove = window.api.control.onRemoveWidget(removeWidget)
     const offRename = window.api.control.onRenameWidget(({ id, title }) => {
-      recordHistory(`rename:${id}`)
+      // Backend title events are synchronization, not a separate canvas edit.
+      // Recording them made Undo restore the temporary "Terminal 1" title
+      // instead of undoing the terminal creation.
+      widgetsRef.current = widgetsRef.current.map((widget) => widget.id === id ? { ...widget, title } : widget)
       setWidgets((prev) => prev.map((widget) => (widget.id === id ? { ...widget, title } : widget)))
     })
     return () => {
@@ -1178,7 +1240,7 @@ export function useCanvas() {
       offRemove()
       offRename()
     }
-  }, [addWidget, recordHistory, removeWidget, screenToWorld])
+  }, [addWidget, removeWidget, screenToWorld])
 
 
 
@@ -1196,6 +1258,7 @@ export function useCanvas() {
     addWidget,
     removeWidget,
     updateWidget,
+    updateWidgets,
     bringToFront,
     toggleMaximize,
     tool,

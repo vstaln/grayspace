@@ -90,6 +90,7 @@ mod platform {
 mod platform {
     use super::*;
     use crate::ipc::prepare_socket_path;
+    use std::os::unix::fs::PermissionsExt;
     use tokio::net::{UnixListener, UnixStream};
 
     pub struct PlatformListener {
@@ -103,6 +104,7 @@ mod platform {
             // with AddrInUse even though nothing is listening.
             prepare_socket_path(path);
             let inner = UnixListener::bind(path)?;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
             Ok(Self { path: path.to_owned(), inner })
         }
 

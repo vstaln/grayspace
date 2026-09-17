@@ -10,6 +10,13 @@ async function launch() {
   return { ...ctx, close: () => closeOrcSpace(ctx) }
 }
 
+async function openTestWorkspace(page: import('@playwright/test').Page): Promise<void> {
+  const name = `e2e-${Date.now()}`
+  const directory = await page.evaluate((workspaceName) => window.api.workspace.create(workspaceName), name)
+  if (typeof directory !== 'string') throw new Error('test workspace was not created')
+  await expect.poll(() => page.evaluate(() => window.api.workspace.getDir())).toBe(directory)
+}
+
 test('all configured AI terminals preserve identity, Unicode, input and image routing after resize', async () => {
   test.skip(process.platform !== 'win32', 'Windows CLI wrapper and keybinding regression')
   test.setTimeout(120_000)
@@ -26,6 +33,7 @@ test('all configured AI terminals preserve identity, Unicode, input and image ro
   `)
   try {
     await waitForCanvas(ctx.page)
+    await openTestWorkspace(ctx.page)
     await ctx.page.getByRole('tab', { name: 'Code', exact: true }).click()
     const cdp = await ctx.page.context().newCDPSession(ctx.page)
     for (const [agent, shortcut] of [
@@ -37,7 +45,7 @@ test('all configured AI terminals preserve identity, Unicode, input and image ro
       const wrapper = path.join(ctx.profileDir, `${agent}.cmd`)
       fs.writeFileSync(wrapper, `@echo off\r\n"${process.execPath}" "${receiver}" "${agent}" "${output}"\r\n`)
       const known = new Set((await listTerminals(ctx)).map(terminal => terminal.id))
-      await ctx.page.getByRole('button', { name: 'Other CLI', exact: true }).click()
+      await ctx.page.getByRole('button', { name: 'Other CLI or browser', exact: true }).click()
       const dialog = ctx.page.getByRole('dialog', { name: 'Launch Code Session' })
       await dialog.getByRole('button', { name: 'Other CLI', exact: true }).click()
       await dialog.getByRole('textbox').fill(`"${wrapper}"`)
@@ -80,8 +88,9 @@ test('real file drag reaches the Code terminal through Electron webUtils', async
   try {
     await waitForCanvas(ctx.page)
     await ctx.page.locator('#startup-screen').waitFor({ state: 'detached' })
+    await openTestWorkspace(ctx.page)
     await ctx.page.getByRole('tab', { name: 'Code', exact: true }).click()
-    await ctx.page.getByRole('button', { name: 'Other CLI', exact: true }).click()
+    await ctx.page.getByRole('button', { name: 'Other CLI or browser', exact: true }).click()
     const dialog = ctx.page.getByRole('dialog', { name: 'Launch Code Session' })
     await dialog.getByRole('button', { name: 'Other CLI', exact: true }).click()
     await dialog.getByRole('textbox').fill(process.platform === 'win32' ? 'cmd /d' : 'sh')

@@ -7,7 +7,7 @@ import ContextMenu from './components/ContextMenu'
 import TitleBar from './components/TitleBar'
 import type { WorkView } from './components/TitleBar'
 import { useCanvas } from './hooks/useCanvas'
-import { Camera, clampWidgetSize, MIN_H, NON_MAXIMIZABLE, Point, ResizeDir, WidgetKind, WIDGET_DEFAULTS, WIDGET_H, WIDGET_W } from './types'
+import { Camera, clampWidgetSize, type Widget, MIN_H, NON_MAXIMIZABLE, Point, ResizeDir, WidgetKind, WIDGET_DEFAULTS, WIDGET_H, WIDGET_W } from './types'
 import ErrorBoundary from './components/ErrorBoundary'
 import StrokesLayer from './components/StrokesLayer'
 import ConnectionsLayer from './components/ConnectionsLayer'
@@ -15,9 +15,13 @@ import { ThemeProvider, useTheme, wallpaperBackgroundImage } from './theme'
 import { ConfirmProvider, useConfirm } from './components/ConfirmDialog'
 import { useSettings } from './hooks/useSettings'
 import { DRAW_CLICK_THRESHOLD_PX } from './lib/canvasMetrics'
+import { arrangeWidgets, isArrangeMode, type ArrangeMode } from './lib/canvasLayout'
+import { isCodeLayoutMode, type CodeLayoutMode } from './lib/codeLayout'
 import { ToastContainer, usePersistErrorToasts, useTerminalBackendErrorToasts, useToasts } from './components/Toast'
 import Toolbar from './components/Toolbar'
 import { queueInitialCommand } from './lib/pendingTerminalCommands'
+import { fitCameraToRect, zoomCameraAt, zoomCameraBy } from './lib/canvasCamera'
+import { DEFAULT_IMAGE_INSERT_SHORTCUT, matchesShortcut } from './lib/keyboardShortcut'
 
 
 
@@ -29,6 +33,47 @@ let localCounter = 0
 
 
 const TITLE_BAR_HEIGHT = 40
+
+const ARRANGE_MODE_KEY = 'orcspace-arrange-mode'
+
+/** Height of the floating canvas tool bar plus its bottom margin. */
+const TOOLBAR_RESERVE_PX = 88
+
+const FREE_LAYOUT_KEY = 'orcspace-arrange-free-layout'
+
+const CODE_LAYOUT_KEY = 'orcspace-code-layout-mode'
+const FLIP_TERMINALS_KEY = 'orcspace-flip-terminals'
+
+type FreeLayoutEntry = Pick<Widget, 'x' | 'y' | 'w' | 'h'> & { maximized?: boolean }
+
+/**
+ * The pre-arrange geometry outlives the session: widget positions are
+ * persisted, so a reload that comes back tiled must still be able to go Free.
+ */
+function readFreeLayout(): Map<string, FreeLayoutEntry> | null {
+  try {
+    const raw = localStorage.getItem(FREE_LAYOUT_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Record<string, Partial<FreeLayoutEntry>>
+    const entries = Object.entries(parsed).filter(
+      ([, v]) =>
+        typeof v?.x === 'number' && typeof v?.y === 'number' &&
+        typeof v?.w === 'number' && typeof v?.h === 'number'
+    )
+    return entries.length > 0
+      ? new Map(entries.map(([id, v]) => [id, v as FreeLayoutEntry]))
+      : null
+  } catch {
+    return null
+  }
+}
+
+function writeFreeLayout(layout: Map<string, FreeLayoutEntry> | null): void {
+  try {
+    if (!layout) localStorage.removeItem(FREE_LAYOUT_KEY)
+    else localStorage.setItem(FREE_LAYOUT_KEY, JSON.stringify(Object.fromEntries(layout)))
+  } catch {}
+}
 
 function titleBarWorldY(cameraY: number, zoom: number): number {
   return (TITLE_BAR_HEIGHT - cameraY) / (zoom || 1)
@@ -44,7 +89,17 @@ export default function App(): React.JSX.Element {
   activeViewRef.current = activeView
   const [canvasHistory, setCanvasHistory] = useState({ canUndo: false, canRedo: false })
   const [codeSidebarCollapsed, setCodeSidebarCollapsed] = useState(false)
+  const [terminalsFlipped, setTerminalsFlipped] = useState(() => {
+    try { return localStorage.getItem(FLIP_TERMINALS_KEY) === 'true' } catch { return false }
+  })
   const toggleCodeSidebar = useCallback(() => setCodeSidebarCollapsed((collapsed) => !collapsed), [])
+  const toggleTerminalsFlipped = useCallback(() => {
+    setTerminalsFlipped((flipped) => {
+      const next = !flipped
+      try { localStorage.setItem(FLIP_TERMINALS_KEY, String(next)) } catch {}
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     const onHistory = (event: Event): void => {
@@ -57,6 +112,40 @@ export default function App(): React.JSX.Element {
 
   const undoCanvas = useCallback(() => window.dispatchEvent(new Event('orcspace:canvas-undo')), [])
   const redoCanvas = useCallback(() => window.dispatchEvent(new Event('orcspace:canvas-redo')), [])
+
+  const [arrangeMode, setArrangeMode] = useState<ArrangeMode>(() => {
+    try {
+      const saved = localStorage.getItem(ARRANGE_MODE_KEY)
+      // Without the pre-arrange snapshot there is nothing for Free to restore,
+      // so an arranged mode with no snapshot would tick a menu item that does
+      // nothing. Fall back to Free rather than lie about the state.
+      if (isArrangeMode(saved) && (saved === 'free' || readFreeLayout() !== null)) return saved
+    } catch {}
+    return 'free'
+  })
+  const [codeLayoutMode, setCodeLayoutMode] = useState<CodeLayoutMode>(() => {
+    try {
+      const saved = localStorage.getItem(CODE_LAYOUT_KEY)
+      if (isCodeLayoutMode(saved)) return saved
+    } catch {}
+    return 'auto'
+  })
+  // Unlike the canvas, Code re-derives its grid from the mode on every render,
+  // so the mode is the whole state — there is no snapshot to restore.
+  const setCodeLayout = useCallback((mode: CodeLayoutMode): void => {
+    setCodeLayoutMode(mode)
+    try {
+      localStorage.setItem(CODE_LAYOUT_KEY, mode)
+    } catch {}
+  }, [])
+
+  const arrangeCanvas = useCallback((mode: ArrangeMode): void => {
+    setArrangeMode(mode)
+    try {
+      localStorage.setItem(ARRANGE_MODE_KEY, mode)
+    } catch {}
+    window.dispatchEvent(new CustomEvent('orcspace:canvas-arrange', { detail: { mode } }))
+  }, [])
 
 
   const [codeStarted, setCodeStarted] = useState(false)
@@ -159,10 +248,16 @@ export default function App(): React.JSX.Element {
               onViewChange={showView}
               codeSidebarCollapsed={codeSidebarCollapsed}
               onToggleCodeSidebar={toggleCodeSidebar}
+              arrangeMode={arrangeMode}
+              onArrange={arrangeCanvas}
+              codeLayoutMode={codeLayoutMode}
+              onCodeLayout={setCodeLayout}
               canUndo={canvasHistory.canUndo}
               canRedo={canvasHistory.canRedo}
               onUndo={undoCanvas}
               onRedo={redoCanvas}
+              terminalsFlipped={terminalsFlipped}
+              onToggleTerminalsFlipped={toggleTerminalsFlipped}
             />
             <SettingsModal listenForToolbar />
             <div className="flex flex-1 flex-col">
@@ -171,13 +266,14 @@ export default function App(): React.JSX.Element {
                   active={activeView === 'canvas'}
                   activeView={activeView}
                   codeSidebarCollapsed={codeSidebarCollapsed}
+                  terminalsFlipped={terminalsFlipped}
                 />
               </ErrorBoundary>
             </div>
             {codeStarted && (
               <ErrorBoundary>
                 <Suspense fallback={<div role="status" className="grid h-full place-items-center text-text-dim">Loading…</div>}>
-                  <CodeView active={activeView === 'code'} sidebarCollapsed={codeSidebarCollapsed} />
+                  <CodeView active={activeView === 'code'} layoutMode={codeLayoutMode} sidebarCollapsed={codeSidebarCollapsed} terminalsFlipped={terminalsFlipped} />
                 </Suspense>
               </ErrorBoundary>
             )}
@@ -238,14 +334,16 @@ function Wallpaper(): React.JSX.Element | null {
 function OrcSpaceCanvas({
   active,
   activeView,
-  codeSidebarCollapsed
+  codeSidebarCollapsed,
+  terminalsFlipped
 }: {
   active: boolean
   activeView: WorkView
   codeSidebarCollapsed: boolean
+  terminalsFlipped: boolean
 }): React.JSX.Element {
   const { settings, update: updateSettings } = useSettings()
-  const canvas = useCanvas()
+  const canvas = useCanvas({ favoriteTerminalNames: settings.favoriteTerminalNames })
   const {
     widgets,
     camera,
@@ -265,6 +363,8 @@ function OrcSpaceCanvas({
 
   const mainOffsetRef = useRef({ left: 0, top: 0 })
   const [mainSize, setMainSize] = useState({ w: 0, h: 0 })
+  const mainSizeRef = useRef(mainSize)
+  mainSizeRef.current = mainSize
   useEffect(() => {
     const el = mainRef.current
     if (!el) return
@@ -318,15 +418,51 @@ function OrcSpaceCanvas({
   const [canvasNotice, setCanvasNotice] = useState<string | null>(null)
   const [selectionBox, setSelectionBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
 
+  const canvasZoomAnchor = useCallback((): Point => {
+    const { w, h } = mainSizeRef.current
+    return {
+      x: w > 0 ? w / 2 : window.innerWidth / 2,
+      y: h > 0 ? h / 2 : window.innerHeight / 2
+    }
+  }, [])
   const onZoomIn = useCallback(() => {
-    setCamera((c) => ({ ...c, zoom: Math.min(4, c.zoom * 1.2) }))
-  }, [setCamera])
+    setCamera((c) => zoomCameraBy(c, 1, canvasZoomAnchor()))
+  }, [canvasZoomAnchor, setCamera])
   const onZoomOut = useCallback(() => {
-    setCamera((c) => ({ ...c, zoom: Math.max(0.2, c.zoom / 1.2) }))
-  }, [setCamera])
+    setCamera((c) => zoomCameraBy(c, -1, canvasZoomAnchor()))
+  }, [canvasZoomAnchor, setCamera])
   const onResetZoom = useCallback(() => {
     setCamera((c) => ({ ...c, zoom: 1 }))
   }, [setCamera])
+  // Fit all widgets into view: zoom out (never in past 1:1) and center the
+  // bounding box in the usable band between the title bar and the toolbar.
+  // The canvas itself stays world-locked by design — widgets never auto-shrink
+  // behind the user's back — so this is the explicit "adapt to my window"
+  // action, next to the zoom controls.
+  const onFitView = useCallback((): void => {
+    const viewW = mainSize.w > 0 ? mainSize.w : window.innerWidth
+    const viewH = mainSize.h > 0 ? mainSize.h : window.innerHeight
+    // Maximized widgets already fill the viewport; framing them would feed
+    // the camera-dependent geometry back into itself.
+    const list = widgetsRef.current.filter((w) => !w.maximized)
+    if (list.length === 0) return
+    let minX = Number.POSITIVE_INFINITY
+    let minY = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    let maxY = Number.NEGATIVE_INFINITY
+    for (const w of list) {
+      minX = Math.min(minX, w.x)
+      minY = Math.min(minY, w.y)
+      maxX = Math.max(maxX, w.x + w.w)
+      maxY = Math.max(maxY, w.y + w.h)
+    }
+    setCamera(fitCameraToRect(viewW, viewH, TITLE_BAR_HEIGHT, TOOLBAR_RESERVE_PX, {
+      x: minX,
+      y: minY,
+      w: Math.max(1, maxX - minX),
+      h: Math.max(1, maxY - minY)
+    }))
+  }, [setCamera, mainSize.w, mainSize.h])
   const panRafRef = useRef<number | null>(null)
   const panPendingRef = useRef<Camera | null>(null)
   useEffect(() => {
@@ -429,6 +565,71 @@ function OrcSpaceCanvas({
     return () => window.removeEventListener('orcspace:new-terminal', onNewTerminal)
   }, [spawnTerminalAtCenter])
 
+  // Geometry every widget had before the first arrange, so Free can put the
+  // hand-dragged canvas back exactly as it was.
+  const freeLayoutRef = useRef<Map<string, FreeLayoutEntry> | null>(null)
+  const freeLayoutLoadedRef = useRef(false)
+  if (!freeLayoutLoadedRef.current) {
+    freeLayoutLoadedRef.current = true
+    freeLayoutRef.current = readFreeLayout()
+  }
+  const arrangeInputRef = useRef({ widgets, camera, mainSize })
+  arrangeInputRef.current = { widgets, camera, mainSize }
+
+  useEffect(() => {
+    const onArrange = (event: Event): void => {
+      const mode = (event as CustomEvent<{ mode?: ArrangeMode }>).detail?.mode
+      if (!mode) return
+      const { widgets: current, camera: cam, mainSize: size } = arrangeInputRef.current
+
+      if (mode === 'free') {
+        const saved = freeLayoutRef.current
+        freeLayoutRef.current = null
+        writeFreeLayout(null)
+        if (!saved) return
+        const patches = current
+          .filter((widget) => saved.has(widget.id))
+          .map((widget) => ({ id: widget.id, change: { ...saved.get(widget.id)! } }))
+        canvas.updateWidgets(patches, 'arrange')
+        return
+      }
+
+      if (current.length === 0) return
+      if (!freeLayoutRef.current) {
+        freeLayoutRef.current = new Map(
+          current.map((widget) => [
+            widget.id,
+            { x: widget.x, y: widget.y, w: widget.w, h: widget.h, maximized: widget.maximized }
+          ])
+        )
+        writeFreeLayout(freeLayoutRef.current)
+      }
+
+      const zoom = cam.zoom || 1
+      const viewW = size.w > 0 ? size.w : window.innerWidth
+      const viewH = size.h > 0 ? size.h : window.innerHeight
+      // The title bar floats over the canvas and the tool bar sits at the
+      // bottom of it, so neither band is usable space for a tile.
+      const usableH = Math.max(0, viewH - TITLE_BAR_HEIGHT - TOOLBAR_RESERVE_PX)
+      const rects = arrangeWidgets(
+        current,
+        {
+          x: -cam.x / zoom,
+          y: titleBarWorldY(cam.y, zoom),
+          w: viewW / zoom,
+          h: usableH / zoom
+        },
+        mode
+      )
+      canvas.updateWidgets(
+        rects.map(({ id, x, y, w, h }) => ({ id, change: { x, y, w, h, maximized: false } })),
+        'arrange'
+      )
+    }
+    window.addEventListener('orcspace:canvas-arrange', onArrange)
+    return () => window.removeEventListener('orcspace:canvas-arrange', onArrange)
+  }, [canvas.updateWidgets])
+
   useEffect(() => {
     const onNotice = (event: Event): void => {
       const message = (event as CustomEvent<{ message?: string }>).detail?.message
@@ -439,7 +640,7 @@ function OrcSpaceCanvas({
   }, [])
 
   const placeWidget = useCallback(
-    (kind: WidgetKind, point: Point, requestedId?: string, title?: string): string | null => {
+    (kind: WidgetKind, point: Point, requestedId?: string, title?: string, media?: { imagePath?: string; imageName?: string }): string | null => {
       const defaults = WIDGET_DEFAULTS[kind]
       const w = defaults.w
       const h = defaults.h
@@ -447,14 +648,43 @@ function OrcSpaceCanvas({
 
 
       if (requestedId && widgetsRef.current.some((widget) => widget.id === requestedId)) return requestedId
-      if (!canvas.addWidget(clampToVisibleWorld(point, w, h), id, title, kind)) {
+      if (!canvas.addWidget(clampToVisibleWorld(point, w, h), id, title, kind, media)) {
         setCanvasNotice('Canvas is full — close a widget before adding another.')
         return null
       }
       return id
-    },
+  },
     [canvas.addWidget, clampToVisibleWorld]
   )
+
+  const insertingImageRef = useRef(false)
+  const insertImageFromClipboard = useCallback(async (): Promise<void> => {
+    if (insertingImageRef.current) return
+    insertingImageRef.current = true
+    try {
+      const saved = await window.api.media.saveClipboard()
+      if (!saved) {
+        setCanvasNotice('No image found in the clipboard.')
+        return
+      }
+      const defaults = WIDGET_DEFAULTS.image
+      const cx = mainSize.w > 0 ? mainSize.w / 2 : window.innerWidth / 2
+      const cy = mainSize.h > 0 ? mainSize.h / 2 : window.innerHeight / 2
+      const center = toWorld(cx, cy)
+      const id = placeWidget(
+        'image',
+        { x: center.x - defaults.w / 2, y: center.y - defaults.h / 2 },
+        undefined,
+        saved.name,
+        { imagePath: saved.path, imageName: saved.name }
+      )
+      if (id) setCanvasNotice(`Image added: ${saved.name}`)
+    } catch (err) {
+      setCanvasNotice(`Could not add image: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      insertingImageRef.current = false
+    }
+  }, [mainSize.h, mainSize.w, placeWidget, setCanvasNotice, toWorld])
 
   const createWidgetFromCommand = useCallback((kind: WidgetKind, initialCommand: string): void => {
     const cx = mainSize.w > 0 ? mainSize.w / 2 : window.innerWidth / 2
@@ -963,9 +1193,18 @@ function OrcSpaceCanvas({
 
 
 
-  const handleCanvasShortcut = (e: KeyboardEvent | React.KeyboardEvent<HTMLElement>): void => {
+  const handleCanvasShortcut = useCallback((e: KeyboardEvent | React.KeyboardEvent<HTMLElement>): void => {
     const isGlobalZoom = (e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '=' || e.key === '-' || e.key === '0')
     const target = e.target as HTMLElement | null
+    const imageHotkey = matchesShortcut(e, settings.imageInsertShortcut || DEFAULT_IMAGE_INSERT_SHORTCUT)
+    const imageHotkeyBlocked = Boolean(target?.closest(
+      '[role="dialog"],input:not(.xterm-helper-textarea),textarea:not(.xterm-helper-textarea),select,[contenteditable="true"]'
+    ))
+    if (imageHotkey && !imageHotkeyBlocked) {
+      e.preventDefault()
+      void insertImageFromClipboard()
+      return
+    }
     if (
       !isGlobalZoom &&
       target &&
@@ -983,7 +1222,7 @@ function OrcSpaceCanvas({
     const dir = dirs[e.key]
     if (!dir) {
 
-      // The empty-canvas hint advertises T and N alongside +/-/0/Home. The
+      // The empty-canvas hint advertises T and N alongside +/-/0/F/Home. The
       // listener for `orcspace:new-terminal` already existed; nothing ever
       // dispatched it, so both keys were dead and the hint was a lie.
       if ((e.key === 't' || e.key === 'T' || e.key === 'n' || e.key === 'N') &&
@@ -994,22 +1233,33 @@ function OrcSpaceCanvas({
       }
       if (e.key === '+' || e.key === '=') {
         e.preventDefault()
-        setCamera((c) => ({ ...c, zoom: Math.min(4, c.zoom * 1.2) }))
+        onZoomIn()
         return
       }
       if (e.key === '-') {
         e.preventDefault()
-        setCamera((c) => ({ ...c, zoom: Math.max(0.2, c.zoom / 1.2) }))
+        onZoomOut()
         return
       }
       if (e.key === '0') {
         e.preventDefault()
-        setCamera((c) => ({ ...c, zoom: 1 }))
+        // 0 resets only zoom and deliberately preserves the current pan.
+        onResetZoom()
+        return
+      }
+      if ((e.key === 'f' || e.key === 'F' || e.key === 'а' || e.key === 'А') &&
+        !e.ctrlKey && !e.altKey && !e.metaKey) {
+        // Fit all widgets into view (also on the toolbar). Russian layout
+        // included: the key sits where F is, mirroring the paste-shortcut
+        // handling elsewhere in the app.
+        e.preventDefault()
+        onFitView()
         return
       }
 
       if (e.key === 'Home') {
         e.preventDefault()
+        // Home resets the complete camera, including the pan position.
         setCamera({ x: 0, y: 0, zoom: 1 })
         return
       }
@@ -1018,7 +1268,7 @@ function OrcSpaceCanvas({
     e.preventDefault()
     const step = e.shiftKey ? 10 : 50
     setCamera((c) => ({ ...c, x: c.x - dir[0] * step, y: c.y - dir[1] * step }))
-  }
+  }, [insertImageFromClipboard, onFitView, onResetZoom, onZoomIn, onZoomOut, setCamera, settings.imageInsertShortcut])
 
   useEffect(() => {
     if (!active) return
@@ -1028,7 +1278,7 @@ function OrcSpaceCanvas({
     }
     window.addEventListener('keydown', onWindowKey)
     return () => window.removeEventListener('keydown', onWindowKey)
-  }, [active, camera.zoom])
+  }, [active, handleCanvasShortcut])
 
   const onCanvasPointerDown = (e: React.PointerEvent): void => {
     if (e.defaultPrevented || !e.currentTarget.contains(e.target as Node)) return
@@ -1175,12 +1425,7 @@ function OrcSpaceCanvas({
           next = { ...next, x: next.x - s.dx, y: next.y - s.dy }
         } else {
           const factor = Math.exp(-s.deltaY * 0.001)
-          const zoom = clamp(next.zoom * factor, 0.2, 4)
-          next = {
-            zoom,
-            x: s.sx - ((s.sx - next.x) / next.zoom) * zoom,
-            y: s.sy - ((s.sy - next.y) / next.zoom) * zoom
-          }
+          next = zoomCameraAt(next, next.zoom * factor, { x: s.sx, y: s.sy })
         }
       }
       return next
@@ -1607,13 +1852,14 @@ function OrcSpaceCanvas({
               >
                 Add terminal
               </button>
-              <div className="mt-2 text-[10px] text-text-faint">
+              <div className="mt-2 flex items-center justify-center gap-1.5 text-[10px] text-text-faint">
                 <kbd className="rounded-panel border border-line px-1 py-0.5 text-[9px] text-text-dim">T</kbd>{' '}
                 <kbd className="rounded-panel border border-line px-1 py-0.5 text-[9px] text-text-dim">N</kbd>{' '}
                 <kbd className="rounded-panel border border-line px-1 py-0.5 text-[9px] text-text-dim">+</kbd>{' '}
                 <kbd className="rounded-panel border border-line px-1 py-0.5 text-[9px] text-text-dim">-</kbd>{' '}
-                <kbd className="rounded-panel border border-line px-1 py-0.5 text-[9px] text-text-dim">0</kbd>{' '}
-                <kbd className="rounded-panel border border-line px-1 py-0.5 text-[9px] text-text-dim">Home</kbd>
+                <span title="0 resets zoom only"><kbd className="rounded-panel border border-line px-1 py-0.5 text-[9px] text-text-dim">0</kbd> zoom</span>
+                <span title="F fits all widgets into view"><kbd className="rounded-panel border border-line px-1 py-0.5 text-[9px] text-text-dim">F</kbd> fit</span>
+                <span title="Home resets pan and zoom"><kbd className="rounded-panel border border-line px-1 py-0.5 text-[9px] text-text-dim">Home</kbd> view</span>
               </div>
             </div>
           </div>
@@ -1652,6 +1898,7 @@ function OrcSpaceCanvas({
               style={widgetStyles.get(w.id)!}
               {...widgetHandlers(w.id)}
               workspaceDir={workspaceDir}
+              terminalsFlipped={terminalsFlipped}
             />
           ))}
         </div>
@@ -1684,6 +1931,7 @@ function OrcSpaceCanvas({
             onPickPlanner={() => { placeWidget('planner', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickOrchestration={() => { placeWidget('orchestration', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickBrowser={() => { placeWidget('browser', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onPickImage={() => { placeWidget('image', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickLinks={() => { placeWidget('links', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickMusicPlayer={() => { placeWidget('music-player', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickChat={() => { placeWidget('chat', toWorld(menu.x, menu.y)); setMenu(null) }}
@@ -1716,6 +1964,7 @@ function OrcSpaceCanvas({
         onZoomIn={onZoomIn}
         onZoomOut={onZoomOut}
         onResetZoom={onResetZoom}
+        onFitView={onFitView}
       />
       </div>
     </div>
@@ -1758,15 +2007,3 @@ function trackDrag(onMove: (e: PointerEvent) => void, onEnd?: () => void, pointe
   window.addEventListener('pointercancel', up)
   window.addEventListener('blur', release)
 }
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value))
-}
-
-
-
-
-
-
-
-

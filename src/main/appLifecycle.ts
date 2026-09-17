@@ -9,6 +9,7 @@ import type { CodeStore } from './codeState.ts'
 import type { OrchestrationStore } from './orchestration/store.ts'
 import type { AppState } from './appState.ts'
 import type { Core } from './core/index.ts'
+import type { RendererStateStore } from './rendererState.ts'
 
 /**
  * How much scrollback the shutdown snapshot reads per terminal.
@@ -41,6 +42,7 @@ export function snapshotTerminals(
             id: info.id,
             title: info.title,
             cwd: info.cwd,
+            lastPrompt: info.lastPrompt,
             scrollback
           })
         }
@@ -77,6 +79,7 @@ export function setupLifecycle(deps: {
   core: Core
   orchestration: OrchestrationStore
   state: AppState
+  rendererState: RendererStateStore
   getControlServer: () => { close(): void; closeAllConnections?(): void } | null
   setControlServer: (v: { close(): void; closeAllConnections?(): void } | null) => void
   getOrchestrationSignal: () => ReturnType<typeof setTimeout> | null
@@ -93,6 +96,7 @@ export function setupLifecycle(deps: {
     core,
     orchestration,
     state,
+    rendererState,
     getControlServer,
     setControlServer,
     getOrchestrationSignal,
@@ -142,6 +146,7 @@ export function setupLifecycle(deps: {
     // pending across the quit.
     cancelPendingProcessTreeSweeps()
     planner.dispose()
+    rendererState.dispose()
     orchestration.dispose()
     canvas.dispose()
     code.dispose()

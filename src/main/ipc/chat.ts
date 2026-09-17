@@ -1,13 +1,14 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readdirSync, statSync } from 'node:fs'
-import { extname, isAbsolute, join } from 'node:path'
+import { existsSync, readdirSync } from 'node:fs'
+import { extname, join } from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
 import type { IpcMainInvokeEvent } from 'electron'
 import { ipcMain, shell } from './shims.ts'
 import { extractChatAuthDetails } from './chatAuth.ts'
 import type { IpcDeps } from './types.ts'
 import { killProcessTree } from '../procTree.ts'
+import { authorizeWorkspacePath, canonicalActiveWorkspacePath } from './workspacePath.ts'
 
 type Provider = 'chatgpt' | 'claude' | 'grok'
 type Effort = 'low' | 'medium' | 'high'
@@ -37,9 +38,18 @@ const PROVIDERS: ProviderInfo[] = [
 const MODEL_RE = /^[A-Za-z0-9._:/-]{1,120}$/
 const MAX_MESSAGE = 12_000
 const MAX_HISTORY = 40
-const MAX_PROVIDER_OUTPUT = 4 * 1024 * 1024
+export const MAX_PROVIDER_OUTPUT = 4 * 1024 * 1024
 const active = new Map<string, ChildProcess>()
 const authActive = new Map<Provider, { child: ChildProcess; timeout: NodeJS.Timeout }>()
+
+function recentWorkspaceEntries(deps: IpcDeps): readonly { path: string }[] {
+  try {
+    const recent = deps.state.get().recent
+    return Array.isArray(recent) ? recent : []
+  } catch {
+    return []
+  }
+}
 
 function killChild(child: ChildProcess | undefined): void {
   if (!child) return
@@ -51,11 +61,21 @@ function killChild(child: ChildProcess | undefined): void {
   } catch {}
 }
 
-function appendProviderOutput(current: string, chunk: Buffer | string): string {
-  const incoming = String(chunk)
-  if (!incoming) return current
-  const combined = current + incoming
-  return combined.length <= MAX_PROVIDER_OUTPUT ? combined : combined.slice(-MAX_PROVIDER_OUTPUT)
+function boundedProviderText(value: Buffer): string {
+  let start = Math.max(0, value.length - MAX_PROVIDER_OUTPUT)
+  // Do not start in the middle of a UTF-8 continuation sequence. If a
+  // malformed leading byte still causes a replacement to exceed the budget,
+  // the loop below drops that replacement before returning.
+  while (start < value.length && (value[start] & 0xc0) === 0x80) start += 1
+  let text = value.subarray(start).toString()
+  while (Buffer.byteLength(text) > MAX_PROVIDER_OUTPUT) text = text.slice(1)
+  return text
+}
+
+export function appendProviderOutput(current: string, chunk: Buffer | string): string {
+  const incoming = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
+  if (incoming.length === 0) return boundedProviderText(Buffer.from(current))
+  return boundedProviderText(Buffer.concat([Buffer.from(current), incoming]))
 }
 
 process.once('exit', () => {
@@ -170,11 +190,11 @@ async function run(command: string, args: string[], input?: string): Promise<{ c
     }
     timeout = setTimeout(() => {
       killChild(child)
-      finish({ code: -1, stdout, stderr: `${stderr}\nTimed out`.trim() })
+      finish({ code: -1, stdout, stderr: appendProviderOutput(stderr, '\nTimed out').trim() })
     }, 10_000)
     child.stdout?.on('data', (chunk: Buffer | string) => { stdout = appendProviderOutput(stdout, chunk) })
     child.stderr?.on('data', (chunk: Buffer | string) => { stderr = appendProviderOutput(stderr, chunk) })
-    child.on('error', (error) => finish({ code: -1, stdout, stderr: `${stderr}\n${error.message}`.trim() }))
+    child.on('error', (error) => finish({ code: -1, stdout, stderr: appendProviderOutput(stderr, `\n${error.message}`).trim() }))
     child.on('close', (code) => finish({ code: code ?? -1, stdout, stderr }))
     if (input !== undefined) {
       child.stdin?.write(input)
@@ -417,18 +437,13 @@ export function registerChatIpc(deps: IpcDeps): void {
     if (!providerInfo) return { ok: false, error: 'Unknown provider' }
     const resolved = await resolveCommand(providerInfo.command)
     if (!resolved) return { ok: false, error: `${providerInfo.label} CLI is not installed. Run: ${providerInfo.installCommand}` }
-    const workspaceDir = typeof request?.workspaceDir === 'string' && request.workspaceDir.length < 1024 ? request.workspaceDir : undefined
-    // Renderer input: require an absolute existing directory, not just any
-    // existing path, so a file or a crafted relative path cannot become cwd.
-    let requestedDir: string | undefined
-    if (workspaceDir && isAbsolute(workspaceDir)) {
-      try {
-        if (statSync(workspaceDir).isDirectory()) requestedDir = workspaceDir
-      } catch {
-        requestedDir = undefined
-      }
+    const workspaceInput = request?.workspaceDir
+    let workingRoot = canonicalActiveWorkspacePath(deps.getWorkspaceDir()) ?? process.cwd()
+    if (workspaceInput !== undefined && workspaceInput !== null && workspaceInput !== '') {
+      const authorized = authorizeWorkspacePath(workspaceInput, deps.getWorkspaceDir(), recentWorkspaceEntries(deps))
+      if (!authorized) return { ok: false, error: 'Workspace is not approved.' }
+      workingRoot = authorized.canonical
     }
-    const workingRoot = requestedDir ?? (deps.getWorkspaceDir() || process.cwd())
     let child: ChildProcess
     try {
       child = spawnResolved(resolved, commandArgs(provider, model, effort, input), { cwd: workingRoot })
@@ -446,8 +461,8 @@ export function registerChatIpc(deps: IpcDeps): void {
       sendEvent(event, { widgetId, requestId, type: 'error', text: `${providerInfo.label} request timed out.`, provider })
     }, 300_000)
     timeout.unref?.()
-    child.stdout?.on('data', (chunk: Buffer | string) => { stdout += String(chunk) })
-    child.stderr?.on('data', (chunk: Buffer | string) => { stderr += String(chunk) })
+    child.stdout?.on('data', (chunk: Buffer | string) => { stdout = appendProviderOutput(stdout, chunk) })
+    child.stderr?.on('data', (chunk: Buffer | string) => { stderr = appendProviderOutput(stderr, chunk) })
     child.on('error', (error) => {
       clearTimeout(timeout)
       if (active.get(widgetId) !== child) return

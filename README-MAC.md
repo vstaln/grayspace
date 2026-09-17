@@ -21,29 +21,15 @@
 
 ---
 
-## 🚀 Способ 2: Автоматический установщик в 1 клик (`OrcSpace-Installer.command`)
+## 🚀 Другие варианты установки
 
-Если у вас есть файл **`OrcSpace-Installer.command`** (или `OrcSpace-Update.command`):
-
-1. Скачайте **`OrcSpace-Installer.command`**.
-2. Дважды кликните по нему в Finder.
-3. Установщик автоматически:
-   - Проверит наличие Node.js и утилит Xcode.
-   - Распакует OrcSpace в `~/Desktop/OrcSpace`.
-   - Автоматически снимет все карантинные атрибуты macOS (`xattr -cr`).
-   - Установит зависимости и запустит OrcSpace!
-
-> Если Finder блокирует запуск скрипта: откройте Терминал и выполните:
-> ```bash
-> chmod +x OrcSpace-Installer.command
-> ./OrcSpace-Installer.command
-> ```
+Для готовых сборок используйте `.dmg` из GitHub Releases. Автономные source-архивы и `.command`-установщики больше не распространяются.
 
 ---
 
 ## 🛠️ Сборка `.dmg` из исходного кода на Mac
 
-Если вы скачали архив с исходным кодом (`OrcSpace-mac-source.zip`):
+Если вы клонировали репозиторий или скачали исходный код:
 
 1. Распакуйте архив и откройте папку в Finder.
 2. Дважды кликните на **`build-mac.command`** (или выполните `./build-mac.command` в Терминале).
@@ -98,6 +84,6 @@
    ```
 4. Launch OrcSpace!
 
-### 2. Standalone 1-Click Installer Script
-- Double-click **`OrcSpace-Installer.command`**. It unpacks, clears quarantine, installs dependencies, and launches OrcSpace seamlessly.
+### 2. Build from source
+- Run `./build-mac.command` in the repository and install the generated `.dmg` from `dist/`.
 

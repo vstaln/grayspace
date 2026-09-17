@@ -4,7 +4,7 @@ import { MESSAGE_TYPES, OUTCOMES, TASK_STATUSES, type MessageType, type Outcome 
 import { resolveRecipient, resolveWorker } from '../orchestration/workers.ts'
 import type { CommandDeps } from './index.ts'
 
-function idOf(target: string, scheme: string): string {
+function resourceIdOf(target: string, scheme: string): string {
   const parsed = parseResource(target)
   if (!parsed || parsed.scheme !== scheme) throw new CommandError('invalid', `${target} is not a ${scheme}`)
   return parsed.id
@@ -57,7 +57,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
     targetScheme: 'run',
     ignoreVersion: true,
     payloadSchema: { type: 'object', properties: {} },
-    handler: { apply: ({ command }) => orchestration.closeRun(idOf(command.target, 'run')) }
+    handler: { apply: ({ command }) => orchestration.closeRun(resourceIdOf(command.target, 'run')) }
   })
 
 
@@ -113,7 +113,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
       }
     },
     handler: {
-      apply: ({ command }) => orchestration.updateTask(idOf(command.target, 'orctask'), command.payload ?? {})
+      apply: ({ command }) => orchestration.updateTask(resourceIdOf(command.target, 'orctask'), command.payload ?? {})
     }
   })
 
@@ -233,12 +233,17 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
 
             if (opened) {
               const start = String(p.command ?? agent)
-              if (!await submitPtyLine(terminals, terminalId, start, signal)) {
+              if (!await submitShellLine(terminals, terminalId, start, signal)) {
                 throw new CommandError('failed', `could not start ${start} in terminal ${terminalId}`)
               }
               await delay(2_500, signal)
+              const tail = terminals.tailOutput(terminalId, 16_000) ?? ''
+              if (terminalShowsLaunchFailure(tail, start)) {
+                throw new CommandError('failed', `${start} is not available in terminal ${terminalId}`)
+              }
             }
-            injected = await submitPtyLine(terminals, terminalId, preamble, signal)
+            injected = await submitPtyMessage(terminals, terminalId, preamble, signal)
+            if (injected) terminals.rememberPrompt(terminalId, task.spec || task.title)
           }
 
           orchestration.send({
@@ -289,7 +294,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
         if (!outcome || !OUTCOMES.includes(outcome)) {
           throw new CommandError('invalid', `outcome must be one of ${OUTCOMES.join(', ')}`)
         }
-        const settled = orchestration.settleDispatch(idOf(command.target, 'dispatch'), outcome, p.filesModified)
+        const settled = orchestration.settleDispatch(resourceIdOf(command.target, 'dispatch'), outcome, p.filesModified)
         return {
           dispatchId: settled.dispatch.id,
           taskId: settled.task.id,
@@ -321,7 +326,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
         if (state !== 'retained' && state !== 'released') {
           throw new CommandError('invalid', 'state must be retained|released')
         }
-        const dispatch = orchestration.setDispatchState(idOf(command.target, 'dispatch'), state)
+        const dispatch = orchestration.setDispatchState(resourceIdOf(command.target, 'dispatch'), state)
         if (state === 'released' && p.closeTerminal) {
           terminals.dispose(dispatch.terminalId)
           deps.requestWidgetRemoval(dispatch.terminalId)
@@ -503,7 +508,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
     },
     handler: {
       apply: ({ command }) =>
-        orchestration.resolveGate(idOf(command.target, 'gate'), String(command.payload?.resolution ?? ''))
+        orchestration.resolveGate(resourceIdOf(command.target, 'gate'), String(command.payload?.resolution ?? ''))
     }
   })
 
@@ -529,28 +534,53 @@ export function failTerminalDispatches(deps: Pick<CommandDeps, 'orchestration'>,
 
 const PTY_CHUNK_CHARS = 8000
 
-async function submitPtyLine(
+async function submitShellLine(
   terminals: CommandDeps['terminals'],
   terminalId: string,
   text: string,
   signal?: AbortSignal
 ): Promise<boolean> {
   const singleLine = text.replace(/\r\n|\r|\n/g, ' ')
-  if (singleLine.length <= PTY_CHUNK_CHARS) {
-    return (await terminals.writeLine(terminalId, singleLine, { signal })).ok
-  }
+  return (await terminals.writeLine(terminalId, singleLine, { signal })).ok
+}
+
+async function submitPtyMessage(
+  terminals: CommandDeps['terminals'],
+  terminalId: string,
+  text: string,
+  signal?: AbortSignal
+): Promise<boolean> {
+  const singleLine = text.replace(/\r\n|\r|\n/g, ' ')
   for (let i = 0; i < singleLine.length; i += PTY_CHUNK_CHARS) {
     if (signal?.aborted) return false
     const last = i + PTY_CHUNK_CHARS >= singleLine.length
-    const ok = (
-      await terminals.writeLine(terminalId, singleLine.slice(i, i + PTY_CHUNK_CHARS), {
+    const delivered = await terminals.deliverLine(
+      terminalId,
+      singleLine.slice(i, i + PTY_CHUNK_CHARS),
+      {
         pressEnter: last,
+        timeoutMs: 8_000,
         signal
-      })
-    ).ok
-    if (!ok) return false
+      }
+    )
+    if (!delivered.ok) return false
   }
   return true
+}
+
+export function terminalShowsLaunchFailure(output: string, command: string): boolean {
+  const executable = /^\s*["']?([^\s"']+)/.exec(command)?.[1]?.toLowerCase()
+  if (!executable) return false
+  const tail = output.slice(-16_000).toLowerCase()
+  if (!tail.includes(executable)) return false
+  return [
+    'commandnotfoundexception',
+    'cmdnotfound',
+    'command not found',
+    'is not recognized as an internal or external command',
+    'is not recognized as the name of a cmdlet',
+    'не является внутренней или внешней командой'
+  ].some((marker) => tail.includes(marker))
 }
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {

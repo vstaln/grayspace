@@ -54,7 +54,18 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
       requestWidget: (info) => {
         const record = (terminals as unknown as { terminals: Map<string, { pty: unknown }> }).terminals?.get(info.id)
         if (record) {
-          record.pty = { write: () => {}, resize: () => {}, kill: () => {} }
+          record.pty = {
+            write: (data: string) => {
+              if (data !== '\r') {
+                setImmediate(() => {
+                  terminals.appendOutput(info.id, data)
+                  terminals.emit('data', info.id, data)
+                })
+              }
+            },
+            resize: () => {},
+            kill: () => {}
+          }
           terminals.emit('spawned', info.id)
         }
       },
@@ -320,10 +331,12 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
 
   test('orc tell command routes text to worker', async () => {
     const term = terminals.reserve({ title: 'worker-2' })
+    const writes: string[] = []
     const record = (terminals as unknown as { terminals: Map<string, { pty: unknown }> }).terminals?.get(term.id)
     if (record) {
       record.pty = {
         write: (data: string) => {
+          writes.push(data)
           if (data === '\r') return true
           setImmediate(() => {
             terminals.appendOutput(term.id, data)
@@ -339,7 +352,44 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     const tellRes = await runOrc(['tell', 'worker-2', 'echo hello'])
     assert.equal(tellRes.status, 0, tellRes.stdout || tellRes.stderr)
     assert.equal((tellRes.json as { delivery?: { status?: string } }).delivery?.status, 'delivered')
+    assert.deepEqual(writes, ['\x1b[200~echo hello\x1b[201~', '\r'])
     terminals.dispose(term.id)
+  })
+
+  test('orc tell with an image still sends the accompanying text as a pasted message', async () => {
+    const term = terminals.reserve({ title: 'worker-with-image' })
+    const image = join(userData, 'tell-image.png')
+    fs.writeFileSync(
+      image,
+      Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+    )
+    const writes: string[] = []
+    const record = (terminals as unknown as { terminals: Map<string, { pty: unknown }> }).terminals?.get(term.id)
+    assert.ok(record)
+    record.pty = {
+      write: (data: string) => {
+        writes.push(data)
+        if (data !== '\r') {
+          setImmediate(() => {
+            terminals.appendOutput(term.id, data)
+            terminals.emit('data', term.id, data)
+          })
+        }
+        return true
+      },
+      resize: () => {},
+      kill: () => {}
+    }
+    terminals.emit('spawned', term.id)
+
+    try {
+      const tellRes = await runOrc(['tell', 'worker-with-image', '--image', image, '--text', 'inspect this'])
+      assert.equal(tellRes.status, 0, tellRes.stdout || tellRes.stderr)
+      assert.ok(writes.some((data) => data === '\x1b[200~inspect this\x1b[201~'))
+      assert.equal(writes.at(-1), '\r')
+    } finally {
+      terminals.dispose(term.id)
+    }
   })
 
   if (process.platform === 'win32') {
@@ -348,7 +398,7 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
       const res = await new Promise<{ status: number; stdout: string; stderr: string }>((resolve) => {
         execFile(
           'cmd.exe',
-          ['/c', cmdPath, 'whoami', '--json'],
+          ['/d', '/c', cmdPath, 'whoami', '--json'],
           {
             env: {
               ...process.env,
@@ -378,7 +428,7 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
       const res = await new Promise<{ status: number; stdout: string; stderr: string }>((resolve) => {
         execFile(
           'cmd.exe',
-          ['/c', cmdPath, 'whoami', '--json'],
+          ['/d', '/c', cmdPath, 'whoami', '--json'],
           {
             env,
             encoding: 'utf8'

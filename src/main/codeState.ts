@@ -5,6 +5,7 @@ import { createHash } from 'crypto'
 import { readStoreJson, writeJsonAtomic, writeJsonAtomicAsync } from './storage.ts'
 import { getUserDataDir } from './userData.ts'
 import { ensureFolderStore, forgetFolderStore, workspaceSessionFile } from './workspaceFolderStore.ts'
+import { notifyPersistError } from './persistNotifier.ts'
 
 export const CODE_SCHEMA_VERSION = 1
 const EMPTY_WORKSPACE_SLOT = '__no-workspace__'
@@ -335,10 +336,12 @@ export class CodeStore extends EventEmitter {
           return
         } catch (retryErr) {
           console.error('failed to persist code layout', retryErr)
+          notifyPersistError('code-layout', retryErr)
           return
         }
       }
       console.error('failed to persist code layout', err)
+      notifyPersistError('code-layout', err)
     }
   }
 
@@ -391,6 +394,7 @@ export class CodeStore extends EventEmitter {
             writeJsonAtomic(file, this.snapshotForPersist())
           } catch (err) {
             console.error('failed to persist code layout', err)
+            notifyPersistError('code-layout', err)
           }
         }
       })
@@ -404,10 +408,12 @@ export class CodeStore extends EventEmitter {
             return
           } catch (retryErr) {
             console.error('failed to persist code layout', retryErr)
+            notifyPersistError('code-layout', retryErr)
             return
           }
         }
         console.error('failed to persist code layout', err)
+        notifyPersistError('code-layout', err)
       })
   }
 

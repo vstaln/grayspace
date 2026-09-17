@@ -105,6 +105,25 @@ describe('TerminalManager', () => {
     manager.disposeAll()
   })
 
+  test('spawn keeps the title supplied by a newly mounted widget', () => {
+    class FakeRustPty extends EventEmitter {
+      spawn(): { ok: true } { return { ok: true } }
+      write(): { ok: true } { return { ok: true } }
+      resize(): { ok: true } { return { ok: true } }
+      dispose(): { ok: true } { return { ok: true } }
+      beginClose(): void {}
+      close(): void {}
+    }
+
+    const manager = new TerminalManager({ rustPty: new FakeRustPty() as never })
+    const seen: string[] = []
+    manager.on('title', (_id: string, title: string) => seen.push(title))
+    assert.equal(manager.spawn('canvas-terminal', 80, 24, undefined, 'James').ok, true)
+    assert.equal(manager.list()[0]?.title, 'James')
+    assert.deepEqual(seen, [])
+    manager.disposeAll()
+  })
+
   test('setTitle maps placeholders to auto names and emits title', () => {
     const manager = new TerminalManager({ getFavoriteNames: () => ['backend'] })
     const term = manager.reserve({ title: 'backend' })
@@ -239,7 +258,34 @@ describe('TerminalManager', () => {
       const result = await delivery
 
       assert.equal(result.ok, true)
-      assert.deepEqual(writes, ['hello world', '\r'])
+      assert.deepEqual(writes, ['\x1b[200~hello world\x1b[201~', '\r'])
+    } finally {
+      manager.disposeAll()
+    }
+  })
+
+  test('deliverLine accepts an echo the target wrapped mid-word', async () => {
+    // An agent TUI re-wraps what it was handed to its own composer width, and
+    // the wrap can land inside a word with the frame's border between the
+    // halves. That is still the message on screen, so it is still delivered —
+    // reporting "not sent" for it made the sender type everything twice.
+    const manager = new TerminalManager()
+    const term = manager.reserve()
+    const record = (
+      manager as unknown as { terminals: Map<string, { pty: { write(data: string): void } | null }> }
+    ).terminals.get(term.id)
+    assert.ok(record)
+    record.pty = { write: () => {} }
+
+    try {
+      const delivery = manager.deliverLine(term.id, 'run the migration and report', { timeoutMs: 2000 })
+      setTimeout(() => {
+        const wrapped = '\x1b[2K\u2502 run the migra \u2502\r\n\u2502 tion and report \u2502\r\n'
+        manager.appendOutput(term.id, wrapped)
+        manager.emit('data', term.id, wrapped)
+      }, 50)
+
+      assert.equal((await delivery).ok, true)
     } finally {
       manager.disposeAll()
     }
@@ -265,7 +311,7 @@ describe('TerminalManager', () => {
 
       assert.equal((await delivery).ok, true)
       assert.equal((await rawInput).ok, true)
-      assert.deepEqual(writes, ['serialized message', '\r', ' '])
+      assert.deepEqual(writes, ['\x1b[200~serialized message\x1b[201~', '\r', ' '])
     } finally {
       manager.disposeAll()
     }
@@ -346,6 +392,22 @@ describe('TerminalManager', () => {
       }, 50)
       assert.equal((await delivery).ok, true)
       assert.deepEqual(writes, ['\x1b[200~first\nsecond\x1b[201~'])
+    } finally {
+      manager.disposeAll()
+    }
+  })
+
+  test('deliverLine rejects control characters that could terminate bracketed paste', async () => {
+    const manager = new TerminalManager()
+    const term = manager.reserve()
+    const writes: string[] = []
+    const record = (manager as unknown as { terminals: Map<string, { pty: { write(data: string): void } | null }> }).terminals.get(term.id)!
+    record.pty = { write: (data: string) => writes.push(data) }
+    try {
+      const result = await manager.deliverLine(term.id, 'safe\x1b[201~echo unsafe', { timeoutMs: 100 })
+      assert.equal(result.ok, false)
+      assert.match((result as { error: string }).error, /unsafe terminal control/)
+      assert.deepEqual(writes, [])
     } finally {
       manager.disposeAll()
     }
@@ -503,6 +565,74 @@ describe('TerminalManager', () => {
     manager.disposeAll()
   })
 
+  test('a native async spawn failure falls back without exiting the terminal', () => {
+    class FakeRustPty extends EventEmitter {
+      spawn(): { ok: true } { return { ok: true } }
+      write(): { ok: true } { return { ok: true } }
+      resize(): { ok: true } { return { ok: true } }
+      dispose(): { ok: true } { return { ok: true } }
+      beginClose(): void {}
+      close(): void {}
+    }
+
+    const sidecar = new FakeRustPty()
+    const manager = new TerminalManager({ rustPty: sidecar as never })
+    const term = manager.reserve()
+    assert.equal(manager.spawn(term.id, 80, 24).ok, true)
+    let fallbackCalls = 0
+    Reflect.set(manager, 'spawnNodePty', () => {
+      fallbackCalls += 1
+      return { ok: true }
+    })
+    const exits: Array<{ id: string; code: number }> = []
+    manager.on('exit', (id: string, code: number) => exits.push({ id, code }))
+
+    sidecar.emit('spawn-error', term.id, new Error('invalid working directory'))
+
+    assert.equal(fallbackCalls, 1)
+    assert.deepEqual(exits, [])
+    manager.disposeAll()
+  })
+
+  test('reserve replaces a duplicate automatic name instead of adding a number', () => {
+    const manager = new TerminalManager()
+
+    const first = manager.reserve({ title: 'Jonathan' })
+    const second = manager.reserve({ title: 'Jonathan' })
+
+    assert.equal(first.title, 'Jonathan')
+    assert.notEqual(second.title, 'Jonathan')
+    assert.match(second.title, /^[A-Z][a-z]+$/)
+    assert.doesNotMatch(second.title, /\d/)
+    manager.disposeAll()
+  })
+
+  test('reserve migrates a saved numbered automatic name', () => {
+    const manager = new TerminalManager()
+    const terminal = manager.reserve({ title: 'Jonathan-2' })
+
+    assert.notEqual(terminal.title, 'Jonathan-2')
+    assert.match(terminal.title, /^[A-Z][a-z]+$/)
+    manager.disposeAll()
+  })
+
+  test('rememberPrompt normalizes, stores and emits the latest user prompt', () => {
+    const manager = new TerminalManager()
+    const term = manager.reserve({ title: 'worker' })
+    const seen: string[] = []
+    manager.on('prompt', (id: string, prompt: string) => {
+      if (id === term.id) seen.push(prompt)
+    })
+
+    manager.rememberPrompt(term.id, '  Review\n\nthis   change  ')
+    manager.rememberPrompt(term.id, 'Review this change')
+    manager.rememberPrompt(term.id, 'Ship it')
+
+    assert.equal(manager.list().find((item) => item.id === term.id)?.lastPrompt, 'Ship it')
+    assert.deepEqual(seen, ['Review this change', 'Ship it'])
+    manager.disposeAll()
+  })
+
   test('a stale pty exit does not tear down the replacement shell', () => {
     const manager = new TerminalManager()
     const term = manager.reserve()
@@ -559,6 +689,45 @@ describe('TerminalManager', () => {
     assert.equal(manager.readOutput(term.id, true), 'fresh')
 
     manager.disposeAll()
+  })
+
+  test('queued input from an exited session never reaches its replacement', async () => {
+    class HeldRustPty extends EventEmitter {
+      writes: string[] = []
+      releases: Array<() => void> = []
+      spawn(): { ok: true } { return { ok: true } }
+      write(_id: string, data: string): Promise<{ ok: true }> {
+        this.writes.push(data)
+        return new Promise((resolve) => this.releases.push(() => resolve({ ok: true })))
+      }
+      resize(): { ok: true } { return { ok: true } }
+      dispose(): { ok: true } { return { ok: true } }
+      beginClose(): void {}
+      close(): void {}
+    }
+
+    const sidecar = new HeldRustPty()
+    const manager = new TerminalManager({ rustPty: sidecar as never })
+    const term = manager.reserve()
+    assert.equal(manager.spawn(term.id, 80, 24).ok, true)
+
+    try {
+      const first = manager.writeInput(term.id, 'old session')
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      const queued = manager.writeInput(term.id, 'must not cross restart')
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      assert.deepEqual(sidecar.writes, ['old session'])
+
+      sidecar.emit('exit', term.id, 0)
+      assert.equal(manager.spawn(term.id, 80, 24).ok, true)
+      for (const release of sidecar.releases.splice(0)) release()
+
+      assert.equal((await first).ok, true)
+      assert.equal((await queued).ok, false)
+      assert.deepEqual(sidecar.writes, ['old session'])
+    } finally {
+      manager.disposeAll()
+    }
   })
 
   test('a backend restart reuses the last known terminal geometry', () => {
@@ -646,7 +815,7 @@ describe('TerminalManager', () => {
     }
   })
 
-  test('windowsShellArgs starts cmd without setup commands', () => {
+  test('windowsShellArgs starts cmd with silent UTF-8 setup', () => {
     // cmd.exe gets a silent chcp only: output nulled, prompt stays on row one.
     if (process.platform !== 'win32') {
       assert.deepEqual(windowsShellArgs('cmd'), [])
@@ -661,6 +830,65 @@ describe('TerminalManager', () => {
     assert.ok(ps.some((arg) => arg.includes('65001')))
     for (const arg of ps) {
       assert.ok(!/[\r\n]/.test(arg), `argv entry must not carry an Enter: ${arg}`)
+    }
+  })
+
+  test('a write that outlives the input queue timeout still holds the queue', async (t) => {
+    // takeInputTurn gives up waiting after INPUT_QUEUE_STALL_MS. Giving up is
+    // not the same as the write ahead finishing: if the queue were released on
+    // the timeout alone, the next keystrokes would be typed into the shell in
+    // the middle of the ones still in flight.
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const releases: Array<() => void> = []
+    class StalledRustPty extends EventEmitter {
+      writes: string[] = []
+      spawn(): { ok: true } { return { ok: true } }
+      write(_id: string, data: string): Promise<{ ok: true }> {
+        this.writes.push(data)
+        return new Promise((resolve) => releases.push(() => resolve({ ok: true })))
+      }
+      resize(): { ok: true } { return { ok: true } }
+      dispose(): { ok: true } { return { ok: true } }
+      beginClose(): void {}
+      close(): void {}
+    }
+
+    // setTimeout is mocked, setImmediate is not: it drains the microtask queue
+    // the promise chain in serializeInput runs on without advancing fake time.
+    const settle = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+
+    const sidecar = new StalledRustPty()
+    const manager = new TerminalManager({ rustPty: sidecar as never })
+    try {
+      assert.equal(manager.spawn('stalled-input', 80, 24).ok, true)
+
+      const first = manager.writeInput('stalled-input', 'first')
+      await settle()
+      assert.deepEqual(sidecar.writes, ['first'], 'the first write reaches the engine')
+
+      const second = manager.writeInput('stalled-input', 'second')
+      await settle()
+      t.mock.timers.tick(10_000)
+      assert.equal((await second).ok, false, 'the turn it waited for never finished, so it is refused')
+      assert.deepEqual(sidecar.writes, ['first'], 'a refused turn types nothing')
+
+      // The turn after the refused one is the one that used to jump the queue:
+      // the timeout had already emptied the tail, so it started typing while
+      // the first write was still in flight.
+      const third = manager.writeInput('stalled-input', 'third')
+      await settle()
+      assert.deepEqual(sidecar.writes, ['first'], 'nothing is typed while the first write is in flight')
+
+      for (const release of releases.splice(0)) release()
+      assert.equal((await first).ok, true)
+
+      // With the queue idle again that write goes through, in order.
+      await settle()
+      assert.deepEqual(sidecar.writes, ['first', 'third'])
+      for (const release of releases.splice(0)) release()
+      assert.equal((await third).ok, true)
+    } finally {
+      manager.disposeAll()
     }
   })
 

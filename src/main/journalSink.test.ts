@@ -38,6 +38,21 @@ describe('readJournalTail', () => {
     assert.equal(tail.lastSeq, 41)
     assert.equal(tail.entries.length, 1)
   })
+
+  test('a large journal returns only its newest entries', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'orcspace-journal-'))
+    dirs.push(dir)
+    const file = join(dir, 'command-journal.ndjson')
+    const lines = Array.from({ length: 5_000 }, (_, index) => JSON.stringify({
+      ...entry(index + 1),
+      payload: { text: `строка-${index + 1}-${'x'.repeat(100)}` }
+    }))
+    writeFileSync(file, `${lines.join('\n')}\n`, 'utf8')
+
+    const tail = readJournalTail(file, 25)
+    assert.equal(tail.lastSeq, 5_000)
+    assert.deepEqual(tail.entries.map((item) => item.seq), Array.from({ length: 25 }, (_, index) => 4_976 + index))
+  })
 })
 
 describe('FileJournalSink', () => {

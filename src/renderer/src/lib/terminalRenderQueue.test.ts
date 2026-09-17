@@ -89,7 +89,8 @@ describe('TerminalRenderQueue', () => {
     h.queue.push('bbbbbbbb')
     h.queue.flush()
 
-    const RESYNC = '\x18\x1b[0m'
+    const RESYNC = '\x18\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l' +
+      '\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?2026l\x1b[?25h\x1b[0m'
     const written = h.writes[0]
     assert.ok(written.startsWith(RESYNC), 'a drop must announce itself so a halved sequence cannot bleed')
     assert.equal(written.slice(RESYNC.length), 'bbbbbbbb', 'the newest output is what survives')

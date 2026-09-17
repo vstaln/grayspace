@@ -1,5 +1,6 @@
 import * as electron from 'electron'
 import { createRequire } from 'module'
+import { readdirSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 
@@ -19,6 +20,10 @@ const nativeStorageCore = ((): NativeStorageCore | null => {
     const nativeDir = electronApp?.isPackaged
       ? join(process.resourcesPath, 'native', 'storage-core')
       : join(ansiModuleDir, '../../native/storage-core')
+    const platformArch = `${process.platform}-${process.arch}`
+    if (!readdirSync(nativeDir).some((name) => name.endsWith('.node') && name.includes(platformArch))) {
+      return null
+    }
     return require(nativeDir) as NativeStorageCore
   } catch {
 

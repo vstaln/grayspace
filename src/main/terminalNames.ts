@@ -22,6 +22,8 @@ const MALE_NAMES = [
   'Caleb', 'Dylan', 'Owen', 'Connor', 'Ryan', 'Aaron', 'Adrian', 'Eric'
 ]
 
+const AUTOMATIC_NAMES = new Set(MALE_NAMES.map((name) => name.toLowerCase()))
+
 export function normalizeTerminalName(raw: unknown): string | null {
   if (typeof raw !== 'string') return null
   const name = raw.trim()
@@ -47,6 +49,15 @@ export function normalizeTerminalNameList(raw: unknown): string[] {
 
 export function isDefaultTerminalTitle(title: string): boolean {
   return DEFAULT_TITLE_PATTERN.test(title.trim())
+}
+
+export function isAutomaticTerminalName(title: string): boolean {
+  return AUTOMATIC_NAMES.has(title.trim().toLowerCase())
+}
+
+export function isLegacyNumberedAutomaticTerminalName(title: string): boolean {
+  const match = title.trim().match(/^([A-Za-z]+)-(\d+)$/)
+  return !!match && Number(match[2]) >= 2 && AUTOMATIC_NAMES.has(match[1].toLowerCase())
 }
 
 export function makeUniqueTitle(base: string, taken: Set<string> | Iterable<string>): string {
@@ -82,8 +93,15 @@ export function pickTerminalName(options: {
     const name = MALE_NAMES[(start + offset) % MALE_NAMES.length]
     if (!taken.has(name.toLowerCase())) return name
   }
-  const base = MALE_NAMES[start]
-  let n = 2
-  while (taken.has(withSuffix(base, n).toLowerCase())) n += 1
-  return withSuffix(base, n)
+  // This path is only defensive (the terminal cap is the size of MALE_NAMES),
+  // but automatic titles must never degrade into James-2 / James-3.
+  for (let firstOffset = 0; firstOffset < MALE_NAMES.length; firstOffset += 1) {
+    const first = MALE_NAMES[(start + firstOffset) % MALE_NAMES.length]
+    for (let secondOffset = 1; secondOffset < MALE_NAMES.length; secondOffset += 1) {
+      const second = MALE_NAMES[(start + firstOffset + secondOffset) % MALE_NAMES.length]
+      const name = `${first}${second}`.slice(0, MAX_NAME_LENGTH)
+      if (!taken.has(name.toLowerCase())) return name
+    }
+  }
+  throw new Error('automatic terminal name pool exhausted')
 }

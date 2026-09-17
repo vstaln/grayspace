@@ -50,7 +50,7 @@ test('right-click offers every canvas action and places widgets on the canvas', 
   await openContextMenu()
 
 
-  await expect(page.getByRole('menu', { name: 'Context Menu' }).getByRole('menuitem')).toHaveCount(10)
+  await expect(page.getByRole('menu', { name: 'Context Menu' }).getByRole('menuitem')).toHaveCount(11)
 
 
   await page.getByTestId('cm-timer').click()

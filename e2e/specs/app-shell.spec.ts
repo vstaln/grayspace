@@ -20,8 +20,19 @@ test('the shell starts and renders the canvas chrome', async () => {
   const { page } = ctx
 
 
-  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Change directory', exact: true })).toBeVisible()
+  await expect(page.getByTestId('toolbar-more')).toBeVisible()
+  await page.getByTestId('toolbar-more').click()
+  const overflow = page.getByTestId('toolbar-overflow-menu')
+  await expect(overflow).toBeVisible()
+  const changeDir = overflow.getByRole('menuitem', { name: 'Change directory', exact: true })
+  await expect(overflow.getByRole('menuitem', { name: 'Settings', exact: true })).toBeVisible()
+  await expect(changeDir).toBeVisible()
+  await expect(changeDir).toBeFocused()
+  await expect(overflow.getByTestId('command-mode')).toBeVisible()
+  await expect(overflow.getByRole('combobox', { name: 'Target terminal', exact: true })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(overflow).toHaveCount(0)
+  await expect(page.getByTestId('toolbar-more')).toBeFocused()
 
   await expect(page.getByTestId('tool-select')).toBeVisible()
   await expect(page.getByTestId('tool-draw')).toBeVisible()
@@ -67,30 +78,42 @@ test('ctrl+wheel zooms the world layer, plain wheel pans it', async () => {
   await expect.poll(transform, { timeout: 3000 }).not.toBe(zoomed)
 })
 
-test('keyboard zoom: Ctrl++ zooms in, Ctrl+- zooms out, Ctrl+0 resets', async () => {
+test('keyboard zoom: Ctrl++ zooms in, Ctrl+- zooms out, 0 resets zoom and Home resets the view', async () => {
   const { page } = ctx
   await page.getByTestId('canvas').focus()
   const world = page.getByTestId('canvas').locator(':scope > div').first()
   const transform = (): Promise<string> => world.evaluate((el) => (el as HTMLElement).style.transform)
 
+  await page.getByTestId('canvas').dispatchEvent('wheel', {
+    deltaX: 0,
+    deltaY: 120,
+    ctrlKey: false,
+    clientX: 400,
+    clientY: 300
+  })
+  await expect.poll(transform, { timeout: 3000 }).not.toBe('translate3d(0px, 0px, 0px) scale(1)')
 
 
   await page.keyboard.press('Control+0')
-  await expect.poll(transform, { timeout: 3000 }).toBe('translate3d(0px, 0px, 0px) scale(1)')
+  await expect.poll(transform, { timeout: 3000 }).toMatch(/scale\(1\)$/)
+  await expect.poll(transform, { timeout: 3000 }).not.toBe('translate3d(0px, 0px, 0px) scale(1)')
   const before = await transform()
 
 
   await page.keyboard.press('Control+=')
   await expect.poll(transform, { timeout: 3000 }).not.toBe(before)
-  const zoomed = await transform()
-
-
-  await page.keyboard.press('Control+-')
-  await expect.poll(transform, { timeout: 3000 }).not.toBe(zoomed)
-
-
   await page.keyboard.press('Control+0')
-  await expect.poll(transform, { timeout: 3000 }).toBe(before)
+  await expect.poll(transform, { timeout: 3000 }).toMatch(/scale\(1\)$/)
+  await expect.poll(transform, { timeout: 3000 }).not.toBe(before)
+
+  const resetAfterZoom = await transform()
+  await page.keyboard.press('Control+-')
+  await expect.poll(transform, { timeout: 3000 }).not.toBe(resetAfterZoom)
+  await page.keyboard.press('Control+0')
+  await expect.poll(transform, { timeout: 3000 }).toMatch(/scale\(1\)$/)
+  await expect.poll(transform, { timeout: 3000 }).not.toBe(resetAfterZoom)
+  await page.keyboard.press('Home')
+  await expect.poll(transform, { timeout: 3000 }).toBe('translate3d(0px, 0px, 0px) scale(1)')
 })
 
 test('minimum window size: no horizontal overflow at 800x560', async () => {

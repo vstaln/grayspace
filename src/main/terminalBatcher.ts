@@ -6,8 +6,11 @@ export interface BatcherOptions {
   maxPendingBytes?: number
 }
 
-/** Invisible SGR reset: resyncs the stream after dropped bytes cut a sequence in half. */
-const RESYNC_PREFIX = '\x1b[0m'
+/** Cancel partial control state after output loss, including stale mouse reporting. */
+const RESYNC_PREFIX =
+  '\x18\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l' +
+  '\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l' +
+  '\x1b[?2026l\x1b[?25h\x1b[0m'
 
 
 
@@ -23,7 +26,8 @@ export class TerminalStreamBatcher extends EventEmitter {
   /**
    * Same resync contract as TerminalOutputGate: when pressure forces a drop
    * of the oldest chunks, the next emitted batch carries an invisible SGR
-   * reset so a sequence cut in half cannot corrupt everything after it.
+   * reset so a sequence cut in half cannot corrupt everything after it or
+   * leave xterm stuck inside a synchronized-output frame.
    */
   private readonly resyncPending = new Set<string>()
   private timer: NodeJS.Timeout | null = null

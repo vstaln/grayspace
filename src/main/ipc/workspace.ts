@@ -2,9 +2,26 @@ import * as fs from 'fs'
 import * as pathModule from 'path'
 import { dialog, ipcMain } from './shims.ts'
 import type { IpcDeps } from './types.ts'
-import { isLocalPath } from '../media.ts'
 import { getUserDataDir } from '../userData.ts'
 import { codeWorkspaceScope } from '../../shared/codeWorkspace.ts'
+import { authorizeWorkspacePath, canonicalActiveWorkspacePath } from './workspacePath.ts'
+
+function recentWorkspaceEntries(deps: IpcDeps): readonly { path: string }[] {
+  try {
+    const recent = deps.state.get().recent
+    return Array.isArray(recent) ? recent : []
+  } catch {
+    return []
+  }
+}
+
+function authorizeFolder(deps: IpcDeps, rawPath: unknown) {
+  return authorizeWorkspacePath(rawPath, deps.getWorkspaceDir(), recentWorkspaceEntries(deps))
+}
+
+function isActiveFolder(deps: IpcDeps, folder: string | undefined): boolean {
+  return folder === deps.getWorkspaceDir() || folder === canonicalActiveWorkspacePath(deps.getWorkspaceDir())
+}
 
 export function registerWorkspaceIpc(deps: IpcDeps): void {
   ipcMain.handle('workspace:get-dir', () => deps.getWorkspaceDir() ?? null)
@@ -48,8 +65,10 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
   })
 
   ipcMain.handle('workspace:rename', (_e, rawPath: unknown, rawName: unknown) => {
-    if (typeof rawPath !== 'string' || !isLocalPath(rawPath) || typeof rawName !== 'string') return { error: 'Invalid workspace.' }
-    return deps.state.renameRecent(rawPath, rawName)
+    if (typeof rawName !== 'string') return { error: 'Invalid workspace.' }
+    const authorized = authorizeFolder(deps, rawPath)
+    if (!authorized) return { error: 'Invalid workspace.' }
+    return deps.state.renameRecent(authorized.configured, rawName)
   })
 
   ipcMain.handle('workspace:code-workspaces', () => deps.state.codeWorkspaceState(deps.getWorkspaceDir()))
@@ -69,14 +88,16 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     let folder = deps.getWorkspaceDir()
     let name: string | undefined
     if (typeof rawNameOrFolder === 'string' && (typeof rawName === 'string' || rawName === null)) {
-      folder = typeof rawNameOrFolder === 'string' ? rawNameOrFolder : folder
+      const authorized = authorizeFolder(deps, rawNameOrFolder)
+      if (!authorized) return { error: 'Invalid workspace.' }
+      folder = authorized.configured
       name = typeof rawName === 'string' ? rawName : undefined
     } else if (typeof rawNameOrFolder === 'string') {
       name = rawNameOrFolder
     }
     const result = deps.state.createCodeWorkspace(folder, name)
     if ('error' in result) return result
-    if (folder === deps.getWorkspaceDir()) {
+    if (isActiveFolder(deps, folder)) {
       deps.code.setWorkspaceScope(deps.state.activeCodeWorkspaceScope(folder), undefined, folder)
       const next = deps.state.codeWorkspaceState(folder)
       deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', next)
@@ -88,7 +109,9 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     let id: string
     let name: string
     if (typeof rawName === 'string' && typeof rawNameOrId === 'string' && typeof rawIdOrFolder === 'string') {
-      folder = rawIdOrFolder
+      const authorized = authorizeFolder(deps, rawIdOrFolder)
+      if (!authorized) return { error: 'Invalid workspace.' }
+      folder = authorized.configured
       id = rawNameOrId
       name = rawName
     } else if (typeof rawIdOrFolder === 'string' && typeof rawNameOrId === 'string') {
@@ -98,7 +121,7 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
       return { error: 'Invalid workspace.' }
     }
     const result = deps.state.renameCodeWorkspace(folder, id, name)
-    if (!('error' in result) && folder === deps.getWorkspaceDir()) {
+    if (!('error' in result) && isActiveFolder(deps, folder)) {
       deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceChange', result)
     }
     return result
@@ -107,7 +130,9 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     let folder = deps.getWorkspaceDir()
     let id: string
     if (typeof rawId === 'string' && typeof rawIdOrFolder === 'string') {
-      folder = rawIdOrFolder
+      const authorized = authorizeFolder(deps, rawIdOrFolder)
+      if (!authorized) return { error: 'Invalid workspace.' }
+      folder = authorized.configured
       id = rawId
     } else if (typeof rawIdOrFolder === 'string') {
       id = rawIdOrFolder
@@ -122,10 +147,10 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
     deps.getWindow()?.webContents.send('workspace:onCodeWorkspaceDeleted', scope)
     if (result.workspaces.length === 0) {
       deps.state.removeRecent(folder ?? '')
-      if (folder === deps.getWorkspaceDir()) deps.setWorkspaceDir(undefined)
+      if (isActiveFolder(deps, folder)) deps.setWorkspaceDir(undefined)
       return result
     }
-    if (folder === deps.getWorkspaceDir()) {
+    if (isActiveFolder(deps, folder)) {
       deps.code.setWorkspaceScope(
         deps.state.activeCodeWorkspaceScope(folder),
         result.activeId === result.workspaces[0]?.id ? folder : undefined,
@@ -153,33 +178,21 @@ export function registerWorkspaceIpc(deps: IpcDeps): void {
   ipcMain.handle('workspace:recent', () => deps.state.get().recent)
 
   ipcMain.handle('workspace:open-recent', (_e, path: string) => {
-
-
-
-    if (typeof path !== 'string' || !isLocalPath(path) || !fs.existsSync(path)) {
-      deps.state.removeRecent(String(path))
-      return { error: 'Folder unavailable' }
-    }
-
-
-
-    try {
-      if (!fs.statSync(path).isDirectory()) return { error: 'Not a folder' }
-    } catch {
-      deps.state.removeRecent(path)
-      return { error: 'Folder unavailable' }
-    }
-    deps.setWorkspaceDir(path)
-    return path
+    const authorized = authorizeFolder(deps, path)
+    if (!authorized) return { error: 'Folder unavailable' }
+    deps.setWorkspaceDir(authorized.configured)
+    return authorized.configured
   })
   ipcMain.handle('workspace:pin-recent', (_e, path: string) => {
-    if (typeof path !== 'string' || !isLocalPath(path)) return { error: 'Invalid path' }
-    deps.state.togglePin(path)
+    const authorized = authorizeFolder(deps, path)
+    if (!authorized) return { error: 'Invalid path' }
+    deps.state.togglePin(authorized.configured)
     return deps.state.get().recent
   })
   ipcMain.handle('workspace:forget-recent', (_e, path: string) => {
-    if (typeof path !== 'string' || !isLocalPath(path)) return { error: 'Invalid path' }
-    deps.state.removeRecent(path)
+    const authorized = authorizeFolder(deps, path)
+    if (!authorized) return { error: 'Invalid path' }
+    deps.state.removeRecent(authorized.configured)
     return deps.state.get().recent
   })
 }

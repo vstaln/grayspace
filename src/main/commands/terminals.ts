@@ -135,7 +135,7 @@ export function registerTerminalCommands({
 
 
   flow.registerDefinition<
-    { cols?: number; rows?: number; cwd?: string },
+    { cols?: number; rows?: number; cwd?: string; title?: string },
     { ok: boolean; error?: string; scrollback?: string; live?: boolean }
   >({
     type: 'terminal.spawn',
@@ -147,7 +147,8 @@ export function registerTerminalCommands({
       properties: {
         cols: { type: 'number' },
         rows: { type: 'number' },
-        cwd: { type: 'string' }
+        cwd: { type: 'string' },
+        title: { type: 'string' }
       }
     },
     handler: {
@@ -162,7 +163,7 @@ export function registerTerminalCommands({
 
 
         const saved = snapshots.get(id)
-        const result = terminals.spawn(id, p.cols, p.rows, p.cwd || saved?.cwd || defaultCwd())
+        const result = terminals.spawn(id, p.cols, p.rows, p.cwd || saved?.cwd || defaultCwd(), p.title)
 
 
         if (!result.ok) throw new CommandError('failed', result.error ?? 'failed to start the terminal')
@@ -172,6 +173,7 @@ export function registerTerminalCommands({
         if (saved?.title && saved.title !== id && !isDefaultTerminalTitle(saved.title)) {
           terminals.setTitle(id, saved.title, { unique: true })
         }
+        if (typeof saved?.lastPrompt === 'string') terminals.rememberPrompt(id, saved.lastPrompt)
         return { ok: true, live: false, scrollback: snapshots.scrollback(id) }
       }
     }
@@ -276,6 +278,7 @@ export function registerTerminalCommands({
                 status: 'not_sent'
               })
             }
+            if (command.payload?.pressEnter !== false) terminals.rememberPrompt(id, singleLine)
             return {
               ok: true as const,
               id,
@@ -294,6 +297,7 @@ export function registerTerminalCommands({
             signal
           })
           if (!written.ok) throw new CommandError('failed', written.error)
+          if (command.payload?.pressEnter !== false) terminals.rememberPrompt(id, singleLine)
 
 
           return { ok: true as const, id, text: singleLine }
@@ -428,6 +432,7 @@ export function registerTerminalCommands({
               const written = await terminals.writeLine(id, text, { pressEnter, signal })
               if (!written.ok) throw new CommandError('failed', written.error)
             }
+            if (pressEnter) terminals.rememberPrompt(id, text)
           } else if (pressEnter) {
             const written = await terminals.writeInput(id, '\r')
             if (!written.ok) throw new CommandError('failed', written.error)

@@ -5,11 +5,12 @@
 
 
 export interface TerminalApi {
-  list(): Promise<Array<{ id: string; title: string; cwd: string }>>
+  list(): Promise<Array<{ id: string; title: string; cwd: string; lastPrompt?: string }>>
   create(
     id: string,
     cols?: number,
-    rows?: number
+    rows?: number,
+    title?: string
   ): Promise<
     { ok: boolean; error?: string; scrollback?: string; live?: boolean } | { error: string }
   >
@@ -17,6 +18,7 @@ export interface TerminalApi {
   resize(id: string, cols: number, rows: number): void
   dispose(id: string): Promise<unknown>
   setTitle?(id: string, title: string): Promise<{ ok: boolean; error?: string }>
+  setLastPrompt(id: string, prompt: string): Promise<{ ok: boolean; error?: string }>
 
 
 
@@ -26,11 +28,19 @@ export interface TerminalApi {
   setFocused(focused: boolean, id: string): void
   onData(id: string, cb: (data: string) => void): () => void
   onExit(id: string, cb: (exitCode: number) => void): () => void
+  onPrompt(id: string, cb: (prompt: string) => void): () => void
   onBackendError(cb: (message: string) => void): () => void
 }
 
+export interface RendererStateApi {
+  load(): Promise<{ schemaVersion: number; values: Record<string, string> }>
+  replace(values: Record<string, string>): Promise<{ schemaVersion: number; values: Record<string, string> }>
+  set(key: string, value: string): Promise<{ ok: boolean }>
+  remove(key: string): Promise<{ ok: boolean }>
+}
+
 export interface ControlApi {
-  onAddWidget(cb: (payload: { id: string; title: string; kind?: string; x?: number; y?: number; from?: string | null }) => void): () => void
+  onAddWidget(cb: (payload: { id: string; title: string; kind?: string; x?: number; y?: number; from?: string | null; imagePath?: string; imageName?: string }) => void): () => void
   onRemoveWidget(cb: (id: string) => void): () => void
   onRenameWidget(cb: (payload: { id: string; title: string }) => void): () => void
 
@@ -121,6 +131,7 @@ export interface AppSettings {
   localModel: LocalModelSettings
   favoriteWidgets?: string[]
   favoriteTerminalNames?: string[]
+  imageInsertShortcut?: string
 }
 
 export interface AppUpdateState {
@@ -418,13 +429,15 @@ export interface PlannerApi {
 export interface CanvasWidget {
   id: string
   title: string
-  kind?: 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'links' | 'music-player' | 'orchestration' | 'chat'
+  kind?: 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'image' | 'links' | 'music-player' | 'orchestration' | 'chat'
   x: number
   y: number
   w: number
   h: number
   z: number
   maximized?: boolean
+  imagePath?: string
+  imageName?: string
 
 
   version?: number

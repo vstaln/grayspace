@@ -15,6 +15,8 @@ interface WidgetCreatePayload {
   w?: number
   h?: number
   z?: number
+  imagePath?: string
+  imageName?: string
 }
 
 type WidgetPatchPayload = Partial<Omit<CanvasWidget, 'id' | 'version' | 'updatedAt'>>
@@ -59,7 +61,9 @@ export function registerCanvasCommands({
         y: { type: 'number' },
         w: { type: 'number' },
         h: { type: 'number' },
-        z: { type: 'number' }
+        z: { type: 'number' },
+        imagePath: { type: 'string', description: 'Durable media-store path for an Image widget' },
+        imageName: { type: 'string', description: 'Media-store file name for an Image widget' }
       }
     },
     handler: {
@@ -83,7 +87,9 @@ export function registerCanvasCommands({
             y: Number(p.y) || 0,
             w: Number(p.w) || defaults?.w || 520,
             h: Number(p.h) || defaults?.h || 360,
-            z: Number(p.z) || 1
+            z: Number(p.z) || 1,
+            ...(typeof p.imagePath === 'string' ? { imagePath: p.imagePath } : {}),
+            ...(typeof p.imageName === 'string' ? { imageName: p.imageName } : {})
           })
 
 
@@ -93,6 +99,8 @@ export function registerCanvasCommands({
             kind: widget.kind,
             x: widget.x,
             y: widget.y,
+            ...(widget.imagePath ? { imagePath: widget.imagePath } : {}),
+            ...(widget.imageName ? { imageName: widget.imageName } : {})
           })
           return widget
         } catch (err) {
@@ -115,7 +123,9 @@ export function registerCanvasCommands({
         y: { type: 'number' },
         w: { type: 'number' },
         h: { type: 'number' },
-        z: { type: 'number' }
+        z: { type: 'number' },
+        imagePath: { type: 'string', description: 'Durable media-store path for an Image widget' },
+        imageName: { type: 'string', description: 'Media-store file name for an Image widget' }
       }
     },
     handler: {

@@ -39,12 +39,6 @@ function formatBytes(bytes: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
 }
 
-function isPathInside(path: string, ancestor: string): boolean {
-  const a = path.replace(/[\\/]+$/, '').toLowerCase()
-  const b = ancestor.replace(/[\\/]+$/, '').toLowerCase()
-  return a === b || a.startsWith(`${b}\\`) || a.startsWith(`${b}/`)
-}
-
 function joinChildPath(dir: string, name: string): string | null {
   const trimmed = name.trim()
   if (!trimmed || trimmed === '.' || trimmed === '..' || /[\\/]/.test(trimmed) || trimmed.includes('..')) {
@@ -143,11 +137,17 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
   useEffect(() => {
     const changed = lastWorkspaceRef.current !== workspaceDir
     lastWorkspaceRef.current = workspaceDir
-    if (!changed || !workspaceDir) return
-    if (!currentPath || !isPathInside(currentPath, workspaceDir)) {
-      setCurrentPath(workspaceDir)
-    }
-  }, [workspaceDir, currentPath])
+    if (!changed) return
+    dirSeq.current += 1
+    previewSeq.current += 1
+    setItems([])
+    setParentPath(null)
+    setPreviewFile(null)
+    setError(null)
+    setTruncated(false)
+    setLoading(false)
+    setCurrentPath(workspaceDir || null)
+  }, [workspaceDir])
 
   useEffect(() => {
     if (!previewFile) return
@@ -188,8 +188,9 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
   }, [showHidden])
 
   useEffect(() => {
+    if (!workspaceDir || !currentPath) return
     void loadDir(currentPath)
-  }, [currentPath, showHidden, loadDir])
+  }, [workspaceDir, currentPath, showHidden, loadDir])
 
   const noticeTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const showNotice = (msg: string): void => {

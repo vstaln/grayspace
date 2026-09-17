@@ -71,7 +71,11 @@ test('natural shell exit is reported without waiting for another terminal comman
     await until(() => observed.output.get('ending')?.includes('>') === true, 'shell is ready')
     assert.ok((await sidecar.write('ending', 'echo LAST_BEFORE_EXIT\rexit\r')).ok)
     await until(() => exited.has('ending'), 'natural shell exit reaches the renderer', 5000)
-    assert.match(stripAnsi(outputAtExit), /\r?\nLAST_BEFORE_EXIT\r?\n/)
+    // System ConPTY may finish the final console line with a bare CR when the
+    // shell exits immediately after writing it. Require the standalone output
+    // line, not merely the command echo.
+    const plainOutput = stripAnsi(outputAtExit)
+    assert.match(plainOutput, /\r?\nLAST_BEFORE_EXIT(?:\r?\n|\r|$)/)
     assert.equal(exited.has('survivor'), false)
     assert.ok((await sidecar.write('survivor', 'echo SURVIVOR_OK\r')).ok)
     await until(() => observed.output.get('survivor')?.includes('SURVIVOR_OK') === true, 'other shell still works')
