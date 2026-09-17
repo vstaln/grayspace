@@ -50,20 +50,24 @@ describe('terminal startup failure', () => {
 })
 
 describe('terminal startup probe', () => {
-  const started = '\u001b]0;C:\\WINDOWS\\system32\\cmd.exe - opencode\u0007'
-  const backToShell = '\u001b]0;C:\\WINDOWS\\system32\\cmd.exe\u0007'
+  const title = (value: string): string => `\u001b]0;${value}\u0007`
+  const SHELL = 'C:\\WINDOWS\\system32\\cmd.exe'
+  const started = title(`${SHELL} - opencode`)
+  const backToShell = title(SHELL)
 
   it('reports an agent that died without printing anything', () => {
     const probe = createStartupProbe('opencode')
-    assert.equal(readStartupOutput(probe, `C:\\work>opencode\r\n${started}`), null)
-    assert.match(readStartupOutput(probe, backToShell) ?? '', /exited right after starting/)
+    assert.equal(readStartupOutput(probe, `C:\\work>opencode\r\n${started}`)?.status, 'running')
+    const verdict = readStartupOutput(probe, backToShell)
+    assert.equal(verdict?.status, 'maybe-exited')
+    assert.match(verdict?.status === 'maybe-exited' ? verdict.message : '', /exited right after starting/)
   })
 
   it('stays quiet while the agent keeps running', () => {
     const probe = createStartupProbe('opencode')
-    assert.equal(readStartupOutput(probe, started), null)
+    assert.equal(readStartupOutput(probe, started)?.status, 'running')
     assert.equal(readStartupOutput(probe, '\u001b[?1049hopencode  Ask anything…'), null)
-    assert.equal(readStartupOutput(probe, '\u001b]0;opencode \u2014 build\u0007'), null)
+    assert.equal(readStartupOutput(probe, title('opencode \u2014 build'))?.status, 'running')
   })
 
   it('ignores a shell title that arrives before the agent ever ran', () => {
@@ -74,15 +78,40 @@ describe('terminal startup probe', () => {
 
   it('joins a title split across two chunks and reads it once', () => {
     const probe = createStartupProbe('opencode')
-    assert.equal(readStartupOutput(probe, '\u001b]0;C:\\WINDOWS\\system32\\cmd.exe - openc'), null)
-    assert.equal(readStartupOutput(probe, 'ode\u0007'), null)
+    assert.equal(readStartupOutput(probe, `\u001b]0;${SHELL} - openc`), null)
+    assert.equal(readStartupOutput(probe, 'ode\u0007')?.status, 'running')
     assert.equal(probe.started, true)
-    assert.match(readStartupOutput(probe, backToShell) ?? '', /exited right after starting/)
+    assert.equal(readStartupOutput(probe, backToShell)?.status, 'maybe-exited')
   })
 
   it('prefers the printed reason over the bare exit', () => {
     const probe = createStartupProbe('opencode')
     readStartupOutput(probe, started)
-    assert.match(readStartupOutput(probe, `memory full\r\n${backToShell}`) ?? '', /ran out of memory/)
+    const verdict = readStartupOutput(probe, `memory full\r\n${backToShell}`)
+    assert.equal(verdict?.status, 'failed')
+    assert.match(verdict?.status === 'failed' ? verdict.message : '', /ran out of memory/)
+  })
+
+  // Captured from a real `codex` launch: the npm shim runs `title` to undo the
+  // suffix cmd.exe added, so the bare shell title arrives ~2ms before the
+  // agent's own process does. Reporting on that title is the false
+  // "codex exited right after starting" banner.
+  it('does not read a launcher shim restoring the title as an exit', () => {
+    const probe = createStartupProbe('codex')
+    assert.equal(readStartupOutput(probe, title(`${SHELL} - codex`))?.status, 'running')
+    assert.equal(readStartupOutput(probe, title(`${SHELL} - codex - title  ${SHELL} `))?.status, 'running')
+    assert.equal(readStartupOutput(probe, title(`${SHELL} `))?.status, 'maybe-exited')
+    // The next title supersedes it, which is what the caller waits for.
+    const resumed = readStartupOutput(probe, title(`${SHELL}  - "node"   "C:\\npm\\@openai\\codex\\bin\\codex.js" `))
+    assert.equal(resumed?.status, 'running')
+    assert.equal(readStartupOutput(probe, title('Orcpace'))?.status, 'running')
+    assert.equal(readStartupOutput(probe, title('\u2819 Orcpace'))?.status, 'running')
+  })
+
+  it('lets a chunk that ends on a live command outweigh an earlier bare title', () => {
+    const probe = createStartupProbe('codex')
+    readStartupOutput(probe, title(`${SHELL} - codex`))
+    const batched = `${title(`${SHELL} `)}${title(`${SHELL}  - "node"  "codex.js"`)}`
+    assert.equal(readStartupOutput(probe, batched)?.status, 'running')
   })
 })

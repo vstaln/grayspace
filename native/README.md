@@ -24,10 +24,9 @@ On Windows the Rust toolchain must have a working linker. The current
 environment can check this tree with `stable-x86_64-pc-windows-gnu`; the
 default MSVC target requires Visual C++ Build Tools and `link.exe`.
 
-`npm run dev` opens the feature-complete React/xterm UI. When the native
-release binary exists, its `TerminalManager` starts the Rust `--engine`
-sidecar automatically; set `ORCSPACE_RUST_ENGINE=0` to force the Node PTY
-fallback.
+`npm run dev` opens the feature-complete React/xterm UI. The stable Node PTY
+backend is used by default. Set `ORCSPACE_RUST_ENGINE=1` to opt into the Rust
+`--engine` sidecar when testing native terminal parity.
 
 ## Runtime boundary
 

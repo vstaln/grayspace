@@ -407,7 +407,8 @@ function WidgetFrame({
     requestAnimationFrame(() => {
       if (!shell.isConnected) return
       const active = document.activeElement
-      if (active instanceof HTMLElement && shell.contains(active) && !active.classList.contains('xterm-helper-textarea')) {
+      if (active instanceof HTMLElement && shell.contains(active) &&
+          !active.closest('input, textarea, select, button, [contenteditable], [role="menu"]')) {
         const termEl = shell.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null
         termEl?.focus()
       }

@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
-import { createRustPtySidecar, RustPtySidecar } from './rustPtySidecar.ts'
+import { createRustPtySidecar, RustPtySidecar, shouldStartRustPty } from './rustPtySidecar.ts'
 import { defaultShell } from './config.ts'
 
 function simulatedSidecar() {
@@ -19,6 +19,12 @@ function simulatedSidecar() {
   return { sidecar: sidecar as RustPtySidecar, packets, receive,
     consume: (chunk: string) => Reflect.get(sidecar, 'consumeStdout').call(sidecar, chunk) }
 }
+
+test('Rust PTY is opt-in so a build artifact cannot change the terminal backend', () => {
+  assert.equal(shouldStartRustPty({}), false)
+  assert.equal(shouldStartRustPty({ ORCSPACE_RUST_ENGINE: '0' }), false)
+  assert.equal(shouldStartRustPty({ ORCSPACE_RUST_ENGINE: '1' }), true)
+})
 
 test('Ctrl+C bypasses ACK cooldown and ordinary input can recover after it', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })

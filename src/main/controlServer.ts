@@ -152,7 +152,12 @@ export function startControlServer(deps: ControlDeps): http.Server {
   // Returns whether the request was answered, mirroring the route handlers.
   const handleRequest = (req: http.IncomingMessage, res: http.ServerResponse): unknown => {
     applyLoopbackCors(req, res, `Content-Type, ${CONTROL_TOKEN_HEADER}`)
-    const url = new URL(req.url || '/', 'http://localhost')
+    let url: URL
+    try {
+      url = new URL(req.url || '/', 'http://localhost')
+    } catch {
+      return sendJson(res, 400, { error: 'invalid request URL' })
+    }
     const parts = url.pathname.split('/').filter(Boolean)
     const method = req.method || 'GET'
 

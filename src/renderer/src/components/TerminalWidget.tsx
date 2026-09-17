@@ -9,12 +9,15 @@ import { attachmentAgent, imagePasteShortcut, insertAttachments, isTerminalPaste
 import { clearInitialCommand, markInitialCommandDelivered, peekInitialCommand } from '../lib/pendingTerminalCommands'
 import { initialCommandVerdict } from '../lib/initialCommandGate'
 import { IS_MAC } from '../lib/platform'
-import { TERMINAL_OUTPUT_RESYNC, TerminalRenderQueue } from '../lib/terminalRenderQueue'
+import { TerminalRenderQueue } from '../lib/terminalRenderQueue'
+import { APP_OWNED_MODE_RESET, terminalRestoreData } from '../lib/terminalRestore'
 import { isPointerScaled, pointerScale, unscalePointer } from '../lib/terminalPointerScale'
 import { palette } from '../ui/tokens'
 import { captureTerminalInput, EMPTY_TERMINAL_PROMPT_CAPTURE } from '../lib/terminalPromptCapture'
+import { shouldReassertCursorBlink } from '../lib/terminalCursorBlink'
 import {
   createStartupProbe,
+  EXIT_CONFIRM_MS,
   readStartupOutput,
   STARTUP_WATCH_MS,
   type StartupProbe
@@ -40,23 +43,6 @@ const cachedSubmit = '\r'
  */
 const RESIZE_SEND_DELAY_MS = 150
 
-/**
- * Turns off every private mode that belongs to a *running foreground
- * application* rather than to the terminal itself: the mouse-reporting modes
- * and their coordinate encodings, focus reporting, and bracketed paste.
- * Cursor visibility and autowrap are restored alongside, since an application
- * that died without cleaning up tends to leave those off too.
- *
- * Used when replaying saved scrollback into a terminal whose shell is new.
- * The history carries whatever the previous application switched on, and
- * replaying it puts the emulator back into those modes even though nothing is
- * running that asked for them — most visibly mouse tracking, which then
- * reports every pointer movement into the prompt as `^[[<35;40;18M` noise.
- */
-const APP_OWNED_MODE_RESET =
-  '\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l' +
-  '\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l' +
-  '\x1b[?2004l\x1b[?2026l\x1b[?25h\x1b[?7h\x1b[?6l\x1b[4l\x1b[r'
 
 
 
@@ -409,7 +395,19 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       fit.fit()
       scheduleResizeAnchorRestore(anchor)
     }
+    // An agent that turned DEC private mode 12 off and exited leaves the shell
+    // prompt with a caret that never blinks again; an agent still painting its
+    // own screen is entitled to a steady one. See shouldReassertCursorBlink.
+    // Checked after parsing, before xterm paints the frame.
+    const keepCursorBlinking = (): void => {
+      const reassert = shouldReassertCursorBlink({
+        bufferType: term.buffer.active.type === 'alternate' ? 'alternate' : 'normal',
+        cursorBlink: term.options.cursorBlink === true
+      })
+      if (reassert) term.options.cursorBlink = true
+    }
     const writeParsedDisposable = term.onWriteParsed(() => {
+      keepCursorBlinking()
       if (!resizeAnchor || performance.now() > resizeRestoreUntil) return
       const generation = resizeAnchorGeneration
       requestAnimationFrame(() => restoreResizeAnchor(generation))
@@ -432,16 +430,41 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     // a failure.
     let startupWatchUntil = 0
     let startupProbe: StartupProbe | null = null
+    let startupExitTimer: ReturnType<typeof setTimeout> | null = null
+    const clearStartupExitTimer = (): void => {
+      if (startupExitTimer === null) return
+      clearTimeout(startupExitTimer)
+      startupExitTimer = null
+    }
     const watchStartupOutput = (chunk: string): void => {
       if (!startupProbe) return
       if (Date.now() > startupWatchUntil) {
         startupProbe = null
+        clearStartupExitTimer()
         return
       }
-      const message = readStartupOutput(startupProbe, chunk)
-      if (!message) return
-      startupProbe = null
-      if (mounted) setStartupFailure(message)
+      const verdict = readStartupOutput(startupProbe, chunk)
+      if (!verdict) return
+      if (verdict.status === 'running') {
+        // A launcher shim restored the console title on its way to starting
+        // the agent; the shell is not idle, so nothing is wrong after all.
+        clearStartupExitTimer()
+        return
+      }
+      if (verdict.status === 'failed') {
+        startupProbe = null
+        clearStartupExitTimer()
+        if (mounted) setStartupFailure(verdict.message)
+        return
+      }
+      // Only a bare title that nothing supersedes is an exit, so the report
+      // waits for the shim's next title instead of racing it.
+      clearStartupExitTimer()
+      startupExitTimer = setTimeout(() => {
+        startupExitTimer = null
+        startupProbe = null
+        if (mounted) setStartupFailure(verdict.message)
+      }, EXIT_CONFIRM_MS)
     }
 
     const dataUnsub = window.api.terminal.onData(id, (data) => {
@@ -1160,13 +1183,9 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
         // emulator is now left in, above all, mouse-tracking mode — so every
         // pointer move over the widget types an SGR mouse report straight into
         // the prompt (`^[[<35;40;18M…`), which is unusable and looks like the
-        // terminal has been corrupted. A live re-attach gets the narrower
-        // interaction reset: history cannot reliably reconstruct its current
-        // mouse mode, while its bracketed-paste and screen modes stay intact.
-        const marker = result.live
-          ? TERMINAL_OUTPUT_RESYNC
-          : `${APP_OWNED_MODE_RESET}\r\n\x1b[90m[Session restored — new process started]\x1b[0m\r\n`
-        writePaced(`\x1b[0m${result.scrollback}${marker}`, () => {
+        // terminal has been corrupted. A live re-attach preserves parser state
+        // so queued output can complete the process's unfinished frame.
+        writePaced(terminalRestoreData(result.scrollback, result.live === true), () => {
           restoreViewportAfterLayout()
           launchQueuedCommand()
         })
@@ -1229,6 +1248,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       flushChannel.port1.close()
       flushChannel.port2.close()
       cancelRestore?.()
+      clearStartupExitTimer()
       renderQueue.dispose()
       pendingResize = null
       if (resizeSendTimer !== null) {

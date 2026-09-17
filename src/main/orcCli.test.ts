@@ -4,6 +4,8 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
+import { IncomingMessage, ServerResponse } from 'node:http'
+import { Socket } from 'node:net'
 
 const userData = fs.mkdtempSync(join(os.tmpdir(), 'orcspace-cli-test-'))
 process.env.ORCSPACE_TEST_USER_DATA = userData
@@ -94,6 +96,18 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
 
   beforeEach(() => {
     orchestration.reset({ all: true })
+  })
+
+  test('a malformed request URL cannot escape the control server handler', async () => {
+    const request = new IncomingMessage(new Socket())
+    request.method = 'GET'
+    request.url = 'http://['
+    const response = new ServerResponse(request)
+    assert.doesNotThrow(() => server.emit('request', request, response))
+    assert.equal(response.statusCode, 400)
+    assert.equal(response.writableEnded, true)
+    const health = await runOrc(['api', 'GET', '/health'])
+    assert.equal(health.status, 0, health.stderr)
   })
 
   after(async () => {

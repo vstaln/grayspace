@@ -424,6 +424,14 @@ const componentsLayer: Sheet = {
       WebkitBackdropFilter: 'none !important'
     },
     '.conn-flare-dot, .conn-idle-dot': { display: 'none' },
+    // The caret is the exception: a terminal cursor that does not blink reads
+    // as a frozen terminal, so it keeps xterm's own 1s keyframes rather than
+    // being collapsed to a single frame by the rule above.
+    '.term-shell .xterm .xterm-cursor-blink': {
+      animationDuration: '1s !important',
+      animationIterationCount: 'infinite !important',
+      animationPlayState: 'running !important'
+    },
     'input[type="checkbox"]::after': { transition: 'none' }
   },
 

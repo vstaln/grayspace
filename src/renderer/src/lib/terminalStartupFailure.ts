@@ -17,12 +17,31 @@
  *    is not installed;
  *  - the console title, which cmd.exe sets to `<shell> - <child>` while a
  *    child runs and puts back to the bare shell when it exits. A title that
- *    names the agent followed by one that names only the shell means the agent
- *    is gone, whether or not it managed to print a reason.
+ *    names the agent followed by one that names only the shell — and stays
+ *    that way — means the agent is gone, whether or not it managed to print a
+ *    reason. Staying that way is the whole test: see EXIT_CONFIRM_MS.
  */
 
 /** How long after the command is typed a failure still counts as a launch failure. */
 export const STARTUP_WATCH_MS = 30_000
+
+/**
+ * How long a bare shell title has to stand before the agent counts as gone.
+ *
+ * A bare title is not proof on its own. A launcher shim runs `title` on its way
+ * to starting the real process — `codex.cmd` does exactly this — so the console
+ * briefly carries the shell's own name while the agent is still coming up:
+ *
+ *   cmd.exe - codex
+ *   cmd.exe - codex - title  cmd.exe
+ *   cmd.exe                                  <- shell name, agent still starting
+ *   cmd.exe  - "node" "...\@openai\codex\bin\codex.js"
+ *
+ * Those three titles arrive inside ~2ms. A shell that really is back at its
+ * prompt sets no further titles, so what separates the two is whether anything
+ * supersedes the bare title, not the bare title itself.
+ */
+export const EXIT_CONFIRM_MS = 1_500
 
 /** Enough tail to hold a multi-line abort message, and nothing more. */
 export const STARTUP_TAIL_LIMIT = 4000
@@ -112,26 +131,51 @@ export function createStartupProbe(command: string): StartupProbe {
   return { command, tail: '', started: false, carry: '' }
 }
 
+export type StartupVerdict =
+  /** Printed evidence of a failed launch; nothing can walk this back. */
+  | { status: 'failed'; message: string }
+  /**
+   * The console title says the shell is idle again. Only true if nothing
+   * supersedes it, so the caller holds this for EXIT_CONFIRM_MS before
+   * believing it, and drops it on the next `running`.
+   */
+  | { status: 'maybe-exited'; message: string }
+  /** The shell is running something: any pending `maybe-exited` was a blip. */
+  | { status: 'running' }
+
 /**
- * Feed one chunk of terminal output; returns the failure message the chunk
- * completed the case for, or `null` while nothing is wrong.
+ * Feed one chunk of terminal output; returns what the chunk says about the
+ * launch, or `null` when it says nothing. The last title in the chunk decides,
+ * because titles inside one chunk are already in order.
  */
-export function readStartupOutput(probe: StartupProbe, chunk: string): string | null {
+export function readStartupOutput(probe: StartupProbe, chunk: string): StartupVerdict | null {
   probe.tail = `${probe.tail}${chunk}`.slice(-STARTUP_TAIL_LIMIT)
   const spoken = startupFailureMessage(probe.tail, probe.command)
-  if (spoken) return spoken
+  if (spoken) return { status: 'failed', message: spoken }
 
   const name = executableName(probe.command).toLowerCase()
   const scanned = `${probe.carry}${chunk}`
+  let verdict: StartupVerdict | null = null
   for (const title of terminalTitles(scanned)) {
-    if (title.toLowerCase().includes(name)) probe.started = true
-    else if (probe.started && isBareShellTitle(title)) {
-      return `${executableName(probe.command)} exited right after starting — the terminal is back at its shell prompt.`
+    if (title.toLowerCase().includes(name)) {
+      probe.started = true
+      verdict = { status: 'running' }
+    } else if (!probe.started) {
+      continue
+    } else if (isBareShellTitle(title)) {
+      verdict = {
+        status: 'maybe-exited',
+        message: `${executableName(probe.command)} exited right after starting — the terminal is back at its shell prompt.`
+      }
+    } else {
+      // Some other command is running under the shell — a launcher shim's
+      // child, most often. Either way the shell is not sitting at a prompt.
+      verdict = { status: 'running' }
     }
   }
   // Carry only what follows the last terminated sequence, so no title is ever
   // scanned twice, and cap it because a console title is short.
   const lastTerminator = Math.max(scanned.lastIndexOf('\u0007'), scanned.lastIndexOf('\u001b\\'))
   probe.carry = (lastTerminator >= 0 ? scanned.slice(lastTerminator + 1) : scanned).slice(-256)
-  return null
+  return verdict
 }

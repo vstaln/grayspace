@@ -23,6 +23,7 @@ test('a Code terminal reaches its prompt without waiting on the renderer', async
   const ctx = await launchOrcSpace()
   try {
     const { page } = ctx
+    await page.emulateMedia({ reducedMotion: 'reduce' })
     await waitForCanvas(page)
     await page.evaluate(() => window.api.workspace.create(`terminal-startup-${Date.now()}`))
     await page.getByRole('tab', { name: 'Code', exact: true }).click()
@@ -42,6 +43,20 @@ test('a Code terminal reaches its prompt without waiting on the renderer', async
 
     console.log(JSON.stringify({ promptMs: elapsed }))
     expect(elapsed, 'the shell prompt must not wait on a renderer round trip').toBeLessThan(PROMPT_BUDGET_MS)
+    await terminal.locator('textarea').focus()
+    const cursor = terminal.locator('.xterm-cursor-blink')
+    await expect(cursor).toBeVisible()
+    await expect(cursor).toHaveCSS('animation-duration', '1s')
+    await expect(cursor).toHaveCSS('animation-iteration-count', 'infinite')
+    const colors = await cursor.evaluate(async (element) => {
+      const samples = new Set<string>()
+      for (let i = 0; i < 12; i++) {
+        samples.add(getComputedStyle(element).backgroundColor)
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
+      return [...samples]
+    })
+    expect(colors.length, 'the focused cursor must actually blink').toBeGreaterThan(1)
   } finally {
     await closeOrcSpace(ctx)
   }

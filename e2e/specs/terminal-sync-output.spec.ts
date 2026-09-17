@@ -7,14 +7,14 @@ test('ordered PTY frames keep the cursor visible across delayed transport and li
   await page.setContent('<div id="terminal" style="width:800px;height:400px"></div>')
   await page.addStyleTag({ path: path.resolve('node_modules/@xterm/xterm/css/xterm.css') })
   await page.addScriptTag({ path: path.resolve('node_modules/@xterm/xterm/lib/xterm.js') })
-  for (const [file, name] of [['terminalRenderQueue', 'TerminalRenderQueue']]) {
+  for (const [file, name] of [['terminalRenderQueue', 'TerminalRenderQueue'], ['terminalRestore', 'terminalRestoreData']]) {
     const source = fs.readFileSync(path.resolve(`src/renderer/src/lib/${file}.ts`), 'utf8').replace(/^export /gm, '')
     await page.addScriptTag({ content: ts.transpile(source + `\nwindow.${name} = ${name}`, { target: ts.ScriptTarget.ES2022 }) })
   }
   const results = await page.evaluate(async () => {
     const api = window as any
     const results: { mode: string; chunkSize: number; wrong: number[]; final: number; invisible: number; blurredVisible: boolean }[] = []
-    for (const mode of ['legacy', 'modern', 'restore']) for (const chunkSize of [7, 128]) {
+    for (const mode of ['legacy', 'legacy-restore', 'modern', 'restore', 'partial-restore']) for (const chunkSize of [7, 128]) {
       const term = new api.Terminal({ cols: 80, rows: 20, cursorBlink: false, cursorInactiveStyle: 'outline' })
       term.open(document.getElementById('terminal'))
       term.focus()
@@ -56,15 +56,18 @@ test('ordered PTY frames keep the cursor visible across delayed transport and li
         requestAnimationFrame(sample)
       }
       requestAnimationFrame(sample)
-      const prefix = '\x1b[?2026h\x1b[?25l\x1b[4;1H'
-      if (mode === 'restore') {
+      const prefix = '\x1b[?2026h\x1b[?25l\x1b[4;' + (mode === 'partial-restore' ? '' : '1H')
+      if (mode.endsWith('restore')) {
         // A snapshot can end inside a frame. The SAME xterm parser receives
         // its continuation from live output, with no normalization/flush.
-        await new Promise<void>(resolve => term.write(prefix, resolve))
+        const data = api.terminalRestoreData(prefix, true) +
+          (mode === 'legacy-restore' ? '\x18\x1b[?2026l\x1b[?25h\x1b[0m' : '')
+        await new Promise<void>(resolve => term.write(data, resolve))
       } else push(prefix)
       if (mode === 'legacy') push('\x1b[?25h\x1b[0 q\x1b[?2026l')
       // Longer than both timeouts of the removed renderer workaround.
       await frames(40)
+      if (mode === 'partial-restore') push('1H')
       for (const part of ['\x1b[7;', '3H\x1b[?25', 'h\x1b[0 q', mode === 'legacy' ? '' : '\x1b[?2026l']) push(part)
       while (queue.pendingLength || busy || scheduled) await frames(1)
       await frames(4)
@@ -80,7 +83,8 @@ test('ordered PTY frames keep the cursor visible across delayed transport and li
     return results
   })
   expect(results.find(result => result.mode === 'legacy' && result.chunkSize === 128)!.wrong).toContain(3)
-  for (const result of results.filter(result => result.mode !== 'legacy')) {
+  expect(results.find(result => result.mode === 'legacy-restore' && result.chunkSize === 128)!.wrong).toContain(3)
+  for (const result of results.filter(result => !result.mode.startsWith('legacy'))) {
     expect(result.wrong, `parser chunk ${result.chunkSize}`).toEqual([])
     expect(result.final).toBe(6)
     expect(result.invisible).toBe(0)

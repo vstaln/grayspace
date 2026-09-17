@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, unlinkSync, rmdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch'
-import { windowsPtyOptions, rustPtyWorkingDirectory } from './conpty.ts'
+import { conptyStartupOutput, windowsPtyOptions, rustPtyWorkingDirectory } from './conpty.ts'
 import { createRustPtySidecar } from './rustPtySidecar.ts'
 import { TerminalManager } from './terminals.ts'
 
@@ -24,10 +24,11 @@ for (const backend of ['node', 'rust'] as const) {
       let send: (data: string) => void = () => {}
       let finish!: () => void
       const finished = new Promise<void>(resolve => { finish = resolve })
+      const answerStartup = conptyStartupOutput(data => send(data))
       const receive = (data: string): void => {
-        output += data
-        if (output.includes('\x1b[6n') && !output.includes(begin)) send('\x1b[1;1R')
-        if (data.includes('\x1b[c')) send('\x1b[?1;2c')
+        // Answer the host exactly the way the app does, so this test cannot
+        // pass on a handshake reply the real terminal never sends.
+        output += answerStartup(data)
         if (output.includes(end)) finish()
       }
       if (backend === 'node') {
@@ -36,7 +37,7 @@ for (const backend of ['node', 'rust'] as const) {
         send = data => child.write(data)
         child.onData(receive)
       } else {
-        const sidecar = createRustPtySidecar()
+        const sidecar = createRustPtySidecar({ force: true })
         assert.ok(sidecar, 'build the native engine before running this integration test')
         dispose = () => sidecar.close()
         const id = 'cursor-order'
@@ -48,13 +49,7 @@ for (const backend of ['node', 'rust'] as const) {
       let timeout: ReturnType<typeof setTimeout> | undefined
       try {
         await Promise.race([finished, new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('no synchronized frame received')), 12000) })])
-        const orderedFrameParts = [begin, 'Working (esc to interrupt)', '> Ask Codex', '\x1b[?25h', end]
-        let offset = 0
-        for (const part of orderedFrameParts) {
-          const found = output.indexOf(part, offset)
-          assert.notEqual(found, -1, `PTY output is missing synchronized frame part ${JSON.stringify(part)}`)
-          offset = found + part.length
-        }
+        assert.ok(output.includes(begin + frameBody + end), 'PTY must preserve the complete frame verbatim, including cursor restoration before sync-end')
       } finally { clearTimeout(timeout) }
     } finally {
       dispose()
@@ -64,17 +59,18 @@ for (const backend of ['node', 'rust'] as const) {
   })
 }
 
-// Regression: a ConPTY created with PSEUDOCONSOLE_INHERIT_CURSOR — which is
-// what portable-pty, and therefore the Rust engine, always does — opens by
-// asking the terminal where the cursor is (`ESC [ 6 n`) and withholds every
-// byte the shell writes until that is answered. Nothing here ever answers it,
+// Regression: a ConPTY host opens by asking the terminal who it is, and
+// withholds every byte the shell writes until that is answered — the bundled
+// host over its DA1, and a pseudoconsole created with
+// PSEUDOCONSOLE_INHERIT_CURSOR (what portable-pty, and therefore the Rust
+// engine, always does) over the cursor position. No terminal is attached here,
 // which is the whole point: the answer used to come only from xterm.js in the
 // renderer, so a terminal appeared on the canvas and then sat blank for
-// seconds while the query made the round trip. node-pty does not set the flag
-// and is covered here to keep that difference from silently changing.
+// seconds while the query made the round trip. The manager has to reach a
+// prompt on its own now, on either backend.
 for (const backend of ['node', 'rust'] as const) {
   test(`${backend} PTY reaches the shell without the terminal answering the cursor query`, { skip: process.platform !== 'win32', timeout: 20000 }, async () => {
-    const sidecar = backend === 'rust' ? createRustPtySidecar() : null
+    const sidecar = backend === 'rust' ? createRustPtySidecar({ force: true }) : null
     if (backend === 'rust') assert.ok(sidecar, 'build the native engine before running this integration test')
     const terminals = new TerminalManager({ rustPty: sidecar })
     const id = `handshake-${backend}`
@@ -84,10 +80,13 @@ for (const backend of ['node', 'rust'] as const) {
       const gotShellOutput = new Promise<void>((resolve) => { finish = resolve })
       terminals.on('data', (eventId: string, data: string) => {
         if (eventId !== id) return
+        // Nothing is answered here on purpose: the manager has to complete the
+        // handshake by itself, without a terminal attached.
         output += data
-        // Anything beyond the query itself only exists once ConPTY has been
-        // released by a cursor report.
-        if (output.replace('\x1b[6n', '').trim().length > 0) finish()
+        // The prompt only exists once the host has released the shell. cmd
+        // echoes the path with the casing Windows hands it, which is not
+        // necessarily the casing of process.cwd().
+        if (output.toLowerCase().includes(`${process.cwd().toLowerCase()}>`)) finish()
       })
       assert.equal(terminals.spawn(id, 80, 20, process.cwd()).ok, true)
       let timeout: ReturnType<typeof setTimeout> | undefined
@@ -95,7 +94,7 @@ for (const backend of ['node', 'rust'] as const) {
         await Promise.race([
           gotShellOutput,
           new Promise<never>((_, reject) => {
-            timeout = setTimeout(() => reject(new Error('shell produced no output; the ConPTY handshake was never answered')), 5000)
+            timeout = setTimeout(() => reject(new Error('shell prompt did not arrive within 1.5s; startup handshake stalled')), 1500)
           })
         ])
       } finally { clearTimeout(timeout) }

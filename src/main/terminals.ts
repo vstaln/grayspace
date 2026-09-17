@@ -3,7 +3,7 @@ import * as os from 'os'
 import * as fs from 'fs'
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch'
 import type { IPty } from '@homebridge/node-pty-prebuilt-multiarch'
-import { bundledWindowsPtyOptions, windowsPtyOptions } from './conpty.ts'
+import { conptyStartupOutput, systemWindowsPtyOptions, windowsPtyOptions } from './conpty.ts'
 import { OUTPUT_BUFFER_LIMIT, MAX_TERMINAL_WRITE_BYTES, defaultShell } from './config.ts'
 import { CommandError } from './core/index.ts'
 import { killProcessTree } from './procTree.ts'
@@ -89,6 +89,7 @@ export interface ReleaseOptions {
 }
 
 interface TerminalRecord {
+  startupOutput?: (chunk: string) => string
   pty: IPty | null
   nativeAlive: boolean
 
@@ -418,6 +419,8 @@ export class TerminalManager extends EventEmitter {
     this.invalidateInput(id)
 
     if (this.rustPty) {
+      record.startupOutput = process.platform === 'win32'
+        ? conptyStartupOutput((data) => { void this.rustPty!.write(id, data) }) : undefined
       const result = this.rustPty.spawn(this.rustSpawnOptions(id, record, cols, rows))
       if (result.ok) {
         record.nativeAlive = true
@@ -463,13 +466,19 @@ export class TerminalManager extends EventEmitter {
         })
       } catch (error) {
         if (process.platform !== 'win32') throw error
-        console.warn('system ConPTY unavailable; using bundled ConPTY fallback', error)
+        console.warn('bundled ConPTY unavailable; using system ConPTY fallback', error)
         child = pty.spawn(defaultShell(windowsShell), resolveWindowsShellArgs(windowsShell), {
           ...spawnOptions,
-          ...bundledWindowsPtyOptions
+          ...systemWindowsPtyOptions
         })
       }
       record.pty = child
+      // The bundled host withholds the shell until the terminal answers its
+      // startup handshake, so the answer lives here rather than in the widget
+      // that may never open. conptyStartupOutput answers every query a host
+      // can block on, which is what keeps that wait from becoming a hang.
+      record.startupOutput = process.platform === 'win32'
+        ? conptyStartupOutput((data) => child.write(data)) : undefined
       record.rootPid = child.pid
       this.preferredId = id
 
@@ -477,6 +486,8 @@ export class TerminalManager extends EventEmitter {
         child.onData((chunk) => {
           const current = this.terminals.get(id)
           if (!current || current.pty !== child) return
+          chunk = current.startupOutput?.(chunk) ?? chunk
+          if (!chunk) return
           current.output.append(chunk)
           current.lastDataAt = Date.now()
           this.emit('data', id, chunk)
@@ -527,6 +538,8 @@ export class TerminalManager extends EventEmitter {
   private handleRustOutput(id: string, chunk: string): void {
     const current = this.terminals.get(id)
     if (!current || !current.nativeAlive) return
+    chunk = current.startupOutput?.(chunk) ?? chunk
+    if (!chunk) return
     current.output.append(chunk)
     current.lastDataAt = Date.now()
     this.emit('data', id, chunk)

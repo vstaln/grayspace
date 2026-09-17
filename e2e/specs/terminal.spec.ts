@@ -149,6 +149,33 @@ test('a new terminal opens without a multi-second startup pause', async () => {
   await expect(frame).toHaveCount(0)
 })
 
+// Clicking the header also focuses the terminal, and that re-focus lands a
+// frame later — after the rename input has opened and taken focus. It must not
+// take focus back, or the new name is typed into the shell instead.
+test('renaming from the header keeps the keystrokes out of the shell', async () => {
+  const { page } = ctx
+  const knownBefore = (await listTerminals(ctx)).map((t) => t.id)
+  await openTerminalFromCanvas()
+  const id = await waitForTerminalShell(ctx, page, knownBefore)
+
+  const frame = terminalFrame(page)
+  const before = await readTerminalOutput(ctx, id)
+  await frame.getByTestId('widget-title').dblclick()
+  const input = frame.getByTestId('widget-title-input')
+  await expect(input).toBeFocused()
+
+  const renamed = `renamed-${Date.now()}`
+  await page.keyboard.press('ControlOrMeta+a')
+  await page.keyboard.type(renamed)
+  await expect(input).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(frame.getByTestId('widget-title')).toHaveText(renamed)
+
+  const after = await readTerminalOutput(ctx, id)
+  expect(after.slice(before.length)).not.toContain(renamed)
+  await closeTerminal(page)
+})
+
 test('the agent-launch button types the CLI command into the shell', async () => {
   const { page } = ctx
 

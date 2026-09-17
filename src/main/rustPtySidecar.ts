@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EventEmitter } from 'node:events'
 import * as electron from 'electron'
+import { rustPtyWorkingDirectory } from './conpty.ts'
 
 export interface RustPtySpawnOptions {
   id: string
@@ -39,6 +40,10 @@ const MAX_ENGINE_STDIN_BUFFER_BYTES = 1 * 1024 * 1024
 const WRITE_ACK_TIMEOUT_MS = 4_000
 const SPAWN_ACK_TIMEOUT_MS = 8_000
 
+export function shouldStartRustPty(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.ORCSPACE_RUST_ENGINE === '1'
+}
+
 interface PendingWrite {
   terminalId: string
   resolve: (result: RustPtyResult) => void
@@ -73,11 +78,8 @@ export class RustPtySidecar extends EventEmitter {
   private constructor(binary: string) {
     super()
     this.child = spawn(binary, ['--engine'], {
-      // portable-pty loads a local `conpty.dll` before the system copy. The
-      // bundled OpenConsole host can pause for ~3s during shell startup on
-      // Windows, so keep the sidecar outside that directory and let it use
-      // the native system ConPTY instead.
-      cwd: dirname(binary),
+      // Match node-pty's host so synchronized frames retain their cursor order.
+      cwd: rustPtyWorkingDirectory(),
       env: { ...process.env, ORCSPACE_RUST_ENGINE: '1' },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true
@@ -109,8 +111,11 @@ export class RustPtySidecar extends EventEmitter {
     })
   }
 
-  static create(): RustPtySidecar | null {
-    if (process.env.ORCSPACE_RUST_ENGINE === '0') return null
+  static create(force = false): RustPtySidecar | null {
+    // A local build artifact must not silently replace the terminal backend.
+    // Keep the proven node-pty path as the default and make the Rust engine an
+    // explicit opt-in while its ConPTY rendering parity is still being tested.
+    if (!force && !shouldStartRustPty()) return null
     const packaged = Boolean(electronApp?.isPackaged)
     const extension = process.platform === 'win32' ? '.exe' : ''
     const candidates = packaged
@@ -447,6 +452,6 @@ export class RustPtySidecar extends EventEmitter {
   }
 }
 
-export function createRustPtySidecar(): RustPtySidecar | null {
-  return RustPtySidecar.create()
+export function createRustPtySidecar(options: { force?: boolean } = {}): RustPtySidecar | null {
+  return RustPtySidecar.create(options.force === true)
 }
