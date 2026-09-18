@@ -143,6 +143,10 @@ try {
   if (!existsSync(join(root, 'package-lock.json'))) throw new Error('package-lock.json is required for a reproducible build.')
   const installer = join(dist, `OrcSpace-Setup-${packageJson.version}-x64.exe`)
   const legacyPortable = join(dist, `OrcSpace-${packageJson.version}-x64-Portable.exe`)
+  const blockmap = `${installer}.blockmap`
+  const latest = join(dist, 'latest.yml')
+  const builderDebug = join(dist, 'builder-debug.yml')
+  const builderConfig = join(dist, 'builder-effective-config.yaml')
 
   if (!skipCi) {
     runNpm(['ci', '--no-fund', '--no-audit'])
@@ -165,8 +169,11 @@ try {
   // produced both NSIS and portable artifacts, which doubled the work and
   // could leave a stale installer in `dist` after a partial build.
   runNpm(['run', 'build'])
+  mkdirSync(dist, { recursive: true })
   rmSync(join(dist, 'win-unpacked'), { recursive: true, force: true })
   rmSync(installer, { force: true })
+  rmSync(blockmap, { force: true })
+  rmSync(latest, { force: true })
   rmSync(legacyPortable, { force: true })
   runLocalBin('electron-builder', ['--win', 'nsis', '--x64', '--publish', 'never'])
 
@@ -188,8 +195,10 @@ try {
     installer: { file: installer.split(/[/\\]/).pop(), sha256: sha256(installer), bytes: statSync(installer).size },
     generatedAt: new Date().toISOString(),
   }
-  mkdirSync(dist, { recursive: true })
   writeFileSync(join(dist, 'checksums.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+  rmSync(join(dist, 'win-unpacked'), { recursive: true, force: true })
+  rmSync(builderDebug, { force: true })
+  rmSync(builderConfig, { force: true })
   console.log(`\n[ok] Stable Windows installer created: ${installer}`)
   console.log(`[ok] SHA-256 manifest: ${join(dist, 'checksums.json')}`)
 } catch (error) {

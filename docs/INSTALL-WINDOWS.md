@@ -2,7 +2,7 @@
 
 ## Сборка стабильного установщика
 
-Сборку выполняйте на Windows с Node.js LTS 20–24:
+Сборку выполняйте на Windows с Node.js 22, 24 или 26:
 
 ```powershell
 npm.cmd run installer:win
@@ -15,8 +15,8 @@ npm.cmd run installer:win
 Результат находится в `dist/`:
 
 - `OrcSpace-Setup-<version>-x64.exe` — обычный пользовательский установщик;
-- `OrcSpace-<version>-x64-Portable.exe` — portable-версия;
-- `checksums.json` — SHA-256 и размеры обоих файлов.
+- `OrcSpace-Setup-<version>-x64.exe.blockmap` и `latest.yml` — метаданные для автообновления;
+- `checksums.json` — SHA-256 и размер установщика.
 
 Установщик не удаляет пользовательские данные при деинсталляции и запускает
 OrcSpace после завершения установки. Для обновления достаточно запустить новый

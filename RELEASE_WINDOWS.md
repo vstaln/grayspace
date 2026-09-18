@@ -30,6 +30,7 @@ node scripts/build-installer.mjs
 OrcSpace-Setup-$Version-x64.exe
 OrcSpace-Setup-$Version-x64.exe.blockmap
 latest.yml
+checksums.json
 ```
 
 `latest.yml` и `.blockmap` нельзя редактировать вручную: они должны быть сгенерированы для того же `.exe`.
