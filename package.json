@@ -7,7 +7,7 @@
   "license": "MIT",
   "author": "OrcSpace",
   "engines": {
-    "node": "22.x || 24.x || 26.x"
+    "node": "22.x || 24.x"
   },
   "scripts": {
     "setup": "node scripts/setup.mjs",

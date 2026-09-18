@@ -135,8 +135,8 @@ try {
   if (process.platform !== 'win32') {
     throw new Error('The Windows installer must be built on Windows (electron-builder cannot cross-build NSIS reliably).')
   }
-  if (nodeMajor < 20 || nodeMajor >= 28) {
-    throw new Error(`Node.js 20–26 is required for the native dependencies (detected ${process.versions.node}).`)
+  if (nodeMajor !== 22 && nodeMajor !== 24) {
+    throw new Error(`Node.js 22 or 24 is required for the native dependencies (detected ${process.versions.node}).`)
   }
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   if (!packageJson.version || !packageJson.name) throw new Error('package.json has no valid name/version.')

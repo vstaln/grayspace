@@ -2,7 +2,7 @@
 
 ## Сборка стабильного установщика
 
-Сборку выполняйте на Windows с Node.js 22, 24 или 26:
+Сборку выполняйте на Windows с Node.js 22 или 24:
 
 ```powershell
 npm.cmd run installer:win
