@@ -70,14 +70,14 @@ export function defaultShell(windowsShell: 'cmd' | 'powershell' = 'cmd'): string
       shellCache.set(cacheKey, 'powershell.exe')
       return 'powershell.exe'
     }
-    if (process.env.ComSpec && fs.existsSync(process.env.ComSpec)) {
-      shellCache.set(cacheKey, process.env.ComSpec)
-      return process.env.ComSpec
-    }
     const cmdCandidate = join(systemRoot, 'System32', 'cmd.exe')
     if (fs.existsSync(cmdCandidate)) {
       shellCache.set(cacheKey, cmdCandidate)
       return cmdCandidate
+    }
+    if (process.env.ComSpec && fs.existsSync(process.env.ComSpec)) {
+      shellCache.set(cacheKey, process.env.ComSpec)
+      return process.env.ComSpec
     }
     shellCache.set(cacheKey, 'cmd.exe')
     return 'cmd.exe'

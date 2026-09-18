@@ -22,6 +22,12 @@ import {
   STARTUP_WATCH_MS,
   type StartupProbe
 } from '../lib/terminalStartupFailure'
+import {
+  createModeRecoveryProbe,
+  hasOrphanedModes,
+  readChildTitle,
+  readEchoedMouseReports
+} from '../lib/terminalModeRecovery'
 
 
 const cachedSubmit = '\r'
@@ -467,9 +473,80 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       }, EXIT_CONFIRM_MS)
     }
 
+    /**
+     * Takes the emulator back out of modes whose owner is gone.
+     *
+     * An agent that crashes never restores what it turned on, so the shell it
+     * drops back to inherits mouse reporting it never asked for: every pointer
+     * movement over the widget is then typed into the prompt as an SGR report
+     * and echoed straight back, hundreds of lines of `^[[<35;36;37M` for one
+     * pass of the mouse. Until now the only way out was the context menu's
+     * "Reset terminal", which nobody finds while the card is filling with
+     * noise.
+     *
+     * Two signals, because neither covers every shell. The console title says
+     * the shell is idle again (cmd.exe, and PowerShell by its product name);
+     * the echo itself says so regardless of what any shell reports. Both are
+     * confirmed against the emulator's own state before anything is written,
+     * so a full-screen application that is still running — on the alternate
+     * buffer, legitimately tracking the mouse — is never interrupted.
+     */
+    const modeRecovery = createModeRecoveryProbe()
+    let modeRecoveryTimer: ReturnType<typeof setTimeout> | null = null
+    const clearModeRecoveryTimer = (): void => {
+      if (modeRecoveryTimer === null) return
+      clearTimeout(modeRecoveryTimer)
+      modeRecoveryTimer = null
+    }
+    // Queued through the render queue, never written straight to the terminal:
+    // output reaches the parser through that queue, and a direct write would
+    // overtake everything still waiting in it.
+    const recoverModes = (): void => {
+      if (!mounted) return
+      if (!hasOrphanedModes({
+        bufferType: term.buffer.active.type === 'alternate' ? 'alternate' : 'normal',
+        mouseTracking: term.modes.mouseTrackingMode
+      })) return
+      batchedWrite(APP_OWNED_MODE_RESET)
+    }
+    /** Returns whether the echo signal fired; the exit signal is deferred. */
+    const watchOrphanedModes = (chunk: string): boolean => {
+      // Both probes see every chunk: the echo one has to, to count a burst,
+      // and the title one, to track the child.
+      const echoed = readEchoedMouseReports(modeRecovery, chunk)
+      const child = readChildTitle(modeRecovery, chunk)
+      if (child === 'started') {
+        // Something is running again, so neither a pending recovery nor a
+        // launch failure reported earlier is still describing this terminal.
+        // The banner sits over the top of the card and nothing ever took it
+        // down: it outlived the agent it was about, all the way through the
+        // next successful launch.
+        clearModeRecoveryTimer()
+        if (mounted) setStartupFailure(null)
+      }
+      if (child === 'exited') {
+        // Held, not acted on. A launcher shim hands the title back on its way
+        // to starting the real process, so a bare title is only an exit if
+        // nothing supersedes it — the same test, and the same window, that
+        // the launch-failure probe uses. Waiting also means the emulator's
+        // state is read once it has settled rather than mid-teardown.
+        clearModeRecoveryTimer()
+        modeRecoveryTimer = setTimeout(() => {
+          modeRecoveryTimer = null
+          recoverModes()
+        }, EXIT_CONFIRM_MS)
+      }
+      return echoed
+    }
+
     const dataUnsub = window.api.terminal.onData(id, (data) => {
       watchStartupOutput(data)
+      const echoed = watchOrphanedModes(data)
       batchedWrite(data)
+      // Immediate, unlike the exit signal: the echo is itself proof that a
+      // shell's line editor is reading input right now, with nothing to wait
+      // for and damage arriving with every pointer movement.
+      if (echoed) recoverModes()
     })
     // Trailing-edge only: a drag produces dozens of geometries per second and
     // ConPTY repaints the whole viewport for each pty resize it receives (see
@@ -1185,9 +1262,21 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
         // the prompt (`^[[<35;40;18M…`), which is unusable and looks like the
         // terminal has been corrupted. A live re-attach preserves parser state
         // so queued output can complete the process's unfinished frame.
-        writePaced(terminalRestoreData(result.scrollback, result.live === true), () => {
+        const restoredScrollback = result.scrollback
+        writePaced(terminalRestoreData(restoredScrollback, result.live === true), () => {
           restoreViewportAfterLayout()
           launchQueuedCommand()
+          // The replayed history is terminal output, and it goes straight to
+          // the parser rather than through onData — so the recovery probes
+          // never saw it. That mattered for a live re-attach, which keeps the
+          // history verbatim: a widget remounting onto a shell whose agent had
+          // crashed replayed the crash's `1049h` and mouse modes and stranded
+          // itself all over again, with no further output coming to notice it
+          // by. Feeding the history in here re-reads the same child-exit the
+          // crash left in it. Done from the completion callback so the pause
+          // before acting is measured against a finished restore, and so the
+          // emulator state it then reads is the settled one.
+          watchOrphanedModes(restoredScrollback)
         })
         viewportRestoredAfterWrite = true
       }
@@ -1249,6 +1338,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       flushChannel.port2.close()
       cancelRestore?.()
       clearStartupExitTimer()
+      clearModeRecoveryTimer()
       renderQueue.dispose()
       pendingResize = null
       if (resizeSendTimer !== null) {

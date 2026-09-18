@@ -130,3 +130,36 @@ test('fitSpawnSize never goes below the widget minimums', () => {
 test('fitSpawnSize falls back to terminal defaults for unknown kinds', () => {
   assert.deepEqual(fitSpawnSize('mystery-kind', 1920, 1080, 1), { w: WIDGET_DEFAULTS.terminal.w, h: WIDGET_DEFAULTS.terminal.h })
 })
+
+test('no arrange mode ever stacks two widgets on each other', () => {
+  // focus measured the side column's left edge from an unclamped main width,
+  // while tile() widens anything under MIN_W to MIN_W — so in a viewport
+  // narrower than about 448 units the focused widget's real right edge ran
+  // straight over every card in the side column. A zoomed-in canvas reaches
+  // that at an ordinary window size.
+  for (const mode of ['grid', 'tiny', 'focus'] as const) {
+    for (const width of [200, 300, 420, 447, 448, 640, 1600, 3200]) {
+      for (const count of [2, 3, 5, 9, 18]) {
+        const rects = arrangeWidgets(widgetsOf(count), { x: 0, y: 0, w: width, h: 600 }, mode)
+        for (let i = 0; i < rects.length; i += 1) {
+          for (let j = i + 1; j < rects.length; j += 1) {
+            assert.equal(
+              overlaps(rects[i], rects[j]),
+              false,
+              `${mode} at ${width}px with ${count} widgets: ${rects[i].id} overlaps ${rects[j].id}`
+            )
+          }
+        }
+      }
+    }
+  }
+})
+
+test('focus keeps the side column clear of the focused widget', () => {
+  const rects = arrangeWidgets(widgetsOf(4), { x: 0, y: 0, w: 300, h: 600 }, 'focus', 'w0')
+  const main = rects.find((r) => r.id === 'w0')!
+  const mainRight = main.x + main.w
+  for (const side of rects.filter((r) => r.id !== 'w0')) {
+    assert.ok(side.x >= mainRight, `side card ${side.x} starts before the focused widget ends ${mainRight}`)
+  }
+})

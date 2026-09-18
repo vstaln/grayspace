@@ -21,7 +21,7 @@ export function terminalAgent(
     .listDispatches()
     .find((d) => d.state === 'running' && d.terminalId === id)
   if (dispatch?.agent) return dispatch.agent
-  const terminal = deps.terminals.list().find((t) => t.id === id)
+  const terminal = deps.terminals.info(id)
   let tail: string | null = null
   try {
     tail = deps.terminals.tailOutput(id, 4_000)

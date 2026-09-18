@@ -21,6 +21,14 @@ import { ToastContainer, usePersistErrorToasts, useTerminalBackendErrorToasts, u
 import Toolbar from './components/Toolbar'
 import { queueInitialCommand } from './lib/pendingTerminalCommands'
 import { fitCameraToRect, zoomCameraAt, zoomCameraBy } from './lib/canvasCamera'
+import {
+  ZOOM_BASELINE_SAVE_DELAY_MS,
+  ZOOM_BASELINE_STORAGE_KEY,
+  adaptCanvasZoom,
+  parseZoomBaseline,
+  serializeZoomBaseline,
+  type ZoomAdaptationState
+} from './lib/responsiveCanvasZoom'
 import { DEFAULT_IMAGE_INSERT_SHORTCUT, matchesShortcut } from './lib/keyboardShortcut'
 
 
@@ -425,6 +433,66 @@ function OrcSpaceCanvas({
       y: h > 0 ? h / 2 : window.innerHeight / 2
     }
   }, [])
+
+  /**
+   * Keeps the canvas scaled to the window.
+   *
+   * The baseline is the zoom the user last chose and the window size they
+   * chose it at; the displayed zoom is always that baseline rescaled by how
+   * much of the window is left. Recomputing from the baseline rather than
+   * compounding is what makes shrinking reversible — grow the window back and
+   * the zoom lands on exactly the value it started from, with every widget's
+   * stored geometry untouched throughout.
+   *
+   * Telling the user's zoom apart from this effect's own is done by
+   * remembering what it last applied: any zoom that is not that value came
+   * from somewhere else — a wheel, a button, Fit, or a workspace being
+   * hydrated — and becomes the new baseline. That rule needs no cooperation
+   * from the places that set the camera, so a new one cannot forget to
+   * participate.
+   */
+  const zoomAdaptationRef = useRef<ZoomAdaptationState | null | undefined>(undefined)
+  // Debounced, because every `orcspace:` key that localStorage takes is also
+  // mirrored to the main process over IPC (see durableLocalStorage). Writing
+  // on each step of a window drag would have sent one round trip per resize
+  // event; only where the drag comes to rest is worth persisting.
+  const zoomBaselineSaveRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (zoomBaselineSaveRef.current !== null) clearTimeout(zoomBaselineSaveRef.current)
+  }, [])
+  const saveZoomBaseline = useCallback((state: ZoomAdaptationState): void => {
+    if (zoomBaselineSaveRef.current !== null) clearTimeout(zoomBaselineSaveRef.current)
+    zoomBaselineSaveRef.current = setTimeout(() => {
+      zoomBaselineSaveRef.current = null
+      try {
+        localStorage.setItem(ZOOM_BASELINE_STORAGE_KEY, serializeZoomBaseline(state))
+      } catch {
+        // Private mode or a full quota: the adaptation still works for this run.
+      }
+    }, ZOOM_BASELINE_SAVE_DELAY_MS)
+  }, [])
+  useEffect(() => {
+    if (zoomAdaptationRef.current === undefined) {
+      // Restored, not re-derived: the camera loaded from disk carries the
+      // *adapted* zoom, so without the baseline that produced it the previous
+      // session's shrink would become this session's 100%.
+      try {
+        zoomAdaptationRef.current = parseZoomBaseline(localStorage.getItem(ZOOM_BASELINE_STORAGE_KEY))
+      } catch {
+        zoomAdaptationRef.current = null
+      }
+    }
+    const viewport = { w: mainSize.w, h: mainSize.h }
+    const step = adaptCanvasZoom(zoomAdaptationRef.current, camera.zoom, viewport)
+    if (step.kind === 'idle') return
+    zoomAdaptationRef.current = step.state
+    saveZoomBaseline(step.state)
+    if (step.kind === 'rebaseline') return
+    // Anchored at the middle of the viewport so the widget the user was
+    // looking at stays where they were looking. Same anchor the zoom buttons
+    // use, so a resize and a zoom click agree on what "the middle" is.
+    setCamera((c) => zoomCameraAt(c, step.zoom, canvasZoomAnchor()))
+  }, [mainSize.w, mainSize.h, camera.zoom, setCamera, canvasZoomAnchor, saveZoomBaseline])
   const onZoomIn = useCallback(() => {
     setCamera((c) => zoomCameraBy(c, 1, canvasZoomAnchor()))
   }, [canvasZoomAnchor, setCamera])
@@ -436,9 +504,12 @@ function OrcSpaceCanvas({
   }, [setCamera])
   // Fit all widgets into view: zoom out (never in past 1:1) and center the
   // bounding box in the usable band between the title bar and the toolbar.
-  // The canvas itself stays world-locked by design — widgets never auto-shrink
-  // behind the user's back — so this is the explicit "adapt to my window"
-  // action, next to the zoom controls.
+  //
+  // This frames the *content*, which the camera's own window adaptation does
+  // not: that keeps the proportion the user chose as the window changes size,
+  // and has no idea where the widgets ended up. So Fit stays the way to say
+  // "show me everything I have", and — like any other deliberate zoom — the
+  // result it lands on becomes the new baseline the adaptation measures from.
   const onFitView = useCallback((): void => {
     const viewW = mainSize.w > 0 ? mainSize.w : window.innerWidth
     const viewH = mainSize.h > 0 ? mainSize.h : window.innerHeight
@@ -1009,7 +1080,10 @@ function OrcSpaceCanvas({
       const onResizeEnd = (): void => {
         canvas.suppressWidget(id, false)
       }
-      trackDrag(onMove, onResizeEnd, e.pointerId)
+      // Same guard as the header drag above: a synthetic pointer event has
+      // pointerId 0, and filtering moves against it drops every packet, so a
+      // resize driven by automation never moves at all.
+      trackDrag(onMove, onResizeEnd, e.pointerId > 0 ? e.pointerId : undefined)
     },
     [canvas.bringToFront, canvas.updateWidget, canvas.suppressWidget]
   )
@@ -1051,9 +1125,14 @@ function OrcSpaceCanvas({
       if (NON_MAXIMIZABLE.has((w.kind ?? 'terminal') as WidgetKind) && w.maximized) {
         canvas.updateWidget(w.id, { maximized: false })
       }
-      if ((w.kind as string) === 'timer' && (w.w > 360 || w.h > 320)) {
-        canvas.updateWidget(w.id, { w: Math.min(w.w, 360), h: Math.min(w.h, 320) })
-      }
+      // Repair a persisted size that is outside the kind's limits — saved
+      // before the limit existed, or arrived from another client. This was
+      // written as a hardcoded `timer > 360x320` check, which both duplicated
+      // one row of WIDGET_MAX_SIZE in a second module and left every other
+      // capped kind (links, files, music-player, orchestration) unrepairable.
+      // clampWidgetSize is the one place those limits live.
+      const size = clampWidgetSize(w.kind, w.w, w.h)
+      if (size.w !== w.w || size.h !== w.h) canvas.updateWidget(w.id, size)
     }
 
     // Runs on every widgets change (not just length) so a kind change to a

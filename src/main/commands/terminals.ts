@@ -11,6 +11,7 @@ import {
 } from '../imageAttachments.ts'
 import { stageClipboardImage, type MediaFile } from '../media.ts'
 import { isDefaultTerminalTitle } from '../terminalNames.ts'
+import { preferredTerminalCwd } from '../terminal/terminalWorkingDirectory.ts'
 import type { CommandDeps } from './index.ts'
 import { failTerminalDispatches } from './orchestration.ts'
 
@@ -163,7 +164,12 @@ export function registerTerminalCommands({
 
 
         const saved = snapshots.get(id)
-        const result = terminals.spawn(id, p.cols, p.rows, p.cwd || saved?.cwd || defaultCwd(), p.title)
+        const cwd = preferredTerminalCwd({
+          requested: p.cwd,
+          saved: saved?.cwd,
+          workspace: defaultCwd()
+        })
+        const result = terminals.spawn(id, p.cols, p.rows, cwd, p.title)
 
 
         if (!result.ok) throw new CommandError('failed', result.error ?? 'failed to start the terminal')

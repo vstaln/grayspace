@@ -1,7 +1,21 @@
+import * as electron from 'electron'
 import { getActiveControlPort } from './config.ts'
 import { getIpcSocketPath } from './ipcSocket.ts'
 
-export const APP_VERSION = '2.0.5'
+const electronApp = (electron as unknown as { app?: { getVersion?: () => string } }).app
+
+export const PACKAGE_FALLBACK_VERSION = '2.0.9'
+
+export function getAppVersion(): string {
+  try {
+    const v = electronApp?.getVersion?.()
+    if (v && typeof v === 'string' && v.trim()) return v.trim()
+  } catch {
+    // Fall through to packaged fallback (tests / pre-ready).
+  }
+  return PACKAGE_FALLBACK_VERSION
+}
+
 
 export interface PresenceInfo {
   ok: true
@@ -44,7 +58,7 @@ export function buildPresence(input: {
   return {
     ok: true,
     app: 'orcspace',
-    version: APP_VERSION,
+    version: getAppVersion(),
     pid: input.pid ?? process.pid,
     ...(getActiveControlPort() ? { controlPort: getActiveControlPort() } : {}),
     socketPath: input.socketPath ?? getIpcSocketPath(),

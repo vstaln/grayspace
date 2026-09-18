@@ -15,7 +15,7 @@ import { CANVAS_TARGET } from './commands/canvas.ts'
 import { GIT_TARGET } from './commands/git.ts'
 import { NEW } from './commands/index.ts'
 import { applyLoopbackCors, isLoopbackRequest, secretsEqual } from './netGuard.ts'
-import { APP_VERSION, buildPresence, buildSnapshot } from './linkSnapshot.ts'
+import { getAppVersion, buildPresence, buildSnapshot } from './linkSnapshot.ts'
 import type { AppState } from './appState.ts'
 import { ActorRateLimiter, type ActorType, type CommandErrorCode, type CommandResult, type Core } from './core/index.ts'
 import { resolveImage } from './imageAttachments.ts'
@@ -319,9 +319,10 @@ function serveRendererFile(rendererDir: string, pathname: string, res: http.Serv
 
 
   const resolved = resolve(rendererDir, relative)
-  const lowerResolved = resolved.toLowerCase()
-  const lowerDir = rendererDir.toLowerCase()
-  if (!lowerResolved.startsWith(lowerDir + sep.toLowerCase()) && lowerResolved !== lowerDir) {
+  const caseSensitive = process.platform === 'linux'
+  const resolvedKey = caseSensitive ? resolved : resolved.toLowerCase()
+  const dirKey = caseSensitive ? rendererDir : rendererDir.toLowerCase()
+  if (!resolvedKey.startsWith(dirKey + sep.toLowerCase()) && resolvedKey !== dirKey) {
     res.writeHead(403).end(); return
   }
   const filePath = resolved
@@ -451,7 +452,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
       ok: true,
       app: 'orcspace',
       server: 'orcspace-control',
-      version: APP_VERSION,
+      version: getAppVersion(),
       ...(getActiveControlPort() ? { controlPort: getActiveControlPort() } : {}),
       workspaceDir: deps.defaultCwd() ?? null,
       terminals: terminals.list().length,

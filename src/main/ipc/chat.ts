@@ -165,12 +165,21 @@ function resolveCommand(command: string): Promise<ResolvedCommand | undefined> {
 }
 
 function spawnResolved(command: ResolvedCommand, args: string[], options: { cwd?: string; stdin?: 'pipe' | 'ignore' } = {}): ChildProcess {
-  return spawn(command.file, [...command.prefixArgs, ...args], {
+  const child = spawn(command.file, [...command.prefixArgs, ...args], {
     shell: false,
     windowsHide: true,
     cwd: options.cwd,
     stdio: [options.stdin ?? 'pipe', 'pipe', 'pipe']
   })
+  // A CLI that exits before its prompt has been written — a missing model, a
+  // bad flag, an instant auth failure — makes the next `stdin.write()` emit
+  // EPIPE on the stream. With no listener that becomes an uncaught exception;
+  // the app survives it only because a process-wide handler logs and swallows
+  // everything, which is not a reason to raise one. The failure itself is
+  // already reported through `close`, so this only has to stop the stream from
+  // throwing on its way there.
+  child.stdin?.on('error', () => {})
+  return child
 }
 
 async function run(command: string, args: string[], input?: string): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -400,11 +409,19 @@ export function registerChatIpc(deps: IpcDeps): void {
         if (current?.child !== child) return
         clearTimeout(current.timeout)
         authActive.delete(provider.id)
-        void providerStatus(provider).then((status) => {
-          authEvent(event, provider.id, status.connected ? 'complete' : 'error', {
-            message: status.connected ? `${provider.label} connected.` : authErrorText(provider, output)
+        // The catch is what closes the sign-in out. `providerStatus` spawns a
+        // CLI, and a spawn that throws rejects this — leaving the renderer on
+        // "Waiting for OAuth sign-in" with nothing ever arriving to end it,
+        // because the only two messages that clear that state are sent here.
+        void providerStatus(provider)
+          .then((status) => {
+            authEvent(event, provider.id, status.connected ? 'complete' : 'error', {
+              message: status.connected ? `${provider.label} connected.` : authErrorText(provider, output)
+            })
           })
-        })
+          .catch(() => {
+            authEvent(event, provider.id, 'error', { message: authErrorText(provider, output) })
+          })
       })
       return { ok: true }
     } catch (error) {

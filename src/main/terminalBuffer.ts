@@ -152,6 +152,15 @@ export class TerminalRingBuffer {
     while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start += 1
     let end = Math.min(bytes.length, start + maxBytes)
     while (end > start && end < bytes.length && (bytes[end] & 0xc0) === 0x80) end -= 1
+    // A budget smaller than the character sitting at `start` collapses the
+    // walk above onto `start` itself, and the read then returns no bytes and
+    // the offset it was given — so a caller paging through the buffer never
+    // advances and spins forever. Overshooting the budget by one character is
+    // the only answer that keeps the read making progress.
+    if (end === start && start < bytes.length) {
+      end = start + 1
+      while (end < bytes.length && (bytes[end] & 0xc0) === 0x80) end += 1
+    }
     const slice = bytes.subarray(start, end).toString('utf8')
 
     return {

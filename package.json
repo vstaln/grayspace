@@ -7,7 +7,7 @@
   "license": "MIT",
   "author": "OrcSpace",
   "engines": {
-    "node": "20.x || 22.x || 24.x || 26.x"
+    "node": "22.x || 24.x || 26.x"
   },
   "scripts": {
     "setup": "node scripts/setup.mjs",
@@ -28,7 +28,7 @@
     "reset": "node scripts/reset.mjs",
     "check:version": "node scripts/check-version.mjs",
     "pretest": "npm run check:version",
-    "test": "node --test --test-concurrency=1 \"src/main/**/*.test.ts\" \"src/renderer/src/lib/*.test.ts\"",
+    "test": "node --test --test-concurrency=1 \"src/main/**/*.test.ts\" \"src/renderer/src/lib/**/*.test.ts\"",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
@@ -217,7 +217,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^43.3.0",
+    "electron": "^43.4.2",
     "electron-builder": "^26.15.3",
     "electron-vite": "^3.1.0",
     "lucide-react": "^1.28.0",

@@ -35,6 +35,19 @@ describe('terminal startup failure', () => {
     }
   })
 
+  it('reads a Bun panic as a crash in the agent, not a missing launch', () => {
+    // Verbatim from opencode's card: the runtime aborts and prints this.
+    const output =
+      'panic(thread 5244): Illegal instruction at address 0x7FF6CAA404F0\r\n' +
+      'oh no: Bun has crashed. This indicates a bug in Bun, not your code.\r\n'
+    assert.match(startupFailureMessage(output, 'opencode') ?? '', /crashed on startup/)
+  })
+
+  it('prefers the out-of-memory reason over the crash banner it also prints', () => {
+    const output = 'MemoryExhaustion: Crash intentionally\r\noh no: Bun has crashed.\r\n'
+    assert.match(startupFailureMessage(output, 'opencode') ?? '', /ran out of memory/)
+  })
+
   it('names the executable, not the whole command line', () => {
     assert.match(startupFailureMessage('memory full', 'opencode --model x') ?? '', /^opencode /)
   })

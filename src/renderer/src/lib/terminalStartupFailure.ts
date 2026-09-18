@@ -61,11 +61,33 @@ export function plainTerminalText(text: string): string {
 // eslint-disable-next-line no-control-regex
 const TITLE_SEQUENCE = /\u001b\]0;([^\u0007\u001b]*)(?:\u0007|\u001b\\)/g
 
+/** Cheap gate: no title sequence in the text, so nothing to scan for. */
+export function mayCarryTitle(text: string): boolean {
+  return text.includes('\u001b]0;')
+}
+
 /** The console titles set in `text`, oldest first. */
 export function terminalTitles(text: string): string[] {
+  if (!mayCarryTitle(text)) return []
   const titles: string[] = []
   for (const match of text.matchAll(TITLE_SEQUENCE)) titles.push(match[1])
   return titles
+}
+
+/**
+ * A title that names a shell and nothing else — whatever ran under it is gone.
+ *
+ * cmd.exe writes `<shell> - <child>` while a child runs and puts back the bare
+ * shell path when it exits. PowerShell does not use the `-` form but does set
+ * its own product name, which means the same thing.
+ */
+const SHELL_OWN_TITLE =
+  /(?:^|[\\/])(?:cmd|powershell|pwsh|bash|zsh|sh|fish)(?:\.exe)?$|^windows powershell$/
+
+export function isShellOwnTitle(title: string): boolean {
+  const value = title.trim().toLowerCase()
+  if (!value) return false
+  return SHELL_OWN_TITLE.test(value)
 }
 
 const MEMORY_MARKERS = [
@@ -78,6 +100,26 @@ const MEMORY_MARKERS = [
   'cannot allocate memory'
 ]
 
+/**
+ * A runtime that aborted rather than an agent that chose to exit.
+ *
+ * Bun prints a panic banner and a crash-report URL before it goes; opencode
+ * runs on Bun, so this is what its card shows when the JIT trips over itself.
+ * Without this the only report was the generic "exited right after starting",
+ * which reads as though OrcSpace failed to start the agent — the agent did
+ * start, and its runtime crashed underneath it, which is a different problem
+ * with a different answer.
+ */
+const CRASH_MARKERS = [
+  'bun has crashed',
+  'panic(thread',
+  'illegal instruction at address',
+  'segmentation fault',
+  'access violation',
+  'fatal error in',
+  'core dumped'
+]
+
 const MISSING_MARKERS = [
   'is not recognized as an internal or external command',
   'is not recognized as the name of a cmdlet',
@@ -85,13 +127,6 @@ const MISSING_MARKERS = [
   'command not found',
   'commandnotfoundexception'
 ]
-
-/** A title that names a shell and nothing else — the child is gone. */
-function isBareShellTitle(title: string): boolean {
-  const value = title.trim().toLowerCase()
-  if (!value) return false
-  return /(?:^|[\\/])(?:cmd|powershell|pwsh|bash|zsh|sh)(?:\.exe)?$/.test(value)
-}
 
 export function executableName(command: string): string {
   return /^\s*["']?([^\s"']+)/.exec(command)?.[1] ?? command.trim()
@@ -113,6 +148,11 @@ export function startupFailureMessage(output: string, command: string): string |
   }
   if (MISSING_MARKERS.some((marker) => text.includes(marker))) {
     return `${name} could not start: the command was not found on PATH.`
+  }
+  // Checked after the two specific causes: an out-of-memory abort also prints
+  // a crash banner, and "ran out of memory" is the more useful of the two.
+  if (CRASH_MARKERS.some((marker) => text.includes(marker))) {
+    return `${name} crashed on startup — its own runtime aborted, not OrcSpace. Relaunch it; if it keeps crashing, update ${name}.`
   }
   return null
 }
@@ -162,7 +202,7 @@ export function readStartupOutput(probe: StartupProbe, chunk: string): StartupVe
       verdict = { status: 'running' }
     } else if (!probe.started) {
       continue
-    } else if (isBareShellTitle(title)) {
+    } else if (isShellOwnTitle(title)) {
       verdict = {
         status: 'maybe-exited',
         message: `${executableName(probe.command)} exited right after starting — the terminal is back at its shell prompt.`

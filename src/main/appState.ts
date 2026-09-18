@@ -489,7 +489,9 @@ export class AppState extends EventEmitter {
       this.state.settings[encKey] = encrypted
       delete this.state.settings[plainKey]
     } else {
-
+      // OS keychain unavailable: key persists as plaintext. Storage is 0600
+      // (see storage.ts) but warn so this does not look encrypted.
+      console.warn('[settings] OS encryption unavailable; storing API key as plaintext with restricted file permissions')
       this.state.settings[plainKey] = value
       delete this.state.settings[encKey]
     }
@@ -657,6 +659,13 @@ export class AppState extends EventEmitter {
     }
     try {
       writeJsonAtomic(this.file, { ...this.state, settings: this.settingsForDisk() })
+      if (this.state.settings.openRouterApiKey) {
+        try {
+          fs.chmodSync(this.file, 0o600)
+        } catch {
+          // Windows/network mounts without permission bits.
+        }
+      }
     } catch (err) {
 
 

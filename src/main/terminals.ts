@@ -6,6 +6,7 @@ import type { IPty } from '@homebridge/node-pty-prebuilt-multiarch'
 import { conptyStartupOutput, systemWindowsPtyOptions, windowsPtyOptions } from './conpty.ts'
 import { OUTPUT_BUFFER_LIMIT, MAX_TERMINAL_WRITE_BYTES, defaultShell } from './config.ts'
 import { CommandError } from './core/index.ts'
+import { getAppVersion } from './linkSnapshot.ts'
 import { killProcessTree } from './procTree.ts'
 import { TerminalRingBuffer } from './terminalBuffer.ts'
 import {
@@ -333,6 +334,18 @@ export class TerminalManager extends EventEmitter {
     return Array.from(this.terminals, ([id, record]) => this.toInfo(id, record))
   }
 
+  /**
+   * One terminal's info, without building every other one's.
+   *
+   * The callers of this were written as `list().find(t => t.id === id)`, which
+   * allocates an info object per open terminal to read a single field — on the
+   * snapshot path, which runs on the thread that pumps every PTY.
+   */
+  info(id: string): TerminalInfo | undefined {
+    const record = this.terminals.get(id)
+    return record ? this.toInfo(id, record) : undefined
+  }
+
 
 
 
@@ -452,7 +465,7 @@ export class TerminalManager extends EventEmitter {
           FORCE_COLOR: '3',
           COLORFGBG: '15;0',
           TERM_PROGRAM: 'OrcSpace',
-          TERM_PROGRAM_VERSION: '2.0.4',
+          TERM_PROGRAM_VERSION: getAppVersion(),
           LANG: process.env.LANG || 'en_US.UTF-8',
           LC_ALL: process.env.LC_ALL || process.env.LANG || 'en_US.UTF-8',
           ...resolveCodeTerminalColorEnv(id)
@@ -520,7 +533,7 @@ export class TerminalManager extends EventEmitter {
       FORCE_COLOR: '3',
       COLORFGBG: '15;0',
       TERM_PROGRAM: 'OrcSpace',
-      TERM_PROGRAM_VERSION: '2.0.4',
+      TERM_PROGRAM_VERSION: getAppVersion(),
       LANG: process.env.LANG || 'en_US.UTF-8',
       LC_ALL: process.env.LC_ALL || process.env.LANG || 'en_US.UTF-8',
       ...resolveCodeTerminalColorEnv(id)

@@ -824,7 +824,21 @@ export function useCanvas({ favoriteTerminalNames = [] }: UseCanvasOptions = {})
     const currentWidget = widgetsRef.current.find((w) => w.id === id)
     const baseVersion = currentWidget?.version
 
-    if (window.api.canvas?.updateWidget) {
+    // Nothing goes out per packet while a gesture owns this widget.
+    //
+    // Suppression also stops incoming upserts from being merged, so the local
+    // `version` stops advancing the moment a gesture starts — while the server
+    // bumps it on every write it accepts. A resize commits on every mousemove,
+    // so from the second packet on, every one of them carried a baseVersion
+    // the server had already moved past: a conflict, rejected, and swallowed
+    // by the `catch` below. An entire drag's worth of IPC round trips existed
+    // to have all but the first rejected.
+    //
+    // The geometry is not lost by skipping them — the debounced full-snapshot
+    // save persists the settled result, and the header drag already commits
+    // once on release, after unsuppressing. This only stops the traffic that
+    // was never going to be applied.
+    if (window.api.canvas?.updateWidget && !suppressedWidgetIdsRef.current.has(id)) {
       void window.api.canvas.updateWidget(id, change, baseVersion).catch(() => {})
     }
 

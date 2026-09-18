@@ -1,8 +1,20 @@
 import * as os from 'os'
 import * as fs from 'fs'
 import { join } from 'path'
+import * as electron from 'electron'
+
+const electronApp = (electron as unknown as { app?: { isPackaged?: boolean } }).app
 
 let activeSocketPath: string | null = null
+
+function allowSocketOverride(): boolean {
+  try {
+    if (electronApp?.isPackaged && !process.env.ORCSPACE_ALLOW_SOCKET_OVERRIDE) return false
+  } catch {
+    // Unknowable packaged state (tests): allow override.
+  }
+  return true
+}
 
 export function isDevEnvironment(): boolean {
   return Boolean(
@@ -20,7 +32,7 @@ export function getIpcSocketPath(isDev = isDevEnvironment()): string {
   if (activeSocketPath) {
     return activeSocketPath
   }
-  if (process.env.ORCSPACE_SOCKET_PATH) {
+  if (allowSocketOverride() && process.env.ORCSPACE_SOCKET_PATH) {
     return process.env.ORCSPACE_SOCKET_PATH
   }
   const suffix = isDev ? '-dev' : ''

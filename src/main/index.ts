@@ -1,6 +1,7 @@
 
-import { config as loadEnvFile } from 'dotenv'
-loadEnvFile()
+// First, and it has to stay first: this is what puts `.env` into the
+// environment before any other module reads it. See loadEnv.ts.
+import './loadEnv.ts'
 
 import { app, Menu } from 'electron'
 import { join } from 'path'

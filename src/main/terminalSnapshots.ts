@@ -212,21 +212,51 @@ export class TerminalSnapshots {
     // keeps this map from growing by one entry per terminal for the lifetime
     // of the app.
     this.generations.delete(id)
-    if (!this.index[id]) return
-    delete this.index[id]
-
-
+    const indexed = this.index[id] !== undefined
+    if (indexed) delete this.index[id]
+    // The removal is not conditional on there having been an index entry. It
+    // used to be, behind an early return, and a scrollback file whose entry
+    // had already gone — the index write is debounced and asynchronous, so a
+    // quit between the two loses it — could then never be deleted by anything.
     void fsp.rm(this.scrollbackFile(id), { force: true }).catch(() => {
 
     })
-    this.scheduleFlush()
+    if (indexed) this.scheduleFlush()
   }
 
 
+  /**
+   * Drop every snapshot that no longer belongs to a live terminal.
+   *
+   * The directory is swept, not just the index. Walking index keys alone
+   * cannot see a file the index has forgotten, and those accumulate: measured
+   * on one real profile, 3 index entries against 28 files on disk — 25
+   * orphans, 623KB, with nothing in the app able to remove them.
+   */
   prune(liveIds: Iterable<string>): void {
     this.ensure()
     const keep = new Set(liveIds)
     for (const id of Object.keys(this.index)) if (!keep.has(id)) this.forget(id)
+
+    // Filenames rather than ids: scrollbackFile() sanitizes, and comparing on
+    // its output avoids having to invert that mapping.
+    const expected = new Set<string>()
+    for (const id of keep) expected.add(this.scrollbackFile(id))
+    for (const id of Object.keys(this.index)) expected.add(this.scrollbackFile(id))
+    try {
+      for (const name of fs.readdirSync(this.dir)) {
+        if (!name.endsWith('.log')) continue
+        const file = join(this.dir, name)
+        if (expected.has(file)) continue
+        try {
+          fs.rmSync(file, { force: true })
+        } catch {
+          // A file another process still holds open is retried next shutdown.
+        }
+      }
+    } catch {
+      // No directory yet, or it cannot be read; nothing to sweep.
+    }
   }
 
   private scrollbackFile(id: string): string {

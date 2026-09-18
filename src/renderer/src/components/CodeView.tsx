@@ -7,7 +7,7 @@ import CodeLauncher, { CODE_AGENTS, CODE_LAUNCH_COUNTS, MAX_CODE_SESSIONS, CodeA
 import ResumeAgents from './ResumeAgents'
 import RestoreSessionsDialog from './RestoreSessionsDialog'
 import { needsRestorePrompt, splitRestore } from '../lib/restorePrompt'
-import { codeGridLayout, type CodeLayoutMode } from '../lib/codeLayout'
+import { autoCodeLayout, codeGridLayout, type CodeLayoutMode } from '../lib/codeLayout'
 import { upgradeSessionsToResume, type AgentConversation } from '../lib/agentConversations'
 import { clearInitialCommand, queueInitialCommand, queueInitialCommandOnce } from '../lib/pendingTerminalCommands'
 import { forgetAgentSelection } from './WidgetFrame'
@@ -56,37 +56,6 @@ function terminalAgentId(session: Pick<Session, 'agent'>): string {
 function extractCounter(id: string): number | null {
   const m = /-(\d+)$/.exec(id)
   return m ? Number(m[1]) : null
-}
-
-function denseRowCounts(count: number): number[] {
-  const rows = count <= 8 || count === 10 ? 2 : count <= 15 ? 3 : 4
-  if (count === 9) return [3, 3, 3]
-  const perRow = Math.floor(count / rows)
-  const remainder = count % rows
-  return Array.from({ length: rows }, (_, row) => perRow + (row < remainder ? 1 : 0))
-}
-
-function placementForIndex(count: number, index: number): React.CSSProperties {
-  if (count === 3) {
-    return index === 0
-      ? { gridColumn: '1', gridRow: '1 / 4' }
-      : { gridColumn: '3', gridRow: index === 1 ? '1' : '3' }
-  }
-  if (count === 5) {
-    if (index < 4) return { gridColumn: `${index % 2 + 1}`, gridRow: `${Math.floor(index / 2) + 1}` }
-    return { gridColumn: '3', gridRow: '1 / span 2' }
-  }
-  if (count >= 6 && count <= 20) {
-    let rowStart = 0
-    for (const [row, terminalsInRow] of denseRowCounts(count).entries()) {
-      if (index < rowStart + terminalsInRow) {
-        const span = 60 / terminalsInRow
-        return { gridColumn: `${(index - rowStart) * span + 1} / span ${span}`, gridRow: `${row + 1}` }
-      }
-      rowStart += terminalsInRow
-    }
-  }
-  return {}
 }
 
 function clampSplit(value: unknown, fallback: number): number {
@@ -1261,22 +1230,6 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
 
 
 
-  const columns = sessions.length >= 6 && sessions.length <= 20
-    ? 60
-    : sessions.length === 3 || sessions.length === 5
-      ? sessions.length === 3 ? 2 : 3
-    : sessions.length <= 1 ? 1 : sessions.length === 2 ? 2 : sessions.length <= 4 ? 2 : sessions.length <= 6 ? 3 : sessions.length === 10 ? 5 : 4
-  const gridTemplateColumns = sessions.length === 5
-    ? '3fr 3fr 4fr'
-    : `repeat(${columns}, minmax(0, 1fr))`
-
-
-
-
-
-
-
-
   // An explicit layout mode owns the whole grid; `auto` leaves the per-count
   // layout below (and its 3-way splitters) exactly as it was.
   const explicitLayout = useMemo(
@@ -1284,25 +1237,22 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
     [layoutMode, sessions, featuredId]
   )
 
+  // One layout, whichever mode produced it. `auto` used to be assembled here
+  // from its own column maths and a local placementForIndex, which is how two
+  // descriptions of the same grid ended up in two files.
+  const layout = explicitLayout ?? autoCodeLayout(sessions.length, threeWaySplit)
+
   const sessionPlacements = useMemo(() => {
     const placements = new Map<string, React.CSSProperties>()
-
-    if (explicitLayout) {
-      sessions.forEach((session, index) => {
-        placements.set(session.id, { ...explicitLayout.placement(index), order: index })
-      })
-      return placements
-    }
-
     sessions.forEach((session, index) => {
-      // `order` carries the slot for the layouts placementForIndex leaves to
-      // auto-placement (1, 2, 4 and >20 sessions). Grid auto-placement follows
+      // `order` carries the slot for the layouts that leave placement to the
+      // grid (1, 2, 4 and >20 sessions). Grid auto-placement follows
       // order-modified document order, so a swap is a style change rather than
       // a DOM move — see stableCardOrder below for why that matters.
-      placements.set(session.id, { ...placementForIndex(sessions.length, index), order: index })
+      placements.set(session.id, { ...layout.placement(index), order: index })
     })
     return placements
-  }, [sessions, explicitLayout])
+  }, [sessions, layout])
 
   /**
    * The order the cards are *rendered in*, which is deliberately not the order
@@ -1357,10 +1307,14 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
           />
         )}
         <div ref={threeWayContainerRef} className={`relative grid min-h-0 flex-1 gap-0 bg-bg-raise p-0 ${maximizedId ? 'overflow-hidden' : 'overflow-auto'}`}
-            style={maximizedId ? { gridTemplateColumns: 'minmax(0, 1fr)', gridAutoRows: 'minmax(0, 1fr)' } : explicitLayout ? explicitLayout.container : sessions.length === 3 ? {
-              gridTemplateColumns: `minmax(0, ${threeWaySplit.col}fr) 2px minmax(0, ${100 - threeWaySplit.col}fr)`,
-              gridTemplateRows: `minmax(0, ${threeWaySplit.row}fr) 2px minmax(0, ${100 - threeWaySplit.row}fr)`
-            } : { gridTemplateColumns, gridAutoRows: 'minmax(180px, 1fr)' }}
+            style={
+              // A maximized card is the only thing on screen, so the grid it
+              // sits in collapses to one cell regardless of what mode produced
+              // the layout underneath.
+              maximizedId
+                ? { gridTemplateColumns: 'minmax(0, 1fr)', gridAutoRows: 'minmax(0, 1fr)' }
+                : layout.container
+            }
           >
             {draggedSession && <CodeDragCue source={draggedSession} target={dropTargetSession} />}
             {stableCardOrder.map((session) => {

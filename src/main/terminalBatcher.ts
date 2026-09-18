@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events'
+import { TERMINAL_OUTPUT_RESYNC } from '../shared/terminalModes.ts'
 
 export interface BatcherOptions {
   frameIntervalMs?: number
@@ -6,11 +7,6 @@ export interface BatcherOptions {
   maxPendingBytes?: number
 }
 
-/** Cancel partial control state after output loss, including stale mouse reporting. */
-const RESYNC_PREFIX =
-  '\x18\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l' +
-  '\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l' +
-  '\x1b[?2026l\x1b[?25h\x1b[0m'
 
 
 
@@ -137,7 +133,7 @@ export class TerminalStreamBatcher extends EventEmitter {
     this.pending.delete(terminalId)
     this.pendingBytes.delete(terminalId)
 
-    const batch = this.resyncPending.delete(terminalId) ? `${RESYNC_PREFIX}${combined}` : combined
+    const batch = this.resyncPending.delete(terminalId) ? `${TERMINAL_OUTPUT_RESYNC}${combined}` : combined
     this.emit('batch', terminalId, batch)
   }
 

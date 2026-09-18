@@ -95,4 +95,36 @@ describe('TerminalRingBuffer', () => {
     assert.equal(all.data, 'x'.repeat(5000))
     assert.equal(all.newOffset, 5000)
   })
+
+  test('always advances, even when the budget is smaller than one character', () => {
+    // A budget that cannot fit the next character used to return no bytes and
+    // the offset it was given, so a caller paging through the buffer spun
+    // forever. Overshooting by one character is the only answer that moves.
+    for (const [text, size] of [['\u{1F4A5}ok', 4], ['\u65E5ok', 3], ['\u0451ok', 2]] as const) {
+      for (let budget = 1; budget <= size; budget += 1) {
+        const buffer = new TerminalRingBuffer({ maxBytes: 1024 })
+        buffer.append(text)
+        const read = buffer.read(0, budget)
+        const label = `budget ${budget} against a ${size}-byte character`
+        assert.equal(read.data, [...text][0], label)
+        assert.equal(read.newOffset, size, label)
+      }
+    }
+  })
+
+  test('paging with a one-byte budget reconstructs the whole buffer', () => {
+    const buffer = new TerminalRingBuffer({ maxBytes: 4096 })
+    buffer.append('a\u0451\u65E5\u{1F4A5}b')
+    let offset = buffer.startOffset
+    let assembled = ''
+    let guard = 0
+    while (offset < buffer.globalOffset) {
+      assert.ok(++guard < 100, 'read made no progress')
+      const read = buffer.read(offset, 1)
+      assert.ok(read.newOffset > offset)
+      assembled += read.data
+      offset = read.newOffset
+    }
+    assert.equal(assembled, buffer.toString())
+  })
 })

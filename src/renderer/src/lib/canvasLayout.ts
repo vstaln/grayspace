@@ -137,8 +137,14 @@ export function arrangeWidgets(
     const innerH = viewport.h - LAYOUT_GAP * 2
     if (rest.length === 0) return [tile(main, viewport.x + LAYOUT_GAP, viewport.y + LAYOUT_GAP, innerW, innerH)]
 
-    const mainW = Math.round((innerW - LAYOUT_GAP) * FOCUS_MAIN_RATIO)
-    const sideW = innerW - LAYOUT_GAP - mainW
+    // Clamped for the same reason the grid below clamps its cell: `mainW` is
+    // what `sideX` is measured from, but `tile` widens anything under MIN_W to
+    // MIN_W — so an unclamped `mainW` below that put the focused widget's real
+    // right edge past the start of the side column and stacked it on top of
+    // every card in there. A viewport narrower than ~448 world units reaches
+    // that, which is an ordinary window once the canvas is zoomed in.
+    const mainW = Math.max(MIN_W, Math.round((innerW - LAYOUT_GAP) * FOCUS_MAIN_RATIO))
+    const sideW = Math.max(MIN_W, innerW - LAYOUT_GAP - mainW)
     const sideH = Math.max(
       TINY_H,
       Math.floor((innerH - LAYOUT_GAP * (rest.length - 1)) / rest.length)

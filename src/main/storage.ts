@@ -91,8 +91,13 @@ async function writeAtomicAsync(file: string, text: string, keepBackup: boolean)
   const dir = dirname(file)
   await fsp.mkdir(dir, { recursive: true })
   const temp = join(dir, `.${Date.now()}-${process.pid}-${randomBytes(8).toString('hex')}.tmp`)
-  const handle = await fsp.open(temp, 'wx')
+  const handle = await fsp.open(temp, 'wx', 0o600)
   try {
+    try {
+      await handle.chmod(0o600)
+    } catch {
+      // Filesystems without permission bits (some Windows/network mounts).
+    }
     await handle.writeFile(text, 'utf8')
     await handle.sync()
     await handle.close()
@@ -147,8 +152,13 @@ function writeAtomic(file: string, text: string, keepBackup: boolean): void {
 
 
   const temp = join(dir, `.${Date.now()}-${process.pid}-${randomBytes(8).toString('hex')}.tmp`)
-  const handle = fs.openSync(temp, 'wx')
+  const handle = fs.openSync(temp, 'wx', 0o600)
   try {
+    try {
+      fs.fchmodSync(handle, 0o600)
+    } catch {
+      // Filesystems without permission bits (some Windows/network mounts).
+    }
     fs.writeFileSync(handle, text, 'utf8')
 
     fs.fsyncSync(handle)

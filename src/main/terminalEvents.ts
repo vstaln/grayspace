@@ -44,7 +44,7 @@ export function setupTerminalEvents(deps: {
     if (isShuttingDown()) return
     const recent = terminals.tailOutput(id, SNAPSHOT_TAIL_BYTES)
     if (recent === null) return
-    const info = terminals.list().find((t) => t.id === id)
+    const info = terminals.info(id)
     snapshots.saveAsync({
       id,
       title: info?.title || id,
@@ -94,7 +94,7 @@ export function setupTerminalEvents(deps: {
     if (!isShuttingDown()) {
       const full = terminals.fullOutput(id)
       if (full !== null) {
-        const info = terminals.list().find((t) => t.id === id)
+        const info = terminals.info(id)
         snapshots.saveAsync({
           id,
           title: info?.title || id,

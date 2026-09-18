@@ -13,6 +13,22 @@ const installCurve = (elapsed: number): number => {
   return Math.min(99, Math.round((1 - Math.pow(1 - t, 2.4)) * 99))
 }
 
+/**
+ * Statuses that only a click can move on from, so there is nothing to poll
+ * for while the app sits in one of them.
+ */
+const SETTLED_STATUS = new Set<AppUpdateState['status']>(['disabled', 'idle', 'current', 'error'])
+
+/** Field-by-field, because each poll answer arrives as a fresh object. */
+function sameUpdateState(a: AppUpdateState | null, b: AppUpdateState): boolean {
+  return a !== null &&
+    a.status === b.status &&
+    a.currentVersion === b.currentVersion &&
+    a.version === b.version &&
+    a.percent === b.percent &&
+    a.message === b.message
+}
+
 const TONE_CLASS: Record<Tone, string> = {
   accent: 'border-accent-soft bg-accent-soft text-accent',
   ok: 'border-line-soft bg-bg-hover text-ok',
@@ -30,18 +46,32 @@ export function AppUpdates(): React.JSX.Element {
     mountedRef.current = true
     return () => { mountedRef.current = false }
   }, [])
+  // The main process holds the update state and has no way to push it, so it
+  // is polled — but only while something is actually moving. `disabled`,
+  // `current`, `idle` and `error` change only in response to a click, which
+  // sets the state directly, so polling through them asked the main process
+  // the same question every two seconds for the lifetime of the app. Each
+  // answer also arrived structure-cloned, a new object every time, so the
+  // unconditional setState re-rendered this component forever.
+  // Polling is driven by the status itself rather than a flag, so the click
+  // handlers that set `checking`/`installing` directly start it again without
+  // having to know it exists.
+  const settled = state !== null && SETTLED_STATUS.has(state.status)
   useEffect(() => {
     let active = true
     const refresh = async (): Promise<void> => {
       try {
         const next = await window.api.settings.updateState()
-        if (active) { setState(next); setError('') }
+        if (!active) return
+        setState((current) => (sameUpdateState(current, next) ? current : next))
+        setError('')
       } catch { if (active) setError('Unable to read update status.') }
     }
     void refresh()
+    if (settled) return () => { active = false }
     const timer = setInterval(() => void refresh(), 2000)
     return () => { active = false; clearInterval(timer) }
-  }, [])
+  }, [settled])
   const curtainOpen = curtain !== null
   useEffect(() => {
     if (!curtainOpen) return
