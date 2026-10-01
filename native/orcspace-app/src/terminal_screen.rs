@@ -79,27 +79,20 @@ impl TerminalScreen {
     }
 
     fn caret_rect(painter: &egui::Painter, origin: Pos2, font_size: f32) -> Rect {
-        // The row contains font leading below the visible capitals. Centering
-        // on that row shifts the caret down relative to a shell prompt.
-        // Use the same capital-glyph metrics as the terminal row.  The pipe
-        // glyph has platform-specific descender/leading bounds and can make
-        // the caret visibly lower on Linux than the prompt it accompanies.
+        // Path separators can extend below capitals in the fallback font.
+        // Measure both so the caret follows prompt ink rather than row leading.
         let reference =
-            painter.layout_no_wrap("M".into(), FontId::monospace(font_size), Color32::WHITE);
+            painter.layout_no_wrap("M\\".into(), FontId::monospace(font_size), Color32::WHITE);
         let ink = reference.mesh_bounds;
         let scale = painter.ctx().pixels_per_point();
         let snap = |value: f32| (value * scale).round() / scale;
-        let top_padding = 2.0 / scale;
-        let bottom_padding = 3.0 / scale;
-        let caret_x = snap(origin.x + ink.left());
+        let padding = 1.0 / scale;
+        let caret_x = snap(origin.x);
         Rect::from_min_max(
-            Pos2::new(
-                caret_x,
-                snap(origin.y + ink.top() - top_padding),
-            ),
+            Pos2::new(caret_x, snap(origin.y + ink.top() - padding)),
             Pos2::new(
                 caret_x + 1.0 / scale,
-                snap(origin.y + ink.bottom() + bottom_padding),
+                snap(origin.y + ink.bottom() + padding),
             ),
         )
     }
@@ -642,36 +635,41 @@ mod tests {
 
     #[test]
     fn caret_tracks_prompt_ink_at_different_font_sizes_and_scales() {
-        for scale in [1.0, 1.25, 1.5, 2.0] {
-            let ctx = egui::Context::default();
-            crate::theme::apply(&ctx);
-            ctx.set_pixels_per_point(scale);
-            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                let ctx = ui.ctx();
-                let painter = ctx.layer_painter(egui::LayerId::background());
-                for size in [11.0, 13.0, 16.0, 20.0] {
-                    let origin = Pos2::new(20.0, 31.0);
-                    let prompt = painter.layout_no_wrap(
-                        "PS C:\\Users>".into(),
-                        FontId::monospace(size),
-                        Color32::WHITE,
-                    );
-                    let caret = TerminalScreen::caret_rect(&painter, origin, size);
-                    let text = prompt.mesh_bounds.translate(origin.to_vec2());
-                    let pixel = 1.0 / ctx.pixels_per_point();
-                    assert!(
-                        (caret.center().y - text.center().y).abs() <= pixel,
-                        "caret {caret:?}, prompt {text:?}, size {size}, scale {scale}"
-                    );
-                    assert!((caret.width() - pixel).abs() < 0.001);
-                    assert!(caret.top() <= text.top() + pixel);
-                    assert!(
-                        caret.bottom() >= text.bottom() - pixel,
-                        "caret {caret:?}, prompt {text:?}, size {size}, scale {scale}"
-                    );
+        for fallback_fonts in [false, true] {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                let ctx = egui::Context::default();
+                crate::theme::apply(&ctx);
+                if fallback_fonts {
+                    ctx.set_fonts(egui::FontDefinitions::default());
                 }
-            });
-            output.textures_delta.clear();
+                ctx.set_pixels_per_point(scale);
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let ctx = ui.ctx();
+                    let painter = ctx.layer_painter(egui::LayerId::background());
+                    for size in [11.0, 13.0, 16.0, 20.0] {
+                        let origin = Pos2::new(20.0, 31.0);
+                        let prompt = painter.layout_no_wrap(
+                            "PS C:\\Users>".into(),
+                            FontId::monospace(size),
+                            Color32::WHITE,
+                        );
+                        let caret = TerminalScreen::caret_rect(&painter, origin, size);
+                        let text = prompt.mesh_bounds.translate(origin.to_vec2());
+                        let pixel = 1.0 / ctx.pixels_per_point();
+                        assert!(
+                            (caret.center().y - text.center().y).abs() <= pixel,
+                            "caret {caret:?}, prompt {text:?}, size {size}, scale {scale}"
+                        );
+                        assert!((caret.width() - pixel).abs() < 0.001);
+                        assert!(caret.top() <= text.top() + pixel);
+                        assert!(
+                            caret.bottom() >= text.bottom() - pixel,
+                            "caret {caret:?}, prompt {text:?}, size {size}, scale {scale}"
+                        );
+                    }
+                });
+                output.textures_delta.clear();
+            }
         }
     }
 

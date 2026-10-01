@@ -119,7 +119,9 @@ pub fn apply(ctx: &egui::Context) {
             .insert(egui::TextStyle::Monospace, egui::FontId::monospace(13.0));
     });
     let mut fonts = egui::FontDefinitions::default();
-    let (mut proportional, mut monospace, mut semibold) = (Vec::new(), Vec::new(), Vec::new());
+    let (proportional, monospace, mut semibold) = (Vec::new(), Vec::new(), Vec::new());
+    #[cfg(windows)]
+    let (mut proportional, mut monospace) = (proportional, monospace);
     // Bold and italic terminal faces, indexed by `TerminalStyle`. Slot 0 is
     // the plain face, which is the monospace family itself.
     let mut terminal_faces: [Vec<String>; 4] = Default::default();
