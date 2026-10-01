@@ -91,6 +91,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify Electron bytecode compiler
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          printf 'module.exports = 42;\n' > "$RUNNER_TEMP/bytecode-probe.js"
+          ELECTRON_ENABLE_LOGGING=1 xvfb-run -a node_modules/.bin/electron scripts/compile-main-bytecode.cjs "$RUNNER_TEMP/bytecode-probe.js"
+          test -s "$RUNNER_TEMP/bytecode-probe.jsc"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+
       - name: Typecheck
         run: npm run typecheck
 

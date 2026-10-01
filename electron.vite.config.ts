@@ -33,7 +33,9 @@ function mainBytecodePlugin() {
       const result = spawnSync(command, args, {
         env, encoding: 'utf8', windowsHide: true, timeout: 60_000
       })
-      if (result.error || result.status !== 0) throw new Error(`Bytecode compilation failed: ${result.error || result.stderr}`)
+      if (result.error || result.status !== 0) {
+        throw new Error(`Bytecode compilation failed (exit ${result.status}, signal ${result.signal}): ${result.error || ''}\n${result.stdout || ''}\n${result.stderr || ''}`)
+      }
       writeFileSync(resolve(options.dir, 'bytecode-loader.cjs'), readFileSync(resolve('scripts/main-bytecode-loader.cjs')))
       writeFileSync(entry, 'require("./bytecode-loader.cjs");\nrequire("./index.jsc");\n')
     }
