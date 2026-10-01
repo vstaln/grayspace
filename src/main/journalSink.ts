@@ -297,9 +297,7 @@ export class FileJournalSink implements JournalSink {
    * not need this.
    */
   private async rotateAsync(): Promise<void> {
-    if (this.writing) return
     if (this.bytes <= this.rotateFloorBytes) return
-    this.writing = true
     const temp = `${this.file}.${randomBytes(8).toString('hex')}.tmp`
     try {
       const text = await fsp.readFile(this.file, 'utf8')
@@ -320,7 +318,6 @@ export class FileJournalSink implements JournalSink {
     } finally {
       // The rename consumes the temp on success; on failure it may remain.
       await fsp.unlink(temp).catch(() => {})
-      this.writing = false
     }
   }
 

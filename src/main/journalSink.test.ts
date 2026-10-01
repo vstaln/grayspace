@@ -102,7 +102,7 @@ describe('FileJournalSink', () => {
       if (seq % 10 === 0) await new Promise((resolve) => setTimeout(resolve, 2))
     }
     await new Promise((resolve) => setTimeout(resolve, 100))
-    sink.flush()
+    await sink.flushPending()
 
     const tail = readJournalTail(file, 10_000)
     const seqs = new Set(tail.entries.map((e) => e.seq))
