@@ -149,12 +149,13 @@ export class FileJournalSink implements JournalSink {
       notifyPersistError('journal', err)
       failed = true
     }
-    this.writing = false
     if (failed) {
+      this.writing = false
       this.scheduleRetry()
       return
     }
     if (this.bytes > this.maxBytes) await this.rotateAsync()
+    this.writing = false
 
 
 

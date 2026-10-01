@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, promises as fsp, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, test } from 'node:test'
@@ -59,6 +59,33 @@ describe('FileJournalSink', () => {
   const dirs: string[] = []
   afterEach(() => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('a synchronous flush during rotation waits until the replacement is installed', async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'orcspace-journal-interleave-'))
+    dirs.push(dir)
+    const file = join(dir, 'command-journal.ndjson')
+    const sink = new FileJournalSink({ file, flushMs: 1, maxBytes: 1 })
+    const rename = fsp.rename.bind(fsp)
+    let signalReached!: () => void
+    let signalResume!: () => void
+    const reached = new Promise<void>((resolve) => { signalReached = resolve })
+    const resume = new Promise<void>((resolve) => { signalResume = resolve })
+    t.mock.method(fsp, 'rename', async (...args: Parameters<typeof fsp.rename>) => {
+      signalReached()
+      await resume
+      return rename(...args)
+    })
+    sink.append(entry(1))
+    try {
+      await reached
+      sink.append(entry(2))
+      sink.flush()
+    } finally {
+      signalResume()
+      await sink.flushPending()
+    }
+    assert.deepEqual(readJournalTail(file).entries.map((item) => item.seq), [1, 2])
   })
 
   test('a failed flush keeps the entry and a later flush writes it', () => {
