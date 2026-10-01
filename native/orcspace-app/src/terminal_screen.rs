@@ -91,13 +91,14 @@ impl TerminalScreen {
         let snap = |value: f32| (value * scale).round() / scale;
         let top_padding = 2.0 / scale;
         let bottom_padding = 3.0 / scale;
+        let caret_x = snap(origin.x + ink.left());
         Rect::from_min_max(
             Pos2::new(
-                snap(origin.x),
+                caret_x,
                 snap(origin.y + ink.top() - top_padding),
             ),
             Pos2::new(
-                snap(origin.x) + 1.0 / scale,
+                caret_x + 1.0 / scale,
                 snap(origin.y + ink.bottom() + bottom_padding),
             ),
         )
