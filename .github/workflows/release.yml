@@ -95,6 +95,10 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          electron_binary="$(node -p "require('electron')")"
+          sandbox="$(dirname "$electron_binary")/chrome-sandbox"
+          sudo chown root:root "$sandbox"
+          sudo chmod 4755 "$sandbox"
           printf 'module.exports = 42;\n' > "$RUNNER_TEMP/bytecode-probe.js"
           ELECTRON_ENABLE_LOGGING=1 xvfb-run -a node_modules/.bin/electron scripts/compile-main-bytecode.cjs "$RUNNER_TEMP/bytecode-probe.js"
           test -s "$RUNNER_TEMP/bytecode-probe.jsc"
