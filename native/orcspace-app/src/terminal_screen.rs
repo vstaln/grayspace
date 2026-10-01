@@ -81,14 +81,21 @@ impl TerminalScreen {
     fn caret_rect(painter: &egui::Painter, origin: Pos2, font_size: f32) -> Rect {
         // The row contains font leading below the visible capitals. Centering
         // on that row shifts the caret down relative to a shell prompt.
+        // Use the same capital-glyph metrics as the terminal row.  The pipe
+        // glyph has platform-specific descender/leading bounds and can make
+        // the caret visibly lower on Linux than the prompt it accompanies.
         let reference =
-            painter.layout_no_wrap("|".into(), FontId::monospace(font_size), Color32::WHITE);
+            painter.layout_no_wrap("M".into(), FontId::monospace(font_size), Color32::WHITE);
         let ink = reference.mesh_bounds;
         let scale = painter.ctx().pixels_per_point();
         let snap = |value: f32| (value * scale).round() / scale;
+        let padding = 3.0 / scale;
         Rect::from_min_max(
-            Pos2::new(snap(origin.x), snap(origin.y + ink.top())),
-            Pos2::new(snap(origin.x) + 1.0 / scale, snap(origin.y + ink.bottom())),
+            Pos2::new(snap(origin.x), snap(origin.y + ink.top() - padding)),
+            Pos2::new(
+                snap(origin.x) + 1.0 / scale,
+                snap(origin.y + ink.bottom() + padding),
+            ),
         )
     }
 
