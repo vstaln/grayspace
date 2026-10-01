@@ -157,10 +157,11 @@ export function samePath(a: string, b: string): boolean {
 
 /** Claude Code names a project folder after the path, with every other character replaced. */
 export function claudeProjectSlug(dir: string): string {
-  // `resolve('')` is the process's own directory, which would quietly scan a
-  // folder nobody asked about.
-  if (!dir.trim()) return ''
-  return resolve(dir).replace(/[\\/]+$/, '').replace(/[^A-Za-z0-9]/g, '-')
+  // Keep the provider's spelling intact before flattening it. Resolving here
+  // makes a Windows path passed by a cross-platform indexer look like a child
+  // of the runner's current directory on Linux, producing the wrong slug.
+  const value = dir.trim().replace(/[\\/]+$/, '')
+  return value.replace(/[^A-Za-z0-9]/g, '-')
 }
 
 /**
@@ -169,8 +170,8 @@ export function claudeProjectSlug(dir: string): string {
  * named in Cyrillic (or any non-Latin script) from silently having no history.
  */
 export function claudeProjectSlugUnicode(dir: string): string {
-  if (!dir.trim()) return ''
-  return resolve(dir).replace(/[\\/]+$/, '').replace(/[^\p{L}\p{N}]/gu, '-')
+  const value = dir.trim().replace(/[\\/]+$/, '')
+  return value.replace(/[^\p{L}\p{N}]/gu, '-')
 }
 
 /** Exported for tests; every caller here goes through a provider. */

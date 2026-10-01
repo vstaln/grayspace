@@ -214,7 +214,10 @@ export function readJsonFile<T>(file: string): JsonRead<T> {
   try {
     text = fs.readFileSync(file, 'utf8')
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { ok: false, error: 'missing' }
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EACCES' || code === 'EPERM') {
+      return { ok: false, error: 'missing' }
+    }
 
 
     console.error(`cannot read store file ${file}:`, err)

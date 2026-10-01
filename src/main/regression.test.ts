@@ -140,7 +140,8 @@ describe('Regression — concurrent IPC stress', () => {
     const results = await Promise.all(
       Array.from({ length: N }, (_, i) => {
         const p = join(tmp, `f${i}.txt`)
-        return core.flow.submit({ actorId: 'user', type: 'file.write', target: `file:${p.toLowerCase()}`, payload: { path: p, content: `hello ${i}` } })
+        const targetPath = process.platform === 'win32' ? p.toLowerCase() : p
+        return core.flow.submit({ actorId: 'user', type: 'file.write', target: `file:${targetPath}`, payload: { path: p, content: `hello ${i}` } })
       })
     )
     const ok = results.filter((r) => r.ok).length
