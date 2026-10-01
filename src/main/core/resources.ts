@@ -27,14 +27,24 @@ export function resourceId(scheme: ResourceScheme, id: string): ResourceId {
 
 
 
+/** Normalize equivalent Windows spellings while preserving POSIX path case. */
 export function fileResource(path: string): ResourceId {
-  const unified = path.replace(/\\/g, '/').replace(/\/+$/, '')
-  const withDrive = /^[a-z]:\//i.test(unified) ? unified[0].toUpperCase() + unified.slice(1) : unified
-
-
-  const slash = withDrive.indexOf('/')
-  const normalized =
-    slash >= 0 ? withDrive.slice(0, slash + 1) + withDrive.slice(slash + 1).toLowerCase() : withDrive.toLowerCase()
+  const unified = path.replace(/\\/g, '/')
+  const drive = /^([a-z]:)(.*)$/i.exec(unified)
+  let normalized: string
+  if (drive) {
+    const rest = drive[2].replace(/\/+$/, '')
+    let suffix = rest.toLowerCase()
+    if (rest.startsWith('/')) suffix = `/${rest.slice(1).toLowerCase()}`
+    if (!rest && drive[2].startsWith('/')) suffix = '/'
+    normalized = `${drive[1][0].toUpperCase()}:${suffix}`
+  } else if (unified.startsWith('//')) {
+    normalized = unified.replace(/\/+$/, '').toLowerCase() || '//'
+  } else if (unified.startsWith('/')) {
+    normalized = unified.replace(/\/+$/, '') || '/'
+  } else {
+    normalized = unified.replace(/\/+$/, '')
+  }
   return resourceId('file', normalized)
 }
 

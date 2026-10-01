@@ -20,7 +20,7 @@ export interface CodeSession {
   status?: 'active' | 'finished'
 }
 
-export type WorkView = 'canvas' | 'code'
+export type WorkView = 'canvas' | 'code' | 'overview'
 
 export interface CodeSnapshot {
   workspaceScope?: string
@@ -57,7 +57,7 @@ function sanitizeSession(raw: unknown): CodeSession | null {
 }
 
 function isWorkView(v: unknown): v is WorkView {
-  return v === 'canvas' || v === 'code'
+  return v === 'canvas' || v === 'code' || v === 'overview'
 }
 
 function sanitizeSnapshot(raw: Record<string, unknown>): CodeSnapshot {

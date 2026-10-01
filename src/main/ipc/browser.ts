@@ -1,5 +1,6 @@
 import { ipcMain, session } from './shims.ts'
 import type { IpcDeps } from './types.ts'
+import { resolveBrowserAgentAction } from '../browserAutomation.ts'
 
 const BROWSER_PARTITION = 'persist:orcspace-browser'
 
@@ -7,6 +8,13 @@ const BROWSER_PARTITION = 'persist:orcspace-browser'
 
 
 export function registerBrowserIpc(_deps: IpcDeps): void {
+  ipcMain.handle('browser:agent-response', (_event, requestId: unknown, response: unknown) => {
+    if (typeof requestId !== 'string') return { error: 'invalid browser request id' }
+    return resolveBrowserAgentAction(requestId, response)
+      ? { ok: true as const }
+      : { error: 'browser request expired or unknown' }
+  })
+
   ipcMain.handle('browser:clear-data', async () => {
     try {
       if (session && typeof session.fromPartition === 'function') {

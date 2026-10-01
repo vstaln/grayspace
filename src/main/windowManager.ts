@@ -323,7 +323,7 @@ export function setupWebContentsHandlers(sendFn: (channel: string, ...args: unkn
             popupOpenAt.push(now)
             lastOpenTime = now
             lastOpenUrl = url
-            sendFn('browser:onOpenTab', url)
+            sendFn('browser:onOpenTab', { url, sourceWebContentsId: contents.id })
           }
         }
       } catch {

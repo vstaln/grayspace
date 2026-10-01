@@ -4,7 +4,7 @@
 //! exact fields and status codes rather than on "something succeeded". A
 //! renamed field or a changed status is a breaking change for every agent.
 
-use orcspace_app::http::{route, Request, RouteDeps, Response};
+use orcspace_app::http::{route, Request, Response, RouteDeps};
 use orcspace_app::orchestration::OrchestrationStore;
 use serde_json::{json, Value};
 
@@ -16,7 +16,9 @@ struct Server {
 
 impl Server {
     fn new() -> Self {
-        Self { store: OrchestrationStore::new() }
+        Self {
+            store: OrchestrationStore::new(),
+        }
     }
 
     fn call(&mut self, request: Request) -> Response {
@@ -26,7 +28,10 @@ impl Server {
             workspace_dir: Some("C:/work"),
             now: NOW,
         };
-        route(&request, &mut deps).unwrap_or(Response { status: 404, body: json!({ "error": "not found" }) })
+        route(&request, &mut deps).unwrap_or(Response {
+            status: 404,
+            body: json!({ "error": "not found" }),
+        })
     }
 
     /// Seeds a run and returns its id.
@@ -72,7 +77,10 @@ fn the_root_path_is_health_too() {
 #[test]
 fn an_unrouted_path_is_a_404() {
     let mut server = Server::new();
-    assert_eq!(server.call(Request::get("GET", "/nothing/here")).status, 404);
+    assert_eq!(
+        server.call(Request::get("GET", "/nothing/here")).status,
+        404
+    );
 }
 
 // --- runs -------------------------------------------------------------------
@@ -99,12 +107,14 @@ fn creating_a_run_answers_201_with_the_accepted_envelope() {
 #[test]
 fn a_run_without_an_objective_is_refused_as_invalid() {
     let mut server = Server::new();
-    let response = server.call(
-        Request::get("POST", "/orchestration/runs").with_body(json!({ "objective": "  " })),
-    );
+    let response = server
+        .call(Request::get("POST", "/orchestration/runs").with_body(json!({ "objective": "  " })));
     assert_eq!(response.status, 400);
     assert_eq!(response.body["code"], json!("invalid"));
-    assert!(response.body["error"].as_str().unwrap().contains("objective"));
+    assert!(response.body["error"]
+        .as_str()
+        .unwrap()
+        .contains("objective"));
 }
 
 #[test]
@@ -170,9 +180,8 @@ fn a_task_with_no_open_run_is_refused() {
 fn an_unknown_task_status_filter_is_refused_before_listing() {
     let mut server = Server::new();
     server.run();
-    let response = server.call(
-        Request::get("GET", "/orchestration/tasks").with_query("status", "teleported"),
-    );
+    let response =
+        server.call(Request::get("GET", "/orchestration/tasks").with_query("status", "teleported"));
     assert_eq!(response.status, 400);
     assert_eq!(response.body["code"], json!("invalid"));
 }
@@ -251,7 +260,10 @@ fn settling_reports_the_task_status_and_what_it_promoted() {
             .with_body(json!({ "spec": "second", "deps": [first.clone()] }))
             .as_agent("alice"),
     );
-    let second = second_response.body["data"]["id"].as_str().unwrap().to_owned();
+    let second = second_response.body["data"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     let dispatch = server.call(
         Request::get("POST", "/orchestration/dispatches")
@@ -260,8 +272,11 @@ fn settling_reports_the_task_status_and_what_it_promoted() {
     let dispatch_id = dispatch.body["data"]["id"].as_str().unwrap().to_owned();
 
     let settled = server.call(
-        Request::get("POST", &format!("/orchestration/dispatches/{dispatch_id}/settle"))
-            .with_body(json!({ "outcome": "succeeded" })),
+        Request::get(
+            "POST",
+            &format!("/orchestration/dispatches/{dispatch_id}/settle"),
+        )
+        .with_body(json!({ "outcome": "succeeded" })),
     );
     assert_eq!(settled.status, 200);
     assert_eq!(settled.body["data"]["status"], json!("completed"));
@@ -371,12 +386,17 @@ fn replies_report_null_until_one_is_sent() {
     let run = server.run();
     let ask = server.call(
         Request::get("POST", "/orchestration/messages")
-            .with_body(json!({ "runId": run, "type": "ask", "to": "alice", "subject": "q", "body": "?" }))
+            .with_body(
+                json!({ "runId": run, "type": "ask", "to": "alice", "subject": "q", "body": "?" }),
+            )
             .as_agent("worker"),
     );
     let ask_id = ask.body["data"]["id"].as_str().unwrap().to_owned();
 
-    let pending = server.call(Request::get("GET", &format!("/orchestration/replies/{ask_id}")));
+    let pending = server.call(Request::get(
+        "GET",
+        &format!("/orchestration/replies/{ask_id}"),
+    ));
     assert_eq!(pending.status, 200);
     assert_eq!(pending.body["reply"], Value::Null);
 
@@ -410,7 +430,10 @@ fn a_gate_can_be_opened_listed_and_resolved_once() {
         Request::get("POST", &format!("/orchestration/gates/{id}/resolve"))
             .with_body(json!({ "resolution": "no" })),
     );
-    assert_eq!(again.status, 409, "a resolved gate cannot be reopened by resolving it again");
+    assert_eq!(
+        again.status, 409,
+        "a resolved gate cannot be reopened by resolving it again"
+    );
 }
 
 #[test]
@@ -433,7 +456,10 @@ fn a_percent_encoded_id_is_decoded() {
     let mut server = Server::new();
     let id = server.run();
     let encoded = id.replace('-', "%2D");
-    let response = server.call(Request::get("GET", &format!("/orchestration/runs/{encoded}")));
+    let response = server.call(Request::get(
+        "GET",
+        &format!("/orchestration/runs/{encoded}"),
+    ));
     assert_eq!(response.status, 200);
     assert_eq!(response.body["run"]["id"], json!(id));
 }
@@ -511,14 +537,21 @@ mod cli_to_router {
 
         // The worker reports, which completes the task and unblocks the next.
         let settled = server.call(
-            Request::get("POST", &format!("/orchestration/dispatches/{dispatch_id}/settle"))
-                .with_body(json!({ "outcome": "succeeded" })),
+            Request::get(
+                "POST",
+                &format!("/orchestration/dispatches/{dispatch_id}/settle"),
+            )
+            .with_body(json!({ "outcome": "succeeded" })),
         );
         assert_eq!(settled.status, 200);
         assert_eq!(settled.body["data"]["promoted"], json!([second_id]));
 
         // The coordinator accounts for the finished worker.
-        let released = run_cli(&mut server, &format!("worker-release {dispatch_id}"), "alice");
+        let released = run_cli(
+            &mut server,
+            &format!("worker-release {dispatch_id}"),
+            "alice",
+        );
         assert_eq!(released.status, 200);
         assert_eq!(released.body["data"]["state"], json!("released"));
 
@@ -538,13 +571,19 @@ mod cli_to_router {
 
         // The ask went to nobody in particular, so it is not in alice's inbox;
         // a reply to it is still findable by id.
-        let pending = server.call(Request::get("GET", &format!("/orchestration/replies/{ask_id}")));
+        let pending = server.call(Request::get(
+            "GET",
+            &format!("/orchestration/replies/{ask_id}"),
+        ));
         assert_eq!(pending.body["reply"], Value::Null);
 
         let replied = run_cli(&mut server, &format!("reply {ask_id} left"), "alice");
         assert_eq!(replied.status, 201, "{:?}", replied.body);
 
-        let answered = server.call(Request::get("GET", &format!("/orchestration/replies/{ask_id}")));
+        let answered = server.call(Request::get(
+            "GET",
+            &format!("/orchestration/replies/{ask_id}"),
+        ));
         assert_eq!(answered.body["reply"]["body"], json!("left"));
         assert_eq!(answered.body["reply"]["replyTo"], json!(ask_id));
     }
@@ -562,7 +601,11 @@ mod cli_to_router {
         let id = asked.body["data"]["id"].as_str().unwrap().to_owned();
         assert_eq!(asked.body["data"]["subject"], json!("permission_request"));
 
-        let denied = run_cli(&mut server, &format!("deny {id} --reason too-risky"), "alice");
+        let denied = run_cli(
+            &mut server,
+            &format!("deny {id} --reason too-risky"),
+            "alice",
+        );
         assert_eq!(denied.status, 201);
         assert_eq!(denied.body["data"]["body"], json!("too-risky"));
         assert_eq!(denied.body["data"]["replyTo"], json!(id));

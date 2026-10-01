@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, ArrowDownToLine, Check, Loader2, RotateCw } from 'lucide-react'
+import { AlertCircle, ArrowDownToLine, Check, ExternalLink, Loader2, RotateCw } from 'lucide-react'
 import type { AppUpdateState } from '../../../preload/api'
 import { UpdateCurtain } from './UpdateCurtain'
 
@@ -17,7 +17,7 @@ const installCurve = (elapsed: number): number => {
  * Statuses that only a click can move on from, so there is nothing to poll
  * for while the app sits in one of them.
  */
-const SETTLED_STATUS = new Set<AppUpdateState['status']>(['disabled', 'idle', 'current', 'error'])
+const SETTLED_STATUS = new Set<AppUpdateState['status']>(['disabled', 'idle', 'current', 'available', 'error'])
 
 /** Field-by-field, because each poll answer arrives as a fresh object. */
 function sameUpdateState(a: AppUpdateState | null, b: AppUpdateState): boolean {
@@ -91,6 +91,9 @@ export function AppUpdates(): React.JSX.Element {
         await window.api.settings.installUpdate()
         if (!mountedRef.current) return
         setState(await window.api.settings.updateState())
+      } else if (state?.status === 'available') {
+        // Manual installs: the main process opens the release page.
+        await window.api.settings.installUpdate()
       } else {
         const next = await window.api.settings.checkUpdates()
         if (!mountedRef.current) return
@@ -110,6 +113,7 @@ export function AppUpdates(): React.JSX.Element {
   const headline = error ? 'Update failed'
     : status === 'checking' ? 'Checking for updates…'
     : status === 'downloading' ? `Downloading ${state?.version ?? 'the update'}`
+    : status === 'available' ? `Version ${state?.version} is available`
     : status === 'ready' ? `Version ${state?.version} is ready`
     : status === 'installing' ? 'Restarting to install…'
     : status === 'current' ? 'You are up to date'
@@ -122,11 +126,12 @@ export function AppUpdates(): React.JSX.Element {
     : status === 'checking' || status === 'installing' ? ''
     : 'Check and download the latest version.')
   const tone: Tone = error || status === 'error' ? 'danger'
-    : status === 'ready' ? 'accent'
+    : status === 'ready' || status === 'available' ? 'accent'
     : status === 'current' ? 'ok' : 'plain'
   const icon = working ? <Loader2 size={15} className="animate-spin" aria-hidden />
     : error || status === 'error' ? <AlertCircle size={15} aria-hidden />
     : status === 'ready' ? <ArrowDownToLine size={15} aria-hidden />
+    : status === 'available' ? <ExternalLink size={15} aria-hidden />
     : status === 'current' ? <Check size={15} aria-hidden />
     : <RotateCw size={15} aria-hidden />
   const disabled = busy || !state || !status || ['disabled', 'checking', 'downloading', 'installing'].includes(status)
@@ -154,12 +159,14 @@ export function AppUpdates(): React.JSX.Element {
       )}
       <button type="button"
         className={`flex min-h-[34px] items-center justify-center gap-1.5 self-start rounded-panel px-3.5 py-1.5 text-xs font-medium transition-colors duration-150 disabled:cursor-default disabled:opacity-40 ${
-          status === 'ready' ? 'bg-accent text-bg hover:opacity-90' : 'border border-line-soft text-text hover:bg-bg-hover'
+          status === 'ready' || status === 'available' ? 'bg-accent text-bg hover:opacity-90' : 'border border-line-soft text-text hover:bg-bg-hover'
         }`}
         disabled={disabled}
         onClick={() => void act()}>
-        {status === 'ready' ? <ArrowDownToLine size={13} aria-hidden /> : <RotateCw size={13} className={working ? 'animate-spin' : ''} aria-hidden />}
-        {status === 'ready' ? 'Restart and install' : status === 'error' || error ? 'Try again' : 'Check for updates'}
+        {status === 'ready' ? <ArrowDownToLine size={13} aria-hidden />
+          : status === 'available' ? <ExternalLink size={13} aria-hidden />
+          : <RotateCw size={13} className={working ? 'animate-spin' : ''} aria-hidden />}
+        {status === 'ready' ? 'Restart and install' : status === 'available' ? 'Download update' : status === 'error' || error ? 'Try again' : 'Check for updates'}
       </button>
     </div>
     {curtain && <UpdateCurtain percent={curtain.percent} label={`Updating OrcSpace${state?.version ? ` to ${state.version}` : ''}`} />}

@@ -63,8 +63,8 @@ describe('TerminalStreamBatcher (Frame Batching & High-Throughput Protection)', 
     batcher.dispose()
   })
 
-  test('accounts multibyte output in bytes without splitting surrogates', () => {
-    const batcher = new TerminalStreamBatcher({ frameIntervalMs: 10_000, maxBatchBytes: 1_000_000, maxPendingBytes: 100 })
+  test('preserves multibyte output without splitting surrogate pairs', () => {
+    const batcher = new TerminalStreamBatcher({ frameIntervalMs: 10_000, maxBatchBytes: 1_000_000 })
     const batches: Array<{ id: string; chunk: string }> = []
     batcher.on('batch', (id, chunk) => {
       batches.push({ id, chunk })
@@ -73,38 +73,31 @@ describe('TerminalStreamBatcher (Frame Batching & High-Throughput Protection)', 
     batcher.push('term-3', '😀'.repeat(100))
     batcher.flush('term-3')
     assert.equal(batches.length, 1)
-    const prefix = '\x18\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l' +
-      '\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?2026l\x1b[?25h\x1b[0m'
-    const payload = batches[0].chunk.startsWith(prefix) ? batches[0].chunk.slice(prefix.length) : batches[0].chunk
-    assert.ok(Buffer.byteLength(payload, 'utf8') <= 100)
-    assert.ok(!/[\ud800-\udbff]$/.test(payload))
-    assert.ok(!/^[\udc00-\udfff]/.test(payload))
+    assert.equal(batches[0].chunk, '😀'.repeat(100))
+    assert.ok(!/[\ud800-\udbff]$/.test(batches[0].chunk))
+    assert.ok(!/^[\udc00-\udfff]/.test(batches[0].chunk))
 
     batcher.dispose()
   })
 
-  test('prefixes a resync marker when pressure drops the oldest chunks', () => {
-    const batcher = new TerminalStreamBatcher({ frameIntervalMs: 10_000, maxBatchBytes: 1_000_000, maxPendingBytes: 10 })
+  test('preserves ordered output above the former pending limit', () => {
+    const batcher = new TerminalStreamBatcher({ frameIntervalMs: 10_000, maxBatchBytes: 1_000_000 })
     const batches: Array<{ id: string; chunk: string }> = []
     batcher.on('batch', (id, chunk) => {
       batches.push({ id, chunk })
     })
 
-    batcher.push('term-9', 'aaaaaaaaaa')
-    batcher.push('term-9', 'bbbbbbbbbb')
+    batcher.push('term-9', 'a'.repeat(300_000))
+    batcher.push('term-9', 'b'.repeat(300_000))
     batcher.flush('term-9')
 
     assert.equal(batches.length, 1)
-    assert.ok(batches[0].chunk.startsWith('\x18\x1b[?9l\x1b[?1000l'))
-    assert.ok(batches[0].chunk.includes('\x1b[?1006l'))
-    assert.ok(batches[0].chunk.includes('\x1b[?2026l'))
-    assert.ok(batches[0].chunk.includes('bbbbbbbbbb'))
-    assert.ok(!batches[0].chunk.includes('a'))
+    assert.equal(batches[0].chunk, 'a'.repeat(300_000) + 'b'.repeat(300_000))
 
     batcher.dispose()
   })
 
-  test('emits no resync marker when nothing was dropped', () => {
+  test('emits output unchanged', () => {
     const batcher = new TerminalStreamBatcher({ frameIntervalMs: 10_000 })
     const batches: Array<{ id: string; chunk: string }> = []
     batcher.on('batch', (id, chunk) => {

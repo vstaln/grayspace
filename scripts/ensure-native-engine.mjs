@@ -6,18 +6,31 @@ const binary = process.platform === 'win32'
   ? 'native/target/release/orcspace.exe'
   : 'native/target/release/orcspace'
 
-function newestSource(dir) {
+function newestInput(path) {
+  if (!existsSync(path)) return 0
+  const info = statSync(path)
+  if (!info.isDirectory()) return info.mtimeMs
+
   let newest = 0
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name)
-    if (entry.isDirectory()) newest = Math.max(newest, newestSource(path))
-    else newest = Math.max(newest, statSync(path).mtimeMs)
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    newest = Math.max(newest, newestInput(join(path, entry.name)))
   }
   return newest
 }
 
 const binaryMtime = existsSync(binary) ? statSync(binary).mtimeMs : 0
-if (binaryMtime >= newestSource('native/orcspace-app/src')) process.exit(0)
+const buildInputs = [
+  'native/Cargo.toml',
+  'native/Cargo.lock',
+  'native/orcspace-app/Cargo.toml',
+  'native/orcspace-app/build.rs',
+  'native/orcspace-app/src',
+  // portable-pty is patched in from this vendored tree, so changes here also
+  // change the engine even when the app's own Rust sources are untouched.
+  'native/vendor/portable-pty'
+]
+const newestBuildInput = Math.max(...buildInputs.map(newestInput))
+if (binaryMtime >= newestBuildInput) process.exit(0)
 
 const result = spawnSync(
   process.execPath,

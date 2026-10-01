@@ -34,7 +34,7 @@ export const timerPersist = {
           remaining,
           running: true,
           deadline: parsed.deadline,
-          rang: false,
+          rang: Boolean(parsed.rang),
           isCustom: Boolean(parsed.isCustom),
           customHours: typeof parsed.customHours === 'string' ? parsed.customHours : '0',
           customMinutes: typeof parsed.customMinutes === 'string' ? parsed.customMinutes : '25',

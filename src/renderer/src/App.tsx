@@ -14,11 +14,13 @@ import ConnectionsLayer from './components/ConnectionsLayer'
 import { ThemeProvider, useTheme, wallpaperBackgroundImage } from './theme'
 import { ConfirmProvider, useConfirm } from './components/ConfirmDialog'
 import { useSettings } from './hooks/useSettings'
+import { useAutoApprovePermissions } from './hooks/useAutoApprovePermissions'
 import { DRAW_CLICK_THRESHOLD_PX } from './lib/canvasMetrics'
 import { arrangeWidgets, isArrangeMode, type ArrangeMode } from './lib/canvasLayout'
 import { isCodeLayoutMode, type CodeLayoutMode } from './lib/codeLayout'
 import { ToastContainer, usePersistErrorToasts, useTerminalBackendErrorToasts, useToasts } from './components/Toast'
 import Toolbar from './components/Toolbar'
+import StatusBar from './components/StatusBar'
 import { queueInitialCommand } from './lib/pendingTerminalCommands'
 import { fitCameraToRect, zoomCameraAt, zoomCameraBy } from './lib/canvasCamera'
 import {
@@ -30,6 +32,7 @@ import {
   type ZoomAdaptationState
 } from './lib/responsiveCanvasZoom'
 import { DEFAULT_IMAGE_INSERT_SHORTCUT, matchesShortcut } from './lib/keyboardShortcut'
+import { isBrowserMounted, isCodeBrowserGuest } from './lib/mountedBrowsers'
 
 
 
@@ -177,6 +180,8 @@ export default function App(): React.JSX.Element {
         if (av === 'code') {
           setCodeStarted(true)
           setActiveView('code')
+        } else if (av === 'overview') {
+          setActiveView('overview')
         } else if (av === 'browser') {
 
           setActiveView('canvas')
@@ -244,6 +249,8 @@ export default function App(): React.JSX.Element {
   const { toasts, push, dismiss } = useToasts()
   usePersistErrorToasts(push)
   useTerminalBackendErrorToasts(push)
+  const { settings: appSettings } = useSettings()
+  useAutoApprovePermissions(appSettings.autoApprovePermissions ?? false)
 
   return (
     <ErrorBoundary>
@@ -286,6 +293,7 @@ export default function App(): React.JSX.Element {
               </ErrorBoundary>
             )}
             <ToastContainer toasts={toasts} onDismiss={dismiss} />
+            <StatusBar />
           </div>
         </ConfirmProvider>
       </ThemeProvider>
@@ -769,13 +777,8 @@ function OrcSpaceCanvas({
     if (id && kind === 'terminal' && initialCommand) queueInitialCommand(id, initialCommand)
   }, [mainSize.h, mainSize.w, placeWidget, toWorld])
 
-  // A link opened with target=_blank or window.open() inside any <webview>
-  // (main.ts denies the new window and rebroadcasts the URL instead — see
-  // windowManager.ts) used to have no listener at all: the click did
-  // nothing. This is the destination — open it the way a new browser tab
-  // would, as a fresh browser widget seeded with the URL. The broadcast
-  // isn't scoped to a widget id, so a new widget (rather than guessing
-  // which existing one to target) is the only option that is always right.
+  // Popups from Canvas browsers open a new canvas widget. Code browsers own
+  // their popups and navigate their existing webview instead.
   useEffect(() => {
     // The URL on this channel comes from a page inside a <webview>: any site
     // calling window.open() reaches here, and every arrival used to mint a
@@ -788,7 +791,8 @@ function OrcSpaceCanvas({
     const openedAt: number[] = []
     const OPEN_WINDOW_MS = 5_000
     const MAX_OPENS_PER_WINDOW = 3
-    return window.api.browser.onOpenTab((url) => {
+    return window.api.browser.onOpenTab(({ url, sourceWebContentsId }) => {
+      if (isCodeBrowserGuest(sourceWebContentsId)) return
       const now = Date.now()
       while (openedAt.length > 0 && now - openedAt[0] > OPEN_WINDOW_MS) openedAt.shift()
       if (openedAt.length >= MAX_OPENS_PER_WINDOW) {
@@ -1595,7 +1599,14 @@ function OrcSpaceCanvas({
   }, [])
 
   const deliverWhenMounted = useCallback(
-    (widgetId: string, deliver: () => void, onDelivered: () => void, onFailed: () => void): void => {
+    (
+      widgetId: string,
+      deliver: () => void,
+      onDelivered: () => void,
+      onFailed: () => void,
+      isMounted: (id: string) => boolean = (id) => widgetsRef.current.some((w) => w.id === id),
+      maxAttempts = 10
+    ): void => {
       let attempts = 0
       const stop = (timer: number): void => {
         window.clearInterval(timer)
@@ -1603,11 +1614,11 @@ function OrcSpaceCanvas({
       }
       const timer = window.setInterval(() => {
         attempts += 1
-        if (widgetsRef.current.some((w) => w.id === widgetId)) {
+        if (isMounted(widgetId)) {
           stop(timer)
           deliver()
           onDelivered()
-        } else if (attempts >= 10) {
+        } else if (attempts >= maxAttempts) {
           stop(timer)
           onFailed()
         }
@@ -1631,6 +1642,23 @@ function OrcSpaceCanvas({
         })),
         () => setCanvasNotice(`Opened "${name}"`),
         () => setCanvasNotice(`Failed to open "${name}"`)
+      )
+    })
+  }, [deliverWhenMounted])
+
+  useEffect(() => {
+    return window.api.browser.onAgentAction(({ requestId, widgetId, action }) => {
+      deliverWhenMounted(
+        widgetId,
+        () => window.dispatchEvent(new CustomEvent('orcspace:browser-agent-action', {
+          detail: { requestId, widgetId, action }
+        })),
+        () => {},
+        () => { void window.api.browser.respond(requestId, { ok: false, error: 'browser widget did not mount' }) },
+        // Code browsers are not canvas widgets; ask the views themselves. A
+        // browser just opened in Code needs a moment longer to mount.
+        isBrowserMounted,
+        30
       )
     })
   }, [deliverWhenMounted])
@@ -1903,7 +1931,7 @@ function OrcSpaceCanvas({
 }
           <ConnectionsLayer connections={connections} widgets={widgets} />
         </div>
-        <StrokesLayer strokes={strokes} camera={camera} width={mainSize.w} height={mainSize.h} />
+        {strokes.length > 0 && <StrokesLayer strokes={strokes} camera={camera} width={mainSize.w} height={mainSize.h} />}
           {widgets.length === 0 && strokes.length === 0 && (
           <div
             className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center"
@@ -2014,6 +2042,9 @@ function OrcSpaceCanvas({
             onPickLinks={() => { placeWidget('links', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickMusicPlayer={() => { placeWidget('music-player', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickChat={() => { placeWidget('chat', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onPickNotes={() => { placeWidget('notes', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onPickCalendar={() => { placeWidget('calendar', toWorld(menu.x, menu.y)); setMenu(null) }}
+            onPickKanban={() => { placeWidget('kanban', toWorld(menu.x, menu.y)); setMenu(null) }}
             favoriteWidgets={settings.favoriteWidgets ?? []}
             onClose={() => setMenu(null)}
           />

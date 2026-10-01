@@ -4,16 +4,19 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use orcspace_app::platform::{
+    interrupt_process_tree, kill_process_tree, prime_conpty_handshake,
+    shell_arguments as windows_utf8_shell_args, shell_command,
+};
+use orcspace_app::queue::ActorRateLimiter;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
-use orcspace_app::queue::ActorRateLimiter;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fs,
     io::{Read, Write},
     path::{Path as FsPath, PathBuf},
-
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         mpsc, Arc, Condvar, Mutex, Weak,
@@ -38,10 +41,8 @@ const MAX_SCROLLBACK: usize = 1_000_000;
 const SCROLLBACK_SLACK: usize = 256 * 1024;
 const TOKEN_HEADER: &str = "x-orcspace-token";
 /// Ceiling for output that has been read from the PTYs but not yet handed to
-/// the app. Only reached when the consumer stalls; past it the oldest output
-/// is dropped (already stale for a live view) so a chatty agent can never
-/// grow the engine without bound. Exit events are never dropped — losing one
-/// leaves a widget waiting forever on a session that already ended.
+/// the app. When it is reached, the PTY reader waits here; the OS PTY buffer
+/// then provides backpressure instead of deleting live terminal bytes.
 const MAX_PENDING_EVENT_BYTES: usize = 8 * 1024 * 1024;
 /// Ceiling for input queued for one terminal's writer thread. Writes are
 /// handed over without waiting (see `enqueue_input`), so this is what keeps a
@@ -49,8 +50,6 @@ const MAX_PENDING_EVENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PENDING_INPUT_BYTES: usize = 1024 * 1024;
 const MAX_HTTP_BODY_BYTES: usize = 2 * 1024 * 1024;
 const SUBMIT_GAP: Duration = Duration::from_millis(200);
-/// DSR cursor-position report for row 1, column 1 — a fresh PTY's cursor.
-const CONPTY_CURSOR_REPORT: &[u8] = b"\x1b[1;1R";
 /// How long a single write into a PTY may stay in flight before the terminal
 /// is treated as no longer reading its input.
 ///
@@ -69,11 +68,6 @@ const INTERRUPT_BYTE: u8 = 0x03;
 /// bulk input that happens to contain the byte. A keystroke is one byte; a
 /// pasted file is not allowed to buy itself an exemption from the queue cap.
 const MAX_INTERRUPT_INPUT_BYTES: usize = 8;
-/// Invisible SGR reset prepended to the first output after a drop: dropping
-/// can cut an escape sequence in half, and without the reset the truncated
-/// sequence bleeds styles into (or swallows) everything after it.
-const RESYNC_PREFIX: &str = "\u{1b}[0m";
-
 /// Take a lock, ignoring poisoning.
 ///
 /// Every lock in this file used to be taken with either `.expect(..)` or
@@ -88,7 +82,9 @@ const RESYNC_PREFIX: &str = "\u{1b}[0m";
 /// leaves any of them in a state the code below cannot handle. Carrying on
 /// with the recovered value is strictly better than either alternative.
 fn lock_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[derive(Clone, Debug)]
@@ -106,6 +102,9 @@ struct Inner {
     events_ready: Condvar,
     token: String,
     control_socket: Mutex<Option<String>>,
+    /// Terminal id to the name the UI shows and `orc` addresses. One map, so
+    /// a terminal cannot be called one thing on screen and another on the CLI.
+    names: Mutex<HashMap<String, String>>,
 }
 
 #[derive(Debug, Default)]
@@ -113,14 +112,9 @@ struct EventQueue {
     notified: bool,
     items: VecDeque<TerminalEvent>,
     bytes: usize,
-    /// Terminal ids that had output dropped or trimmed under pressure.
-    /// Consumed by the next drain, which prefixes a resync reset onto the
-    /// first Output event for each affected id — and only that id. A single
-    /// shared flag here used to mean whichever terminal happened to produce
-    /// the first Output event in a batch got the reset while the terminal
-    /// that actually lost data did not, leaving it to keep rendering with
-    /// whatever ANSI state a truncated escape sequence left it in.
-    dropped: std::collections::HashSet<String>,
+    /// Ids being disposed; a reader blocked on a full queue must wake and stop
+    /// instead of keeping a closed terminal alive forever.
+    stopped: HashSet<String>,
 }
 
 #[derive(Debug)]
@@ -140,6 +134,9 @@ struct TerminalHandle {
     /// Unix-millis timestamp of the write currently in flight, or 0 when the
     /// writer is idle. Read by `enqueue_input` to spot a wedged child.
     writing_since: Arc<AtomicU64>,
+    /// Gate shared with the PTY reader so renderer backpressure can pause OS
+    /// reads. The child then naturally blocks on its PTY output buffer.
+    output_gate: Arc<(Mutex<bool>, Condvar)>,
     /// OS pid of the shell, used to kill the whole process tree on dispose.
     /// `child.kill()` alone only terminates the direct child and leaves
     /// grandchildren (agents, servers) orphaned.
@@ -155,7 +152,10 @@ struct TerminalInput {
 
 #[derive(Debug)]
 enum ControlCommand {
-    Resize { cols: u16, rows: u16 },
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
     /// Ctrl+C on a terminal whose input is already wedged. The byte itself
     /// cannot be typed — it would queue behind the write that is stuck — so
     /// the foreground program is stopped directly instead.
@@ -172,6 +172,9 @@ struct TerminalState {
     output: String,
     alive: bool,
     cwd: String,
+    /// Whether the program running in this terminal has turned on DECSET
+    /// 2004. Only then may a delivery be wrapped as a bracketed paste.
+    bracketed_paste: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -215,8 +218,34 @@ impl TerminalManager {
                 events_ready: Condvar::new(),
                 token,
                 control_socket: Mutex::new(None),
+                names: Mutex::new(HashMap::new()),
             }),
         }
+    }
+
+    pub fn set_name(&self, id: &str, name: &str) {
+        lock_recover(&self.inner.names).insert(id.to_owned(), name.to_owned());
+    }
+
+    pub fn name(&self, id: &str) -> Option<String> {
+        lock_recover(&self.inner.names).get(id).cloned()
+    }
+
+    pub fn names(&self) -> HashMap<String, String> {
+        lock_recover(&self.inner.names).clone()
+    }
+
+    /// Turns whatever a caller typed — an id or a name — into a terminal id.
+    /// Names beat ids in the docs, so `orc tell backend` has to land even
+    /// though nothing is keyed by name.
+    pub fn resolve(&self, target: &str) -> String {
+        if lock_recover(&self.inner.terminals).contains_key(target) {
+            return target.to_owned();
+        }
+        lock_recover(&self.inner.names)
+            .iter()
+            .find(|(_, name)| name.eq_ignore_ascii_case(target))
+            .map_or_else(|| target.to_owned(), |(id, _)| id.clone())
     }
 
     /// Records where the control server is listening, so every terminal this
@@ -230,14 +259,7 @@ impl TerminalManager {
     }
 
     pub fn spawn(&self, id: impl Into<String>) -> Result<(), String> {
-        self.spawn_with_options(
-            id,
-            120,
-            32,
-            None,
-            shell_command(),
-            HashMap::new(),
-        )
+        self.spawn_with_options(id, 120, 32, None, shell_command(), HashMap::new())
     }
 
     pub fn spawn_with_options(
@@ -260,6 +282,7 @@ impl TerminalManager {
                 }
             }
         }
+        allow_terminal_events(&self.inner, &id);
 
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -276,6 +299,9 @@ impl TerminalManager {
             command.arg(arg);
         }
         command.env("TERM", "xterm-256color");
+        command.env_remove("NO_COLOR");
+        command.env("COLORTERM", "truecolor");
+        command.env("TERM_PROGRAM", "OrcSpace");
         command.env("ORCSPACE_TERMINAL_ID", &id);
         command.env("ORCSPACE_AGENT_ID", &id);
         command.env("ORCSPACE_TOKEN", &self.inner.token);
@@ -311,13 +337,19 @@ impl TerminalManager {
         // chiefly this binary's own standalone native-GUI mode, which used
         // to hand the shell an empty environment.
         let lang = std::env::var("LANG").unwrap_or_else(|_| "en_US.UTF-8".to_owned());
-        command.env("LC_ALL", std::env::var("LC_ALL").unwrap_or_else(|_| lang.clone()));
+        command.env(
+            "LC_ALL",
+            std::env::var("LC_ALL").unwrap_or_else(|_| lang.clone()),
+        );
         command.env("LANG", lang);
-        let state_cwd = cwd.clone().or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .and_then(|path| path.to_str().map(str::to_owned))
-        }).unwrap_or_default();
+        let state_cwd = cwd
+            .clone()
+            .or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .and_then(|path| path.to_str().map(str::to_owned))
+            })
+            .unwrap_or_default();
         if let Some(cwd) = cwd {
             command.cwd(cwd);
         } else if let Ok(cwd) = std::env::current_dir() {
@@ -369,6 +401,7 @@ impl TerminalManager {
         let input_guard = Arc::new(Mutex::new(()));
         let pending_input = Arc::new(AtomicUsize::new(0));
         let writing_since = Arc::new(AtomicU64::new(0));
+        let output_gate = Arc::new((Mutex::new(false), Condvar::new()));
         // Two channels, two threads: a write into a PTY blocks for as long as
         // the child refuses to drain it, so the thread that writes must never
         // be the thread that answers a resize, a dispose or an interrupt.
@@ -379,10 +412,21 @@ impl TerminalManager {
         let events = Arc::clone(&self.inner);
         let reader_state = Arc::clone(&state);
         let reader_id = id.clone();
+        let reader_gate = Arc::clone(&output_gate);
+        let startup_input = cfg!(windows).then(|| (input_tx.clone(), Arc::clone(&pending_input)));
 
         if let Err(error) = thread::Builder::new()
             .name(format!("orcspace-pty-reader-{id}"))
-            .spawn(move || read_output(reader, reader_state, events, reader_id))
+            .spawn(move || {
+                read_output(
+                    reader,
+                    reader_state,
+                    events,
+                    reader_id,
+                    startup_input,
+                    reader_gate,
+                )
+            })
         {
             abandon_child!(child, format!("spawn pty reader: {error}"));
         }
@@ -466,6 +510,7 @@ impl TerminalManager {
                     input_guard,
                     pending_input,
                     writing_since,
+                    output_gate,
                     child_pid,
                 },
             );
@@ -477,6 +522,10 @@ impl TerminalManager {
         let handle = lock_recover(&self.inner.terminals)
             .remove(id)
             .ok_or_else(|| format!("unknown terminal {id}"))?;
+        set_output_gate(&handle.output_gate, false);
+        stop_terminal_events(&self.inner, id);
+        // Freeing the name lets the pool hand it to the next terminal.
+        lock_recover(&self.inner.names).remove(id);
         // Kill the whole tree: the actor may be blocked behind a stuck write,
         // and `child.kill()` alone would orphan grandchildren. Killing runs on
         // its own thread because `taskkill` takes ~100ms and this call sits on
@@ -495,7 +544,10 @@ impl TerminalManager {
     }
 
     pub fn dispose_all(&self) {
-        let ids: Vec<String> = lock_recover(&self.inner.terminals).keys().cloned().collect();
+        let ids: Vec<String> = lock_recover(&self.inner.terminals)
+            .keys()
+            .cloned()
+            .collect();
         for id in ids {
             let _ = self.dispose(&id);
         }
@@ -506,12 +558,9 @@ impl TerminalManager {
         self.deliver_input(id, data.to_vec())
     }
 
-    pub fn write_line(&self, id: &str, text: &str) -> Result<DeliveryReceipt, String> {
-        self.write_text(id, text, true)
-    }
-
     pub fn write_message(&self, id: &str, text: &str) -> Result<DeliveryReceipt, String> {
-        let bytes = encode_terminal_message_input(text)?;
+        let bracketed = lock_recover(&self.handle(id)?.state).bracketed_paste;
+        let bytes = encode_terminal_message_input(text, bracketed)?;
         self.write_encoded(id, bytes, true)
     }
 
@@ -537,15 +586,23 @@ impl TerminalManager {
         {
             let _guard = lock_recover(&handle.input_guard);
             if write_in_flight_ms(&handle.writing_since) >= STUCK_WRITE_MS
-                || handle.pending_input.load(Ordering::Acquire).saturating_add(count) > MAX_PENDING_INPUT_BYTES
+                || handle
+                    .pending_input
+                    .load(Ordering::Acquire)
+                    .saturating_add(count)
+                    > MAX_PENDING_INPUT_BYTES
             {
                 return Err(format!("terminal {id} is not reading input"));
             }
-            push_terminal_input(id, &handle, TerminalInput {
-                data: bytes,
-                press_enter,
-                acknowledgement: Some(tx),
-            })?;
+            push_terminal_input(
+                id,
+                &handle,
+                TerminalInput {
+                    data: bytes,
+                    press_enter,
+                    acknowledgement: Some(tx),
+                },
+            )?;
         }
         rx.recv_timeout(Duration::from_secs(5))
             .map_err(|_| format!("terminal {id}: input write not confirmed; delivery is uncertain, do not resend automatically"))??;
@@ -567,6 +624,12 @@ impl TerminalManager {
             .map_err(|_| format!("terminal {id} actor stopped"))
     }
 
+    pub fn set_output_paused(&self, id: &str, paused: bool) -> Result<(), String> {
+        let handle = self.handle(id)?;
+        set_output_gate(&handle.output_gate, paused);
+        Ok(())
+    }
+
     pub fn snapshot(&self, id: &str) -> Result<TerminalSnapshot, String> {
         let handle = self.handle(id)?;
         let state = lock_recover(&handle.state);
@@ -579,16 +642,29 @@ impl TerminalManager {
     }
 
     pub fn snapshots(&self) -> Vec<TerminalSnapshot> {
-        let ids: Vec<String> = lock_recover(&self.inner.terminals).keys().cloned().collect();
+        let mut ids: Vec<String> = lock_recover(&self.inner.terminals)
+            .keys()
+            .cloned()
+            .collect();
+        ids.sort();
         ids.into_iter()
             .filter_map(|id| self.snapshot(&id).ok())
+            .collect()
+    }
+
+    pub fn terminal_ids(&self) -> Vec<String> {
+        lock_recover(&self.inner.terminals)
+            .keys()
+            .cloned()
             .collect()
     }
 
     /// Non-blocking drain, used by the egui frame loop.
     pub fn drain_events(&self) -> Vec<TerminalEvent> {
         let mut queue = lock_recover(&self.inner.events);
-        take_events(&mut queue)
+        let events = take_events(&mut queue);
+        self.inner.events_ready.notify_all();
+        events
     }
 
     /// Blocking drain, used by the headless engine so output is forwarded the
@@ -607,7 +683,9 @@ impl TerminalManager {
             .wait_while(queue, |queue| queue.items.is_empty() && !queue.notified)
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         queue.notified = false;
-        take_events(&mut queue)
+        let events = take_events(&mut queue);
+        self.inner.events_ready.notify_all();
+        events
     }
 
     fn handle(&self, id: &str) -> Result<TerminalHandle, String> {
@@ -620,6 +698,7 @@ impl TerminalManager {
                 input_guard: Arc::clone(&handle.input_guard),
                 pending_input: Arc::clone(&handle.pending_input),
                 writing_since: Arc::clone(&handle.writing_since),
+                output_gate: Arc::clone(&handle.output_gate),
                 child_pid: handle.child_pid,
             })
             .ok_or_else(|| format!("unknown terminal {id}"))
@@ -688,10 +767,22 @@ fn enqueue_input(id: &str, handle: &TerminalHandle, data: Vec<u8>) -> Result<(),
 /// Hand bytes to the writer thread. No capacity check: callers decide whether
 /// this payload is allowed past the queue cap.
 fn push_input(id: &str, handle: &TerminalHandle, data: Vec<u8>) -> Result<(), String> {
-    push_terminal_input(id, handle, TerminalInput { data, press_enter: false, acknowledgement: None })
+    push_terminal_input(
+        id,
+        handle,
+        TerminalInput {
+            data,
+            press_enter: false,
+            acknowledgement: None,
+        },
+    )
 }
 
-fn push_terminal_input(id: &str, handle: &TerminalHandle, input: TerminalInput) -> Result<(), String> {
+fn push_terminal_input(
+    id: &str,
+    handle: &TerminalHandle,
+    input: TerminalInput,
+) -> Result<(), String> {
     let len = input.data.len() + usize::from(input.press_enter);
     handle.pending_input.fetch_add(len, Ordering::AcqRel);
     handle.input_tx.send(input).map_err(|_| {
@@ -706,30 +797,6 @@ fn push_terminal_input(id: &str, handle: &TerminalHandle, input: TerminalInput) 
 /// carry the byte somewhere inside it.
 fn is_interrupt(data: &[u8]) -> bool {
     data.len() <= MAX_INTERRUPT_INPUT_BYTES && data.contains(&INTERRUPT_BYTE)
-}
-
-/// Answer ConPTY's startup cursor-position query before anyone asks.
-///
-/// ConPTY opens a session by emitting a DSR query (`ESC [ 6 n`) and then
-/// holding back *every* byte the shell produces until a terminal answers it.
-/// Our answer used to come from xterm.js: the query travelled engine ->
-/// Electron main -> renderer -> parser, and the reply travelled all the way
-/// back. That round trip waits on the widget being mounted, on the output
-/// batcher, and on any scrollback restore in flight — which is why a terminal
-/// window appeared instantly but sat blank for seconds before the prompt.
-///
-/// A fresh PTY's cursor is at 1;1, so the reply is known up front and is sent
-/// here, before the writer thread even starts. xterm.js still answers the same
-/// query when it parses it; ConPTY's input parser consumes cursor reports and
-/// discards the late duplicate, so the shell never sees it as typed input.
-///
-/// Windows only: on a Unix pty the master has no such handshake and these
-/// bytes would land in the shell's stdin as literal text.
-fn prime_conpty_handshake(writer: &mut Box<dyn Write + Send>) {
-    if !cfg!(windows) {
-        return;
-    }
-    let _ = writer.write_all(CONPTY_CURSOR_REPORT).and_then(|_| writer.flush());
 }
 
 /// The one thread that writes into a PTY.
@@ -762,25 +829,36 @@ fn run_writer(
                 thread::sleep(SUBMIT_GAP.saturating_sub(last.elapsed()));
             }
         }
-        let result = writer.write_all(&input.data).and_then(|_| writer.flush()).and_then(|_| {
-            if input.press_enter {
-                // Delay at the actual writer, after the paste has drained, not
-                // at the caller where a backed-up queue can erase the gap.
-                thread::sleep(SUBMIT_GAP);
-                writer.write_all(b"\r")?;
-                writer.flush()?;
-            }
-            Ok(())
-        });
+        let result = writer
+            .write_all(&input.data)
+            .and_then(|_| writer.flush())
+            .and_then(|_| {
+                if input.press_enter {
+                    // Delay at the actual writer, after the paste has drained, not
+                    // at the caller where a backed-up queue can erase the gap.
+                    thread::sleep(SUBMIT_GAP);
+                    writer.write_all(b"\r")?;
+                    writer.flush()?;
+                }
+                Ok(())
+            });
         last_bulk_write = if input.data.len() > 1 && !input.press_enter {
             Some(Instant::now())
         } else {
             None
         };
         writing_since.store(0, Ordering::Release);
-        pending_input.fetch_sub(input.data.len() + usize::from(input.press_enter), Ordering::AcqRel);
+        pending_input.fetch_sub(
+            input.data.len() + usize::from(input.press_enter),
+            Ordering::AcqRel,
+        );
         if let Some(ack) = input.acknowledgement {
-            let _ = ack.send(result.as_ref().map(|_| ()).map_err(|error| format!("write terminal {id}: {error}")));
+            let _ = ack.send(
+                result
+                    .as_ref()
+                    .map(|_| ())
+                    .map_err(|error| format!("write terminal {id}: {error}")),
+            );
         }
         if let Err(error) = result {
             // A PTY whose writer is broken cannot be typed into again. The
@@ -811,7 +889,7 @@ fn run_actor(
     rx: mpsc::Receiver<ControlCommand>,
     state: Arc<Mutex<TerminalState>>,
     inner: Weak<Inner>,
-    pending_input: Arc<AtomicUsize>,
+    _pending_input: Arc<AtomicUsize>,
     id: String,
     exit_tx: mpsc::Sender<ControlCommand>,
 ) {
@@ -832,11 +910,15 @@ fn run_actor(
         });
     if let Err(error) = &waiter {
         eprintln!("wait terminal {id}: {error}");
-        if let Some(pid) = child_pid { kill_process_tree(pid); }
+        if let Some(pid) = child_pid {
+            kill_process_tree(pid);
+        }
         let _ = killer.kill();
     }
     while waiter.is_ok() {
-        let Ok(command) = rx.recv() else { break; };
+        let Ok(command) = rx.recv() else {
+            break;
+        };
         match command {
             ControlCommand::ChildExited => {
                 natural_exit = true;
@@ -881,13 +963,14 @@ fn run_actor(
     // ClosePseudoConsole may wait for its processes. Stop them before dropping
     // the master, including on a broken writer rather than explicit disposal.
     if !disposed {
-        if let Some(pid) = child_pid { kill_process_tree(pid); }
+        if let Some(pid) = child_pid {
+            kill_process_tree(pid);
+        }
         let _ = killer.kill();
     }
     // Closes the PTY, which ends the reader thread and releases the writer
     // thread if it is still parked inside a write.
     drop(master);
-    pending_input.store(0, Ordering::Release);
     lock_recover(&state).alive = false;
     if !disposed && !natural_exit {
         // The reader thread announces the ordinary end of a session, but it
@@ -901,89 +984,63 @@ fn run_actor(
     }
 }
 
-fn push_event(inner: &Arc<Inner>, event: TerminalEvent) {
-    let mut queue = lock_recover(&inner.events);
-    queue.bytes = queue.bytes.saturating_add(event_bytes(&event));
-    queue.items.push_back(event);
-    // Exit events are never dropped: losing one strands a widget on a session
-    // that already ended. Only stale output goes, oldest first.
-    while queue.bytes > MAX_PENDING_EVENT_BYTES {
-        let outputs: Vec<usize> = queue
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| matches!(item, TerminalEvent::Output { .. }))
-            .map(|(index, _)| index)
-            .take(2)
-            .collect();
-        // Stop at the last remaining chunk — dropping it would throw away the
-        // newest output too and leave the widget with nothing at all. It is
-        // trimmed to the budget instead, just below.
-        if outputs.len() < 2 {
-            break;
-        }
-        let Some(dropped) = queue.items.remove(outputs[0]) else {
-            break;
-        };
-        queue.bytes = queue.bytes.saturating_sub(event_bytes(&dropped));
-        if let TerminalEvent::Output { id, .. } = &dropped {
-            queue.dropped.insert(id.clone());
-        }
+fn set_output_gate(gate: &Arc<(Mutex<bool>, Condvar)>, paused: bool) {
+    let (state, ready) = &**gate;
+    *lock_recover(state) = paused;
+    if !paused {
+        ready.notify_all();
     }
-    if queue.bytes > MAX_PENDING_EVENT_BYTES {
-        let mut shrunk = None;
-        for item in &mut queue.items {
-            if let TerminalEvent::Output { id, data } = item {
-                keep_tail(data, MAX_PENDING_EVENT_BYTES);
-                shrunk = Some((id.clone(), data.len()));
-                break;
-            }
-        }
-        if let Some((id, len)) = shrunk {
-            queue.bytes = len;
-            queue.dropped.insert(id);
-        }
-    }
+}
+
+fn allow_terminal_events(inner: &Arc<Inner>, id: &str) {
+    lock_recover(&inner.events).stopped.remove(id);
     inner.events_ready.notify_all();
 }
 
-/// Shrink `data` in place to at most `max_bytes`, keeping the newest bytes and
-/// never cutting a UTF-8 character in half.
-fn keep_tail(data: &mut String, max_bytes: usize) {
-    if data.len() <= max_bytes {
+fn stop_terminal_events(inner: &Arc<Inner>, id: &str) {
+    let mut queue = lock_recover(&inner.events);
+    queue.stopped.insert(id.to_owned());
+    let mut retained = VecDeque::with_capacity(queue.items.len());
+    while let Some(event) = queue.items.pop_front() {
+        let event_id = match &event {
+            TerminalEvent::Output { id, .. } | TerminalEvent::Exited { id } => id,
+        };
+        if event_id == id {
+            queue.bytes = queue.bytes.saturating_sub(event_bytes(&event));
+        } else {
+            retained.push_back(event);
+        }
+    }
+    queue.items = retained;
+    inner.events_ready.notify_all();
+}
+
+fn push_event(inner: &Arc<Inner>, event: TerminalEvent) {
+    let (id, bytes) = match &event {
+        TerminalEvent::Output { id, data } => (id.as_str(), data.len()),
+        TerminalEvent::Exited { id } => (id.as_str(), 0),
+    };
+    let mut queue = lock_recover(&inner.events);
+    while queue.bytes > 0
+        && queue.bytes.saturating_add(bytes) > MAX_PENDING_EVENT_BYTES
+        && !queue.stopped.contains(id)
+    {
+        queue = inner
+            .events_ready
+            .wait(queue)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    }
+    if queue.stopped.contains(id) {
         return;
     }
-    let mut cut = data.len() - max_bytes;
-    while cut < data.len() && !data.is_char_boundary(cut) {
-        cut += 1;
-    }
-    data.drain(..cut);
+    queue.bytes = queue.bytes.saturating_add(bytes);
+    queue.items.push_back(event);
+    inner.events_ready.notify_all();
 }
 
 fn take_events(queue: &mut EventQueue) -> Vec<TerminalEvent> {
-    let mut events: Vec<TerminalEvent> = queue.items.drain(..).collect();
+    let events = queue.items.drain(..).collect();
     queue.bytes = 0;
-    if !queue.dropped.is_empty() {
-        let mut pending = std::mem::take(&mut queue.dropped);
-        for event in events.iter_mut() {
-            if pending.is_empty() {
-                break;
-            }
-            if let TerminalEvent::Output { id, data } = event {
-                // `remove` only matches once per id, so a second Output
-                // event for the same terminal later in this same batch is
-                // left alone — one drop gets one reset.
-                if pending.remove(id.as_str()) {
-                    data.insert_str(0, RESYNC_PREFIX);
-                }
-            }
-        }
-        // An id with no Output event in this batch at all (the terminal
-        // went quiet right after losing data) stays pending so the next
-        // batch that does carry its output still gets the reset, instead of
-        // the signal being silently discarded here.
-        queue.dropped = pending;
-    }
     events
 }
 
@@ -991,56 +1048,6 @@ fn event_bytes(event: &TerminalEvent) -> usize {
     match event {
         TerminalEvent::Output { data, .. } => data.len(),
         TerminalEvent::Exited { .. } => 0,
-    }
-}
-
-/// Best-effort termination of a shell and everything it spawned. Returns
-/// true when the OS accepted the request. Never panics, never blocks the
-/// caller beyond the OS call itself.
-fn kill_process_tree(pid: u32) -> bool {
-    // 0 means "my own process group" to kill(2) and "the current process" to
-    // parts of the Win32 API. Never let one through: the engine would be
-    // taking itself, and every terminal it owns, down with it.
-    if pid == 0 {
-        return false;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        /// The engine itself runs without a console, so Windows hands any
-        /// console-subsystem child it starts a brand-new console window.
-        /// Without this flag `taskkill` flashes a black window on screen
-        /// every single time a terminal widget is closed.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        std::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false)
-    }
-    #[cfg(not(windows))]
-    {
-        // portable-pty puts the shell in its own session (setsid, so the slave
-        // can become the controlling terminal), which makes the shell's pid
-        // its process-group id too — a negative pid therefore reaps every
-        // descendant. This used to do nothing at all, leaving the actor's
-        // `child.kill()` to take down the direct child only: agents, dev
-        // servers and other grandchildren kept running headless after the
-        // widget was closed, which is precisely what the Windows branch above
-        // goes out of its way to prevent.
-        let Ok(pid) = i32::try_from(pid) else {
-            return false;
-        };
-        // SAFETY: kill(2) is async-signal-safe and only reports errors through
-        // its return value; `pid` is non-zero and positive, so neither the
-        // "own process group" nor the "every process" target can be selected.
-        if unsafe { libc::kill(-pid, libc::SIGKILL) } == 0 {
-            return true;
-        }
-        // Not a group leader, or the group is already gone: at least make sure
-        // the shell itself is down.
-        unsafe { libc::kill(pid, libc::SIGKILL) == 0 }
     }
 }
 
@@ -1060,108 +1067,82 @@ fn now_millis_u64() -> u64 {
     u64::try_from(now_millis()).unwrap_or(u64::MAX)
 }
 
-/// Stop what a wedged terminal is running, without ending the session.
-///
-/// Called when the user pressed Ctrl+C on a terminal whose input is no longer
-/// being read, so the keystroke itself can never arrive. The shell survives:
-/// the point is to leave the user with a working terminal instead of the
-/// close-the-widget-and-lose-everything they had before.
-fn interrupt_process_tree(pid: u32) -> bool {
-    // 0 means "my own process group" to kill(2) and "the current process" to
-    // parts of the Win32 API — never let one through.
-    if pid == 0 {
-        return false;
-    }
-    #[cfg(windows)]
-    {
-        // Windows cannot signal a process attached to someone else's
-        // pseudoconsole, so the foreground program is terminated instead,
-        // which is what Ctrl+C on an unresponsive terminal is asking for.
-        // Only the shell's children go; the shell itself stays.
-        let mut stopped = false;
-        for child in direct_children(pid) {
-            stopped |= kill_process_tree(child);
-        }
-        stopped
-    }
-    #[cfg(not(windows))]
-    {
-        let Ok(pid) = i32::try_from(pid) else {
-            return false;
-        };
-        // SAFETY: kill(2) is async-signal-safe and reports errors through its
-        // return value only; the pid is positive and non-zero, so neither the
-        // "own process group" nor the "every process" target can be selected.
-        // portable-pty puts the shell in its own session, so the negated pid
-        // addresses that group: the shell ignores SIGINT as any interactive
-        // shell does, and the job it is running takes it.
-        unsafe { libc::kill(-pid, libc::SIGINT) == 0 }
-    }
-}
-
-/// Direct children of `pid`, as the OS sees them right now.
-///
-/// Safe to key off the parent id because the engine holds an open handle to
-/// the shell, which stops Windows from recycling its pid while it runs.
-#[cfg(windows)]
-fn direct_children(pid: u32) -> Vec<u32> {
-    use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
-    use winapi::um::tlhelp32::{
-        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-        TH32CS_SNAPPROCESS,
-    };
-
-    let mut children = Vec::new();
-    // SAFETY: the snapshot handle is checked against INVALID_HANDLE_VALUE
-    // before use and closed on every path out; `entry` is zeroed with the
-    // dwSize the API requires, and both walk calls only write into it.
-    unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snapshot == INVALID_HANDLE_VALUE {
-            return children;
-        }
-        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-        if Process32FirstW(snapshot, &mut entry) != 0 {
-            loop {
-                if entry.th32ParentProcessID == pid && entry.th32ProcessID != 0 {
-                    children.push(entry.th32ProcessID);
-                }
-                if Process32NextW(snapshot, &mut entry) == 0 {
-                    break;
-                }
-            }
-        }
-        CloseHandle(snapshot);
-    }
-    children
-}
-
 fn read_output(
     mut reader: Box<dyn Read + Send>,
     state: Arc<Mutex<TerminalState>>,
     inner: Arc<Inner>,
     id: String,
+    startup_input: Option<(mpsc::Sender<TerminalInput>, Arc<AtomicUsize>)>,
+    output_gate: Arc<(Mutex<bool>, Condvar)>,
 ) {
     let mut buffer = [0_u8; 16 * 1024];
     let mut decoder = Utf8Stream::default();
+    // The tail of the previous chunk, so a mode toggle split across two reads
+    // is still seen whole. `\x1b[?2004h` is eight bytes.
+    let mut modes = orcspace_app::terminal_protocol::Decoder::default();
+    let mut startup = orcspace_app::conpty_startup::StartupFilter::default();
     loop {
+        let (paused, ready) = &*output_gate;
+        let mut paused = lock_recover(paused);
+        while *paused {
+            paused = ready
+                .wait(paused)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+        drop(paused);
         let count = match reader.read(&mut buffer) {
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Ok(0) | Err(_) => 0,
             Ok(count) => count,
         };
-        let data = decoder.decode(&buffer[..count], count == 0);
+        let filtered;
+        let bytes = if let Some((sender, pending)) = &startup_input {
+            let (mut output, replies) = startup.process(&buffer[..count]);
+            if !replies.is_empty() {
+                let size = replies.len();
+                pending.fetch_add(size, Ordering::AcqRel);
+                if sender
+                    .send(TerminalInput {
+                        data: replies,
+                        press_enter: false,
+                        acknowledgement: None,
+                    })
+                    .is_err()
+                {
+                    pending.fetch_sub(size, Ordering::AcqRel);
+                }
+            }
+            if count == 0 {
+                output.extend(startup.finish());
+            }
+            filtered = output;
+            filtered.as_slice()
+        } else {
+            &buffer[..count]
+        };
+        let data = decoder.decode(bytes, count == 0);
         if data.is_empty() {
-            if count == 0 { break; }
+            if count == 0 {
+                break;
+            }
             continue;
+        }
+        for control in modes.advance(data.as_bytes()) {
+            use orcspace_app::terminal_protocol::Control;
+            match control {
+                Control::Mode(2004, enabled) => lock_recover(&state).bracketed_paste = enabled,
+                Control::Reset => lock_recover(&state).bracketed_paste = false,
+                _ => {}
+            }
         }
         if inner.retain_scrollback {
             let mut current = lock_recover(&state);
             current.output.push_str(&data);
             if current.output.len() > MAX_SCROLLBACK + SCROLLBACK_SLACK {
                 let mut cut = current.output.len() - MAX_SCROLLBACK;
-                while !current.output.is_char_boundary(cut) { cut += 1; }
+                while !current.output.is_char_boundary(cut) {
+                    cut += 1;
+                }
                 let boundary = current.output[cut..]
                     .find('\n')
                     .map(|offset| cut + offset + 1)
@@ -1176,7 +1157,9 @@ fn read_output(
                 data,
             },
         );
-        if count == 0 { break; }
+        if count == 0 {
+            break;
+        }
     }
     lock_recover(&state).alive = false;
     push_event(&inner, TerminalEvent::Exited { id });
@@ -1220,58 +1203,6 @@ impl Utf8Stream {
     }
 }
 
-/// Startup arguments for Windows shells.
-/// Empty everywhere else.
-///
-/// ConPTY defaults a new console to the system's legacy OEM codepage (866 or
-/// 1251 on a Russian install), not UTF-8. Every env var set alongside
-/// (`LANG`, `LC_ALL`, `TERM`, `COLORTERM`) declares UTF-8 intent, but Windows
-/// console apps mostly ignore those — they take their encoding from the
-/// console. Left at the OEM default, a child that prints non-ASCII text
-/// (Cyrillic, in the reported case) writes bytes xterm.js cannot parse as
-/// UTF-8, rendering as a wall of replacement characters that reads as a
-/// frozen or broken terminal even though the process is running fine.
-///
-/// Both shells therefore get a silent `chcp 65001`, matching what the node-pty
-/// fallback sends (windowsShellArgs in src/main/terminal/terminalEnvironment.ts).
-/// cmd.exe was once given a bare `/K` on the grounds that a setup command moves
-/// its first prompt row — it does not, because cmd clears the viewport as it
-/// starts either way, and the cost of leaving it out was measurable: `type` on
-/// a UTF-8 file printed `Привет` on this very machine,
-/// because the console decoded those bytes as CP866.
-///
-/// This only matters for programs that write bytes straight to stdout. Anything
-/// going through the console API (cmd's own `echo`, Node's console.log) is
-/// converted by Windows and looks correct at any code page, which is exactly
-/// why the gap survived so long.
-fn windows_utf8_shell_args(shell: &str) -> Vec<&'static str> {
-    #[cfg(windows)]
-    {
-        let lower = shell.to_ascii_lowercase();
-        if lower.contains("powershell") || lower.contains("pwsh") {
-            vec!["-NoLogo", "-NoExit", "-Command", "chcp 65001 > $null"]
-        } else {
-            vec!["/K", "chcp 65001 >nul"]
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = shell;
-        Vec::new()
-    }
-}
-
-fn shell_command() -> String {
-    #[cfg(windows)]
-    {
-        std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_owned())
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned())
-    }
-}
-
 fn now_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1291,7 +1222,11 @@ fn encode_terminal_input(text: &str, press_enter: bool) -> Result<Vec<u8>, Strin
     Ok(bytes)
 }
 
-fn encode_terminal_message_input(text: &str) -> Result<Vec<u8>, String> {
+/// Encodes one delivery. The paste markers go on only when the receiving
+/// program asked for them: `cmd.exe` and other plain shells never enable
+/// DECSET 2004, and its line editor takes the leading escape as "clear the
+/// line" — which ate all but the first character of every `orc tell`.
+fn encode_terminal_message_input(text: &str, bracketed: bool) -> Result<Vec<u8>, String> {
     let line = text.replace("\r\n", "\n").replace('\r', "\n");
     if line.trim().is_empty() {
         return Err("message must contain non-whitespace text".to_owned());
@@ -1302,10 +1237,21 @@ fn encode_terminal_message_input(text: &str) -> Result<Vec<u8>, String> {
     {
         return Err("message contains unsafe terminal control characters".to_owned());
     }
+    if !bracketed {
+        // Without paste markers a newline is a submit, so a multi-line
+        // message would run its first line and leave the rest as commands.
+        return Ok(line.replace('\n', " ").into_bytes());
+    }
     let mut bytes = b"\x1b[200~".to_vec();
     bytes.extend_from_slice(line.as_bytes());
     bytes.extend_from_slice(b"\x1b[201~");
     Ok(bytes)
+}
+
+/// The state DECSET 2004 was last left in by this chunk of output.
+#[cfg(test)]
+fn bracketed_paste_toggle(data: &str) -> Option<bool> {
+    orcspace_app::terminal_screen::last_mode_toggle(data.as_bytes(), 2004)
 }
 
 #[derive(Clone)]
@@ -1336,12 +1282,9 @@ impl ControlServer {
     /// Starts on an explicit path. A test — or a second instance — uses this to
     /// stay off the real socket.
     #[cfg(test)]
-    pub fn start_at(
-        manager: TerminalManager,
-        token: String,
-        path: String,
-    ) -> Result<Self, String> {
-        let storage = std::env::temp_dir().join(format!("orcspace-test-{}.json", uuid::Uuid::new_v4()));
+    pub fn start_at(manager: TerminalManager, token: String, path: String) -> Result<Self, String> {
+        let storage =
+            std::env::temp_dir().join(format!("orcspace-test-{}.json", uuid::Uuid::new_v4()));
         Self::start_at_with_storage(manager, token, path, storage)
     }
 
@@ -1379,8 +1322,9 @@ impl ControlServer {
                     let listener = match orcspace_app::listener::bind(&listen_path).await {
                         Ok(listener) => listener,
                         Err(error) => {
-                            let _ = ready_tx
-                                .send(Err(format!("bind control server at {listen_path}: {error}")));
+                            let _ = ready_tx.send(Err(format!(
+                                "bind control server at {listen_path}: {error}"
+                            )));
                             return;
                         }
                     };
@@ -1452,16 +1396,14 @@ fn persist_orchestration(
         uuid::Uuid::new_v4().simple()
     ));
     let result = (|| {
-        let data = serde_json::to_vec_pretty(&store.to_json())
-            .map_err(std::io::Error::other)?;
-        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temp)?;
+        let data = serde_json::to_vec_pretty(&store.to_json()).map_err(std::io::Error::other)?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
         file.write_all(&data)?;
         file.sync_all()?;
         drop(file);
-        #[cfg(windows)]
-        {
-            let _ = fs::remove_file(path);
-        }
         fs::rename(&temp, path)
     })();
     if result.is_err() {
@@ -1498,7 +1440,10 @@ struct WorkerInfo {
 #[derive(Deserialize)]
 struct TellRequest {
     to: String,
+    #[serde(default)]
     text: String,
+    #[serde(default)]
+    images: Vec<String>,
     #[serde(rename = "agentId")]
     agent_id: Option<String>,
 }
@@ -1531,13 +1476,17 @@ async fn list_workers(
 ) -> Result<Json<WorkerList>, (StatusCode, String)> {
     authenticate(&headers, &state.token)?;
     check_rate_limit(&state, &headers, None)?;
+    let names = state.manager.names();
     let workers = state
         .manager
         .snapshots()
         .into_iter()
         .map(|snapshot| WorkerInfo {
-            id: snapshot.id.clone(),
-            name: snapshot.id,
+            name: names
+                .get(&snapshot.id)
+                .cloned()
+                .unwrap_or_else(|| snapshot.id.clone()),
+            id: snapshot.id,
             alive: snapshot.alive,
             busy: false,
             cwd: snapshot.cwd,
@@ -1550,22 +1499,52 @@ async fn tell_worker(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Json(request): Json<TellRequest>,
-) -> Result<Json<WriteResponse>, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     authenticate(&headers, &state.token)?;
     check_rate_limit(&state, &headers, request.agent_id.as_deref())?;
     let manager = state.manager.clone();
-    let to = request.to.clone();
+    let to = state.manager.resolve(&request.to);
     let text = request.text.clone();
-    let receipt = tokio::task::spawn_blocking(move || manager.write_message(&to, &text))
-        .await
-        .map_err(|error| bad_request(format!("delivery task failed: {error}")))?
-        .map_err(bad_request)?;
-    Ok(Json(WriteResponse {
-        ok: true,
-        id: request.to.clone(),
-        text: request.text,
-        delivery: Some(receipt),
-    }))
+    if request.images.len() > 16 {
+        return Err(bad_request("At most 16 images per delivery".into()));
+    }
+    let sources = request.images.clone();
+    let (receipt, images) = tokio::task::spawn_blocking(move || -> Result<_, String> {
+        if sources.is_empty() {
+            return manager
+                .write_message(&to, &text)
+                .map(|r| (r, Vec::<String>::new()));
+        }
+        if !manager.snapshot(&to)?.alive {
+            return Err("Terminal has exited".into());
+        }
+        let directory = orcspace_app::ipc::user_data_dir().join("media");
+        let images = sources
+            .iter()
+            .map(|source| {
+                orcspace_app::attachments::import_image(std::path::Path::new(source), &directory)
+                    .map(|path| path.to_string_lossy().into_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut content = String::new();
+        for path in &images {
+            content.push_str(&orcspace_app::attachments::path_token(path)?);
+        }
+        content.push_str(&text.replace(['\r', '\n'], " "));
+        // This branch only runs when at least one image was attached, so the
+        // delivery must be submitted even when the accompanying text is blank.
+        let receipt = manager.write_text(&to, &content, true)?;
+        Ok((receipt, images))
+    })
+    .await
+    .map_err(|error| bad_request(format!("delivery task failed: {error}")))?
+    .map_err(bad_request)?;
+    let mut response = serde_json::json!({"ok": true, "id": request.to, "text": request.text, "delivery": receipt});
+    if !images.is_empty() {
+        response["images"] = serde_json::json!(images);
+        response["mode"] = serde_json::json!("path");
+    }
+    Ok(Json(response))
 }
 
 async fn write_terminal(
@@ -1581,6 +1560,7 @@ async fn write_terminal(
         .ok_or_else(|| bad_request("terminal.write requires text".to_owned()))?;
     let manager = state.manager.clone();
     let press_enter = request.press_enter;
+    let id = state.manager.resolve(&id);
     let delivery_id = id.clone();
     let delivery_text = text.clone();
     let receipt = tokio::task::spawn_blocking(move || {
@@ -1611,7 +1591,7 @@ async fn read_terminal_output(
     check_rate_limit(&state, &headers, None)?;
     let snapshot = state
         .manager
-        .snapshot(&id)
+        .snapshot(&state.manager.resolve(&id))
         .map_err(|error| (StatusCode::NOT_FOUND, error))?;
     Ok(Json(OutputResponse {
         output: snapshot.output,
@@ -1676,7 +1656,12 @@ async fn handle_routed(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned)
         .or_else(|| query.get("agentId").cloned())
-        .or_else(|| parsed_body.get("agentId").and_then(|value| value.as_str()).map(str::to_owned));
+        .or_else(|| {
+            parsed_body
+                .get("agentId")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        });
     if let Err((status, error)) = check_rate_limit(&state, &headers, agent_id.as_deref()) {
         return (
             status,
@@ -1701,6 +1686,7 @@ async fn handle_routed(
         .unwrap_or(0);
 
     let mut store = lock_recover(&state.orchestration);
+    let previous = store.to_json();
     let mut deps = orcspace_app::http::RouteDeps {
         orchestration: &mut store,
         app_version: env!("CARGO_PKG_VERSION"),
@@ -1712,6 +1698,7 @@ async fn handle_routed(
         Some(response) => {
             if method != axum::http::Method::GET.as_str() && response.status < 400 {
                 if let Err(error) = persist_orchestration(&state.orchestration_file, &store) {
+                    *store = orcspace_app::orchestration::OrchestrationStore::load(&previous);
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(serde_json::json!({
@@ -1759,8 +1746,14 @@ fn check_rate_limit(
     headers: &HeaderMap,
     hint: Option<&str>,
 ) -> Result<(), (StatusCode, String)> {
-    let header = headers.get("x-agent-id").and_then(|value| value.to_str().ok());
-    let raw = hint.filter(|value| !value.trim().is_empty()).or(header).unwrap_or("api").trim();
+    let header = headers
+        .get("x-agent-id")
+        .and_then(|value| value.to_str().ok());
+    let raw = hint
+        .filter(|value| !value.trim().is_empty())
+        .or(header)
+        .unwrap_or("api")
+        .trim();
     let key = raw
         .char_indices()
         .nth(128)
@@ -1770,7 +1763,10 @@ fn check_rate_limit(
     if lock_recover(&state.rate_limiter).try_consume(key, 1.0, now) {
         Ok(())
     } else {
-        Err((StatusCode::TOO_MANY_REQUESTS, "too many requests".to_owned()))
+        Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many requests".to_owned(),
+        ))
     }
 }
 
@@ -1805,11 +1801,52 @@ mod tests {
     use super::{
         constant_time_token_eq, encode_terminal_input, encode_terminal_message_input, take_events,
         windows_utf8_shell_args, EventQueue, TerminalEvent, WriteRequest, MAX_PENDING_EVENT_BYTES,
-        RESYNC_PREFIX,
     };
     use serde_json::json;
     use std::sync::atomic::AtomicU64;
     use std::sync::Arc;
+
+    #[cfg(windows)]
+    #[test]
+    fn bundled_conpty_preserves_synchronized_cursor_commands() {
+        use std::time::{Duration, Instant};
+        let manager = super::TerminalManager::new("cursor-probe".into());
+        manager.spawn("cursor-probe").unwrap();
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(5) {
+            if manager
+                .snapshot("cursor-probe")
+                .unwrap()
+                .output
+                .contains('>')
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let command = "powershell.exe -NoLogo -NoProfile -Command \"$e=[char]27; [Console]::Write($e+'[?2026h'+$e+'[?25l'+$e+'[4;9H'+'ORC_CURSOR_PROBE'+$e+'[6 q'+$e+'[?25h'+$e+'[?2026l')\"\r";
+        manager
+            .write_raw("cursor-probe", command.as_bytes())
+            .unwrap();
+        let expected = "\x1b[?2026h\x1b[?25l\x1b[4;9HORC_CURSOR_PROBE\x1b[6 q\x1b[?25h\x1b[?2026l";
+        let started = Instant::now();
+        let preserved = loop {
+            if manager
+                .snapshot("cursor-probe")
+                .unwrap()
+                .output
+                .contains(expected)
+            {
+                break true;
+            }
+            if started.elapsed() > Duration::from_secs(10) {
+                break false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        manager.dispose("cursor-probe").unwrap();
+        assert!(preserved, "ConPTY rewrote the synchronized cursor frame");
+    }
 
     #[test]
     fn line_normalization_rejects_space_only_messages() {
@@ -1819,16 +1856,37 @@ mod tests {
     }
 
     #[test]
-    fn message_input_uses_bracketed_paste_markers() {
+    fn message_input_uses_bracketed_paste_markers_only_where_they_are_understood() {
         assert_eq!(
-            encode_terminal_message_input("hello\r\nworld").unwrap(),
+            encode_terminal_message_input("hello\r\nworld", true).unwrap(),
             b"\x1b[200~hello\nworld\x1b[201~"
+        );
+        // cmd.exe reads the leading escape as "clear the line", so a plain
+        // shell gets the bare text, flattened to the single line it submits.
+        assert_eq!(
+            encode_terminal_message_input("hello\r\nworld", false).unwrap(),
+            b"hello world"
         );
     }
 
     #[test]
     fn message_input_rejects_bracketed_paste_terminators() {
-        assert!(encode_terminal_message_input("safe\x1b[201~echo unsafe").is_err());
+        assert!(encode_terminal_message_input("safe\x1b[201~echo unsafe", true).is_err());
+        assert!(encode_terminal_message_input("safe\x1b[201~echo unsafe", false).is_err());
+    }
+
+    #[test]
+    fn the_last_paste_mode_toggle_in_a_chunk_wins() {
+        assert_eq!(super::bracketed_paste_toggle("no modes here"), None);
+        assert_eq!(super::bracketed_paste_toggle("\x1b[?2004h"), Some(true));
+        assert_eq!(
+            super::bracketed_paste_toggle("\x1b[?2004h out \x1b[?2004l"),
+            Some(false)
+        );
+        assert_eq!(
+            super::bracketed_paste_toggle("\x1b[?2004l out \x1b[?2004h"),
+            Some(true)
+        );
     }
 
     #[test]
@@ -1858,7 +1916,10 @@ mod tests {
         // Nothing may end with a carriage return: these are argv entries, not
         // keystrokes typed into a running shell.
         for arg in cmd.iter().chain(ps.iter()) {
-            assert!(!arg.contains('\r'), "argv entry must not carry an Enter: {arg}");
+            assert!(
+                !arg.contains('\r'),
+                "argv entry must not carry an Enter: {arg}"
+            );
         }
     }
 
@@ -1882,18 +1943,27 @@ mod tests {
     fn unicode_scrollback_overflow_does_not_kill_the_reader() {
         let manager = super::TerminalManager::new("test".to_owned());
         let state = Arc::new(std::sync::Mutex::new(super::TerminalState {
-            output: "я".repeat(super::MAX_SCROLLBACK / 2), alive: true,
+            output: "я".repeat(super::MAX_SCROLLBACK / 2),
+            alive: true,
             ..Default::default()
         }));
         // Enough to cross the slack so the compaction actually runs: that is
         // the path where the cut lands inside a two-byte char and used to be
         // able to kill the reader.
         let overflow = vec![b'x'; super::SCROLLBACK_SLACK + 1];
-        super::read_output(Box::new(std::io::Cursor::new(overflow)), Arc::clone(&state),
-            Arc::clone(&manager.inner), "test".to_owned());
+        super::read_output(
+            Box::new(std::io::Cursor::new(overflow)),
+            Arc::clone(&state),
+            Arc::clone(&manager.inner),
+            "test".to_owned(),
+            None,
+            Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new())),
+        );
         let state = state.lock().unwrap();
-        assert!(state.output.len() < super::MAX_SCROLLBACK + super::SCROLLBACK_SLACK,
-            "the buffer must actually have been compacted");
+        assert!(
+            state.output.len() < super::MAX_SCROLLBACK + super::SCROLLBACK_SLACK,
+            "the buffer must actually have been compacted"
+        );
         assert!(!state.alive);
     }
 
@@ -1902,14 +1972,23 @@ mod tests {
         let manager = super::TerminalManager::streaming("test".to_owned());
         let state = Arc::new(std::sync::Mutex::new(super::TerminalState::default()));
         let expected = "hello\r\n".repeat(200_000);
-        super::read_output(Box::new(std::io::Cursor::new(expected.clone())), Arc::clone(&state),
-            Arc::clone(&manager.inner), "test".to_owned());
+        super::read_output(
+            Box::new(std::io::Cursor::new(expected.clone())),
+            Arc::clone(&state),
+            Arc::clone(&manager.inner),
+            "test".to_owned(),
+            None,
+            Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new())),
+        );
         assert_eq!(state.lock().unwrap().output.capacity(), 0);
         let events = manager.drain_events();
-        let actual: String = events.iter().filter_map(|event| match event {
-            TerminalEvent::Output { data, .. } => Some(data.as_str()),
-            _ => None,
-        }).collect();
+        let actual: String = events
+            .iter()
+            .filter_map(|event| match event {
+                TerminalEvent::Output { data, .. } => Some(data.as_str()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(actual, expected);
         assert!(matches!(events.last(), Some(TerminalEvent::Exited { .. })));
     }
@@ -1919,8 +1998,13 @@ mod tests {
         let manager = super::TerminalManager::streaming("test".to_owned());
         manager.notify_response();
         let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || { tx.send(manager.wait_events()).unwrap(); });
-        assert!(rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap().is_empty());
+        std::thread::spawn(move || {
+            tx.send(manager.wait_events()).unwrap();
+        });
+        assert!(rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1940,7 +2024,7 @@ mod tests {
     }
 
     #[test]
-    fn output_pressure_drops_old_output_but_never_an_exit() {
+    fn output_pressure_waits_for_the_consumer_and_preserves_every_byte() {
         let inner = Arc::new(super::Inner {
             retain_scrollback: true,
             terminals: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -1948,96 +2032,74 @@ mod tests {
             events_ready: std::sync::Condvar::new(),
             token: "t".to_owned(),
             control_socket: std::sync::Mutex::new(None),
+            names: std::sync::Mutex::new(std::collections::HashMap::new()),
         });
 
-        super::push_event(&inner, output("term-1", "oldest"));
-        super::push_event(
-            &inner,
-            TerminalEvent::Exited {
-                id: "term-1".to_owned(),
-            },
-        );
-        super::push_event(
-            &inner,
-            output("term-1", &"x".repeat(MAX_PENDING_EVENT_BYTES + 1)),
+        let first = "a".repeat(MAX_PENDING_EVENT_BYTES / 2);
+        let second = "b".repeat(MAX_PENDING_EVENT_BYTES / 2 + 1);
+        super::push_event(&inner, output("term-1", &first));
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let blocked_inner = Arc::clone(&inner);
+        let blocked_second = second.clone();
+        let writer = std::thread::spawn(move || {
+            super::push_event(&blocked_inner, output("term-1", &blocked_second));
+            done_tx.send(()).unwrap();
+        });
+        assert!(
+            done_rx.try_recv().is_err(),
+            "producer waits while the queue is full"
         );
 
         let mut queue = inner.events.lock().unwrap();
-        let events = take_events(&mut queue);
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, TerminalEvent::Exited { .. })),
-            "an exit event must survive output pressure"
+        let first_events = take_events(&mut queue);
+        inner.events_ready.notify_all();
+        drop(queue);
+        assert_eq!(
+            done_rx.recv_timeout(std::time::Duration::from_secs(2)),
+            Ok(())
         );
-        let outputs: Vec<&String> = events
-            .iter()
+        writer.join().unwrap();
+
+        let mut queue = inner.events.lock().unwrap();
+        let second_events = take_events(&mut queue);
+        let collected: String = first_events
+            .into_iter()
+            .chain(second_events)
             .filter_map(|event| match event {
                 TerminalEvent::Output { data, .. } => Some(data),
                 _ => None,
             })
             .collect();
-        assert_eq!(outputs.len(), 1, "the stale chunk should have been dropped");
-        assert!(
-            outputs[0].starts_with(RESYNC_PREFIX),
-            "a drop must be followed by a resync reset"
-        );
+        assert_eq!(collected, first + &second);
     }
 
     #[test]
-    fn resync_reset_targets_only_the_terminal_that_actually_dropped_output() {
-        // Terminal B loses output to pressure; terminal A did not. The reset
-        // must land on B's next chunk, not A's — a shared flag used to hand
-        // it to whichever terminal's Output event happened to come first.
-        let mut queue = EventQueue::default();
-        queue.dropped.insert("term-b".to_owned());
-        queue.items.push_back(output("term-a", "unaffected"));
-        queue.items.push_back(output("term-b", "resumed"));
-
-        let events = take_events(&mut queue);
-        let by_id = |id: &str| -> &String {
-            events
-                .iter()
-                .find_map(|event| match event {
-                    TerminalEvent::Output { id: eid, data } if eid == id => Some(data),
-                    _ => None,
-                })
-                .unwrap()
-        };
-        assert_eq!(by_id("term-a"), "unaffected", "an unrelated terminal must not gain a reset");
-        assert!(
-            by_id("term-b").starts_with(RESYNC_PREFIX),
-            "the terminal that actually dropped output must get the reset"
+    fn disposing_a_terminal_releases_a_blocked_output_producer() {
+        let inner = Arc::new(super::Inner {
+            retain_scrollback: true,
+            terminals: std::sync::Mutex::new(std::collections::HashMap::new()),
+            events: std::sync::Mutex::new(EventQueue::default()),
+            events_ready: std::sync::Condvar::new(),
+            token: "t".to_owned(),
+            control_socket: std::sync::Mutex::new(None),
+            names: std::sync::Mutex::new(std::collections::HashMap::new()),
+        });
+        super::push_event(
+            &inner,
+            output("term-1", &"x".repeat(MAX_PENDING_EVENT_BYTES)),
         );
-        assert!(queue.dropped.is_empty(), "the pending drop is consumed once applied");
+        let blocked_inner = Arc::clone(&inner);
+        let writer = std::thread::spawn(move || {
+            super::push_event(&blocked_inner, output("term-1", "after"))
+        });
+        super::stop_terminal_events(&inner, "term-1");
+        writer.join().unwrap();
+        assert!(inner.events.lock().unwrap().items.is_empty());
     }
 
     #[test]
-    fn resync_reset_stays_pending_until_the_affected_terminal_produces_output() {
-        // The affected terminal went quiet right after losing data: this
-        // batch carries no Output event for it at all. The signal must
-        // survive to the next drain instead of being silently discarded.
-        let mut queue = EventQueue::default();
-        queue.dropped.insert("term-b".to_owned());
-        queue.items.push_back(output("term-a", "unrelated"));
-
-        let first = take_events(&mut queue);
-        assert_eq!(first.len(), 1);
-        assert!(
-            queue.dropped.contains("term-b"),
-            "the pending reset for term-b must survive a batch that never mentions it"
-        );
-
-        queue.items.push_back(output("term-b", "finally back"));
-        let second = take_events(&mut queue);
-        let TerminalEvent::Output { data, .. } = &second[0] else {
-            panic!("expected an Output event");
-        };
-        assert!(data.starts_with(RESYNC_PREFIX));
-    }
-
-    #[test]
-    fn draining_without_drops_leaves_output_untouched() {
+    fn draining_leaves_output_untouched() {
         let mut queue = EventQueue::default();
         queue.items.push_back(output("term-1", "hello"));
         let events = take_events(&mut queue);
@@ -2057,15 +2119,18 @@ mod tests {
     #[test]
     fn message_enter_is_separate_and_acknowledged_after_flush() {
         use std::io::Write;
-        use std::sync::{mpsc, Arc, Mutex, atomic::AtomicUsize};
+        use std::sync::{atomic::AtomicUsize, mpsc, Arc, Mutex};
         use std::time::{Duration, Instant};
-        struct RecordingWriter(Arc<Mutex<Vec<(Vec<u8>, Instant)>>>);
+        type RecordedWrites = Arc<Mutex<Vec<(Vec<u8>, Instant)>>>;
+        struct RecordingWriter(RecordedWrites);
         impl Write for RecordingWriter {
             fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
                 self.0.lock().unwrap().push((data.to_vec(), Instant::now()));
                 Ok(data.len())
             }
-            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
         }
         let writes = Arc::new(Mutex::new(Vec::new()));
         let (tx, rx) = mpsc::channel();
@@ -2073,29 +2138,60 @@ mod tests {
         let (ack_tx, ack_rx) = mpsc::channel();
         let pending = Arc::new(AtomicUsize::new(13));
         tx.send(super::TerminalInput {
-            data: b"hello".to_vec(), press_enter: true, acknowledgement: Some(ack_tx),
-        }).unwrap();
+            data: b"hello".to_vec(),
+            press_enter: true,
+            acknowledgement: Some(ack_tx),
+        })
+        .unwrap();
         tx.send(super::TerminalInput {
-            data: b"x".to_vec(), press_enter: false, acknowledgement: None,
-        }).unwrap();
+            data: b"x".to_vec(),
+            press_enter: false,
+            acknowledgement: None,
+        })
+        .unwrap();
         tx.send(super::TerminalInput {
-            data: b"world".to_vec(), press_enter: false, acknowledgement: None,
-        }).unwrap();
+            data: b"world".to_vec(),
+            press_enter: false,
+            acknowledgement: None,
+        })
+        .unwrap();
         tx.send(super::TerminalInput {
-            data: b"\r".to_vec(), press_enter: false, acknowledgement: None,
-        }).unwrap();
+            data: b"\r".to_vec(),
+            press_enter: false,
+            acknowledgement: None,
+        })
+        .unwrap();
         drop(tx);
         let output = Arc::clone(&writes);
         let queued = Arc::clone(&pending);
-        let worker = std::thread::spawn(move || super::run_writer(
-            Box::new(RecordingWriter(output)), rx, control_tx, queued,
-            Arc::new(AtomicU64::new(0)), "test".to_owned(),
-        ));
-        ack_rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
-        assert!(writes.lock().unwrap().iter().any(|(bytes, _)| bytes == b"\r"));
+        let worker = std::thread::spawn(move || {
+            super::run_writer(
+                Box::new(RecordingWriter(output)),
+                rx,
+                control_tx,
+                queued,
+                Arc::new(AtomicU64::new(0)),
+                "test".to_owned(),
+            )
+        });
+        ack_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        assert!(writes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(bytes, _)| bytes == b"\r"));
         worker.join().unwrap();
         let writes = writes.lock().unwrap();
-        assert_eq!(writes.iter().map(|(bytes, _)| bytes.as_slice()).collect::<Vec<_>>(), vec![b"hello".as_slice(), b"\r", b"x", b"world", b"\r"]);
+        assert_eq!(
+            writes
+                .iter()
+                .map(|(bytes, _)| bytes.as_slice())
+                .collect::<Vec<_>>(),
+            vec![b"hello".as_slice(), b"\r", b"x", b"world", b"\r"]
+        );
         assert!(writes[1].1.duration_since(writes[0].1) >= Duration::from_millis(200));
         assert!(writes[4].1.duration_since(writes[3].1) >= Duration::from_millis(200));
         assert_eq!(pending.load(std::sync::atomic::Ordering::Acquire), 0);
@@ -2106,23 +2202,42 @@ mod tests {
         struct FailedSubmit;
         impl std::io::Write for FailedSubmit {
             fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-                if data == b"\r" { return Err(std::io::Error::other("submit failed")); }
+                if data == b"\r" {
+                    return Err(std::io::Error::other("submit failed"));
+                }
                 Ok(data.len())
             }
-            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
         }
         let (tx, rx) = std::sync::mpsc::channel();
         let (control_tx, control_rx) = std::sync::mpsc::channel();
         let (ack_tx, ack_rx) = std::sync::mpsc::channel();
         tx.send(super::TerminalInput {
-            data: b"hello".to_vec(), press_enter: true, acknowledgement: Some(ack_tx),
-        }).unwrap();
+            data: b"hello".to_vec(),
+            press_enter: true,
+            acknowledgement: Some(ack_tx),
+        })
+        .unwrap();
         drop(tx);
-        super::run_writer(Box::new(FailedSubmit), rx, control_tx,
+        super::run_writer(
+            Box::new(FailedSubmit),
+            rx,
+            control_tx,
             std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(6)),
-            std::sync::Arc::new(AtomicU64::new(0)), "test".to_owned());
-        assert!(ack_rx.recv().unwrap().unwrap_err().contains("submit failed"));
-        assert!(matches!(control_rx.recv().unwrap(), super::ControlCommand::WriterFailed));
+            std::sync::Arc::new(AtomicU64::new(0)),
+            "test".to_owned(),
+        );
+        assert!(ack_rx
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("submit failed"));
+        assert!(matches!(
+            control_rx.recv().unwrap(),
+            super::ControlCommand::WriterFailed
+        ));
     }
 
     #[test]
@@ -2198,7 +2313,13 @@ mod transport_tests {
 
     /// Minimal HTTP/1.1 over the transport, so the test exercises the real
     /// socket rather than calling the router directly.
-    fn request(path_to_socket: &str, method: &str, target: &str, token: &str, body: Option<&str>) -> String {
+    fn request(
+        path_to_socket: &str,
+        method: &str,
+        target: &str,
+        token: &str,
+        body: Option<&str>,
+    ) -> String {
         let mut stream = open(path_to_socket);
         let body = body.unwrap_or("");
         let request = format!(

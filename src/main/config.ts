@@ -82,5 +82,19 @@ export function defaultShell(windowsShell: 'cmd' | 'powershell' = 'cmd'): string
     shellCache.set(cacheKey, 'cmd.exe')
     return 'cmd.exe'
   }
-  return process.env.SHELL || '/bin/sh'
+  // POSIX: prefer the user's SHELL, but a GUI launch from Dock/Finder often
+  // has SHELL empty. On macOS fall back to zsh (system default) so brew
+  // paths and login profiles resolve instead of bare /bin/sh.
+  const posixShell = (process.env.SHELL ?? '').trim()
+  if (posixShell) return posixShell
+  if (process.platform === 'darwin') {
+    for (const candidate of ['/bin/zsh', '/bin/bash', '/bin/sh']) {
+      try {
+        if (fs.existsSync(candidate)) return candidate
+      } catch {
+        // ignore stat errors and try the next candidate
+      }
+    }
+  }
+  return '/bin/sh'
 }

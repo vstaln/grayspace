@@ -30,7 +30,10 @@ pub struct FieldSchema {
 
 impl FieldSchema {
     pub fn of(field_type: FieldType) -> Self {
-        Self { field_type: Some(field_type), enum_values: None }
+        Self {
+            field_type: Some(field_type),
+            enum_values: None,
+        }
     }
 
     pub fn with_enum(mut self, values: Vec<Value>) -> Self {

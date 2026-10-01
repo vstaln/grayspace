@@ -19,6 +19,16 @@ fn load_fixture() -> Vec<JournalEntry> {
 }
 
 #[test]
+fn command_ids_are_preserved_in_typescript_hashes() {
+    // Generated with src/main/core/journal.ts::computeEntryHash.
+    let text = r#"{"seq":1,"at":100,"phase":"commit","actorId":"user","commandId":"cmd-1","type":"plan.create","target":"plan:one","payload":{"title":"Task"},"prevHash":"0000000000000000000000000000000000000000000000000000000000000000","hash":"7bfd75c48add72d4a00f6b0fd7ed84ba7b20581ab0a67652c76eda9a4519eda3"}"#;
+    let entry: JournalEntry = serde_json::from_str(text).unwrap();
+    assert_eq!(entry.command_id.as_deref(), Some("cmd-1"));
+    verify_chain(std::slice::from_ref(&entry)).unwrap();
+    assert_eq!(serde_json::to_value(&entry).unwrap()["commandId"], "cmd-1");
+}
+
+#[test]
 fn every_fixture_hash_matches_the_typescript_one() {
     let entries = load_fixture();
     assert!(!entries.is_empty(), "fixture must not be empty");
@@ -144,7 +154,11 @@ fn float_payloads_survive_the_parse_exactly() {
     let entry: JournalEntry = serde_json::from_str(raw).expect("parses");
     let canonical = canonical_hash_input_for_debug(GENESIS_HASH, &entry);
 
-    for expected in ["3844.7897983016796", "1181.8581761894222", "0.8925206405937184"] {
+    for expected in [
+        "3844.7897983016796",
+        "1181.8581761894222",
+        "0.8925206405937184",
+    ] {
         assert!(
             canonical.contains(expected),
             "{expected} did not survive the parse/print round trip:\n{canonical}"
@@ -174,7 +188,9 @@ fn dumps_canonical_form() {
         std::env::var("ORCSPACE_SEQ"),
         std::env::var("ORCSPACE_CANON_OUT"),
     ) else {
-        println!("set ORCSPACE_JOURNAL, ORCSPACE_SEQ and ORCSPACE_CANON_OUT to dump a canonical form");
+        println!(
+            "set ORCSPACE_JOURNAL, ORCSPACE_SEQ and ORCSPACE_CANON_OUT to dump a canonical form"
+        );
         return;
     };
     let seq: u64 = seq.parse().expect("ORCSPACE_SEQ is a number");
@@ -186,5 +202,9 @@ fn dumps_canonical_form() {
         .find(|e| e.seq == seq)
         .expect("seq present");
     let prev = entry.prev_hash.clone().unwrap();
-    std::fs::write(&out, orcspace_app::journal::canonical_hash_input_for_debug(&prev, &entry)).unwrap();
+    std::fs::write(
+        &out,
+        orcspace_app::journal::canonical_hash_input_for_debug(&prev, &entry),
+    )
+    .unwrap();
 }

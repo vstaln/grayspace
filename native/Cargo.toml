@@ -10,8 +10,11 @@ members = [
 # target/ and these profile settings, and the napi build would no longer find
 # the artifact where it puts it. Adding them to `members` for tidiness breaks
 # the addon build — leave them excluded.
-exclude = ["canvas-core", "storage-core"]
+exclude = ["canvas-core", "storage-core", "vendor/portable-pty"]
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[patch.crates-io]
+portable-pty = { path = "vendor/portable-pty" }

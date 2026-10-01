@@ -356,19 +356,19 @@
     },
     {
       "raw": "/home/User/Project",
-      "id": "file:/home/user/project"
+      "id": "file:/home/User/Project"
     },
     {
       "raw": "relative/Path",
-      "id": "file:relative/path"
+      "id": "file:relative/Path"
     },
     {
       "raw": "D:\\",
-      "id": "file:d:"
+      "id": "file:D:/"
     },
     {
       "raw": "NoSlashHere",
-      "id": "file:noslashhere"
+      "id": "file:NoSlashHere"
     }
   ]
 }

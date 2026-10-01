@@ -40,7 +40,11 @@ impl Default for ActorRateLimiter {
 
 impl ActorRateLimiter {
     pub fn new(capacity: f64, refill_per_sec: f64) -> Self {
-        Self { buckets: IndexMap::new(), capacity, refill_per_sec }
+        Self {
+            buckets: IndexMap::new(),
+            capacity,
+            refill_per_sec,
+        }
     }
 
     /// A first-seen actor starts with a full bucket, so a burst at the start of
@@ -59,10 +63,10 @@ impl ActorRateLimiter {
                 bucket
             }
             // A new one starts full and is not refilled on the same tick.
-            None => self
-                .buckets
-                .entry(actor_id.to_owned())
-                .or_insert(Bucket { tokens: capacity, last_refill: now }),
+            None => self.buckets.entry(actor_id.to_owned()).or_insert(Bucket {
+                tokens: capacity,
+                last_refill: now,
+            }),
         };
 
         if bucket.tokens >= tokens {

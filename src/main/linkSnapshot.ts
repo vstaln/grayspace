@@ -4,7 +4,7 @@ import { getIpcSocketPath } from './ipcSocket.ts'
 
 const electronApp = (electron as unknown as { app?: { getVersion?: () => string } }).app
 
-export const PACKAGE_FALLBACK_VERSION = '2.0.9'
+export const PACKAGE_FALLBACK_VERSION = '2.2.10'
 
 export function getAppVersion(): string {
   try {

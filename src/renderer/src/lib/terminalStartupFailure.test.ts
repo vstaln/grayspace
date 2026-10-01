@@ -73,7 +73,7 @@ describe('terminal startup probe', () => {
     assert.equal(readStartupOutput(probe, `C:\\work>opencode\r\n${started}`)?.status, 'running')
     const verdict = readStartupOutput(probe, backToShell)
     assert.equal(verdict?.status, 'maybe-exited')
-    assert.match(verdict?.status === 'maybe-exited' ? verdict.message : '', /exited right after starting/)
+    assert.match(verdict?.status === 'maybe-exited' ? verdict.message : '', /exited; the terminal is back at its shell prompt/)
   })
 
   it('stays quiet while the agent keeps running', () => {

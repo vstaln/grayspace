@@ -63,7 +63,9 @@ pub struct LockManager {
 }
 
 fn clamp_ttl(value: Option<i64>, default_ttl: i64) -> i64 {
-    value.unwrap_or(default_ttl).clamp(MIN_LOCK_TTL_MS, MAX_LOCK_TTL_MS)
+    value
+        .unwrap_or(default_ttl)
+        .clamp(MIN_LOCK_TTL_MS, MAX_LOCK_TTL_MS)
 }
 
 pub struct AcquireInput<'a> {
@@ -91,7 +93,10 @@ impl LockManager {
         if parse_resource(input.resource).is_none() {
             return Err(CommandError::new(
                 ErrorCode::Invalid,
-                format!("\"{}\" is not a resource id (expected scheme:id)", input.resource),
+                format!(
+                    "\"{}\" is not a resource id (expected scheme:id)",
+                    input.resource
+                ),
             ));
         }
         let actor_id = input.actor_id.trim();
@@ -120,13 +125,19 @@ impl LockManager {
             // never let go, only extended.
             acquired_at: current.as_ref().map(|c| c.acquired_at).unwrap_or(now),
             expires_at: now + clamp_ttl(input.ttl_ms, self.default_ttl),
-            reason: input.reason.or_else(|| current.as_ref().and_then(|c| c.reason.clone())),
+            reason: input
+                .reason
+                .or_else(|| current.as_ref().and_then(|c| c.reason.clone())),
             // An explicit re-acquire promotes an implicit lock to explicit, but
             // an implicit re-acquire never demotes an explicit one.
             implicit: input.implicit && current.as_ref().map(|c| c.implicit).unwrap_or(true),
         };
 
-        let event = if current.is_some() { LockEvent::Renewed } else { LockEvent::Acquired };
+        let event = if current.is_some() {
+            LockEvent::Renewed
+        } else {
+            LockEvent::Acquired
+        };
         self.locks.insert(lock.resource.clone(), lock.clone());
         self.events.push((event, lock.clone()));
         Ok(lock)

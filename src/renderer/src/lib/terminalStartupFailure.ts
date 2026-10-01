@@ -100,6 +100,14 @@ const MEMORY_MARKERS = [
   'cannot allocate memory'
 ]
 
+// Rust's allocator includes the requested byte count, so this cannot be a
+// fixed marker. Codex prints, for example, "memory allocation of 219136 bytes
+// failed" immediately before aborting.
+const MEMORY_PATTERNS = [
+  /memory allocation of \d+ bytes failed/,
+  /failed to allocate \d+ bytes/
+]
+
 /**
  * A runtime that aborted rather than an agent that chose to exit.
  *
@@ -143,8 +151,11 @@ export function executableName(command: string): string {
 export function startupFailureMessage(output: string, command: string): string | null {
   const text = plainTerminalText(output).toLowerCase()
   const name = executableName(command) || 'The command'
-  if (MEMORY_MARKERS.some((marker) => text.includes(marker))) {
-    return `${name} could not start: the system ran out of memory. Close other sessions or free memory, then launch it again.`
+  if (
+    MEMORY_MARKERS.some((marker) => text.includes(marker)) ||
+    MEMORY_PATTERNS.some((pattern) => pattern.test(text))
+  ) {
+    return `${name} could not start: the system ran out of memory. Close other sessions or enable/increase the OS pagefile, then launch it again.`
   }
   if (MISSING_MARKERS.some((marker) => text.includes(marker))) {
     return `${name} could not start: the command was not found on PATH.`
@@ -205,7 +216,7 @@ export function readStartupOutput(probe: StartupProbe, chunk: string): StartupVe
     } else if (isShellOwnTitle(title)) {
       verdict = {
         status: 'maybe-exited',
-        message: `${executableName(probe.command)} exited right after starting — the terminal is back at its shell prompt.`
+        message: `${executableName(probe.command)} exited; the terminal is back at its shell prompt.`
       }
     } else {
       // Some other command is running under the shell — a launcher shim's

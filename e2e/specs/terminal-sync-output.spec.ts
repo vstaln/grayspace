@@ -8,8 +8,15 @@ test('ordered PTY frames keep the cursor visible across delayed transport and li
   await page.addStyleTag({ path: path.resolve('node_modules/@xterm/xterm/css/xterm.css') })
   await page.addScriptTag({ path: path.resolve('node_modules/@xterm/xterm/lib/xterm.js') })
   for (const [file, name] of [['terminalRenderQueue', 'TerminalRenderQueue'], ['terminalRestore', 'terminalRestoreData']]) {
-    const source = fs.readFileSync(path.resolve(`src/renderer/src/lib/${file}.ts`), 'utf8').replace(/^export /gm, '')
-    await page.addScriptTag({ content: ts.transpile(source + `\nwindow.${name} = ${name}`, { target: ts.ScriptTarget.ES2022 }) })
+    let source = fs.readFileSync(path.resolve(`src/renderer/src/lib/${file}.ts`), 'utf8')
+      .replace(/^import .*$/gm, '')
+      .replace(/^export \{.*$/gm, '')
+      .replace(/^export /gm, '')
+    if (file === 'terminalRestore') {
+      source = `const APP_OWNED_MODE_RESET = '\\x1b[?9l\\x1b[?1000l\\x1b[?1001l\\x1b[?1002l\\x1b[?1003l\\x1b[?1004l\\x1b[?1005l\\x1b[?1006l\\x1b[?1015l\\x1b[?2004l\\x1b[?2026l\\x1b[?1049l\\x1b[?25h\\x1b[?7h\\x1b[?6l\\x1b[4l\\x1b[r'\n${source}`
+    }
+    const exposeReset = file === 'terminalRestore' ? '\nwindow.APP_OWNED_MODE_RESET = APP_OWNED_MODE_RESET' : ''
+    await page.addScriptTag({ content: ts.transpile(source + `\nwindow.${name} = ${name}${exposeReset}`, { target: ts.ScriptTarget.ES2022 }) })
   }
   const results = await page.evaluate(async () => {
     const api = window as any
@@ -80,16 +87,27 @@ test('ordered PTY frames keep the cursor visible across delayed transport and li
       term.dispose()
       document.getElementById('terminal')!.replaceChildren()
     }
+    const resetTerm = new api.Terminal({ cols: 80, rows: 20 })
+    resetTerm.open(document.getElementById('terminal'))
+    await new Promise<void>(resolve => resetTerm.write('\x1b[?1049h\x1b[?6h\x1b[3;7r\x1b[5;1Hstranded', resolve))
+    const beforeReset = resetTerm.buffer.active.type === 'alternate' && resetTerm.modes.originMode === true
+    await new Promise<void>(resolve => resetTerm.write(api.APP_OWNED_MODE_RESET, resolve))
+    const afterReset = resetTerm.buffer.active.type === 'normal' && resetTerm.modes.originMode === false
+    results.push({ mode: 'mode-reset', chunkSize: 0, wrong: [], final: afterReset ? 1 : 0, invisible: beforeReset ? 0 : 1, blurredVisible: true })
+    resetTerm.dispose()
     return results
   })
   expect(results.find(result => result.mode === 'legacy' && result.chunkSize === 128)!.wrong).toContain(3)
   expect(results.find(result => result.mode === 'legacy-restore' && result.chunkSize === 128)!.wrong).toContain(3)
   for (const result of results.filter(result => !result.mode.startsWith('legacy'))) {
+    if (result.mode === 'mode-reset') continue
     expect(result.wrong, `parser chunk ${result.chunkSize}`).toEqual([])
     expect(result.final).toBe(6)
     expect(result.invisible).toBe(0)
     expect(result.blurredVisible).toBe(true)
   }
+  expect(results.find(result => result.mode === 'mode-reset')?.invisible).toBe(0)
+  expect(results.find(result => result.mode === 'mode-reset')?.final).toBe(1)
 })
 
 test('split synchronized frames never paint temporary cursor positions', async ({ page }) => {

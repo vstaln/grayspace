@@ -1,7 +1,6 @@
 // Explicit extension: this module is loaded both by Vite and directly by the
 // node test runner, and node's ESM resolver does not infer it.
 import { capOldest } from './boundedCache.ts'
-
 /**
  * Commands queued to be typed into a terminal the first time it comes up
  * (the agent CLI chosen in the launcher, for instance).
@@ -17,7 +16,15 @@ import { capOldest } from './boundedCache.ts'
  * never started.
  */
 
-const pending = new Map<string, string>()
+interface PendingCommand {
+  command: string
+  notBefore: number
+  delivery?: Promise<InitialCommandWriteResult>
+}
+
+type InitialCommandWriteResult = { ok: true } | { error: string; code?: string }
+
+const pending = new Map<string, PendingCommand>()
 
 /**
  * Terminals whose queued command has been typed. Callers re-queue on every
@@ -33,8 +40,12 @@ const delivered = new Set<string>()
  * nothing to consume it. Capping keeps that from accumulating over a long
  * session; the oldest entry is the one least likely to still be wanted.
  */
+/** Avoid the transient memory spike caused by starting many heavy CLIs together. */
+export const AGENT_LAUNCH_STAGGER_MS = 1_000
 const MAX_PENDING_COMMANDS = 200
 const MAX_DELIVERED_IDS = 500
+let nextLaunchAt = 0
+let nextDeliveryAt = 0
 
 /**
  * Queue a command the user just asked for. Always queues, including for a
@@ -42,7 +53,11 @@ const MAX_DELIVERED_IDS = 500
  * retrying a launch the pty was not ready for, is a new request.
  */
 export function queueInitialCommand(id: string, command: string): void {
-  pending.set(id, command)
+  const now = Date.now()
+  if (pending.size === 0) nextLaunchAt = now
+  const notBefore = Math.max(now, nextLaunchAt)
+  nextLaunchAt = notBefore + AGENT_LAUNCH_STAGGER_MS
+  pending.set(id, { command, notBefore })
   capOldest(pending, MAX_PENDING_COMMANDS)
 }
 
@@ -54,15 +69,49 @@ export function queueInitialCommand(id: string, command: string): void {
  * (does not). Delivery, not connection, clears an entry now, so without this
  * the next remount of a running session would type the agent command a second
  * time into the agent already sitting there.
+ *
+ * A command still queued is left exactly as it is, stagger slot included:
+ * this runs on every state broadcast, and re-queuing would push an already
+ * scheduled launch further back on each one.
  */
 export function queueInitialCommandOnce(id: string, command: string): void {
-  if (delivered.has(id)) return
+  if (delivered.has(id) || pending.has(id)) return
   queueInitialCommand(id, command)
 }
 
 /** Read without consuming — the caller has not delivered anything yet. */
 export function peekInitialCommand(id: string): string | undefined {
-  return pending.get(id)
+  return pending.get(id)?.command
+}
+
+/** Milliseconds until this command may start, or zero when it is ready. */
+export function initialCommandWaitMs(id: string, now = Date.now()): number {
+  const entry = pending.get(id)
+  return entry ? Math.max(0, entry.notBefore - now, nextDeliveryAt - now) : 0
+}
+
+/** Reserve the gap when a command actually starts, after its terminal is ready. */
+export function markInitialCommandStarted(id: string, now = Date.now()): void {
+  if (pending.has(id)) nextDeliveryAt = now + AGENT_LAUNCH_STAGGER_MS
+}
+
+/** Widget remounts join the same write until the main process acknowledges it. */
+export function deliverInitialCommand(
+  id: string,
+  write: (command: string) => Promise<InitialCommandWriteResult>
+): Promise<InitialCommandWriteResult> {
+  const entry = pending.get(id)
+  if (!entry) return Promise.resolve({ ok: true })
+  if (entry.delivery) return entry.delivery
+  markInitialCommandStarted(id)
+  entry.delivery = Promise.resolve()
+    .then(() => pending.get(id) === entry ? write(entry.command) : { error: 'initial command cancelled' })
+    .then((result) => {
+      if (!('error' in result) && pending.get(id) === entry) markInitialCommandDelivered(id)
+      return result
+    })
+    .finally(() => { entry.delivery = undefined })
+  return entry.delivery
 }
 
 /** The command reached the pty: drop it, and refuse to queue it again. */

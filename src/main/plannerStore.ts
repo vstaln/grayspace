@@ -25,6 +25,8 @@ export const PLANNER_SNAPSHOT_INTERVAL = 50
 
 
 
+export type PlanStatus = 'todo' | 'doing' | 'done'
+
 export interface PlanItem {
   id: string
   title: string
@@ -36,6 +38,8 @@ export interface PlanItem {
 
   time?: string
   done: boolean
+  /** Kanban column. Kept in sync with `done` (done === status === 'done') for clients that only know the boolean. */
+  status?: PlanStatus
   createdBy: string
 
   order: number
@@ -89,6 +93,7 @@ export class PlannerStore extends EventEmitter {
     const targetId = event.target.startsWith('plan:') ? event.target.slice('plan:'.length) : event.target
 
     if (event.type === 'plan.create') {
+      const created = resolveCreateStatus(undefined, payload.status)
       const item = revive({
         id: targetId === 'new' ? (payload.id as string) || `plan-${event.at}-${event.seq}` : targetId,
         title: payload.title,
@@ -97,7 +102,8 @@ export class PlannerStore extends EventEmitter {
         day: payload.day,
         time: payload.time,
         attachments: normalizeAttachments(payload.attachments),
-        done: false,
+        done: created.done,
+        status: created.status,
         createdBy: event.actorId,
         order: Number(payload.order) || 0,
         createdAt: event.at,
@@ -108,6 +114,12 @@ export class PlannerStore extends EventEmitter {
     } else if (event.type === 'plan.update') {
       const existing = next.get(targetId)
       if (existing) {
+        const resolved = resolveStatus(
+          typeof payload.done === 'boolean' ? payload.done : undefined,
+          payload.status,
+          existing.done,
+          existing.status
+        )
         const updated: PlanItem = {
           ...existing,
           title: typeof payload.title === 'string' && payload.title.trim() ? payload.title.trim().slice(0, 200) : existing.title,
@@ -115,7 +127,8 @@ export class PlannerStore extends EventEmitter {
           project: payload.project !== undefined ? (payload.project === null ? undefined : normalizeProject(payload.project)) : existing.project,
           day: payload.day !== undefined ? (payload.day === null ? undefined : normalizeDay(payload.day)) : existing.day,
           time: payload.time !== undefined ? (payload.time === null ? undefined : normalizeTime(payload.time)) : existing.time,
-          done: typeof payload.done === 'boolean' ? payload.done : existing.done,
+          done: resolved.done,
+          status: resolved.status,
           order: typeof payload.order === 'number' && Number.isFinite(payload.order) ? payload.order : existing.order,
           attachments:
             payload.attachments !== undefined
@@ -131,10 +144,16 @@ export class PlannerStore extends EventEmitter {
     } else if (event.type === 'plan.toggle') {
       const existing = next.get(targetId)
       if (existing) {
-        const done = typeof payload.done === 'boolean' ? payload.done : !existing.done
+        const resolved = resolveStatus(
+          typeof payload.done === 'boolean' ? payload.done : !existing.done,
+          undefined,
+          existing.done,
+          existing.status
+        )
         next.set(targetId, {
           ...existing,
-          done,
+          done: resolved.done,
+          status: resolved.status,
           updatedAt: event.at,
           version: event.version ?? existing.version + 1
         })
@@ -389,6 +408,7 @@ export class PlannerStore extends EventEmitter {
     attachments?: string[]
     createdBy: string
     done?: boolean
+    status?: string
   }, overlayId?: string): PlanItem {
     this.ensure()
     const title = input.title?.trim().slice(0, 200)
@@ -397,6 +417,7 @@ export class PlannerStore extends EventEmitter {
     const now = Date.now()
     const id = (typeof input.id === 'string' && input.id.trim()) ? input.id.trim() : this.nextId()
     const attachments = normalizeAttachments(input.attachments)
+    const created = resolveCreateStatus(input.done, input.status)
     const item: PlanItem = {
       id,
       title,
@@ -404,7 +425,8 @@ export class PlannerStore extends EventEmitter {
       project: normalizeProject(input.project),
       day,
       time: normalizeTime(input.time),
-      done: input.done === true,
+      done: created.done,
+      status: created.status,
       createdBy: input.createdBy,
       order: this.nextOrder(day),
       createdAt: now,
@@ -427,6 +449,7 @@ export class PlannerStore extends EventEmitter {
       day?: string | null
       time?: string | null
       done?: boolean
+      status?: string
       order?: number
       attachments?: string[] | null
     },
@@ -446,7 +469,11 @@ export class PlannerStore extends EventEmitter {
     if (patch.time !== undefined) {
       item.time = patch.time === null ? undefined : normalizeTime(patch.time)
     }
-    if (typeof patch.done === 'boolean') item.done = patch.done
+    if (typeof patch.done === 'boolean' || patch.status !== undefined) {
+      const resolved = resolveStatus(patch.done, patch.status, item.done, item.status)
+      item.done = resolved.done
+      item.status = resolved.status
+    }
     if (typeof patch.order === 'number' && Number.isFinite(patch.order)) item.order = patch.order
     if (patch.attachments !== undefined) {
       const attachments = normalizeAttachments(patch.attachments)
@@ -545,6 +572,42 @@ function safeTime(value: unknown): string | undefined {
   }
 }
 
+function normalizeStatus(value: unknown): PlanStatus | undefined {
+  if (value === undefined || value === null) return undefined
+  if (value === 'todo' || value === 'doing' || value === 'done') return value
+  throw new CommandError('invalid', 'status must be "todo", "doing" or "done"')
+}
+
+function safeStatus(value: unknown): PlanStatus | undefined {
+  try {
+    return normalizeStatus(value)
+  } catch {
+    return undefined
+  }
+}
+
+/** Kanban's `status` and Planner's `done` describe the same lifecycle from two angles; a write to either keeps both consistent, with an explicit `status` taking precedence over a same-call `done`. */
+function resolveStatus(
+  patchDone: boolean | undefined,
+  patchStatus: unknown,
+  existingDone: boolean,
+  existingStatus: PlanStatus | undefined
+): { done: boolean; status: PlanStatus } {
+  const explicitStatus = patchStatus !== undefined ? normalizeStatus(patchStatus) : undefined
+  if (explicitStatus) return { done: explicitStatus === 'done', status: explicitStatus }
+  if (typeof patchDone === 'boolean') {
+    return { done: patchDone, status: patchDone ? 'done' : existingStatus === 'done' ? 'todo' : (existingStatus ?? 'todo') }
+  }
+  return { done: existingDone, status: existingStatus ?? (existingDone ? 'done' : 'todo') }
+}
+
+function resolveCreateStatus(inputDone: boolean | undefined, inputStatus: unknown): { done: boolean; status: PlanStatus } {
+  const explicitStatus = inputStatus !== undefined ? normalizeStatus(inputStatus) : undefined
+  if (explicitStatus) return { done: explicitStatus === 'done', status: explicitStatus }
+  const done = inputDone === true
+  return { done, status: done ? 'done' : 'todo' }
+}
+
 function revive(entry: unknown): PlanItem | null {
   if (!entry || typeof entry !== 'object') return null
   const raw = entry as Record<string, unknown>
@@ -553,6 +616,7 @@ function revive(entry: unknown): PlanItem | null {
   if (!id || !title) return null
   const now = Date.now()
   const attachments = normalizeAttachments(raw.attachments) ?? normalizeAttachments(raw.image ? [raw.image] : undefined)
+  const done = raw.done === true
   return {
     id,
     title,
@@ -560,7 +624,8 @@ function revive(entry: unknown): PlanItem | null {
     project: normalizeProject(raw.project),
     day: safeDay(raw.day),
     time: safeTime(raw.time),
-    done: raw.done === true,
+    done,
+    status: safeStatus(raw.status) ?? (done ? 'done' : 'todo'),
     createdBy: typeof raw.createdBy === 'string' ? raw.createdBy : 'user',
     order: Number.isFinite(raw.order) ? Number(raw.order) : 0,
     createdAt: Number(raw.createdAt) || now,

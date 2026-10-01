@@ -8,8 +8,11 @@ export function isTrustedAppNavigation(
     const parsed = new URL(url)
     if (parsed.protocol === 'orc:') return parsed.hostname === 'app'
     if (parsed.protocol === 'file:') {
-      const normalizeFilePath = (value: string): string =>
-        value.replace(/\\/g, '/').replace(/^\/([a-z]:\/)/i, '$1').toLowerCase()
+      if (parsed.host) return false
+      const normalizeFilePath = (value: string): string => {
+        const path = value.replace(/\\/g, '/').replace(/^\/([a-z]:\/)/i, '$1')
+        return process.platform === 'win32' || process.platform === 'darwin' ? path.toLowerCase() : path
+      }
       return normalizeFilePath(decodeURIComponent(parsed.pathname)) === normalizeFilePath(options.rendererFile)
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false

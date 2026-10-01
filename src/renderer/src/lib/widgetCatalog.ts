@@ -18,5 +18,8 @@ export const WIDGET_CATALOG = [
   { kind: 'image', label: 'Image', hint: 'Pinned image from the clipboard or a file' },
   { kind: 'links', label: 'Links', hint: 'Saved links' },
   { kind: 'music-player', label: 'Music Player', hint: 'Stream YouTube, Yandex Music, Spotify or MP3 links' },
-  { kind: 'chat', label: 'AI Chat', hint: 'Chat with an authenticated model' }
+  { kind: 'chat', label: 'AI Chat', hint: 'Chat with an authenticated model' },
+  { kind: 'notes', label: 'Notes', hint: 'Tagged notes with a color per category' },
+  { kind: 'calendar', label: 'Calendar', hint: 'Month view of your planner tasks' },
+  { kind: 'kanban', label: 'Kanban', hint: 'Todo / Doing / Done board for your planner tasks' }
 ] as const satisfies readonly WidgetCatalogEntry[]

@@ -100,12 +100,21 @@ impl Args {
                 index += 1;
                 continue;
             }
+            if matches!(
+                stripped,
+                "json" | "all" | "close" | "open" | "ready" | "wait"
+            ) {
+                args.flags.insert(stripped.to_owned(), Value::Bool(true));
+                index += 1;
+                continue;
+            }
             // A following token that is itself a flag means this one is a bare
             // boolean, not a flag whose value happens to look like a flag.
             let next = argv.get(index + 1);
             match next {
                 Some(value) if !value.starts_with("--") => {
-                    args.flags.insert(stripped.to_owned(), Value::from(value.clone()));
+                    args.flags
+                        .insert(stripped.to_owned(), Value::from(value.clone()));
                     index += 2;
                 }
                 _ => {
@@ -131,6 +140,10 @@ impl Args {
 
     pub fn flag(&self, name: &str) -> bool {
         matches!(self.flags.get(name), Some(Value::Bool(true)))
+    }
+
+    pub fn positionals(&self) -> &[String] {
+        &self.positional
     }
 
     /// A flag, or the positional at `index` if no alias carries a value.
@@ -260,7 +273,11 @@ pub fn plan(command: &str, args: &Args) -> CommandResult<Plan> {
 
         // --- dispatches -----------------------------------------------------
         "worker-start" | "dispatch" => {
-            let task = args.require(&["task", "taskId"], 1, "worker-start needs --task <task-id>")?;
+            let task = args.require(
+                &["task", "taskId"],
+                1,
+                "worker-start needs --task <task-id>",
+            )?;
             Ok(Plan::post(
                 "/orchestration/dispatches",
                 object(vec![
@@ -277,12 +294,19 @@ pub fn plan(command: &str, args: &Args) -> CommandResult<Plan> {
                 1,
                 &format!("{command} needs <dispatch-id>"),
             )?;
-            let state = if command == "worker-retain" { "retained" } else { "released" };
+            let state = if command == "worker-retain" {
+                "retained"
+            } else {
+                "released"
+            };
             Ok(Plan::post(
                 format!("/orchestration/dispatches/{}/account", encode(&id)),
                 object(vec![
                     ("state", Some(Value::from(state))),
-                    ("closeTerminal", args.flag("close").then(|| Value::Bool(true))),
+                    (
+                        "closeTerminal",
+                        args.flag("close").then(|| Value::Bool(true)),
+                    ),
                 ]),
             ))
         }
@@ -292,7 +316,10 @@ pub fn plan(command: &str, args: &Args) -> CommandResult<Plan> {
                 1,
                 "worker-show needs <dispatch-id>",
             )?;
-            Ok(Plan::get(format!("/orchestration/dispatches/{}", encode(&id))))
+            Ok(Plan::get(format!(
+                "/orchestration/dispatches/{}",
+                encode(&id)
+            )))
         }
         "dispatches" => Ok(Plan::get("/orchestration/dispatches")
             .query("runId", args.pick(&["run", "runId"]))
@@ -300,11 +327,7 @@ pub fn plan(command: &str, args: &Args) -> CommandResult<Plan> {
 
         // --- reporting ------------------------------------------------------
         "done" => {
-            let outcome = args.require(
-                &["outcome"],
-                1,
-                "done needs --outcome succeeded|failed",
-            )?;
+            let outcome = args.require(&["outcome"], 1, "done needs --outcome succeeded|failed")?;
             if outcome != "succeeded" && outcome != "failed" {
                 return Err(CommandError::new(
                     ErrorCode::Invalid,
@@ -319,7 +342,10 @@ pub fn plan(command: &str, args: &Args) -> CommandResult<Plan> {
                     ("taskId", text(args.pick(&["task", "taskId"]))),
                     ("dispatchId", text(args.pick(&["dispatch", "dispatchId"]))),
                     ("body", text(args.pick(&["body", "message"]))),
-                    ("filesModified", list_value(args.list(&["files", "filesModified"]))),
+                    (
+                        "filesModified",
+                        list_value(args.list(&["files", "filesModified"])),
+                    ),
                     ("runId", text(args.pick(&["run", "runId"]))),
                 ]),
             ))
@@ -363,7 +389,8 @@ pub fn plan(command: &str, args: &Args) -> CommandResult<Plan> {
                     (
                         "subject",
                         Some(Value::from(
-                            args.pick(&["subject"]).unwrap_or_else(|| default_subject.to_owned()),
+                            args.pick(&["subject"])
+                                .unwrap_or_else(|| default_subject.to_owned()),
                         )),
                     ),
                     ("options", list_value(args.list(&["options"]))),
@@ -455,7 +482,11 @@ pub fn plan(command: &str, args: &Args) -> CommandResult<Plan> {
         // --- permissions ----------------------------------------------------
         // Three spellings each, because agents have been told all of them.
         "allow" | "approve" | "permit" | "deny" | "reject" | "refuse" => {
-            let id = args.require(&["id", "permission"], 1, &format!("{command} needs <permission-id>"))?;
+            let id = args.require(
+                &["id", "permission"],
+                1,
+                &format!("{command} needs <permission-id>"),
+            )?;
             let granted = matches!(command, "allow" | "approve" | "permit");
             Ok(Plan::post(
                 "/orchestration/messages",
@@ -476,8 +507,9 @@ pub fn plan(command: &str, args: &Args) -> CommandResult<Plan> {
         }
 
         // --- status ---------------------------------------------------------
-        "status" | "st" => Ok(Plan::get("/orchestration")
-            .query("runId", args.pick(&["run", "runId"]))),
+        "status" | "st" => {
+            Ok(Plan::get("/orchestration").query("runId", args.pick(&["run", "runId"])))
+        }
         "version" => Ok(Plan::get("/health")),
 
         _ => Err(CommandError::new(

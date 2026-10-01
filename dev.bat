@@ -53,7 +53,7 @@ REM Use a persistent portable Node 22 runtime when a newer system Node is
 REM selected, then put it first on PATH so npm lifecycle scripts use it too.
 REM The runtime lives in %LOCALAPPDATA%\Orcspace\node22 and is downloaded once
 REM (official nodejs.org zip); every later launch is just an `if exist` check.
-set "ORC_NODE22_VERSION=22.14.0"
+set "ORC_NODE22_VERSION=22.18.0"
 if !ORC_NODE_MAJOR! GEQ 25 (
   set "ORC_NODE=%LOCALAPPDATA%\Orcspace\node22\node-v!ORC_NODE22_VERSION!-win-x64\node.exe"
   if not exist "!ORC_NODE!" (

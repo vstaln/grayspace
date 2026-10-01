@@ -195,7 +195,7 @@ pub fn format_js_number(value: f64) -> String {
             out.push_str(&digits[1..]);
         }
         out.push('e');
-        if n - 1 >= 0 {
+        if n > 0 {
             out.push('+');
         }
         out.push_str(&(n - 1).to_string());

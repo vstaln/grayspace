@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test'
 import { launchOrcSpace, waitForCanvas, closeOrcSpace } from '../helpers/app'
-import { frameStats, estimateRefreshMs } from '../../src/renderer/src/lib/frameMetrics'
+import { BUDGET_60HZ_MS, frameStats, estimateRefreshMs, meetsStable60 } from '../../src/renderer/src/lib/frameMetrics'
 
 for (const terminalCount of [1, 3]) test(`keyboard echo stays responsive with ${terminalCount} streaming terminals`, async () => {
-  const ctx = await launchOrcSpace()
+  const ctx = await launchOrcSpace({ gpu: process.env.ORCSPACE_E2E_GPU === '1' })
   try {
     const { page } = ctx
     await ctx.app.evaluate(({ BrowserWindow }) => {
@@ -13,6 +13,16 @@ for (const terminalCount of [1, 3]) test(`keyboard echo stays responsive with ${
       window.focus()
     })
     await waitForCanvas(page)
+    if (process.env.ORCSPACE_E2E_GPU === '1') {
+      const gpu = await ctx.app.evaluate(({ app }) => ({
+        disabled: app.commandLine.hasSwitch('disable-gpu'),
+        acceleration: app.isHardwareAccelerationEnabled(),
+        features: app.getGPUFeatureStatus()
+      }))
+      console.log(JSON.stringify({ terminalCount, gpu }))
+      expect(gpu.disabled).toBe(false)
+      expect(gpu.acceleration).toBe(true)
+    }
     await page.evaluate(() => window.api.workspace.create(`latency-${Date.now()}`))
     await page.getByRole('tab', { name: 'Code', exact: true }).click()
     await page.evaluate(async (count) => {
@@ -78,6 +88,10 @@ for (const terminalCount of [1, 3]) test(`keyboard echo stays responsive with ${
     ) }))
     expect(ordered[24]).toBeLessThan(100)
     expect(stats.p95Ms).toBeLessThan(35)
+    if (process.env.ORCSPACE_E2E_GPU === '1') {
+      const result = meetsStable60(frameStats(metrics.frames, BUDGET_60HZ_MS))
+      expect(result.reasons).toEqual([])
+    }
   } finally {
     await closeOrcSpace(ctx)
   }

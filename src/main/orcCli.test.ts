@@ -16,6 +16,7 @@ const { registerCommands } = await import('./commands/index.ts')
 const { TerminalManager } = await import('./terminals.ts')
 const { TerminalSnapshots } = await import('./terminalSnapshots.ts')
 const { PlannerStore } = await import('./plannerStore.ts')
+const { NotesStore } = await import('./notesStore.ts')
 const { CanvasStore } = await import('./canvasState.ts')
 const { startControlServer } = await import('./controlServer.ts')
 const { controlToken } = await import('./controlToken.ts')
@@ -31,6 +32,7 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
   let orchestration: InstanceType<typeof OrchestrationStore>
   let terminals: InstanceType<typeof TerminalManager>
   let planner: InstanceType<typeof PlannerStore>
+  let notes: InstanceType<typeof NotesStore>
   let canvas: InstanceType<typeof CanvasStore>
   let snapshots: InstanceType<typeof TerminalSnapshots>
   const cliPath = join(process.cwd(), 'cli', 'orc.mjs')
@@ -43,6 +45,7 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
     orchestration = new OrchestrationStore({ file: join(userData, 'orchestration.json') })
     terminals = new TerminalManager()
     planner = new PlannerStore()
+    notes = new NotesStore()
     canvas = new CanvasStore()
     snapshots = new TerminalSnapshots()
 
@@ -50,6 +53,7 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
       core,
       canvas,
       planner,
+      notes,
       orchestration,
       terminals,
       snapshots,
@@ -82,6 +86,7 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
       core,
       terminals,
       planner,
+      notes,
       orchestration,
       canvas,
       port: testPort,
@@ -498,7 +503,7 @@ describe('orc CLI - Functional, Performance & Integration Tests', () => {
       ? `\\\\.\\pipe\\orcspace-production-test-${process.pid}`
       : join(userData, 'production.sock')
     const ipc = startControlServer({
-      core, terminals, planner, orchestration, canvas,
+      core, terminals, planner, notes, orchestration, canvas,
       state: { workspaceDir: userData } as never,
       defaultCwd: () => userData,
       allowTcp: controlTcpEnabled(true), port: testPort, socketPath

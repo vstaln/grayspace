@@ -8,7 +8,8 @@ import OpenCodeIcon from './OpenCodeIcon'
 import CursorIcon from './CursorIcon'
 import KimiIcon from './KimiIcon'
 import { useFocusTrap } from '../hooks/useFocusTrap'
-import { launchMemoryWarning } from '../lib/launchMemory'
+import { useSettings } from '../hooks/useSettings'
+import { agentLaunchCapacity, launchMemoryWarning, type AgentLaunchMemory } from '../lib/launchMemory'
 
 export const MAX_CODE_SESSIONS = 32
 export const CODE_LAUNCH_COUNTS = [1, 2, 4, 6, 8, 10, 12] as const
@@ -48,19 +49,34 @@ export default function CodeLauncher({
   const [selectedAgentId, setSelectedAgentId] = useState<string>('claude')
   const [count, setCount] = useState(1)
   const [customCommand, setCustomCommand] = useState('')
-  // Read once, when the dialog opens: the figure only has to be right at the
-  // moment the user decides how many sessions to start.
-  const [freeMemory, setFreeMemory] = useState(0)
+  const { settings } = useSettings()
+  // Re-read while the dialog is open: it gates the Launch button now, and a
+  // dialog left open for a few minutes was deciding on a figure from whenever
+  // it was opened.
+  const [memory, setMemory] = useState<AgentLaunchMemory>({ freeBytes: 0, totalBytes: 0 })
   const dialogRef = useRef<HTMLElement>(null)
   useFocusTrap(dialogRef, true)
 
   useEffect(() => {
     let alive = true
-    void window.api.system.stats().then((stats) => {
-      if (alive && 'freeMem' in stats) setFreeMemory(stats.freeMem)
-    }).catch(() => {})
+    const refresh = (): void => {
+      void window.api.system.memory().then((stats) => {
+        if (!alive || !('freeMem' in stats)) return
+        setMemory({
+          freeBytes: stats.freeMem,
+          availableBytes: stats.availableMem,
+          totalBytes: stats.totalMem,
+          swapFreeBytes: stats.swapFree,
+          swapTotalBytes: stats.swapTotal,
+          platform: stats.platform
+        })
+      }).catch(() => {})
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 15_000)
     return () => {
       alive = false
+      window.clearInterval(timer)
     }
   }, [])
 
@@ -76,7 +92,22 @@ export default function CodeLauncher({
   }, [onClose])
 
   const remaining = Math.max(0, MAX_CODE_SESSIONS - currentCount)
-  const baseAgent = CODE_AGENTS.find((a) => a.id === selectedAgentId) || CODE_AGENTS[0]
+  const customAgentChoices = (settings.customCodeAgents ?? []).map((entry) => ({
+    selectionId: `preset:${entry.id}`,
+    agent: { id: 'custom', label: entry.name, command: entry.command, Icon: Terminal }
+  }))
+  const fixedChoices = CODE_AGENTS.filter((agent) => agent.id !== 'custom').map((agent) => ({
+    selectionId: agent.id,
+    agent
+  }))
+  const customChoice = CODE_AGENTS.find((agent) => agent.id === 'custom')
+  const choices = [
+    ...fixedChoices,
+    ...customAgentChoices,
+    ...(customChoice ? [{ selectionId: 'custom', agent: customChoice }] : [])
+  ]
+  const selectedChoice = choices.find((choice) => choice.selectionId === selectedAgentId)
+  const baseAgent = selectedChoice?.agent ?? CODE_AGENTS[0]
   const effectiveAgent: CodeAgent =
     selectedAgentId === 'custom'
       ? {
@@ -86,15 +117,38 @@ export default function CodeLauncher({
         }
       : baseAgent
 
-  const launchCount = Math.min(count, remaining)
+  // The browser is one embedded widget, regardless of the count selected for
+  // CLI agents before it.
+  const isBrowser = selectedChoice?.agent.id === 'browser'
+  const launchCount = isBrowser ? 1 : count
   // A browser widget is a webview inside this process, not an agent CLI, so
-  // the per-agent estimate does not apply to it.
-  const memoryWarning =
-    selectedAgentId === 'browser' ? null : launchMemoryWarning(freeMemory, launchCount)
+  // neither the per-agent estimate nor the memory budget applies to it.
+  // Unmeasured memory falls back to the session cap alone: a stats read that
+  // is slow or fails must not leave the Launch button permanently dead.
+  const available = isBrowser ? remaining : agentLaunchCapacity(memory, remaining)
+  const memoryWarning = isBrowser ? null : launchMemoryWarning(memory, launchCount)
+  // Only the fixed session cap can be the limiter here without the warning
+  // above already explaining it, so say so rather than just greying buttons.
+  const cappedBySessions = !memoryWarning && launchCount > available
   const canLaunch =
+    Boolean(selectedChoice) &&
     (selectedAgentId !== 'custom' || customCommand.trim().length > 0) &&
     launchCount > 0 &&
+    launchCount <= available &&
     effectiveAgent.command.length > 0
+
+  // Without this a selection made before the budget shrank just greys the
+  // Launch button out, with the reason sitting on buttons the user is not
+  // looking at. Step down to the largest offered count that still fits.
+  useEffect(() => {
+    if (isBrowser) {
+      if (count !== 1) setCount(1)
+      return
+    }
+    if (available <= 0 || count <= available) return
+    const fits = CODE_LAUNCH_COUNTS.filter((n) => n <= available)
+    setCount(fits.length > 0 ? fits[fits.length - 1] : available)
+  }, [available, count, isBrowser])
 
   const handleLaunch = (): void => {
     if (!canLaunch) return
@@ -115,7 +169,7 @@ export default function CodeLauncher({
         role="dialog"
         aria-modal="true"
         aria-label="Launch Code Session"
-        className="pop-in flex w-[560px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-panel border border-line bg-bg-panel shadow-[0_24px_80px_rgba(0,0,0,0.5)]"
+        className="pop-in flex max-h-[calc(100vh-32px)] w-[560px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-panel border border-line bg-bg-panel shadow-[0_24px_80px_rgba(0,0,0,0.5)]"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className="flex flex-none items-center justify-between border-b border-line-soft bg-bg-raise px-5 py-4">
@@ -136,22 +190,22 @@ export default function CodeLauncher({
           </button>
         </header>
 
-        <div className="flex flex-col gap-5 p-5">
+        <div className="flex flex-col gap-5 overflow-y-auto p-5">
           <div>
             <p className="mb-2 text-[11px] font-medium tracking-[0.08em] text-text-faint uppercase">
               Agent or widget
             </p>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-              {CODE_AGENTS.map((a) => {
-                const isSelected = a.id === selectedAgentId
+              {choices.map(({ selectionId, agent: a }) => {
+                const isSelected = selectionId === selectedAgentId
                 const IconComponent = a.Icon
                 return (
                   <button
-                    key={a.id}
+                    key={selectionId}
                     type="button"
                     aria-pressed={isSelected}
                     onClick={() => {
-                      setSelectedAgentId(a.id)
+                      setSelectedAgentId(selectionId)
                       if (a.id === 'browser') setCount(1)
                     }}
                     className={`flex flex-col items-start gap-2.5 rounded-panel border p-3 text-left transition-colors duration-150 ${
@@ -198,7 +252,7 @@ export default function CodeLauncher({
                     key={n}
                     type="button"
                     aria-pressed={count === n}
-                    disabled={n > remaining || (selectedAgentId === 'browser' && n !== 1)}
+                    disabled={n > available || (selectedAgentId === 'browser' && n !== 1)}
                     onClick={() => setCount(n)}
                     className={`min-h-[36px] min-w-[40px] rounded-panel px-3 py-1.5 text-xs font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-30 ${
                       count === n
@@ -213,8 +267,8 @@ export default function CodeLauncher({
             </div>
             <p className="text-[11px] text-text-faint">
               Opens {launchCount}× <span className="text-text">{effectiveAgent.label}</span>
-              {launchCount !== count && (
-                <span className="text-danger"> (capped: {remaining} left)</span>
+              {cappedBySessions && (
+                <span className="text-danger"> (only {remaining} session{remaining === 1 ? '' : 's'} left)</span>
               )}
             </p>
             {memoryWarning && (

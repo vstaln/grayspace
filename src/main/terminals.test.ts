@@ -124,6 +124,64 @@ describe('TerminalManager', () => {
     manager.disposeAll()
   })
 
+  test('PTY output pauses until renderer parsing catches up', () => {
+    class FakeRustPty extends EventEmitter {
+      outputPauses: boolean[] = []
+      spawn(): { ok: true } { return { ok: true } }
+      write(): { ok: true } { return { ok: true } }
+      resize(): { ok: true } { return { ok: true } }
+      pauseOutput(_id: string, paused: boolean): { ok: true } {
+        this.outputPauses.push(paused)
+        return { ok: true }
+      }
+      dispose(): { ok: true } { return { ok: true } }
+      beginClose(): void {}
+      close(): void {}
+    }
+
+    const sidecar = new FakeRustPty()
+    const manager = new TerminalManager({ rustPty: sidecar as never })
+    const term = manager.reserve()
+    assert.equal(manager.spawn(term.id, 80, 24).ok, true)
+
+    manager.noteRendererOutput(term.id, 256 * 1024 - 1, 1)
+    assert.deepEqual(sidecar.outputPauses, [])
+    manager.noteRendererOutput(term.id, 1, 2)
+    assert.deepEqual(sidecar.outputPauses, [true])
+
+    manager.acknowledgeRendererOutput(term.id, 1)
+    assert.deepEqual(sidecar.outputPauses, [true, false])
+    manager.acknowledgeRendererOutput(term.id, 1)
+    assert.deepEqual(sidecar.outputPauses, [true, false], 'duplicate widget ACKs do not subtract twice')
+
+    manager.noteRendererOutput(term.id, 256 * 1024, 3)
+    manager.resetRendererOutput(term.id)
+    assert.deepEqual(sidecar.outputPauses, [true, false, true, false])
+    manager.disposeAll()
+  })
+
+  test('node-pty output resumes after the matching render acknowledgement', () => {
+    const manager = new TerminalManager()
+    const term = manager.reserve()
+    const calls: string[] = []
+    const record = (manager as unknown as { terminals: Map<string, { pty: unknown }> }).terminals.get(term.id)
+    assert.ok(record)
+    record.pty = {
+      pause: () => calls.push('pause'),
+      resume: () => calls.push('resume'),
+      kill: () => {},
+      onData: () => ({ dispose: () => {} }),
+      onExit: () => ({ dispose: () => {} })
+    }
+
+    manager.noteRendererOutput(term.id, 256 * 1024, 10)
+    assert.deepEqual(calls, ['pause'])
+    manager.acknowledgeRendererOutput(term.id, 10)
+    assert.deepEqual(calls, ['pause', 'resume'])
+
+    manager.disposeAll()
+  })
+
   test('setTitle maps placeholders to auto names and emits title', () => {
     const manager = new TerminalManager({ getFavoriteNames: () => ['backend'] })
     const term = manager.reserve({ title: 'backend' })
@@ -567,7 +625,9 @@ describe('TerminalManager', () => {
 
   test('a native async spawn failure falls back without exiting the terminal', () => {
     class FakeRustPty extends EventEmitter {
+      failedWrites: string[] = []
       spawn(): { ok: true } { return { ok: true } }
+      failTerminalWrites(id: string): void { this.failedWrites.push(id) }
       write(): { ok: true } { return { ok: true } }
       resize(): { ok: true } { return { ok: true } }
       dispose(): { ok: true } { return { ok: true } }
@@ -590,6 +650,7 @@ describe('TerminalManager', () => {
     sidecar.emit('spawn-error', term.id, new Error('invalid working directory'))
 
     assert.equal(fallbackCalls, 1)
+    assert.deepEqual(sidecar.failedWrites, [term.id], 'writes waiting on the dead session are failed')
     assert.deepEqual(exits, [])
     manager.disposeAll()
   })

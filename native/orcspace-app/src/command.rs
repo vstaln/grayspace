@@ -75,7 +75,11 @@ pub struct CommandError {
 
 impl CommandError {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), details: None }
+        Self {
+            code,
+            message: message.into(),
+            details: None,
+        }
     }
 
     pub fn with_details(
@@ -83,7 +87,11 @@ impl CommandError {
         message: impl Into<String>,
         details: serde_json::Value,
     ) -> Self {
-        Self { code, message: message.into(), details: Some(details) }
+        Self {
+            code,
+            message: message.into(),
+            details: Some(details),
+        }
     }
 }
 

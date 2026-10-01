@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, MessageSquareText, X } from 'lucide-react'
+import { AlertTriangle, MessageSquareText, Terminal as TerminalIcon, X } from 'lucide-react'
 import { Terminal, ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import '@xterm/xterm/css/xterm.css'
 import { ThemeName, useTheme } from '../theme'
 import { attachmentAgent, imagePasteShortcut, insertAttachments, isTerminalPasteShortcut } from '../lib/terminalAttachments'
-import { clearInitialCommand, markInitialCommandDelivered, peekInitialCommand } from '../lib/pendingTerminalCommands'
+import { clearInitialCommand, deliverInitialCommand, initialCommandWaitMs, markInitialCommandDelivered, peekInitialCommand } from '../lib/pendingTerminalCommands'
 import { initialCommandVerdict } from '../lib/initialCommandGate'
 import { IS_MAC } from '../lib/platform'
 import { TerminalRenderQueue } from '../lib/terminalRenderQueue'
@@ -32,22 +32,8 @@ import {
 
 const cachedSubmit = '\r'
 
-/**
- * Trailing debounce for geometry updates sent to the pty. The local xterm is
- * still fitted immediately so the view always matches its container — only
- * the notification to the shell is delayed.
- *
- * This exists because of ConPTY: every pty resize makes it repaint the whole
- * viewport (`ESC[H ESC[K \r\n <prompt> ESC[K (\r\n ESC[K)*rows`, cursor back
- * to the prompt). The repaint is generated for the size the pty *currently*
- * has. While a widget is being drag-resized the xterm already moved on to a
- * newer size by the time the repaint arrives, so the repaint's newlines
- * overflow the viewport and scroll — each one parks another copy of the
- * prompt in the scrollback (the "new lines appear while stretching" bug).
- * Coalescing a drag into one trailing resize means the repaint arrives while
- * the xterm is stable at that same size and redraws in place, cleanly.
- */
-const RESIZE_SEND_DELAY_MS = 150
+/** Keep xterm and the PTY at one geometry while a widget is being resized. */
+const RESIZE_SETTLE_DELAY_MS = 150
 
 
 
@@ -81,6 +67,8 @@ interface Props {
   flipped?: boolean
   onProcessExit?: () => void
 }
+
+type StartupNotice = { message: string; tone: 'error' | 'info' }
 
 
 const BASE_COLORS = {
@@ -147,7 +135,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
    * agent has usually cleared the screen on its way out — anything written
    * there goes with it, which is how this looked like a black card.
    */
-  const [startupFailure, setStartupFailure] = useState<string | null>(null)
+  const [startupNotice, setStartupNotice] = useState<StartupNotice | null>(null)
   const [lastPrompt, setLastPrompt] = useState('')
   const { theme } = useTheme()
 
@@ -202,7 +190,14 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       fontSize: 13,
       fontFamily: 'Consolas, "Cascadia Mono", monospace',
       lineHeight: 1,
-      scrollback: 5000,
+      // Deliberately short, and a user-visible reduction from 5000.
+      //
+      // Every open terminal holds its own buffer in the renderer, and a canvas
+      // full of agent sessions is the case this app is built for: at 5000 lines
+      // the buffers alone were a large multiple of what the agents themselves
+      // could then not allocate. Persisted scrollback is unaffected — snapshots
+      // keep their own 64KB tail on disk and restore it on mount.
+      scrollback: 1500,
       cursorBlink: true,
       cursorInactiveStyle: 'outline',
       convertEol: false,
@@ -262,8 +257,8 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       flushChannel.port2.postMessage(null)
     }
     flushChannel.port1.onmessage = flushWrites
-    const batchedWrite = (data: string): void => {
-      renderQueue.push(data)
+    const batchedWrite = (data: string, onParsed?: () => void): void => {
+      renderQueue.push(data, onParsed)
     }
     // Ordered, backpressured writes for large restores: each slice is handed
     // to xterm only after the previous one was parsed, so the UI thread is
@@ -292,10 +287,6 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       // away from the bottom. Invalidate that anchor for this restore.
       resizeAnchor = null
       resizeAnchorGeneration += 1
-      if (resizeRestoreTimer !== null) {
-        clearTimeout(resizeRestoreTimer)
-        resizeRestoreTimer = null
-      }
       renderQueue.pause(true)
       term.options.disableStdin = true
       let offset = 0
@@ -346,19 +337,25 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
         if (mounted) restoreViewport()
       })
     }
-    type ViewportAnchor = { line: number; atBottom: boolean }
+    type ViewportAnchor = { line: number; atBottom: boolean; bufferType: 'normal' | 'alternate' }
     const captureViewportAnchor = (): ViewportAnchor => {
       const activeBuffer = term.buffer.active
       return {
         line: activeBuffer.viewportY,
-        atBottom: activeBuffer.viewportY >= activeBuffer.baseY
+        atBottom: activeBuffer.viewportY >= activeBuffer.baseY,
+        bufferType: activeBuffer.type === 'alternate' ? 'alternate' : 'normal'
       }
     }
     const applyViewportAnchor = (anchor: ViewportAnchor): void => {
       if (!mounted) return
       // Fullscreen TUIs live on the alternate screen buffer — forcing scroll
-      // positions there corrupts the rendered frame.
-      if (term.buffer.active.type === 'alternate') return
+      // positions there corrupts the rendered frame. Anchors are also never
+      // replayed across buffers: an offset captured inside Codex (typically
+      // line 0, not at bottom) applied to the normal buffer after its exit
+      // yanks the viewport to the very top — the "I type at the top" state.
+      const currentType = term.buffer.active.type === 'alternate' ? 'alternate' : 'normal'
+      if (currentType === 'alternate') return
+      if (anchor.bufferType !== currentType) return
       if (anchor.atBottom) term.scrollToBottom()
       else term.scrollToLine(Math.min(anchor.line, term.buffer.active.baseY))
     }
@@ -371,7 +368,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     let resizeAnchor: ViewportAnchor | null = null
     let resizeAnchorGeneration = 0
     let resizeRestoreUntil = 0
-    let resizeRestoreTimer: ReturnType<typeof setTimeout> | null = null
+    let fitTimer: ReturnType<typeof setTimeout> | null = null
     const restoreResizeAnchor = (generation: number): void => {
       if (restoreInFlight || generation !== resizeAnchorGeneration || !resizeAnchor) return
       applyViewportAnchor(resizeAnchor)
@@ -382,24 +379,26 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       resizeAnchorGeneration++
       const generation = resizeAnchorGeneration
       resizeRestoreUntil = performance.now() + 300
-      if (resizeRestoreTimer) clearTimeout(resizeRestoreTimer)
-      // Three staggered restores on top of the immediate one meant a single
-      // resize yanked the viewport four times; the RAF already lands after
-      // xterm has reflowed, and the timer only covers a reflow that spilled
-      // into a later frame.
+      // One authoritative restore now, one after xterm reflows: a blind timer
+      // on top only re-yanked the viewport while ConPTY's repaint was still
+      // being parsed. Late reflows are covered exactly by the onWriteParsed
+      // hook below instead.
       applyViewportAnchor(anchor)
       requestAnimationFrame(() => restoreResizeAnchor(generation))
-      resizeRestoreTimer = setTimeout(() => restoreResizeAnchor(generation), 150)
     }
-    // Every geometry change must go through here: fit the xterm to its
-    // container now (the view is always live) while the scroll position the
-    // user was reading is pinned across the reflow. The pty itself learns
-    // the new size later via the debounced queueResize from onResize.
+    // Wait until the resize settles before changing either side of the PTY.
+    // Resizing xterm immediately while its process still paints at the old
+    // geometry lets stale rows and columns show as stray text during a drag.
     const fitPreservingViewport = (): void => {
       if (!mounted || container.clientWidth === 0 || container.clientHeight === 0) return
-      const anchor = captureViewportAnchor()
-      fit.fit()
-      scheduleResizeAnchorRestore(anchor)
+      if (fitTimer !== null) clearTimeout(fitTimer)
+      fitTimer = setTimeout(() => {
+        fitTimer = null
+        if (!mounted || container.clientWidth === 0 || container.clientHeight === 0) return
+        const anchor = captureViewportAnchor()
+        fit.fit()
+        scheduleResizeAnchorRestore(anchor)
+      }, RESIZE_SETTLE_DELAY_MS)
     }
     // An agent that turned DEC private mode 12 off and exited leaves the shell
     // prompt with a caret that never blinks again; an agent still painting its
@@ -423,6 +422,10 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       // Those intermediate positions are not user intent and must not replace
       // the saved bottom-follow state used after restore.
       if (restoreInFlight) return
+      // Alternate-buffer offsets (a TUI's internal scroll) are meaningless on
+      // the normal buffer — saving them is what pinned the viewport to the top
+      // after the TUI exited.
+      if (term.buffer.active.type === 'alternate') return
       const activeBuffer = term.buffer.active
       rememberViewport(id, {
         line: activeBuffer.viewportY,
@@ -437,6 +440,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     let startupWatchUntil = 0
     let startupProbe: StartupProbe | null = null
     let startupExitTimer: ReturnType<typeof setTimeout> | null = null
+    let queuedLaunchTimer: ReturnType<typeof setTimeout> | null = null
     const clearStartupExitTimer = (): void => {
       if (startupExitTimer === null) return
       clearTimeout(startupExitTimer)
@@ -460,7 +464,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       if (verdict.status === 'failed') {
         startupProbe = null
         clearStartupExitTimer()
-        if (mounted) setStartupFailure(verdict.message)
+        if (mounted) setStartupNotice({ message: verdict.message, tone: 'error' })
         return
       }
       // Only a bare title that nothing supersedes is an exit, so the report
@@ -469,7 +473,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       startupExitTimer = setTimeout(() => {
         startupExitTimer = null
         startupProbe = null
-        if (mounted) setStartupFailure(verdict.message)
+        if (mounted) setStartupNotice({ message: verdict.message, tone: 'info' })
       }, EXIT_CONFIRM_MS)
     }
 
@@ -501,16 +505,54 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     // Queued through the render queue, never written straight to the terminal:
     // output reaches the parser through that queue, and a direct write would
     // overtake everything still waiting in it.
+    const readEmulatorModes = (): {
+      bufferType: 'normal' | 'alternate'
+      mouseTracking: string
+      originMode: boolean
+      synchronizedOutputMode: boolean
+      insertMode: boolean
+      wraparoundMode: boolean
+    } => ({
+      bufferType: term.buffer.active.type === 'alternate' ? 'alternate' : 'normal',
+      mouseTracking: term.modes.mouseTrackingMode,
+      originMode: term.modes.originMode === true,
+      synchronizedOutputMode: (term.modes as { synchronizedOutputMode?: boolean }).synchronizedOutputMode === true,
+      insertMode: term.modes.insertMode === true,
+      wraparoundMode: term.modes.wraparoundMode !== false
+    })
+    const scrollPromptToBottom = (): void => {
+      if (!mounted || term.buffer.active.type === 'alternate') return
+      try { term.scrollToBottom() } catch {}
+      const activeBuffer = term.buffer.active
+      rememberViewport(id, { line: activeBuffer.viewportY, atBottom: true })
+    }
     const recoverModes = (): void => {
-      if (!mounted) return
-      if (!hasOrphanedModes({
-        bufferType: term.buffer.active.type === 'alternate' ? 'alternate' : 'normal',
-        mouseTracking: term.modes.mouseTrackingMode
-      })) return
-      batchedWrite(APP_OWNED_MODE_RESET)
+      if (!mounted || term.buffer.active.type === 'alternate') return
+      if (!hasOrphanedModes(readEmulatorModes())) {
+        scrollPromptToBottom()
+        return
+      }
+      batchedWrite(APP_OWNED_MODE_RESET, scrollPromptToBottom)
+      // The reset leaves the alternate screen and clears the TUI's scroll
+      // region; park the viewport at the live bottom so the next prompt line —
+      // the one the user types on after Ctrl-C — is visible instead of the
+      // stale top lines. Run only after xterm has parsed the reset.
     }
     /** Returns whether the echo signal fired; the exit signal is deferred. */
     const watchOrphanedModes = (chunk: string): boolean => {
+      // Fast path for the overwhelmingly common case: with no probe state
+      // pending and no escape or bracket in the chunk, neither signal can
+      // fire — both probes would be provable no-ops. This keeps the per-chunk
+      // regex cost off the PTY fast path (plain shell output, streaming
+      // tokens). Any pending carry/hits or any ESC/'[' falls through to the
+      // exact same probes as before.
+      if (
+        modeRecovery.carry === '' &&
+        modeRecovery.hits === 0 &&
+        modeRecovery.titleCarry === '' &&
+        !chunk.includes('\u001b') &&
+        !chunk.includes('[')
+      ) return false
       // Both probes see every chunk: the echo one has to, to count a burst,
       // and the title one, to track the child.
       const echoed = readEchoedMouseReports(modeRecovery, chunk)
@@ -522,7 +564,8 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
         // down: it outlived the agent it was about, all the way through the
         // next successful launch.
         clearModeRecoveryTimer()
-        if (mounted) setStartupFailure(null)
+        clearInterruptRecoveryTimer()
+        if (mounted) setStartupNotice(null)
       }
       if (child === 'exited') {
         // Held, not acted on. A launcher shim hands the title back on its way
@@ -533,43 +576,75 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
         clearModeRecoveryTimer()
         modeRecoveryTimer = setTimeout(() => {
           modeRecoveryTimer = null
-          recoverModes()
+          renderQueue.afterPending(recoverModes)
         }, EXIT_CONFIRM_MS)
       }
       return echoed
     }
 
-    const dataUnsub = window.api.terminal.onData(id, (data) => {
+    let interruptRecoveryTimer: ReturnType<typeof setTimeout> | null = null
+    const clearInterruptRecoveryTimer = (): void => {
+      if (interruptRecoveryTimer === null) return
+      clearTimeout(interruptRecoveryTimer)
+      interruptRecoveryTimer = null
+    }
+    /**
+     * Second-chance recovery for Ctrl-C / Ctrl-D kills that the title probe
+     * never sees (custom shell titles, shims that don't restore titles).
+     *
+     * Only acts on the self-evident corpse state: back on the normal buffer
+     * with mouse tracking off, but origin mode / synchronized output / insert
+     * mode left on or autowrap left off. A shell prompt never sets any of
+     * those, while a still-running TUI is on the alternate buffer and/or
+     * tracks the mouse — so this combination cannot be a live application
+     * and resetting it is safe without any title evidence.
+     */
+    const recoverInterruptedShell = (): void => {
+      if (!mounted) return
+      const modes = readEmulatorModes()
+      if (modes.bufferType !== 'normal') return
+      if ((modes.mouseTracking ?? 'none') !== 'none') return
+      if (
+        modes.originMode !== true &&
+        modes.synchronizedOutputMode !== true &&
+        modes.insertMode !== true &&
+        modes.wraparoundMode !== false
+      ) {
+        scrollPromptToBottom()
+        return
+      }
+      batchedWrite(APP_OWNED_MODE_RESET, scrollPromptToBottom)
+    }
+    const armInterruptRecovery = (): void => {
+      clearInterruptRecoveryTimer()
+      // The kill is asynchronous: ConPTY/node-pty has to deliver SIGINT,
+      // the TUI has to die, and its last frame has to parse through the
+      // render queue before the emulator state reads settled.
+      interruptRecoveryTimer = setTimeout(() => {
+        interruptRecoveryTimer = null
+        renderQueue.afterPending(recoverInterruptedShell)
+      }, 400)
+    }
+
+    const dataUnsub = window.api.terminal.onData(id, (data, deliveryId) => {
       watchStartupOutput(data)
       const echoed = watchOrphanedModes(data)
-      batchedWrite(data)
+      batchedWrite(data, () => {
+        if (deliveryId !== undefined) window.api.terminal.ackOutput(id, deliveryId)
+      })
       // Immediate, unlike the exit signal: the echo is itself proof that a
       // shell's line editor is reading input right now, with nothing to wait
       // for and damage arriving with every pointer movement.
-      if (echoed) recoverModes()
+      if (echoed) renderQueue.afterPending(recoverModes)
     })
-    // Trailing-edge only: a drag produces dozens of geometries per second and
-    // ConPTY repaints the whole viewport for each pty resize it receives (see
-    // RESIZE_SEND_DELAY_MS). Intermediate sizes are coalesced into
-    // pendingResize and only the settled size is ever sent, so a repaint can
-    // never arrive for a size the xterm already left behind. A plain timer
-    // (no rAF gate) also fires when frames stop, so an update is never
-    // stranded.
-    let resizeSendTimer: ReturnType<typeof setTimeout> | null = null
-    let pendingResize: { cols: number; rows: number } | null = null
+    // fit.fit() runs only after the resize settles, so send each resulting
+    // geometry immediately. The PTY and xterm therefore move together, and a
+    // repaint cannot land in a viewport that has already moved on.
     let lastSentResize: { cols: number; rows: number } | null = null
-    const flushResize = (): void => {
-      resizeSendTimer = null
-      const next = pendingResize
-      pendingResize = null
-      if (!next || (lastSentResize?.cols === next.cols && lastSentResize?.rows === next.rows)) return
-      lastSentResize = next
-      void window.api.terminal.resize(id, next.cols, next.rows)
-    }
-    const queueResize = (cols: number, rows: number): void => {
-      pendingResize = { cols, rows }
-      if (resizeSendTimer !== null) clearTimeout(resizeSendTimer)
-      resizeSendTimer = setTimeout(flushResize, RESIZE_SEND_DELAY_MS)
+    const syncPtySize = (cols: number, rows: number): void => {
+      if (lastSentResize?.cols === cols && lastSentResize?.rows === rows) return
+      lastSentResize = { cols, rows }
+      void window.api.terminal.resize(id, cols, rows)
     }
     // The reader and control thread can both report the same exit.
     let exitReported = false
@@ -577,8 +652,12 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       if (exitReported) return
       exitReported = true
       clearInitialCommand(id)
+      clearInterruptRecoveryTimer()
       if (agentIdRef.current === 'codex' && agentId !== 'codex') agentIdRef.current = undefined
-      term.write(`${APP_OWNED_MODE_RESET}\r\n\x1b[90m[Process exited${typeof code === 'number' ? ` (code ${code})` : ''}]\x1b[0m\r\n`)
+      // Through the render queue like everything else: a direct write would
+      // overtake output still waiting in it and print the marker above the
+      // shell's last lines.
+      batchedWrite(`${APP_OWNED_MODE_RESET}\r\n\x1b[90m[Process exited${typeof code === 'number' ? ` (code ${code})` : ''}]\x1b[0m\r\n`, scrollPromptToBottom)
       onProcessExitRef.current?.()
     })
 
@@ -588,7 +667,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
         if (result && 'error' in result) {
           if (!lockNotified) {
             lockNotified = true
-            term.write(`\r\n\x1b[33m[Input locked: ${result.error}]\x1b[0m\r\n`)
+            batchedWrite(`\r\n\x1b[33m[Input locked: ${result.error}]\x1b[0m\r\n`)
           }
           return
         }
@@ -596,7 +675,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       }).catch(() => {
         if (!lockNotified) {
           lockNotified = true
-          term.write('\r\n\x1b[33m[Failed to write input]\x1b[0m\r\n')
+          batchedWrite('\r\n\x1b[33m[Failed to write input]\x1b[0m\r\n')
         }
       })
     }
@@ -612,6 +691,20 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     term.onData((data) => {
       // Replayed device queries must not send historical replies to a live shell.
       if (restoreInFlight) return
+      // A deliberate interrupt is not a startup error, even if the CLI was
+      // still inside its initial reconnect window.
+      if (data.includes('\x03') || data.includes('\x04')) {
+        startupProbe = null
+        startupWatchUntil = 0
+        clearStartupExitTimer()
+        if (mounted) setStartupNotice(null)
+      }
+      // Ctrl-C (and Ctrl-D EOF) may kill the foreground TUI without cleanup,
+      // leaving origin mode / scroll region behind — the "typing at the top"
+      // state. Arm the second-chance recovery; it only acts on the corpse
+      // state (normal buffer, no mouse, but TUI-only modes left on), so a TUI
+      // that handles the key itself is never disturbed.
+      if (data.includes('\x03') || data.includes('\x04')) armInterruptRecovery()
       const captured = captureTerminalInput(promptCapture, data)
       promptCapture = captured.capture
       for (const submitted of captured.submitted) {
@@ -620,7 +713,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       }
       writePty(data)
     })
-    term.onResize(({ cols, rows }) => queueResize(cols, rows))
+    term.onResize(({ cols, rows }) => syncPtySize(cols, rows))
 
     const attachmentShortcut = (): string | null => imagePasteShortcut(agentIdRef.current, /win/i.test(navigator.platform) ? 'win32' : IS_MAC ? 'darwin' : 'linux')
     let attachmentQueue = Promise.resolve()
@@ -635,7 +728,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
           stage: (bytes) => window.api.media.stageClipboardImage(bytes),
           paste: (text) => term.paste(text),
           write: writePty,
-          report: (message) => term.write(`\r\n\x1b[31m[${message.replace(/[\x00-\x1f\x7f]/g, ' ')}]\x1b[0m\r\n`),
+          report: (message) => batchedWrite(`\r\n\x1b[31m[${message.replace(/[\x00-\x1f\x7f]/g, ' ')}]\x1b[0m\r\n`),
           alive: () => mounted
         })
       }).catch((error) => {
@@ -646,7 +739,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
 
 
     const writeImagePath = (image: { path: string } | null, addTrailingSpace = false): void => {
-      if (!image) return void term.write('\r\n\x1b[33m[No image in clipboard]\x1b[0m\r\n')
+      if (!image) return void batchedWrite('\r\n\x1b[33m[No image in clipboard]\x1b[0m\r\n')
 
       const pathText = /\s/.test(image.path) ? `"${image.path.replace(/"/g, '\\"')}"` : image.path
       const toInsert = addTrailingSpace ? `${pathText} ` : pathText
@@ -659,7 +752,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       if (bytes) {
         const staged = await window.api.media.stageClipboardImage(bytes)
         if ('error' in staged) {
-          term.write(`\r\n\x1b[31m[${staged.error}]\x1b[0m\r\n`)
+          batchedWrite(`\r\n\x1b[31m[${staged.error}]\x1b[0m\r\n`)
           return false
         }
       }
@@ -707,7 +800,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
           const fallbackText = await window.api.media.readClipboardText()
           if (fallbackText) term.paste(fallbackText)
         } catch {
-          term.write(`\r\n\x1b[31m[${err instanceof Error ? err.message : 'Failed to paste'}]\x1b[0m\r\n`)
+          batchedWrite(`\r\n\x1b[31m[${err instanceof Error ? err.message : 'Failed to paste'}]\x1b[0m\r\n`)
         }
       }
     }
@@ -811,7 +904,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       }
     } catch (err) {
       console.error('failed to initialise terminal widget', err)
-      term.write('\r\n\x1b[31m[Terminal could not be initialised; retrying is safe]\x1b[0m\r\n')
+      batchedWrite('\r\n\x1b[31m[Terminal could not be initialised; retrying is safe]\x1b[0m\r\n')
     }
 
 
@@ -1035,7 +1128,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       // clear that — the shell is still alive, so there is no exit to hook —
       // so this is the way out.
       addItem('Reset terminal', () => {
-        term.write(APP_OWNED_MODE_RESET)
+        batchedWrite(APP_OWNED_MODE_RESET)
         term.clearSelection()
       })
 
@@ -1207,7 +1300,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       }
       if (!result || !('ok' in result) || !result.ok) {
         const err = result && 'error' in result ? result.error : undefined
-        term.write(`\r\n\x1b[31m[Failed to launch terminal${err ? `: ${err}` : ''}]\x1b[0m\r\n`)
+        batchedWrite(`\r\n\x1b[31m[Failed to launch terminal${err ? `: ${err}` : ''}]\x1b[0m\r\n`)
 
 
         if (mounted) setConnecting(false)
@@ -1217,6 +1310,15 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       const launchQueuedCommand = (): void => {
         const queued = peekInitialCommand(id)
         if (!mounted || exitReported || !queued) return
+        const waitMs = initialCommandWaitMs(id)
+        if (waitMs > 0) {
+          if (queuedLaunchTimer !== null) clearTimeout(queuedLaunchTimer)
+          queuedLaunchTimer = setTimeout(() => {
+            queuedLaunchTimer = null
+            launchQueuedCommand()
+          }, waitMs)
+          return
+        }
         if (
           initialCommandVerdict({
             live: result.live === true,
@@ -1232,18 +1334,23 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
           return
         }
         learnAgentFromCommand(queued)
-        void window.api.terminal.write(id, `${queued}${cachedSubmit}`).then((result) => {
+        // Arm before writing. A missing command or an allocator abort can
+        // produce output and return to the prompt before the IPC write promise
+        // settles; arming in the continuation loses the only failure text.
+        setStartupNotice(null)
+        startupProbe = createStartupProbe(queued)
+        startupWatchUntil = Date.now() + STARTUP_WATCH_MS
+        void deliverInitialCommand(id, (command) => window.api.terminal.write(id, `${command}${cachedSubmit}`)).then((result) => {
           if ('error' in result) {
-            if (mounted) term.write(`\r\n\x1b[31m[Failed to start command: ${result.error}]\x1b[0m\r\n`)
+            startupProbe = null
+            clearStartupExitTimer()
+            if (mounted) batchedWrite(`\r\n\x1b[31m[Failed to start command: ${result.error}]\x1b[0m\r\n`)
             return
           }
-          markInitialCommandDelivered(id)
-          if (!mounted) return
-          setStartupFailure(null)
-          startupProbe = createStartupProbe(queued)
-          startupWatchUntil = Date.now() + STARTUP_WATCH_MS
         }).catch(() => {
-          if (mounted) term.write('\r\n\x1b[31m[Failed to start command]\x1b[0m\r\n')
+          startupProbe = null
+          clearStartupExitTimer()
+          if (mounted) batchedWrite('\r\n\x1b[31m[Failed to start command]\x1b[0m\r\n')
         })
       }
       if (result.scrollback) {
@@ -1306,7 +1413,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     }).catch(() => {
       // Leave the command queued: nothing was typed, so a retry still owes it.
       if (mounted) {
-        term.write('\r\n\x1b[31m[Failed to launch terminal]\x1b[0m\r\n')
+        batchedWrite('\r\n\x1b[31m[Failed to launch terminal]\x1b[0m\r\n')
         setConnecting(false)
       }
     })
@@ -1329,25 +1436,30 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
 
     return () => {
       mounted = false
-      const activeBuffer = term.buffer.active
-      rememberViewport(id, {
-        line: activeBuffer.viewportY,
-        atBottom: activeBuffer.viewportY >= activeBuffer.baseY
-      })
+      // Never persist alternate-buffer offsets: they describe the dead TUI's
+      // frame, and replaying them onto the normal buffer pins the viewport
+      // to the top after the TUI exits.
+      if (term.buffer.active.type !== 'alternate') {
+        const activeBuffer = term.buffer.active
+        rememberViewport(id, {
+          line: activeBuffer.viewportY,
+          atBottom: activeBuffer.viewportY >= activeBuffer.baseY
+        })
+      }
       flushChannel.port1.close()
       flushChannel.port2.close()
       cancelRestore?.()
       clearStartupExitTimer()
+      if (queuedLaunchTimer !== null) clearTimeout(queuedLaunchTimer)
       clearModeRecoveryTimer()
+      clearInterruptRecoveryTimer()
       renderQueue.dispose()
-      pendingResize = null
-      if (resizeSendTimer !== null) {
-        clearTimeout(resizeSendTimer)
-        resizeSendTimer = null
+      if (fitTimer !== null) {
+        clearTimeout(fitTimer)
+        fitTimer = null
       }
       if (resizeRaf !== null) cancelAnimationFrame(resizeRaf)
       resizeAnchorGeneration++
-      if (resizeRestoreTimer) clearTimeout(resizeRestoreTimer)
       observer.disconnect()
       endSelectionDrag()
       for (const type of ['mousedown', 'mousemove', 'dblclick']) {
@@ -1407,18 +1519,20 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
           </div>
         )}
       </div>
-      {startupFailure && !flipped && (
+      {startupNotice && !flipped && (
         <div
-          role="alert"
+          role={startupNotice.tone === 'error' ? 'alert' : 'status'}
           data-testid="terminal-startup-failure"
-          className="pointer-events-auto absolute inset-x-1.5 top-1.5 z-20 flex items-start gap-2 rounded-panel border border-danger/40 bg-bg-panel/95 px-2.5 py-2 text-[11px] leading-snug text-text shadow-[0_8px_26px_rgba(0,0,0,0.35)]"
+          className={`pointer-events-auto absolute inset-x-1.5 top-1.5 z-20 flex items-start gap-2 rounded-panel border bg-bg-panel/95 px-2.5 py-2 text-[11px] leading-snug text-text shadow-[0_8px_26px_rgba(0,0,0,0.35)] ${startupNotice.tone === 'error' ? 'border-danger/40' : 'border-line'}`}
         >
-          <AlertTriangle size={14} className="mt-[1px] flex-none text-danger" aria-hidden="true" />
-          <span className="min-w-0 flex-1">{startupFailure}</span>
+          {startupNotice.tone === 'error'
+            ? <AlertTriangle size={14} className="mt-[1px] flex-none text-danger" aria-hidden="true" />
+            : <TerminalIcon size={14} className="mt-[1px] flex-none text-text-faint" aria-hidden="true" />}
+          <span className="min-w-0 flex-1">{startupNotice.message}</span>
           <button
             type="button"
             aria-label="Dismiss"
-            onClick={() => setStartupFailure(null)}
+            onClick={() => setStartupNotice(null)}
             className="flex-none rounded-panel px-1 text-text-faint transition-colors hover:text-text"
           >
             <X size={12} />

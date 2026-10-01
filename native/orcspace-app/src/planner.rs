@@ -32,13 +32,17 @@ pub const MAX_PROJECT: usize = 80;
 pub const MAX_ATTACHMENT: usize = 1_024;
 pub const MAX_ATTACHMENTS: usize = 12;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlanItem {
     pub id: String,
     pub title: String,
     pub note: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub day: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time: Option<String>,
     pub done: bool,
     pub created_by: String,
@@ -48,6 +52,7 @@ pub struct PlanItem {
     pub version: f64,
     /// Absent rather than empty: the TypeScript reducer deletes the key when a
     /// patch leaves no attachments, and the persisted shape follows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<String>>,
 }
 
@@ -148,6 +153,19 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// Today's date from the system clock, in UTC.
+///
+/// The renderer resolves `"today"` against the machine's *local* date. Nothing
+/// in the native UI sets a day yet, so the two cannot disagree in practice;
+/// wiring up day scheduling means giving this a local-time source first.
+pub fn today_utc() -> Today {
+    let days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs() / 86_400) as i64;
+    let (year, month, day) = civil_from_days(days);
+    Today(format!("{year:04}-{month:02}-{day:02}"))
+}
+
 /// The throwing validator, as used by `plan.update`.
 pub fn normalize_day(value: Option<&Value>, today: &Today) -> Result<Option<String>, InvalidDay> {
     match value {
@@ -171,7 +189,9 @@ pub fn normalize_day(value: Option<&Value>, today: &Today) -> Result<Option<Stri
         && parts[0].len() == 4
         && (1..=2).contains(&parts[1].len())
         && (1..=2).contains(&parts[2].len())
-        && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty());
+        && parts
+            .iter()
+            .all(|p| p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty());
     if !valid_shape {
         return Err(InvalidDay(format!("day \"{raw}\" is not YYYY-MM-DD")));
     }
@@ -202,7 +222,8 @@ pub fn normalize_time(value: Option<&Value>) -> Option<String> {
     if bytes.len() != 5 || bytes[2] != b':' {
         return None;
     }
-    if !raw[0..2].chars().all(|c| c.is_ascii_digit()) || !raw[3..5].chars().all(|c| c.is_ascii_digit())
+    if !raw[0..2].chars().all(|c| c.is_ascii_digit())
+        || !raw[3..5].chars().all(|c| c.is_ascii_digit())
     {
         return None;
     }

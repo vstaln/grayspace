@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Bot, Code2, FolderOpen, FolderPlus, Palette, Pencil, Pin, Plus, Settings, Trash2, UserRound, X } from 'lucide-react'
+import { Bot, Code2, FolderOpen, FolderPlus, Palette, Pencil, Pin, Plus, Settings, ShieldCheck, Trash2, UserRound, X } from 'lucide-react'
 import type { CodeWorkspaceGroup, RecentDir } from '../../../preload/index.d'
 import type { ChatAuthEvent, ChatProvider, ChatProviderStatus } from '../../../preload/api'
 import type { WorkView } from './TitleBar'
@@ -17,6 +17,7 @@ import GrokIcon from './GrokIcon'
 import { monochrome } from '../ui/tokens'
 import { WIDGET_CATALOG } from '../lib/widgetCatalog'
 import { DEFAULT_IMAGE_INSERT_SHORTCUT, formatShortcut, shortcutFromEvent } from '../lib/keyboardShortcut'
+import { MAX_CUSTOM_CODE_AGENTS } from '../../../shared/customCodeAgents'
 
 interface Props {
   workspaceDir: string | null
@@ -79,7 +80,9 @@ function IconButton({
 const SETTINGS_TABS = [
   { id: 'account' as const, label: 'Account', Icon: UserRound },
   { id: 'appearance' as const, label: 'Appearance', Icon: Palette },
-  { id: 'ai' as const, label: 'AI', Icon: Bot }
+  { id: 'ai' as const, label: 'AI', Icon: Bot },
+  { id: 'code' as const, label: 'Code agents', Icon: Code2 },
+  { id: 'automation' as const, label: 'Automation', Icon: ShieldCheck }
 ]
 
 type SettingsTab = (typeof SETTINGS_TABS)[number]['id']
@@ -89,7 +92,9 @@ type SettingsTab = (typeof SETTINGS_TABS)[number]['id']
 const SETTINGS_TAB_HINTS: Record<SettingsTab, string> = {
   account: 'Manage the local profile used throughout this workspace.',
   appearance: 'Theme, shell and what the canvas right-click menu offers.',
-  ai: 'Connect an AI account once, then use its subscription in every AI Chat widget.'
+  ai: 'Connect an AI account once, then use its subscription in every AI Chat widget.',
+  code: 'Add command-line agents to the new session picker.',
+  automation: 'Decide how much an agent can do on its own before it needs your say-so.'
 }
 
 const AI_PROVIDERS: Array<{ id: ChatProvider; label: string; hint: string; Icon: React.ComponentType<{ size?: number }> }> = [
@@ -224,6 +229,9 @@ export function SettingsModal({
   const [tab, setTab] = useState<SettingsTab>('account')
   const [userName, setUserName] = useState('')
   const [favoriteNamesText, setFavoriteNamesText] = useState('')
+  const [customAgentName, setCustomAgentName] = useState('')
+  const [customAgentCommand, setCustomAgentCommand] = useState('')
+  const [favoriteNamesDirty, setFavoriteNamesDirty] = useState(false)
   const [imageShortcut, setImageShortcut] = useState(DEFAULT_IMAGE_INSERT_SHORTCUT)
   const [recordingImageShortcut, setRecordingImageShortcut] = useState(false)
   const nameEntries = favoriteNamesText.split(/[\n,]+/).map((name) => name.trim()).filter(Boolean)
@@ -234,6 +242,17 @@ export function SettingsModal({
       ? `Add up to ${MAX_FAVORITE_TERMINAL_NAMES} names.`
       : null
   const namesChanged = JSON.stringify(favoriteNames) !== JSON.stringify(settings.favoriteTerminalNames ?? [])
+  const customCodeAgents = settings.customCodeAgents ?? []
+  const customAgentNameTaken = customCodeAgents.some((agent) => agent.name.toLowerCase() === customAgentName.trim().toLowerCase())
+  const customAgentFormError = customAgentNameTaken
+    ? 'An agent with this name already exists.'
+    : customAgentName.trim().length > 40
+      ? 'Names can be up to 40 characters.'
+      : customAgentCommand.trim().length > 512
+        ? 'Commands can be up to 512 characters.'
+        : customCodeAgents.length >= MAX_CUSTOM_CODE_AGENTS
+          ? `You can add up to ${MAX_CUSTOM_CODE_AGENTS} agents.`
+          : null
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [providerStatuses, setProviderStatuses] = useState<ChatProviderStatus[]>([])
@@ -245,7 +264,10 @@ export function SettingsModal({
   useFocusTrap(dialogRef, open)
 
   useEffect(() => {
-    if (open) setFavoriteNamesText((settings.favoriteTerminalNames ?? []).join('\n'))
+    if (open) {
+      setFavoriteNamesText((settings.favoriteTerminalNames ?? []).join('\n'))
+      setFavoriteNamesDirty(false)
+    }
   }, [open, settings.favoriteTerminalNames])
 
   useEffect(() => {
@@ -257,9 +279,46 @@ export function SettingsModal({
     setBusy(true)
     try {
       const saved = await update({ favoriteTerminalNames: favoriteNames })
-      setNotice(saved ? 'Favorite terminal names saved.' : 'Failed to save terminal names.')
+      if (saved) {
+        setFavoriteNamesDirty(false)
+        setNotice('Favorite terminal names saved.')
+      } else {
+        setNotice('Failed to save terminal names.')
+      }
     } catch {
       setNotice('Failed to save terminal names.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const addCustomCodeAgent = async (): Promise<void> => {
+    const name = customAgentName.trim()
+    const command = customAgentCommand.trim()
+    if (!name || !command || customAgentFormError || busy) return
+    setBusy(true)
+    setNotice(null)
+    try {
+      const saved = await update({ customCodeAgents: [...customCodeAgents, { id: crypto.randomUUID(), name, command }] })
+      if (saved) {
+        setCustomAgentName('')
+        setCustomAgentCommand('')
+        setNotice('CLI agent added.')
+      } else {
+        setNotice('Failed to save the CLI agent.')
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const removeCustomCodeAgent = async (id: string): Promise<void> => {
+    if (busy) return
+    setBusy(true)
+    setNotice(null)
+    try {
+      const saved = await update({ customCodeAgents: customCodeAgents.filter((agent) => agent.id !== id) })
+      setNotice(saved ? 'CLI agent removed.' : 'Failed to remove the CLI agent.')
     } finally {
       setBusy(false)
     }
@@ -600,6 +659,99 @@ export function SettingsModal({
               </div>
             )}
 
+            {tab === 'code' && (
+              <div className="flex max-w-xl flex-col gap-8">
+                <Section title="Custom CLI agents" hint="Add a command and arguments. The saved agent will appear in the + new session picker.">
+                  <div className="flex flex-col gap-2">
+                    {customCodeAgents.map((agent) => (
+                      <div key={agent.id} className="flex min-w-0 items-center gap-3 rounded-panel border border-line-soft bg-bg-raise p-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs text-text">{agent.name}</p>
+                          <code className="mt-1 block break-all font-mono text-[10px] text-text-faint">{agent.command}</code>
+                        </div>
+                        <button
+                          type="button"
+                          className={BTN_QUIET}
+                          disabled={busy}
+                          aria-label={`Remove ${agent.name}`}
+                          title={`Remove ${agent.name}`}
+                          onClick={() => void removeCustomCodeAgent(agent.id)}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                    {customCodeAgents.length === 0 && (
+                      <p className="rounded-panel border border-dashed border-line-soft px-3 py-4 text-[11px] text-text-faint">No custom agents yet.</p>
+                    )}
+                  </div>
+
+                  <form className="flex flex-col gap-2.5 rounded-panel border border-line-soft p-3.5" onSubmit={(event) => { event.preventDefault(); void addCustomCodeAgent() }}>
+                    <label className="flex flex-col gap-1.5 text-[11px] text-text-dim">
+                      Name
+                      <input
+                        aria-label="CLI agent name"
+                        value={customAgentName}
+                        onChange={(event) => setCustomAgentName(event.target.value)}
+                        maxLength={40}
+                        placeholder="For example, Aider"
+                        className="h-9 rounded-panel border border-line-soft bg-transparent px-2.5 text-xs text-text outline-none focus:border-line"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1.5 text-[11px] text-text-dim">
+                      Command
+                      <input
+                        aria-label="CLI agent command"
+                        value={customAgentCommand}
+                        onChange={(event) => setCustomAgentCommand(event.target.value)}
+                        maxLength={512}
+                        placeholder="aider --model ..."
+                        autoComplete="off"
+                        className="h-9 rounded-panel border border-line-soft bg-transparent px-2.5 font-mono text-xs text-text outline-none focus:border-line"
+                      />
+                    </label>
+                    {customAgentFormError && <p role="status" className="text-[10px] text-text-faint">{customAgentFormError}</p>}
+                    <button
+                      type="submit"
+                      className={`${BTN_PRIMARY} self-start`}
+                      disabled={busy || !customAgentName.trim() || !customAgentCommand.trim() || Boolean(customAgentFormError)}
+                    >
+                      <span className="flex items-center gap-1.5"><Plus size={13} /> Add CLI agent</span>
+                    </button>
+                  </form>
+                </Section>
+              </div>
+            )}
+
+            {tab === 'automation' && (
+              <div className="flex max-w-xl flex-col gap-8">
+                <Section
+                  title="Agent permissions"
+                  hint="When an agent hits something that needs your OK (orc ask --type permission), choose whether it waits for you or approves itself."
+                >
+                  <div role="radiogroup" aria-label="Permission mode" className="flex flex-col gap-2.5">
+                    <Choice
+                      selected={!settings.autoApprovePermissions}
+                      label="Always ask"
+                      hint="Every permission request waits in Orchestration until you Allow or Deny it. Safer default."
+                      onClick={() => void update({ autoApprovePermissions: false })}
+                    />
+                    <Choice
+                      selected={Boolean(settings.autoApprovePermissions)}
+                      label="Full permissions"
+                      hint="Every permission request is approved automatically, the instant it's asked. Only turn this on if you trust what your agents are doing unattended."
+                      onClick={() => void update({ autoApprovePermissions: true })}
+                    />
+                  </div>
+                  {settings.autoApprovePermissions && (
+                    <p className="rounded-panel border border-accent/30 bg-accent/10 px-3 py-2 text-[11px] leading-relaxed text-text">
+                      Full permissions is on — agents will not stop to ask before taking gated actions.
+                    </p>
+                  )}
+                </Section>
+              </div>
+            )}
+
             {tab === 'account' && (
               <div className="flex max-w-xl flex-col gap-8">
                 <div className="flex flex-col gap-3 rounded-panel border border-line-soft bg-bg-raise p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -688,14 +840,17 @@ export function SettingsModal({
                     rows={5}
                     maxLength={4096}
                     value={favoriteNamesText}
-                    onChange={(event) => setFavoriteNamesText(event.target.value)}
+                    onChange={(event) => {
+                      setFavoriteNamesText(event.target.value)
+                      setFavoriteNamesDirty(true)
+                    }}
                     placeholder={'James\nHenry\nOliver'}
                     className="w-full resize-y rounded-panel border border-line-soft bg-transparent px-3 py-2.5 text-xs text-text outline-none focus:border-line"
                   />
                   {namesError && <p id="favorite-terminal-names-error" role="alert" className="text-[11px] text-danger">{namesError}</p>}
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-[11px] text-text-faint">{favoriteNames.length} / {MAX_FAVORITE_TERMINAL_NAMES} names</span>
-                    <button type="button" className={BTN_PRIMARY} disabled={busy || Boolean(namesError) || !namesChanged}
+                    <button type="button" className={BTN_PRIMARY} disabled={busy || Boolean(namesError) || (!favoriteNamesDirty && !namesChanged)}
                       onClick={() => void saveFavoriteNames()}>Save names</button>
                   </div>
                 </Section>

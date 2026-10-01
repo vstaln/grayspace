@@ -52,7 +52,10 @@ fn a_bare_flag_is_true_and_does_not_swallow_the_next_flag() {
 #[test]
 fn the_first_present_alias_wins() {
     let a = args("cmd --body second");
-    assert_eq!(a.pick(&["spec", "brief", "body"]).as_deref(), Some("second"));
+    assert_eq!(
+        a.pick(&["spec", "brief", "body"]).as_deref(),
+        Some("second")
+    );
 
     let b = args("cmd --spec first --body second");
     assert_eq!(
@@ -87,7 +90,11 @@ fn run_create_takes_a_flag_or_a_positional() {
 fn run_create_without_an_objective_names_the_flag() {
     let error = parse_err("run-create");
     assert_eq!(error.code, ErrorCode::Invalid);
-    assert!(error.message.contains("--objective"), "got {}", error.message);
+    assert!(
+        error.message.contains("--objective"),
+        "got {}",
+        error.message
+    );
 }
 
 #[test]
@@ -141,7 +148,10 @@ fn task_list_turns_ready_into_a_query_flag() {
     assert_eq!(plan.query.get("runId").map(String::as_str), Some("run-1"));
 
     let without = parse("tasks");
-    assert!(without.query.is_empty(), "nothing is sent that was not asked for");
+    assert!(
+        without.query.is_empty(),
+        "nothing is sent that was not asked for"
+    );
 }
 
 #[test]
@@ -349,7 +359,11 @@ fn every_command_plans_a_well_formed_request() {
         );
         assert!(plan.path.starts_with('/'), "{line}: {}", plan.path);
         if plan.method == "GET" {
-            assert_eq!(plan.body, Value::Null, "{line}: a read must not carry a body");
+            assert_eq!(
+                plan.body,
+                Value::Null,
+                "{line}: a read must not carry a body"
+            );
         } else {
             assert!(
                 plan.body.is_object(),

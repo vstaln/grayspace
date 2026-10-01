@@ -26,8 +26,13 @@ export function normalizeLockResource(raw: unknown): string {
   return text
 }
 
+const parsedRequestBodies = new WeakMap<http.IncomingMessage, Promise<Record<string, unknown>>>()
+
 export function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
+  const cached = parsedRequestBodies.get(req)
+  if (cached) return cached
+
+  const parsedBody = new Promise<Record<string, unknown>>((resolve, reject) => {
     const chunks: Buffer[] = []
     let bytes = 0
     let settled = false
@@ -36,9 +41,6 @@ export function readJson(req: http.IncomingMessage): Promise<Record<string, unkn
       settled = true
       clearTimeout(timer)
       chunks.length = 0
-      try {
-        req.destroy()
-      } catch {}
       const error = new Error(message) as Error & { statusCode: number }
       error.statusCode = statusCode
       reject(error)
@@ -86,6 +88,8 @@ export function readJson(req: http.IncomingMessage): Promise<Record<string, unkn
       reject(err)
     })
   })
+  parsedRequestBodies.set(req, parsedBody)
+  return parsedBody
 }
 
 export function sendJson(res: http.ServerResponse, status: number, data: unknown): true {

@@ -4,6 +4,7 @@ import { AppState } from './appState.ts'
 import { CanvasStore } from './canvasState.ts'
 import { CodeStore } from './codeState.ts'
 import { PlannerStore } from './plannerStore.ts'
+import { NotesStore } from './notesStore.ts'
 import { OrchestrationStore } from './orchestration/store.ts'
 import { TerminalManager } from './terminals.ts'
 import { TerminalStreamBatcher } from './terminalBatcher.ts'
@@ -23,6 +24,7 @@ export interface AppStores {
   canvas: CanvasStore
   code: CodeStore
   planner: PlannerStore
+  notes: NotesStore
   orchestration: OrchestrationStore
   rendererState: RendererStateStore
   journalFile: string
@@ -54,6 +56,7 @@ export function createAppStores(): AppStores {
     state.workspaceDir
   )
   const planner = new PlannerStore()
+  const notes = new NotesStore()
   const orchestration = new OrchestrationStore()
   const rendererState = new RendererStateStore()
 
@@ -66,6 +69,7 @@ export function createAppStores(): AppStores {
     canvas,
     code,
     planner,
+    notes,
     orchestration,
     rendererState,
     journalFile

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AppSettings } from '../../../preload/index.d'
+import { normalizeCustomCodeAgents } from '../../../shared/customCodeAgents'
 
 const DEFAULTS: AppSettings = {
   linkSyntax: 'both',
@@ -21,9 +22,11 @@ const DEFAULTS: AppSettings = {
     idleTimeoutMs: 5 * 60_000,
     offloadVision: false
   },
-  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'image', 'links', 'music-player', 'chat'],
+  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'image', 'links', 'music-player', 'chat', 'notes', 'calendar', 'kanban'],
   favoriteTerminalNames: [],
-  imageInsertShortcut: 'Mod+Shift+I'
+  customCodeAgents: [],
+  imageInsertShortcut: 'Mod+Shift+I',
+  autoApprovePermissions: false
 }
 
 const FAVORITES_ALL_MIGRATION_KEY = 'orcspace-favorites-all-enabled'
@@ -47,7 +50,8 @@ function mergeDefaults(s: AppSettings): AppSettings {
     ),
     favoriteTerminalNames: Array.isArray(s.favoriteTerminalNames)
       ? s.favoriteTerminalNames.filter((name): name is string => typeof name === 'string')
-      : (DEFAULTS.favoriteTerminalNames ?? [])
+      : (DEFAULTS.favoriteTerminalNames ?? []),
+    customCodeAgents: normalizeCustomCodeAgents(s.customCodeAgents)
   }
 }
 

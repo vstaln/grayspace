@@ -161,6 +161,10 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
             terminalId: conflicting.terminalId
           })
         }
+        // Refuse before a terminal is opened for it, not after: createDispatch
+        // checks again, but by then a fresh shell has been spawned for nothing.
+        const blocker = orchestration.dispatchBlocker(task)
+        if (blocker) throw new CommandError('conflict', blocker)
 
         let terminalId = String(p.terminalId ?? '').trim()
         let opened = false
@@ -386,7 +390,21 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
         if (!type || !MESSAGE_TYPES.includes(type)) {
           throw new CommandError('invalid', `type must be one of ${MESSAGE_TYPES.join(', ')}`)
         }
-        const runId = resolveRunId(p.runId)
+        const dispatchId = typeof p.dispatchId === 'string' ? p.dispatchId.trim() : ''
+        const dispatch = dispatchId ? orchestration.requireDispatch(dispatchId) : undefined
+        const explicitRunId = typeof p.runId === 'string' ? p.runId.trim() : ''
+        const runId = explicitRunId
+          ? resolveRunId(explicitRunId)
+          : dispatch?.runId ?? resolveRunId()
+        if (dispatch && dispatch.runId !== runId) {
+          throw new CommandError('invalid', `dispatch "${dispatch.id}" belongs to run "${dispatch.runId}"`)
+        }
+        if (dispatch && p.taskId && p.taskId !== dispatch.taskId) {
+          throw new CommandError('invalid', `dispatch "${dispatch.id}" belongs to task "${dispatch.taskId}"`)
+        }
+        if (p.replyTo && !orchestration.messageById(p.replyTo)) {
+          throw new CommandError('not_found', `no message "${p.replyTo}" to reply to`)
+        }
         const to = resolveRecipient(
           { terminals, orchestration, knownActor: (id) => !!core.actors.get(id) },
           p.to,
@@ -398,15 +416,14 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
 
         let settled: { taskId: string; status: string; promoted: string[] } | undefined
         if (type === 'worker_done') {
-          const dispatchId = String(p.dispatchId ?? '')
-          if (!dispatchId) {
+          if (!dispatch) {
             throw new CommandError('invalid', 'worker_done needs --dispatch-id (it is in your dispatch preamble)')
           }
           const outcome = p.outcome
           if (!outcome || !OUTCOMES.includes(outcome)) {
             throw new CommandError('invalid', 'worker_done needs --outcome succeeded|failed')
           }
-          const result = orchestration.settleDispatch(dispatchId, outcome, p.filesModified)
+          const result = orchestration.settleDispatch(dispatch.id, outcome, p.filesModified)
           settled = { taskId: result.task.id, status: result.task.status, promoted: result.promoted }
         }
 
@@ -420,7 +437,7 @@ export function registerOrchestrationCommands(deps: CommandDeps): void {
           subject: p.subject,
           body: p.body,
           taskId: p.taskId,
-          dispatchId: p.dispatchId,
+          dispatchId: dispatch?.id,
           outcome: p.outcome,
           filesModified: p.filesModified,
           images: p.images,
@@ -586,11 +603,15 @@ export function terminalShowsLaunchFailure(output: string, command: string): boo
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal?.aborted) return resolve()
-    const timer = setTimeout(resolve, ms)
-    timer.unref?.()
-    signal?.addEventListener('abort', () => {
-      clearTimeout(timer)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = (): void => {
+      if (timer !== undefined) clearTimeout(timer)
+      signal?.removeEventListener('abort', finish)
       resolve()
-    })
+    }
+    timer = setTimeout(finish, ms)
+    timer?.unref?.()
+    signal?.addEventListener('abort', finish, { once: true })
+    if (signal?.aborted) finish()
   })
 }

@@ -6,10 +6,10 @@ import { spawnSync, spawn } from 'node:child_process'
 import { existsSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isSupportedNodeVersion, SUPPORTED_NODE_VERSION_TEXT } from './node-support.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const APP_PORT = process.env.WORKSPACE_CONTROL_PORT || '20220'
-const MIN_NODE_MAJOR = 20
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 
 const args = process.argv.slice(2)
@@ -44,6 +44,7 @@ if (flags.help) {
 
 function sh(cmd, shArgs, opts = {}) {
   const r = spawnSync(cmd, shArgs, { stdio: 'inherit', shell: process.platform === 'win32', cwd: opts.cwd ?? root })
+  if (r.error) console.error(` [x] Failed to run ${cmd}: ${r.error.message}`)
   return r.status === 0
 }
 
@@ -64,11 +65,9 @@ console.log(` Backend :${APP_PORT} (Control + renderer)\n` + '─'.repeat(58))
 
 
 const nodeVersion = process.version
-const nodeMajor = parseInt(nodeVersion.slice(1).split('.')[0], 10)
-
-if (nodeMajor < MIN_NODE_MAJOR) {
-  console.error(`\n [x] Node.js >= ${MIN_NODE_MAJOR} required. Currently installed: ${nodeVersion}`)
-  console.error('     Please update Node.js from https://nodejs.org/\n')
+if (!isSupportedNodeVersion(nodeVersion.slice(1))) {
+  console.error(`\n [x] Node.js ${SUPPORTED_NODE_VERSION_TEXT} required. Currently installed: ${nodeVersion}`)
+  console.error('     Install a supported Node.js LTS release from https://nodejs.org/\n')
   process.exit(1)
 }
 console.log(` [ok] Node.js ${nodeVersion} (${process.platform}-${process.arch})`)
@@ -125,6 +124,22 @@ if (!existsSync(join(root, 'node_modules')) || !existsSync(join(root, 'node_modu
   console.log(' [ok] App dependencies present.')
 }
 
+const electronBin = join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron')
+const electronCheck = spawnSync(electronBin, ['--version'], {
+  cwd: root,
+  encoding: 'utf8',
+  shell: process.platform === 'win32',
+  windowsHide: true
+})
+if (electronCheck.error || electronCheck.status !== 0 || !/^v?\d+\.\d+\.\d+/.test((electronCheck.stdout || '').trim())) {
+  console.error(' [x] Electron installation is incomplete or cannot start.')
+  if (electronCheck.error) console.error(`     ${electronCheck.error.message}`)
+  if (electronCheck.stderr) console.error(`     ${electronCheck.stderr.trim()}`)
+  console.error('     Run setup again with --reinstall to repair dependencies.')
+  process.exit(1)
+}
+console.log(` [ok] Electron ${electronCheck.stdout.trim()}`)
+
 
 console.log(' ==> Building native accelerators...')
 if (!sh(npmCommand, ['run', 'build:native'])) {
@@ -135,7 +150,7 @@ if (!sh(npmCommand, ['run', 'build:native'])) {
 
 
 if (flags.build) {
-  const distScript = process.platform === 'darwin' ? 'dist:mac' : 'dist'
+  const distScript = process.platform === 'darwin' ? 'dist:mac' : (process.platform === 'linux' ? 'dist:linux' : 'dist')
   if (!sh(npmCommand, ['run', distScript])) {
     console.error(' [x] Distribution build failed.')
     process.exit(1)
@@ -169,6 +184,10 @@ if (isRunning) {
   for (let i = 0; i < 45; i++) {
     await new Promise((r) => setTimeout(r, 2000))
     if (await alive(`http://127.0.0.1:${APP_PORT}/presence`)) break
+    if (child.exitCode !== null) {
+      console.error(` [x] Electron development process exited with code ${child.exitCode}.`)
+      process.exit(child.exitCode || 1)
+    }
     if (i === 44) console.log(' [!] App is still initializing (>90s) — check terminal output above.')
   }
 }
@@ -181,6 +200,7 @@ try {
   console.log(`  [ok] Backend presence: PID ${j.pid} | Workspace: ${j.workspaceDir || '(no folder)'}`)
 } catch {
   console.log('  [!] /presence endpoint not answering yet.')
+  if (flags.check) process.exit(1)
 }
 
 console.log('\n' + '═'.repeat(58))

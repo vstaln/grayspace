@@ -8,6 +8,7 @@ import { registerGitIpc } from './git.ts'
 import { registerIntegrationsIpc } from './integrations.ts'
 import { registerOrchestrationIpc } from './orchestration.ts'
 import { registerPlannerIpc } from './planner.ts'
+import { registerNotesIpc } from './notes.ts'
 import { registerSettingsIpc } from './settings.ts'
 import { registerSystemIpc } from './system.ts'
 import { registerTerminalIpc } from './terminals.ts'
@@ -48,6 +49,7 @@ export function registerIpc(deps: IpcDeps): void {
   registerCanvasIpc(deps)
   registerCodeIpc(deps)
   registerPlannerIpc(deps)
+  registerNotesIpc(deps)
   registerOrchestrationIpc(deps)
   registerBrowserIpc(deps)
   registerChatIpc(deps)

@@ -42,7 +42,10 @@ mod platform {
             let first = ServerOptions::new()
                 .first_pipe_instance(true)
                 .create(path)?;
-            Ok(Self { path: path.to_owned(), next: Some(first) })
+            Ok(Self {
+                path: path.to_owned(),
+                next: Some(first),
+            })
         }
 
         pub fn path(&self) -> &str {
@@ -102,10 +105,13 @@ mod platform {
         pub async fn bind(path: &str) -> io::Result<Self> {
             // A socket file left by a crash would make every later start fail
             // with AddrInUse even though nothing is listening.
-            prepare_socket_path(path);
+            prepare_socket_path(path)?;
             let inner = UnixListener::bind(path)?;
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-            Ok(Self { path: path.to_owned(), inner })
+            Ok(Self {
+                path: path.to_owned(),
+                inner,
+            })
         }
 
         pub fn path(&self) -> &str {

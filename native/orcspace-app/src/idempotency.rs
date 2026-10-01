@@ -44,7 +44,11 @@ impl Default for IdempotencyCache {
 
 impl IdempotencyCache {
     pub fn new(max_entries: usize, ttl_ms: i64) -> Self {
-        Self { entries: IndexMap::new(), max_entries, ttl_ms }
+        Self {
+            entries: IndexMap::new(),
+            max_entries,
+            ttl_ms,
+        }
     }
 
     /// Reading drops a lapsed entry, so a key past its TTL is simply unknown.
@@ -64,7 +68,13 @@ impl IdempotencyCache {
     /// Marks a key as being worked on.
     pub fn track(&mut self, key: &str, now: i64) {
         self.prune(now);
-        self.entries.insert(key.to_owned(), Record { at: now, entry: Entry::Pending });
+        self.entries.insert(
+            key.to_owned(),
+            Record {
+                at: now,
+                entry: Entry::Pending,
+            },
+        );
     }
 
     /// Records the answer. The stored copy carries `cached: true` so a retry can
@@ -75,8 +85,13 @@ impl IdempotencyCache {
         if let Some(object) = stored.as_object_mut() {
             object.insert("cached".into(), Value::Bool(true));
         }
-        self.entries
-            .insert(key.to_owned(), Record { at: now, entry: Entry::Done(stored) });
+        self.entries.insert(
+            key.to_owned(),
+            Record {
+                at: now,
+                entry: Entry::Done(stored),
+            },
+        );
     }
 
     /// A command that failed leaves no record: the retry should actually retry.

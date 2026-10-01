@@ -27,6 +27,8 @@ pub struct JournalEntry {
     pub phase: String,
     #[serde(rename = "actorId")]
     pub actor_id: String,
+    #[serde(default, rename = "commandId", skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<String>,
     #[serde(rename = "type")]
     pub entry_type: String,
     pub target: String,
@@ -58,6 +60,10 @@ fn canonical_hash_input(prev_hash: &str, entry: &JournalEntry) -> String {
     write_key(&mut out, "phase", &entry.phase);
     out.push(',');
     write_key(&mut out, "actorId", &entry.actor_id);
+    if let Some(command_id) = &entry.command_id {
+        out.push(',');
+        write_key(&mut out, "commandId", command_id);
+    }
     out.push(',');
     write_key(&mut out, "type", &entry.entry_type);
     out.push(',');
@@ -98,11 +104,21 @@ pub fn compute_entry_hash(prev_hash: &str, entry: &JournalEntry) -> String {
 #[derive(Debug, PartialEq)]
 pub enum ChainError {
     /// The entry's recorded prevHash does not match the previous entry's hash.
-    BrokenLink { seq: u64, expected: String, found: String },
+    BrokenLink {
+        seq: u64,
+        expected: String,
+        found: String,
+    },
     /// The entry's own hash is not what its content hashes to — tampering or a
     /// serialization mismatch.
-    BadHash { seq: u64, expected: String, found: String },
-    MissingHash { seq: u64 },
+    BadHash {
+        seq: u64,
+        expected: String,
+        found: String,
+    },
+    MissingHash {
+        seq: u64,
+    },
 }
 
 /// Walks the chain from genesis, recomputing every hash.

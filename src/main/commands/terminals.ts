@@ -19,15 +19,15 @@ import { failTerminalDispatches } from './orchestration.ts'
 function settle(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.resolve()
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms)
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer)
-        resolve()
-      },
-      { once: true }
-    )
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = (): void => {
+      if (timer !== undefined) clearTimeout(timer)
+      signal?.removeEventListener('abort', finish)
+      resolve()
+    }
+    timer = setTimeout(finish, ms)
+    signal?.addEventListener('abort', finish, { once: true })
+    if (signal?.aborted) finish()
   })
 }
 
@@ -226,7 +226,11 @@ export function registerTerminalCommands({
 
 
         if (!terminals.isRunning(id)) {
-          const resolved = terminals.resolveWriteTarget(id === 'new' ? '' : id)
+          // Only the empty/`new` placeholder may float to another shell.
+          // An explicit dead id stays as-is so the wait below fails with
+          // `not_found` ({ requested, resolved }) instead of typing into the
+          // wrong terminal. resolveWriteTarget logs what it decided.
+          const resolved = terminals.resolveWriteTarget(id)
           if (resolved) id = resolved
         }
         const resource = `terminal:${id}`
@@ -364,7 +368,7 @@ export function registerTerminalCommands({
       apply: async ({ command, unblock, signal }) => {
         let id = terminalIdOf(command.target)
         if (!terminals.isRunning(id)) {
-          const resolved = terminals.resolveWriteTarget(id === 'new' ? '' : id)
+          const resolved = terminals.resolveWriteTarget(id)
           if (resolved) id = resolved
         }
         const p = command.payload ?? {}

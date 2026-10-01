@@ -5,6 +5,7 @@ import { makeSend, unwrap } from './shared.ts'
 import {
   blurTerminal,
   forgetTerminalMounted,
+  isTerminalMounted,
   markTerminalMounted,
   setFocusedTerminal,
   unmarkTerminalMounted
@@ -49,6 +50,12 @@ export function registerTerminalIpc(deps: IpcDeps): void {
   ipcMain.on('terminal:detach', (_e, id: string) => {
     if (typeof id !== 'string' || !TERMINAL_ID.test(id)) return
     unmarkTerminalMounted(id)
+    if (!isTerminalMounted(id)) deps.terminals.resetRendererOutput(id)
+  })
+  ipcMain.on('terminal:ack-output', (_e, id: string, deliveryId: number) => {
+    if (typeof id !== 'string' || !TERMINAL_ID.test(id)) return
+    if (!Number.isSafeInteger(deliveryId) || deliveryId <= 0) return
+    deps.terminals.acknowledgeRendererOutput(id, deliveryId)
   })
   ipcMain.handle('terminal:write', async (_e, id: string, data: string) => {
     if (typeof id !== 'string' || !TERMINAL_ID.test(id)) {

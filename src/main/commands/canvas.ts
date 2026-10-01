@@ -169,10 +169,11 @@ export function registerCanvasCommands({
         if (!removed) throw new CommandError('not_found', `widget ${id} not found`)
         forgetOrigin(id)
         requestWidgetRemoval(id)
-        snapshots.forget(id)
         if (terminals.has(id)) {
           terminals.dispose(id)
         }
+        // release emits the final snapshot; invalidate it after teardown.
+        snapshots.forget(id)
         failTerminalDispatches({ orchestration }, id)
         return { id }
       }

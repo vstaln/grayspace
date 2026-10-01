@@ -20,13 +20,15 @@ export function waitForInbox(
   activeWaiters += 1
   return new Promise((resolvePromise) => {
     let finished = false
+    const socket = req.socket
     const finish = (messages: unknown[]): void => {
       if (finished) return
       finished = true
       activeWaiters = Math.max(0, activeWaiters - 1)
       clearTimeout(timer)
       orchestration.off('message', onMessage)
-      req.off('close', onClose)
+      req.off('aborted', onClose)
+      socket.off('close', onClose)
       resolvePromise({ messages, overloaded: false })
     }
     const onMessage = (message?: { runId?: string; type?: MessageType }): void => {
@@ -41,7 +43,12 @@ export function waitForInbox(
     const timer = setTimeout(() => finish([]), timeoutMs)
     timer.unref?.()
     orchestration.on('message', onMessage)
-    req.on('close', onClose)
+    // IncomingMessage 'close' means the request body completed, which is
+    // normally true before a long-poll handler starts waiting. Watch the
+    // actual connection and the request's explicit abort signal instead.
+    req.on('aborted', onClose)
+    socket.on('close', onClose)
+    if (req.aborted || socket.destroyed) onClose()
     onMessage()
   })
 }
@@ -56,13 +63,15 @@ export function waitForReply(
   activeWaiters += 1
   return new Promise((resolvePromise) => {
     let finished = false
+    const socket = req.socket
     const finish = (reply: unknown): void => {
       if (finished) return
       finished = true
       activeWaiters = Math.max(0, activeWaiters - 1)
       clearTimeout(timer)
       orchestration.off('message', onMessage)
-      req.off('close', onClose)
+      req.off('aborted', onClose)
+      socket.off('close', onClose)
       resolvePromise({ reply, overloaded: false })
     }
     const onMessage = (): void => {
@@ -73,7 +82,9 @@ export function waitForReply(
     const timer = setTimeout(() => finish(null), timeoutMs)
     timer.unref?.()
     orchestration.on('message', onMessage)
-    req.on('close', onClose)
+    req.on('aborted', onClose)
+    socket.on('close', onClose)
+    if (req.aborted || socket.destroyed) onClose()
     onMessage()
   })
 }

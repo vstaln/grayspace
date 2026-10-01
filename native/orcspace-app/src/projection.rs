@@ -32,7 +32,7 @@ pub const MAX_CONNECTIONS: usize = 2_000;
 /// Must stay in step with WIDGET_KINDS in src/main/canvasState.ts: a kind this
 /// list does not know is not merely ignored, it makes sanitize_widget drop the
 /// whole widget, so a replay silently loses every widget of that kind.
-const WIDGET_KINDS: [&str; 11] = [
+const WIDGET_KINDS: [&str; 14] = [
     "terminal",
     "timer",
     "planner",
@@ -44,6 +44,9 @@ const WIDGET_KINDS: [&str; 11] = [
     "music-player",
     "orchestration",
     "chat",
+    "notes",
+    "calendar",
+    "kanban",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,7 +78,11 @@ pub struct Camera {
 
 impl Default for Camera {
     fn default() -> Self {
-        Self { x: 0.0, y: 0.0, zoom: 1.0 }
+        Self {
+            x: 0.0,
+            y: 0.0,
+            zoom: 1.0,
+        }
     }
 }
 
@@ -212,7 +219,11 @@ pub fn sanitize_camera(value: Option<&Value>) -> Camera {
     ) else {
         return Camera::default();
     };
-    Camera { x, y, zoom: zoom.clamp(0.2, 4.0) }
+    Camera {
+        x,
+        y,
+        zoom: zoom.clamp(0.2, 4.0),
+    }
 }
 
 pub fn sanitize_strokes(value: Option<&Value>) -> Vec<Stroke> {
@@ -222,7 +233,9 @@ pub fn sanitize_strokes(value: Option<&Value>) -> Vec<Stroke> {
     let mut strokes = Vec::new();
     let mut total_points = 0usize;
     for entry in entries {
-        let Some(object) = entry.as_object() else { continue };
+        let Some(object) = entry.as_object() else {
+            continue;
+        };
         let (Some(id), Some(color)) = (text(object.get("id")), text(object.get("color"))) else {
             continue;
         };
@@ -232,7 +245,9 @@ pub fn sanitize_strokes(value: Option<&Value>) -> Vec<Stroke> {
 
         let mut points = Vec::new();
         for raw in raw_points {
-            let Some(point) = raw.as_object() else { continue };
+            let Some(point) = raw.as_object() else {
+                continue;
+            };
             let (Some(x), Some(y)) = (num(point.get("x")), num(point.get("y"))) else {
                 continue;
             };
@@ -246,7 +261,11 @@ pub fn sanitize_strokes(value: Option<&Value>) -> Vec<Stroke> {
             continue;
         }
         total_points += points.len();
-        strokes.push(Stroke { id: id.to_owned(), points, color: color.to_owned() });
+        strokes.push(Stroke {
+            id: id.to_owned(),
+            points,
+            color: color.to_owned(),
+        });
         if total_points >= MAX_STROKE_POINTS {
             break;
         }
@@ -261,7 +280,9 @@ pub fn sanitize_connections(value: Option<&Value>, clock: Clock) -> Vec<Connecti
     let mut connections: Vec<Connection> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for entry in entries {
-        let Some(object) = entry.as_object() else { continue };
+        let Some(object) = entry.as_object() else {
+            continue;
+        };
         let (Some(id), Some(from), Some(to)) = (
             text(object.get("id")),
             text(object.get("from")),
@@ -332,7 +353,10 @@ pub fn reduce(state: &CanvasState, event: &JournalEntry, clock: Clock) -> Canvas
                     target_id.clone()
                 };
                 object.insert("id".into(), Value::String(id));
-                object.insert("version".into(), json_number(event.version.unwrap_or(1) as f64));
+                object.insert(
+                    "version".into(),
+                    json_number(event.version.unwrap_or(1) as f64),
+                );
                 object.insert("updatedAt".into(), json_number(event.at as f64));
             }
             if let Some(widget) = sanitize_widget(&seed, clock) {
@@ -368,16 +392,27 @@ pub fn reduce(state: &CanvasState, event: &JournalEntry, clock: Clock) -> Canvas
         }
         "canvas.camera" => {
             next.camera = sanitize_camera(Some(payload));
-            next.version = event.version.map(|v| v as f64).unwrap_or(next.version + 1.0);
+            next.version = event
+                .version
+                .map(|v| v as f64)
+                .unwrap_or(next.version + 1.0);
         }
         "canvas.strokes" => {
             next.strokes = sanitize_strokes(get("strokes"));
-            next.version = event.version.map(|v| v as f64).unwrap_or(next.version + 1.0);
+            next.version = event
+                .version
+                .map(|v| v as f64)
+                .unwrap_or(next.version + 1.0);
         }
         "canvas.connections" => {
-            next.connections =
-                live_connections(sanitize_connections(get("connections"), clock), &next.widgets);
-            next.version = event.version.map(|v| v as f64).unwrap_or(next.version + 1.0);
+            next.connections = live_connections(
+                sanitize_connections(get("connections"), clock),
+                &next.widgets,
+            );
+            next.version = event
+                .version
+                .map(|v| v as f64)
+                .unwrap_or(next.version + 1.0);
         }
         "canvas.import" => {
             if let Some(widgets) = get("widgets").and_then(Value::as_array) {
@@ -402,7 +437,10 @@ pub fn reduce(state: &CanvasState, event: &JournalEntry, clock: Clock) -> Canvas
                     &next.widgets,
                 );
             }
-            next.version = event.version.map(|v| v as f64).unwrap_or(next.version + 1.0);
+            next.version = event
+                .version
+                .map(|v| v as f64)
+                .unwrap_or(next.version + 1.0);
         }
         _ => {}
     }

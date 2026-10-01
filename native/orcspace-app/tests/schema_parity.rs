@@ -28,7 +28,11 @@ fn strict_schema() -> CommandPayloadSchema {
 fn open_schema() -> CommandPayloadSchema {
     let mut properties = IndexMap::new();
     properties.insert("title".to_owned(), FieldSchema::of(FieldType::String));
-    CommandPayloadSchema { properties, required: Vec::new(), additional_properties: None }
+    CommandPayloadSchema {
+        properties,
+        required: Vec::new(),
+        additional_properties: None,
+    }
 }
 
 #[test]
@@ -40,7 +44,11 @@ fn validation_messages_match_typescript() {
 
     for case in data["cases"].as_array().unwrap() {
         let name = case["name"].as_str().unwrap();
-        let schema = if case["schema"] == json!("strict") { &strict } else { &open };
+        let schema = if case["schema"] == json!("strict") {
+            &strict
+        } else {
+            &open
+        };
         let actual = validate_payload(schema, &case["payload"]);
         let expected = case["error"].as_str().map(str::to_owned);
         assert_eq!(actual, expected, "case {name:?}");
@@ -53,7 +61,11 @@ fn a_retry_gets_the_first_answer_back_marked_cached() {
     let now = 1_000;
 
     cache.track("k1", now);
-    assert_eq!(cache.get("k1", now), Some(Entry::Pending), "a running command is known");
+    assert_eq!(
+        cache.get("k1", now),
+        Some(Entry::Pending),
+        "a running command is known"
+    );
 
     cache.set("k1", json!({ "ok": true, "version": 3 }), now);
     let Some(Entry::Done(result)) = cache.get("k1", now) else {

@@ -20,6 +20,15 @@ interface StrokeMetrics {
   spreadSquared: number
 }
 
+// A 4K Retina canvas at full DPR needs over 130 MB for one RGBA surface.
+// Keep normal laptop displays crisp while bounding the backing allocation.
+const MAX_CANVAS_PIXELS = 16_000_000
+
+export function strokeCanvasPixelRatio(width: number, height: number, devicePixelRatio: number): number {
+  const nativeRatio = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1
+  return Math.min(nativeRatio, 2, Math.sqrt(MAX_CANVAS_PIXELS / Math.max(1, width * height)))
+}
+
 
 
 
@@ -98,14 +107,14 @@ function StrokesLayer({ strokes, camera, width, height }: Props): React.JSX.Elem
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const dpr = window.devicePixelRatio || 1
+    const dpr = strokeCanvasPixelRatio(width, height, window.devicePixelRatio)
 
 
 
 
 
-    const pixelWidth = Math.round(width * dpr)
-    const pixelHeight = Math.round(height * dpr)
+    const pixelWidth = Math.max(1, Math.floor(width * dpr))
+    const pixelHeight = Math.max(1, Math.floor(height * dpr))
     if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
       canvas.width = pixelWidth
       canvas.height = pixelHeight

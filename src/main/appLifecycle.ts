@@ -4,26 +4,29 @@ import { cancelPendingProcessTreeSweeps } from './procTree.ts'
 import type { TerminalManager } from './terminals.ts'
 import type { TerminalSnapshots } from './terminalSnapshots.ts'
 import type { PlannerStore } from './plannerStore.ts'
+import type { NotesStore } from './notesStore.ts'
 import type { CanvasStore } from './canvasState.ts'
 import type { CodeStore } from './codeState.ts'
 import type { OrchestrationStore } from './orchestration/store.ts'
 import type { AppState } from './appState.ts'
 import type { Core } from './core/index.ts'
 import type { RendererStateStore } from './rendererState.ts'
+import { SNAPSHOT_TAIL_BYTES } from './terminalSnapshots.ts'
+import { closeRealBrowser } from './realBrowser.ts'
 
 /**
- * How much scrollback the shutdown snapshot reads per terminal.
+ * How much scrollback the shutdown snapshot reads per terminal — the same
+ * bound the periodic snapshot uses.
  *
  * TerminalSnapshots.prepare() strips the text and then keeps only its last
- * 64KB, so reading the whole ring buffer here was work whose result was
- * immediately thrown away — and it happened inside `before-quit`, where the
- * window is already unresponsive and every millisecond is visible as the app
- * refusing to close. With a full buffer per terminal that is up to half a
- * megabyte joined and character-scanned, times every open terminal, on the
- * main thread. The margin over 64KB covers text that is mostly escape
- * sequences, where stripping shrinks the tail a lot.
+ * MAX_SCROLLBACK_BYTES, so reading the whole ring buffer here was work whose
+ * result was immediately thrown away — and it happened inside `before-quit`,
+ * where the window is already unresponsive and every millisecond is visible
+ * as the app refusing to close. With a full buffer per terminal that is up to
+ * half a megabyte joined and character-scanned, times every open terminal, on
+ * the main thread.
  */
-const SHUTDOWN_SNAPSHOT_TAIL_BYTES = 256 * 1024
+const SHUTDOWN_SNAPSHOT_TAIL_BYTES = SNAPSHOT_TAIL_BYTES
 
 export function snapshotTerminals(
   terminals: TerminalManager,
@@ -63,7 +66,10 @@ export function snapshotTerminals(
         }
       }
       snapshots.prune(live)
-      snapshots.flushNow()
+      // `before-quit` is synchronous, so the drain this returns cannot be
+      // awaited here. flushNow() writes the index synchronously before it
+      // returns, which is the part that has to land.
+      void snapshots.flushNow()
     } catch (err) {
       console.error('failed to flush terminal snapshots', err)
     }
@@ -74,6 +80,7 @@ export function setupLifecycle(deps: {
   terminals: TerminalManager
   snapshots: TerminalSnapshots
   planner: PlannerStore
+  notes: NotesStore
   canvas: CanvasStore
   code: CodeStore
   core: Core
@@ -91,6 +98,7 @@ export function setupLifecycle(deps: {
     terminals,
     snapshots,
     planner,
+    notes,
     canvas,
     code,
     core,
@@ -116,8 +124,13 @@ export function setupLifecycle(deps: {
       clearTimeout(sig)
       setOrchestrationSignal(null)
     }
-    snapshotTerminals(terminals, snapshots, code, canvas)
+    // beginShutdown() first: it stops new debounced saves from being queued
+    // behind us and writes whatever the pending one was holding, so the
+    // synchronous snapshot below is the last word rather than racing an async
+    // write that may or may not land. It also leaves flushNow(), at the end of
+    // snapshotTerminals(), as the only other index write on this path.
     snapshots.beginShutdown()
+    snapshotTerminals(terminals, snapshots, code, canvas)
     try {
       state.flush()
     } catch (err) {
@@ -135,6 +148,11 @@ export function setupLifecycle(deps: {
 
     }
     setControlServer(null)
+    try {
+      closeRealBrowser()
+    } catch {
+
+    }
     clearRuntimePresence()
 
 
@@ -146,6 +164,7 @@ export function setupLifecycle(deps: {
     // pending across the quit.
     cancelPendingProcessTreeSweeps()
     planner.dispose()
+    notes.dispose()
     rendererState.dispose()
     orchestration.dispose()
     canvas.dispose()

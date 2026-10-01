@@ -7,7 +7,8 @@ v8.setFlagsFromString('--no-lazy --no-flush-bytecode')
 app.disableHardwareAcceleration()
 app.whenReady().then(() => {
   try {
-    const filename = process.argv[2]
+    const filename = process.argv[process.argv.length - 1]
+    if (!filename || !filename.endsWith('.js')) throw new Error('Missing JavaScript bundle path')
     const code = fs.readFileSync(filename, 'utf8')
     const compiled = vm.compileFunction(code, ['exports', 'require', 'module', '__filename', '__dirname'], { produceCachedData: true })
     if (!compiled.cachedDataProduced) throw new Error('V8 did not produce bytecode')

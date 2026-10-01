@@ -39,16 +39,35 @@ fn a_task_with_an_unfinished_dependency_waits() {
         .create_task(&run, None, "first", &[], &[], "alice", T0)
         .unwrap();
     let second = store
-        .create_task(&run, None, "second", &[first.id.clone()], &[], "alice", T0)
+        .create_task(
+            &run,
+            None,
+            "second",
+            std::slice::from_ref(&first.id),
+            &[],
+            "alice",
+            T0,
+        )
         .unwrap();
-    assert_eq!(second.status, "pending", "a dependent task is not dispatchable yet");
+    assert_eq!(
+        second.status, "pending",
+        "a dependent task is not dispatchable yet"
+    );
 }
 
 #[test]
 fn the_title_falls_back_to_the_specs_first_line() {
     let (mut store, run) = store_with_run();
     let task = store
-        .create_task(&run, None, "Goal: ship it\nScope: everything", &[], &[], "alice", T0)
+        .create_task(
+            &run,
+            None,
+            "Goal: ship it\nScope: everything",
+            &[],
+            &[],
+            "alice",
+            T0,
+        )
         .unwrap();
     assert_eq!(task.title, "Goal: ship it");
 }
@@ -57,8 +76,14 @@ fn the_title_falls_back_to_the_specs_first_line() {
 fn a_very_long_first_line_is_elided() {
     let (mut store, run) = store_with_run();
     let spec = "x".repeat(200);
-    let task = store.create_task(&run, None, &spec, &[], &[], "alice", T0).unwrap();
-    assert_eq!(task.title.chars().count(), 78, "77 characters plus the ellipsis");
+    let task = store
+        .create_task(&run, None, &spec, &[], &[], "alice", T0)
+        .unwrap();
+    assert_eq!(
+        task.title.chars().count(),
+        78,
+        "77 characters plus the ellipsis"
+    );
     assert!(task.title.ends_with('…'));
 }
 
@@ -66,7 +91,15 @@ fn a_very_long_first_line_is_elided() {
 fn a_dependency_that_is_not_a_task_is_refused() {
     let (mut store, run) = store_with_run();
     let error = store
-        .create_task(&run, None, "spec", &["otask-nope".to_owned()], &[], "alice", T0)
+        .create_task(
+            &run,
+            None,
+            "spec",
+            &["otask-nope".to_owned()],
+            &[],
+            "alice",
+            T0,
+        )
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::NotFound);
 }
@@ -92,9 +125,19 @@ fn a_dependency_from_another_run_is_refused() {
 #[test]
 fn settling_a_dispatch_promotes_what_it_unblocked() {
     let (mut store, run) = store_with_run();
-    let first = store.create_task(&run, None, "first", &[], &[], "alice", T0).unwrap();
+    let first = store
+        .create_task(&run, None, "first", &[], &[], "alice", T0)
+        .unwrap();
     let second = store
-        .create_task(&run, None, "second", &[first.id.clone()], &[], "alice", T0)
+        .create_task(
+            &run,
+            None,
+            "second",
+            std::slice::from_ref(&first.id),
+            &[],
+            "alice",
+            T0,
+        )
         .unwrap();
 
     let dispatch = store
@@ -114,9 +157,19 @@ fn settling_a_dispatch_promotes_what_it_unblocked() {
 #[test]
 fn a_failed_dispatch_fails_the_task_and_unblocks_nothing() {
     let (mut store, run) = store_with_run();
-    let first = store.create_task(&run, None, "first", &[], &[], "alice", T0).unwrap();
+    let first = store
+        .create_task(&run, None, "first", &[], &[], "alice", T0)
+        .unwrap();
     let second = store
-        .create_task(&run, None, "second", &[first.id.clone()], &[], "alice", T0)
+        .create_task(
+            &run,
+            None,
+            "second",
+            std::slice::from_ref(&first.id),
+            &[],
+            "alice",
+            T0,
+        )
         .unwrap();
     let dispatch = store
         .create_dispatch(&first.id, "term-1", "claude", "brief", T0)
@@ -127,7 +180,10 @@ fn a_failed_dispatch_fails_the_task_and_unblocks_nothing() {
         .unwrap();
 
     assert_eq!(task.status, "failed");
-    assert!(promoted.is_empty(), "a dependent must not start on a failed dependency");
+    assert!(
+        promoted.is_empty(),
+        "a dependent must not start on a failed dependency"
+    );
     assert_eq!(store.require_task(&second.id).unwrap().status, "pending");
 }
 
@@ -135,7 +191,9 @@ fn a_failed_dispatch_fails_the_task_and_unblocks_nothing() {
 #[test]
 fn a_task_may_have_only_one_running_dispatch() {
     let (mut store, run) = store_with_run();
-    let task = store.create_task(&run, None, "work", &[], &[], "alice", T0).unwrap();
+    let task = store
+        .create_task(&run, None, "work", &[], &[], "alice", T0)
+        .unwrap();
     store
         .create_dispatch(&task.id, "term-1", "claude", "brief", T0)
         .unwrap();
@@ -150,9 +208,15 @@ fn a_task_may_have_only_one_running_dispatch() {
 #[test]
 fn a_terminal_may_run_only_one_dispatch() {
     let (mut store, run) = store_with_run();
-    let one = store.create_task(&run, None, "one", &[], &[], "alice", T0).unwrap();
-    let two = store.create_task(&run, None, "two", &[], &[], "alice", T0).unwrap();
-    store.create_dispatch(&one.id, "term-1", "claude", "brief", T0).unwrap();
+    let one = store
+        .create_task(&run, None, "one", &[], &[], "alice", T0)
+        .unwrap();
+    let two = store
+        .create_task(&run, None, "two", &[], &[], "alice", T0)
+        .unwrap();
+    store
+        .create_dispatch(&one.id, "term-1", "claude", "brief", T0)
+        .unwrap();
 
     let error = store
         .create_dispatch(&two.id, "term-1", "claude", "brief", T0)
@@ -163,11 +227,15 @@ fn a_terminal_may_run_only_one_dispatch() {
 #[test]
 fn a_completed_task_cannot_be_dispatched_again() {
     let (mut store, run) = store_with_run();
-    let task = store.create_task(&run, None, "work", &[], &[], "alice", T0).unwrap();
+    let task = store
+        .create_task(&run, None, "work", &[], &[], "alice", T0)
+        .unwrap();
     let dispatch = store
         .create_dispatch(&task.id, "term-1", "claude", "brief", T0)
         .unwrap();
-    store.settle_dispatch(&dispatch.id, "succeeded", None, T0 + 1).unwrap();
+    store
+        .settle_dispatch(&dispatch.id, "succeeded", None, T0 + 1)
+        .unwrap();
 
     let error = store
         .create_dispatch(&task.id, "term-2", "claude", "brief", T0 + 2)
@@ -179,11 +247,15 @@ fn a_completed_task_cannot_be_dispatched_again() {
 #[test]
 fn settling_is_one_way() {
     let (mut store, run) = store_with_run();
-    let task = store.create_task(&run, None, "work", &[], &[], "alice", T0).unwrap();
+    let task = store
+        .create_task(&run, None, "work", &[], &[], "alice", T0)
+        .unwrap();
     let dispatch = store
         .create_dispatch(&task.id, "term-1", "claude", "brief", T0)
         .unwrap();
-    store.settle_dispatch(&dispatch.id, "succeeded", None, T0 + 1).unwrap();
+    store
+        .settle_dispatch(&dispatch.id, "succeeded", None, T0 + 1)
+        .unwrap();
 
     let error = store
         .settle_dispatch(&dispatch.id, "failed", None, T0 + 2)
@@ -201,23 +273,31 @@ fn settling_is_one_way() {
 #[test]
 fn a_running_dispatch_cannot_be_released() {
     let (mut store, run) = store_with_run();
-    let task = store.create_task(&run, None, "work", &[], &[], "alice", T0).unwrap();
+    let task = store
+        .create_task(&run, None, "work", &[], &[], "alice", T0)
+        .unwrap();
     let dispatch = store
         .create_dispatch(&task.id, "term-1", "claude", "brief", T0)
         .unwrap();
 
-    let error = store.set_dispatch_state(&dispatch.id, "released").unwrap_err();
+    let error = store
+        .set_dispatch_state(&dispatch.id, "released")
+        .unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict);
 }
 
 #[test]
 fn a_settled_dispatch_is_unaccounted_until_it_is_released_or_retained() {
     let (mut store, run) = store_with_run();
-    let task = store.create_task(&run, None, "work", &[], &[], "alice", T0).unwrap();
+    let task = store
+        .create_task(&run, None, "work", &[], &[], "alice", T0)
+        .unwrap();
     let dispatch = store
         .create_dispatch(&task.id, "term-1", "claude", "brief", T0)
         .unwrap();
-    store.settle_dispatch(&dispatch.id, "succeeded", None, T0 + 1).unwrap();
+    store
+        .settle_dispatch(&dispatch.id, "succeeded", None, T0 + 1)
+        .unwrap();
 
     assert_eq!(store.unaccounted_dispatches(None).len(), 1);
     store.set_dispatch_state(&dispatch.id, "released").unwrap();
@@ -227,9 +307,19 @@ fn a_settled_dispatch_is_unaccounted_until_it_is_released_or_retained() {
 #[test]
 fn marking_a_task_completed_by_hand_also_promotes_its_dependents() {
     let (mut store, run) = store_with_run();
-    let first = store.create_task(&run, None, "first", &[], &[], "alice", T0).unwrap();
+    let first = store
+        .create_task(&run, None, "first", &[], &[], "alice", T0)
+        .unwrap();
     let second = store
-        .create_task(&run, None, "second", &[first.id.clone()], &[], "alice", T0)
+        .create_task(
+            &run,
+            None,
+            "second",
+            std::slice::from_ref(&first.id),
+            &[],
+            "alice",
+            T0,
+        )
         .unwrap();
 
     store
@@ -241,7 +331,9 @@ fn marking_a_task_completed_by_hand_also_promotes_its_dependents() {
 #[test]
 fn an_unknown_status_is_refused() {
     let (mut store, run) = store_with_run();
-    let task = store.create_task(&run, None, "work", &[], &[], "alice", T0).unwrap();
+    let task = store
+        .create_task(&run, None, "work", &[], &[], "alice", T0)
+        .unwrap();
     let error = store
         .update_task(&task.id, Some("teleported"), None, None, T0)
         .unwrap_err();
@@ -251,9 +343,15 @@ fn an_unknown_status_is_refused() {
 #[test]
 fn ready_filter_excludes_dispatched_and_finished_tasks() {
     let (mut store, run) = store_with_run();
-    let a = store.create_task(&run, None, "a", &[], &[], "alice", T0).unwrap();
-    store.create_task(&run, None, "b", &[], &[], "alice", T0 + 1).unwrap();
-    store.create_dispatch(&a.id, "term-1", "claude", "brief", T0).unwrap();
+    let a = store
+        .create_task(&run, None, "a", &[], &[], "alice", T0)
+        .unwrap();
+    store
+        .create_task(&run, None, "b", &[], &[], "alice", T0 + 1)
+        .unwrap();
+    store
+        .create_dispatch(&a.id, "term-1", "claude", "brief", T0)
+        .unwrap();
 
     let ready = store.list_tasks(Some(&run), None, true);
     assert_eq!(ready.len(), 1);
@@ -264,7 +362,19 @@ fn ready_filter_excludes_dispatched_and_finished_tasks() {
 fn the_inbox_hides_what_the_recipient_already_acked() {
     let (mut store, run) = store_with_run();
     let message = store
-        .send(&run, "ask", "worker", "alice", "question", "which way?", None, None, None, None, T0)
+        .send(
+            &run,
+            "ask",
+            "worker",
+            "alice",
+            "question",
+            "which way?",
+            None,
+            None,
+            None,
+            None,
+            T0,
+        )
         .unwrap();
     assert_eq!(store.inbox("alice", None).len(), 1);
 
@@ -278,21 +388,39 @@ fn the_inbox_hides_what_the_recipient_already_acked() {
 fn a_broadcast_is_acked_per_recipient() {
     let (mut store, run) = store_with_run();
     let message = store
-        .send(&run, "note", "alice", "*", "heads up", "body", None, None, None, None, T0)
+        .send(
+            &run, "note", "alice", "*", "heads up", "body", None, None, None, None, T0,
+        )
         .unwrap();
     assert_eq!(store.inbox("bob", None).len(), 1);
     assert_eq!(store.inbox("carol", None).len(), 1);
 
     store.ack(&message.id, "bob").unwrap();
     assert!(store.inbox("bob", None).is_empty());
-    assert_eq!(store.inbox("carol", None).len(), 1, "carol has still not seen it");
+    assert_eq!(
+        store.inbox("carol", None).len(),
+        1,
+        "carol has still not seen it"
+    );
 }
 
 #[test]
 fn an_unknown_message_type_is_refused() {
     let (mut store, run) = store_with_run();
     let error = store
-        .send(&run, "telepathy", "a", "b", "s", "b", None, None, None, None, T0)
+        .send(
+            &run,
+            "telepathy",
+            "a",
+            "b",
+            "s",
+            "b",
+            None,
+            None,
+            None,
+            None,
+            T0,
+        )
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::Invalid);
 }
@@ -303,12 +431,22 @@ fn an_unknown_message_type_is_refused() {
 fn a_gate_resolves_once() {
     let (mut store, run) = store_with_run();
     let gate = store
-        .create_gate(&run, "ship it?", &["yes".into(), "no".into()], "alice", None, T0)
+        .create_gate(
+            &run,
+            "ship it?",
+            &["yes".into(), "no".into()],
+            "alice",
+            None,
+            T0,
+        )
         .unwrap();
     assert_eq!(store.list_gates(Some(&run), true).len(), 1);
 
     store.resolve_gate(&gate.id, "yes", T0 + 1).unwrap();
-    assert!(store.list_gates(Some(&run), true).is_empty(), "it is no longer open");
+    assert!(
+        store.list_gates(Some(&run), true).is_empty(),
+        "it is no longer open"
+    );
 
     let error = store.resolve_gate(&gate.id, "no", T0 + 2).unwrap_err();
     assert_eq!(error.code, ErrorCode::Conflict);
@@ -349,7 +487,11 @@ fn loads_a_real_orchestration_file() {
     let dispatches = store.list_dispatches(None, None, None);
 
     assert_eq!(runs.len(), value["runs"].as_array().unwrap().len(), "runs");
-    assert_eq!(tasks.len(), value["tasks"].as_array().unwrap().len(), "tasks");
+    assert_eq!(
+        tasks.len(),
+        value["tasks"].as_array().unwrap().len(),
+        "tasks"
+    );
     assert_eq!(
         dispatches.len(),
         value["dispatches"].as_array().unwrap().len(),
@@ -412,7 +554,9 @@ fn a_real_orchestration_file_survives_a_load_and_save() {
 
     let path = std::env::var("ORCSPACE_ORCHESTRATION").expect("ORCSPACE_ORCHESTRATION");
     let raw = std::fs::read_to_string(&path).expect("file is readable");
-    let original = raw.trim_start_matches('\u{feff}').trim_end_matches(['\n', '\r']);
+    let original = raw
+        .trim_start_matches('\u{feff}')
+        .trim_end_matches(['\n', '\r']);
 
     let value: serde_json::Value = serde_json::from_str(original).expect("parses");
     let rendered = to_js_json_pretty(&OrchestrationStore::load(&value).to_json(), 2);
@@ -431,5 +575,8 @@ fn a_real_orchestration_file_survives_a_load_and_save() {
             &rendered[from..(at + 120).min(rendered.len())]
         );
     }
-    println!("load/save round-tripped {} bytes byte-for-byte", original.len());
+    println!(
+        "load/save round-tripped {} bytes byte-for-byte",
+        original.len()
+    );
 }

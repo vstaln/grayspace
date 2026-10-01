@@ -2,9 +2,10 @@ import { app } from 'electron'
 import type { TerminalManager } from './terminals.ts'
 import type { TerminalStreamBatcher } from './terminalBatcher.ts'
 import type { PlannerStore } from './plannerStore.ts'
+import type { NotesStore } from './notesStore.ts'
 import type { CanvasStore } from './canvasState.ts'
 import type { CodeStore } from './codeState.ts'
-import type { TerminalSnapshots } from './terminalSnapshots.ts'
+import { SNAPSHOT_TAIL_BYTES, type TerminalSnapshots } from './terminalSnapshots.ts'
 import { isTerminalMounted } from './ipc/index.ts'
 
 export function setupTerminalEvents(deps: {
@@ -12,29 +13,21 @@ export function setupTerminalEvents(deps: {
   terminalBatcher: TerminalStreamBatcher
   snapshots: TerminalSnapshots
   planner: PlannerStore
+  notes: NotesStore
   canvas: CanvasStore
   code: CodeStore
   send: (channel: string, ...args: unknown[]) => void
   isShuttingDown: () => boolean
 }): void {
-  const { terminals, terminalBatcher, snapshots, planner, canvas, code, send, isShuttingDown } = deps
+  const { terminals, terminalBatcher, snapshots, planner, notes, canvas, code, send, isShuttingDown } = deps
+  let outputDeliveryId = 0
 
   const snapshotDebounce = new Map<string, ReturnType<typeof setTimeout>>()
-  /**
-   * How much of the live scrollback a periodic snapshot looks at.
-   *
-   * TerminalSnapshots.prepare() keeps only the last 64KB, so reading the whole
-   * ring buffer here was pure waste. The margin over 64KB covers text that is
-   * mostly escape sequences, where the SGR-preserving pass shrinks the tail a
-   * lot. Even bounded, this join and scan runs on the thread that pumps every
-   * PTY, which is why the cadence below matters as much as the size does.
-   */
-  const SNAPSHOT_TAIL_BYTES = 256 * 1024
   /**
    * A terminal that never stops streaming would never reach the trailing edge
    * of the debounce, so a save is forced this long after the first unsaved
    * byte. Everything in between is skipped, which is the whole point: the
-   * 256KB tail join below runs on the thread that pumps every PTY.
+   * tail join above runs on the thread that pumps every PTY.
    */
   const SNAPSHOT_MAX_INTERVAL_MS = 15000
   const snapshotDeadline = new Map<string, number>()
@@ -71,13 +64,13 @@ export function setupTerminalEvents(deps: {
   })
   // Straight to the renderer. A second queue used to sit here pacing output to
   // 16KB per 32ms tick, which is ~500KB/s — far below what an agent streaming a
-  // diff produces. Its 256KB backlog filled in well under a second, and from
-  // then on every batch evicted older output and set the resync flag, whose
-  // marker is an SGR reset. That is why a busy code session both lagged half a
-  // second behind and came out with its colours stripped. The batcher above
-  // already coalesces per frame and bounds its own backlog.
+  // diff produces. Output is acknowledged only after xterm parses it; the PTY
+  // pauses above the renderer high-water mark, so transport never evicts bytes.
   terminalBatcher.on('batch', (id: string, chunk: string) => {
-    if (isTerminalMounted(id)) send('terminal:onData', id, chunk)
+    if (!isTerminalMounted(id)) return
+    outputDeliveryId += 1
+    terminals.noteRendererOutput(id, chunk.length, outputDeliveryId)
+    send('terminal:onData', id, chunk, outputDeliveryId)
   })
   const cancelSnapshotTimer = (id: string): void => {
     const timer = snapshotDebounce.get(id)
@@ -126,6 +119,7 @@ export function setupTerminalEvents(deps: {
     snapshots.saveAsync({ id: info.id, title: info.title, cwd: info.cwd, lastPrompt: info.lastPrompt, scrollback: info.scrollback })
   })
   planner.on('change', (items) => send('planner:onChange', items))
+  notes.on('change', (items) => send('notes:onChange', items))
   canvas.on('change', (snapshot) => send('canvas:onChange', snapshot))
   code.on('change', (snapshot) => send('code:onChange', snapshot))
 }

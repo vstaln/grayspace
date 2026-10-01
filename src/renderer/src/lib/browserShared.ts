@@ -20,6 +20,7 @@ export const HOME_URL = 'https://www.google.com'
 
 export interface Webview extends HTMLElement {
   src: string
+  getWebContentsId(): number
   loadURL(url: string): Promise<void>
   getURL(): string
   goBack(): void

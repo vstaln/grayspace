@@ -8,7 +8,7 @@ import { TerminalRenderQueue } from './terminalRenderQueue.ts'
  * hands xterm one chunk per scheduled frame and must not start the next until
  * the previous one is done.
  */
-function harness(limit?: number, chunkSize?: number) {
+function harness(chunkSize?: number) {
   const writes: string[] = []
   let pendingDone: (() => void) | null = null
   let scheduled = 0
@@ -20,7 +20,6 @@ function harness(limit?: number, chunkSize?: number) {
     () => {
       scheduled += 1
     },
-    limit,
     chunkSize
   )
   return {
@@ -40,7 +39,7 @@ function harness(limit?: number, chunkSize?: number) {
 
 describe('TerminalRenderQueue', () => {
   test('output is delivered in order, one chunk per flush', () => {
-    const h = harness(1024, 4)
+    const h = harness(4)
     h.queue.push('abcdefghij')
     h.queue.flush()
     assert.deepStrictEqual(h.writes, ['abcd'])
@@ -55,15 +54,28 @@ describe('TerminalRenderQueue', () => {
   })
 
   test('a second flush is refused while the parser still owns the first chunk', () => {
-    const h = harness(1024, 4)
+    const h = harness(4)
     h.queue.push('abcdefgh')
     h.queue.flush()
     h.queue.flush()
     assert.deepStrictEqual(h.writes, ['abcd'], 'writing again before done would reorder output')
   })
 
+  test('streaming output waits for the parser instead of scheduling futile flushes', () => {
+    const h = harness(4)
+    h.queue.push('abcd')
+    h.queue.flush()
+    const scheduled = h.scheduled
+    for (let i = 0; i < 100; i++) h.queue.push('x')
+    assert.equal(h.scheduled, scheduled)
+    h.complete()
+    assert.equal(h.scheduled, scheduled + 1)
+    h.queue.flush()
+    assert.deepStrictEqual(h.writes.slice(0, 2), ['abcd', 'xxxx'])
+  })
+
   test('a completed write asks for another frame only while data is left', () => {
-    const h = harness(1024, 4)
+    const h = harness(4)
     h.queue.push('abcd')
     h.queue.flush()
     const before = h.scheduled
@@ -72,39 +84,57 @@ describe('TerminalRenderQueue', () => {
   })
 
   test('nothing is written while paused, and resuming asks for a frame', () => {
-    const h = harness(1024, 4)
+    const h = harness(4)
     h.queue.pause(true)
     h.queue.push('abcd')
     h.queue.flush()
     assert.deepStrictEqual(h.writes, [])
 
     h.queue.pause(false)
+    assert.equal(h.scheduled, 1)
     h.queue.flush()
     assert.deepStrictEqual(h.writes, ['abcd'])
   })
 
-  test('overflowing the backlog drops the oldest bytes and marks the resync once', () => {
-    const h = harness(8, 64)
+  test('preserves every byte across ordered chunks', () => {
+    const h = harness(4)
     h.queue.push('aaaaaaaa')
     h.queue.push('bbbbbbbb')
-    h.queue.flush()
-
-    const RESYNC = '\x18\x1b[?9l\x1b[?1000l\x1b[?1001l\x1b[?1002l\x1b[?1003l' +
-      '\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?2026l\x1b[?25h\x1b[0m'
-    const written = h.writes[0]
-    assert.ok(written.startsWith(RESYNC), 'a drop must announce itself so a halved sequence cannot bleed')
-    assert.equal(written.slice(RESYNC.length), 'bbbbbbbb', 'the newest output is what survives')
-
+    while (h.queue.pendingLength || h.writes.length === 0) {
+      if (h.writes.length > 0) h.complete()
+      h.queue.flush()
+    }
     h.complete()
-    h.queue.push('cc')
+    assert.equal(h.writes.join(''), 'aaaaaaaabbbbbbbb')
+  })
+
+  test('runs a callback only after all bytes in that push are parsed', () => {
+    const h = harness(4)
+    let parsed = false
+    h.queue.push('abcdefgh', () => { parsed = true })
     h.queue.flush()
-    assert.equal(h.writes[1], 'cc', 'the marker belongs to the drop, not to every later write')
+    h.complete()
+    assert.equal(parsed, false)
+    h.queue.flush()
+    h.complete()
+    assert.equal(parsed, true)
+  })
+
+  test('afterPending waits for the current parser write before running', () => {
+    const h = harness(4)
+    let drained = false
+    h.queue.push('abcd')
+    h.queue.flush()
+    h.queue.afterPending(() => { drained = true })
+    assert.equal(drained, false)
+    h.complete()
+    assert.equal(drained, true)
   })
 
   test('a surrogate pair is never split across two chunks', () => {
     // Four astral characters, two UTF-16 units each. A chunkSize that lands
     // mid-pair must back off rather than emit a lone high surrogate.
-    const h = harness(1024, 3)
+    const h = harness(3)
     h.queue.push('😀😀😀😀')
     h.queue.flush()
     assert.equal(h.writes[0], '😀', 'a 3-unit budget may only carry one whole pair')
@@ -112,7 +142,7 @@ describe('TerminalRenderQueue', () => {
   })
 
   test('a disposed queue accepts nothing further', () => {
-    const h = harness(1024, 4)
+    const h = harness(4)
     h.queue.push('abcd')
     h.queue.dispose()
     h.queue.flush()
@@ -131,7 +161,6 @@ describe('TerminalRenderQueue', () => {
         done()
       },
       () => {},
-      1024,
       4
     )
     queue.push('abcd')

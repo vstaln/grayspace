@@ -1,5 +1,6 @@
 import type { CanvasStore } from '../canvasState.ts'
 import type { PlannerStore } from '../plannerStore.ts'
+import type { NotesStore } from '../notesStore.ts'
 import type { OrchestrationStore } from '../orchestration/store.ts'
 import type { TerminalManager } from '../terminals.ts'
 import type { TerminalSnapshots } from '../terminalSnapshots.ts'
@@ -9,6 +10,7 @@ import { registerFileCommands } from './files.ts'
 import { registerGitCommands } from './git.ts'
 import { registerOrchestrationCommands } from './orchestration.ts'
 import { registerPlannerCommands } from './planner.ts'
+import { registerNotesCommands } from './notes.ts'
 import { registerTerminalCommands } from './terminals.ts'
 import { registerBuiltinWidgets } from '../widgets/registry.ts'
 import type { GitStatus } from '../git.ts'
@@ -17,6 +19,7 @@ export interface CommandDeps {
   core: Core
   canvas: CanvasStore
   planner: PlannerStore
+  notes: NotesStore
 
   orchestration: OrchestrationStore
   terminals: TerminalManager
@@ -58,6 +61,7 @@ export function registerCommands(deps: CommandDeps): { git: { status(): Promise<
   registerBuiltinWidgets()
   registerCanvasCommands(deps)
   registerPlannerCommands(deps)
+  registerNotesCommands(deps)
   registerOrchestrationCommands(deps)
   registerTerminalCommands(deps)
   registerFileCommands(deps)
@@ -68,6 +72,7 @@ export const NEW = {
   terminal: 'terminal:new',
   widget: 'widget:new',
   plan: 'plan:new',
+  note: 'note:new',
   run: 'run:new',
   orctask: 'orctask:new',
   dispatch: 'dispatch:new',

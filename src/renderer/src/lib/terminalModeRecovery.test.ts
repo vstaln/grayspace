@@ -273,4 +273,46 @@ describe('orphaned modes', () => {
       false
     )
   })
+
+  it('recovers origin mode left behind by a clean alternate-screen exit', () => {
+    // The Ctrl-C/Codex case: the TUI restored the normal buffer and turned
+    // mouse reporting off, but died with origin mode (and its scroll region)
+    // still set — so the shell prompt is trapped on the top row.
+    assert.equal(
+      hasOrphanedModes({ bufferType: 'normal', mouseTracking: 'none', originMode: true }),
+      true
+    )
+  })
+
+  it('recovers a stuck synchronized-output frame after the child is gone', () => {
+    assert.equal(
+      hasOrphanedModes({ bufferType: 'normal', mouseTracking: 'none', synchronizedOutputMode: true }),
+      true
+    )
+  })
+
+  it('recovers insert mode and a disabled autowrap left by a dead TUI', () => {
+    assert.equal(
+      hasOrphanedModes({ bufferType: 'normal', mouseTracking: 'none', insertMode: true }),
+      true
+    )
+    assert.equal(
+      hasOrphanedModes({ bufferType: 'normal', mouseTracking: 'none', wraparoundMode: false }),
+      true
+    )
+  })
+
+  it('stays quiet for a healthy shell that reports all modes', () => {
+    assert.equal(
+      hasOrphanedModes({
+        bufferType: 'normal',
+        mouseTracking: 'none',
+        originMode: false,
+        synchronizedOutputMode: false,
+        insertMode: false,
+        wraparoundMode: true
+      }),
+      false
+    )
+  })
 })

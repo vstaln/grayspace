@@ -1,11 +1,19 @@
 name: Build installers
 
-# Produces the shippable installers for both desktop platforms.
+# Produces the shippable installers for Linux and Windows and, for a v* tag,
+# publishes them together with the auto-update feeds.
 #
-# macOS is the reason this workflow exists: electron-builder cannot cross-build
-# a .dmg from Windows or Linux (it needs macOS-only tooling to lay out the disk
-# image and sign the bundle), so the only way to get a Mac installer without
-# owning a Mac is to run the build on a macOS runner.
+# Linux and Windows installers are built on their native GitHub-hosted runners;
+# electron-builder cannot cross-build either target reliably.
+#
+# Auto-update: installed apps read the GitHub release of orcspace/Orcspace-Uptade
+# (a public repository) and look for one feed file per platform:
+#   latest.yml        Windows (NSIS)
+#   latest-linux.yml  Linux    (AppImage and .deb)
+# All of them are uploaded to that release, next to the installers they describe.
+#
+# Secrets (all optional except UPDATE_RELEASE_TOKEN for publishing):
+#   UPDATE_RELEASE_TOKEN        token with contents:write on orcspace/Orcspace-Uptade
 #
 # Artifacts are attached to the run — download them from the run's summary page.
 
@@ -14,6 +22,10 @@ on:
   push:
     tags:
       - 'v*'
+
+concurrency:
+  group: orcspace-release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -25,31 +37,41 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            name: macos-arm64
-            script: dist:mac:arm
+          - os: ubuntu-latest
+            name: linux-x64
+            script: dist:linux
+            build_args: '-- --skip-ci --skip-tests'
             artifacts: |
-              dist/*.dmg
-              dist/*.zip
-          - os: macos-13
-            name: macos-intel
-            script: dist:mac:intel
-            artifacts: |
-              dist/*.dmg
-              dist/*.zip
+              dist/installers/linux/*.AppImage
+              dist/installers/linux/*.deb
+              dist/installers/linux/*.tar.gz
+              dist/installers/linux/latest-linux.yml
+              dist/installers/linux/checksums-linux.json
           - os: windows-latest
             name: windows
             script: dist
+            build_args: '-- --skip-ci --skip-tests'
             artifacts: |
-              dist/*.exe
-              dist/*.exe.blockmap
-              dist/latest.yml
+              dist/installers/windows/*.exe
+              dist/installers/windows/*.exe.blockmap
+              dist/installers/windows/latest.yml
+              dist/installers/windows/checksums.json
 
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Linux native build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libclang-dev libfontconfig1-dev libgtk-3-dev \
+            libssl-dev libwayland-dev libxkbcommon-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libx11-dev libxcursor-dev libxi-dev libxinerama-dev libxrandr-dev xvfb
 
       # 24, not 22: `npm test` runs `node --test` straight over .ts files, which
       # relies on native type stripping (unflagged from Node 23.6). On 22 the
@@ -59,7 +81,7 @@ jobs:
           node-version: 24
           cache: npm
 
-      # The three native crates are optional accelerations: native/build.mjs
+      # The native crates are optional accelerations: native/build.mjs
       # detects a missing toolchain and falls back to the TypeScript paths, so
       # the build never fails for want of Rust. Installing it anyway means the
       # shipped app gets the fast paths.
@@ -85,9 +107,8 @@ jobs:
         run: npm test
 
       - name: Build the installer
-        run: npm run ${{ matrix.script }}
+        run: npm run ${{ matrix.script }} ${{ matrix.build_args }}
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -96,12 +117,10 @@ jobs:
         run: |
           echo "### ${{ matrix.name }} installers" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          ls -lh dist/*.dmg dist/*.zip dist/*.exe 2>/dev/null || true
-          ls -lh dist/*.dmg dist/*.zip dist/*.exe 2>/dev/null >> "$GITHUB_STEP_SUMMARY" || true
+          find dist -maxdepth 4 -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name '*.exe.blockmap' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.tar.gz' -o -name 'latest*.yml' -o -name 'checksums*.json' \) -print0 | xargs -0 -r ls -lh | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "These builds are **unsigned**." >> "$GITHUB_STEP_SUMMARY"
-          echo "macOS: the first launch needs a right-click → Open, or \`xattr -cr /Applications/OrcSpace.app\`." >> "$GITHUB_STEP_SUMMARY"
           echo "Windows: SmartScreen shows 'More info → Run anyway' until the .exe builds reputation." >> "$GITHUB_STEP_SUMMARY"
+          echo "Linux: AppImage requires \`chmod +x\`; .deb can be installed via \`sudo dpkg -i\`. Only the AppImage and .deb update themselves." >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -110,22 +129,48 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish macOS installers to source repository
-        if: startsWith(github.ref, 'refs/tags/v') && matrix.name != 'windows'
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      # Publish both platform installers to the source repository.
+      - name: Publish installers
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.artifacts }}
+          files: |
+            release-assets/orcspace-windows/*.exe
+            release-assets/orcspace-windows/*.exe.blockmap
+            release-assets/orcspace-windows/latest.yml
+            release-assets/orcspace-windows/checksums.json
+            release-assets/orcspace-linux-x64/*.AppImage
+            release-assets/orcspace-linux-x64/*.deb
+            release-assets/orcspace-linux-x64/*.tar.gz
+            release-assets/orcspace-linux-x64/latest-linux.yml
+            release-assets/orcspace-linux-x64/checksums-linux.json
           fail_on_unmatched_files: true
           draft: false
           prerelease: false
 
-      - name: Publish Windows update to public release repository
-        if: startsWith(github.ref, 'refs/tags/v') && matrix.name == 'windows'
+      - name: Publish installers and update feeds for in-app updates
         uses: softprops/action-gh-release@v2
         with:
           repository: orcspace/Orcspace-Uptade
           token: ${{ secrets.UPDATE_RELEASE_TOKEN }}
-          files: ${{ matrix.artifacts }}
+          files: |
+            release-assets/orcspace-windows/*.exe
+            release-assets/orcspace-windows/*.exe.blockmap
+            release-assets/orcspace-windows/latest.yml
+            release-assets/orcspace-windows/checksums.json
+            release-assets/orcspace-linux-x64/*.AppImage
+            release-assets/orcspace-linux-x64/*.deb
+            release-assets/orcspace-linux-x64/*.tar.gz
+            release-assets/orcspace-linux-x64/latest-linux.yml
+            release-assets/orcspace-linux-x64/checksums-linux.json
           fail_on_unmatched_files: true
           draft: false
           prerelease: false

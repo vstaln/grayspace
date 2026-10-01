@@ -195,6 +195,13 @@ export function readChildTitle(probe: ModeRecoveryProbe, chunk: string): ChildTi
   // twice, and cap it because a console title is short.
   const lastEnd = Math.max(scanned.lastIndexOf('\u0007'), scanned.lastIndexOf('\u001b\\'))
   probe.titleCarry = (lastEnd >= 0 ? scanned.slice(lastEnd + 1) : scanned).slice(-TITLE_CARRY_LIMIT)
+  // A tail with no escape and no BEL can never start or finish a title, so it
+  // is not kept: holding 512 chars of plain prompt output forever would defeat
+  // the widget's no-escape fast path below on every chunk. A split title
+  // always carries its ESC through the carry, so nothing real is dropped.
+  if (!probe.titleCarry.includes('\u001b') && !probe.titleCarry.includes('\u0007')) {
+    probe.titleCarry = ''
+  }
   if (!mayCarryTitle(scanned)) return null
   let event: ChildTitleEvent | null = null
   for (const title of terminalTitles(scanned)) {
@@ -240,6 +247,25 @@ export type RecoveryReason =
 export function hasOrphanedModes(input: {
   bufferType: 'normal' | 'alternate'
   mouseTracking?: string
+  /** Origin mode (DECOM `?6h`): a shell prompt never uses it; a dead TUI leaves it with its scroll region. */
+  originMode?: boolean
+  /** Synchronized output (`?2026h`) stuck on looks like a hung terminal: output buffers until `?2026l`. */
+  synchronizedOutputMode?: boolean
+  /** Insert mode (`IRM`): shells don't leave it on at a prompt. */
+  insertMode?: boolean
+  /** Auto-wrap (`?7`) is on at a healthy prompt; a TUI that turned it off and died leaves it off. */
+  wraparoundMode?: boolean
 }): boolean {
-  return (input.mouseTracking ?? 'none') !== 'none' || input.bufferType === 'alternate'
+  if ((input.mouseTracking ?? 'none') !== 'none') return true
+  if (input.bufferType === 'alternate') return true
+  // After a clean `1049l` the cursor can still be trapped in the TUI's scroll
+  // region (origin mode) or inside an unclosed synchronized-output frame.
+  // This is the "Ctrl-C closed Codex, now I type at the very top" state:
+  // mouse is off and the buffer is normal, so the two checks above say the
+  // terminal is clean — but the shell prompt is constrained to row 1.
+  if (input.originMode === true) return true
+  if (input.synchronizedOutputMode === true) return true
+  if (input.insertMode === true) return true
+  if (input.wraparoundMode === false) return true
+  return false
 }

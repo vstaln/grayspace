@@ -19,23 +19,53 @@ fn fixture() -> Value {
 /// Asserts one recorded step succeeded and hands back its result.
 fn expect_ok<'a>(steps: &'a [Value], index: usize, call: &str) -> &'a Value {
     let step = &steps[index];
-    assert_eq!(step["call"].as_str().unwrap(), call, "step {index} is a different call");
-    assert!(step["ok"].as_bool().unwrap(), "step {index} ({call}) was recorded as failing");
+    assert_eq!(
+        step["call"].as_str().unwrap(),
+        call,
+        "step {index} is a different call"
+    );
+    assert!(
+        step["ok"].as_bool().unwrap(),
+        "step {index} ({call}) was recorded as failing"
+    );
     &step["result"]
 }
 
 fn expect_err<'a>(steps: &'a [Value], index: usize, call: &str) -> &'a str {
     let step = &steps[index];
-    assert_eq!(step["call"].as_str().unwrap(), call, "step {index} is a different call");
-    assert!(!step["ok"].as_bool().unwrap(), "step {index} ({call}) was recorded as succeeding");
+    assert_eq!(
+        step["call"].as_str().unwrap(),
+        call,
+        "step {index} is a different call"
+    );
+    assert!(
+        !step["ok"].as_bool().unwrap(),
+        "step {index} ({call}) was recorded as succeeding"
+    );
     step["code"].as_str().unwrap()
 }
 
 fn assert_lock(actual: &orcspace_app::locks::ResourceLock, expected: &Value, at: &str) {
-    assert_eq!(actual.actor_id, expected["actorId"].as_str().unwrap(), "{at}: actorId");
-    assert_eq!(actual.acquired_at, expected["acquiredAt"].as_i64().unwrap(), "{at}: acquiredAt");
-    assert_eq!(actual.expires_at, expected["expiresAt"].as_i64().unwrap(), "{at}: expiresAt");
-    assert_eq!(actual.implicit, expected["implicit"].as_bool().unwrap(), "{at}: implicit");
+    assert_eq!(
+        actual.actor_id,
+        expected["actorId"].as_str().unwrap(),
+        "{at}: actorId"
+    );
+    assert_eq!(
+        actual.acquired_at,
+        expected["acquiredAt"].as_i64().unwrap(),
+        "{at}: acquiredAt"
+    );
+    assert_eq!(
+        actual.expires_at,
+        expected["expiresAt"].as_i64().unwrap(),
+        "{at}: expiresAt"
+    );
+    assert_eq!(
+        actual.implicit,
+        expected["implicit"].as_bool().unwrap(),
+        "{at}: implicit"
+    );
 }
 
 fn acquire<'a>(
@@ -44,7 +74,13 @@ fn acquire<'a>(
     ttl_ms: Option<i64>,
     implicit: bool,
 ) -> AcquireInput<'a> {
-    AcquireInput { resource, actor_id, ttl_ms, reason: None, implicit }
+    AcquireInput {
+        resource,
+        actor_id,
+        ttl_ms,
+        reason: None,
+        implicit,
+    }
 }
 
 #[test]
@@ -58,13 +94,20 @@ fn the_lock_timeline_matches_typescript() {
     let lock = locks
         .acquire(acquire("widget:w1", "alice", Some(5_000), false), clock)
         .expect("first acquire succeeds");
-    assert_lock(&lock, expect_ok(steps, i, "acquire widget:w1 by alice"), "w1 by alice");
+    assert_lock(
+        &lock,
+        expect_ok(steps, i, "acquire widget:w1 by alice"),
+        "w1 by alice",
+    );
     i += 1;
 
     let error = locks
         .acquire(acquire("widget:w1", "bob", Some(5_000), false), clock)
         .expect_err("a second actor is refused");
-    assert_eq!(error.code.as_str(), expect_err(steps, i, "acquire widget:w1 by bob"));
+    assert_eq!(
+        error.code.as_str(),
+        expect_err(steps, i, "acquire widget:w1 by bob")
+    );
     assert_eq!(error.code, ErrorCode::Locked);
     i += 1;
 
@@ -73,33 +116,54 @@ fn the_lock_timeline_matches_typescript() {
     let lock = locks
         .acquire(acquire("widget:w1", "alice", Some(5_000), false), clock)
         .expect("the holder may re-acquire");
-    assert_lock(&lock, expect_ok(steps, i, "re-acquire widget:w1 by alice"), "w1 re-acquired");
+    assert_lock(
+        &lock,
+        expect_ok(steps, i, "re-acquire widget:w1 by alice"),
+        "w1 re-acquired",
+    );
     i += 1;
 
     let error = locks
         .acquire(acquire("not-a-resource", "alice", None, false), clock)
         .expect_err("a malformed resource id is refused");
-    assert_eq!(error.code.as_str(), expect_err(steps, i, "acquire nonsense"));
+    assert_eq!(
+        error.code.as_str(),
+        expect_err(steps, i, "acquire nonsense")
+    );
     i += 1;
 
     let error = locks
         .acquire(acquire("widget:w2", "   ", None, false), clock)
         .expect_err("a blank actor is refused");
-    assert_eq!(error.code.as_str(), expect_err(steps, i, "acquire empty actor"));
+    assert_eq!(
+        error.code.as_str(),
+        expect_err(steps, i, "acquire empty actor")
+    );
     i += 1;
 
     // TTL clamps up to the 1s minimum ...
     let lock = locks
         .acquire(acquire("widget:w3", "alice", Some(10), false), clock)
         .unwrap();
-    assert_lock(&lock, expect_ok(steps, i, "acquire widget:w3 ttl 10ms"), "w3 short ttl");
+    assert_lock(
+        &lock,
+        expect_ok(steps, i, "acquire widget:w3 ttl 10ms"),
+        "w3 short ttl",
+    );
     i += 1;
 
     // ... and down to the 10m maximum.
     let lock = locks
-        .acquire(acquire("widget:w4", "alice", Some(60 * 60_000), false), clock)
+        .acquire(
+            acquire("widget:w4", "alice", Some(60 * 60_000), false),
+            clock,
+        )
         .unwrap();
-    assert_lock(&lock, expect_ok(steps, i, "acquire widget:w4 ttl 1h"), "w4 long ttl");
+    assert_lock(
+        &lock,
+        expect_ok(steps, i, "acquire widget:w4 ttl 1h"),
+        "w4 long ttl",
+    );
     i += 1;
 
     let lock = locks
@@ -130,35 +194,56 @@ fn the_lock_timeline_matches_typescript() {
         expect_ok(steps, i, "acquire terminal:t1 explicitly by alice"),
         "t1 promoted",
     );
-    assert!(!lock.implicit, "an explicit re-acquire promotes an implicit lock");
+    assert!(
+        !lock.implicit,
+        "an explicit re-acquire promotes an implicit lock"
+    );
     i += 1;
 
     let renewed = locks.heartbeat("alice", Some(9_000), clock);
     assert_eq!(
         renewed as u64,
-        expect_ok(steps, i, "heartbeat alice again").as_u64().unwrap(),
+        expect_ok(steps, i, "heartbeat alice again")
+            .as_u64()
+            .unwrap(),
         "the promoted lock now counts"
     );
     i += 1;
 
-    let error = locks.release("widget:w1", "bob", clock).expect_err("not the holder");
-    assert_eq!(error.code.as_str(), expect_err(steps, i, "release widget:w1 by bob"));
+    let error = locks
+        .release("widget:w1", "bob", clock)
+        .expect_err("not the holder");
+    assert_eq!(
+        error.code.as_str(),
+        expect_err(steps, i, "release widget:w1 by bob")
+    );
     i += 1;
 
-    locks.release("widget:w1", "alice", clock).expect("the holder may release");
+    locks
+        .release("widget:w1", "alice", clock)
+        .expect("the holder may release");
     expect_ok(steps, i, "release widget:w1 by alice");
     i += 1;
 
     // Releasing what is not held is not an error: it is the desired state.
-    locks.release("widget:w1", "alice", clock).expect("releasing twice is quiet");
+    locks
+        .release("widget:w1", "alice", clock)
+        .expect("releasing twice is quiet");
     expect_ok(steps, i, "release widget:w1 again");
     i += 1;
 
-    let error = locks.renew("widget:w3", "bob", Some(5_000), clock).expect_err("not the holder");
-    assert_eq!(error.code.as_str(), expect_err(steps, i, "renew widget:w3 by bob"));
+    let error = locks
+        .renew("widget:w3", "bob", Some(5_000), clock)
+        .expect_err("not the holder");
+    assert_eq!(
+        error.code.as_str(),
+        expect_err(steps, i, "renew widget:w3 by bob")
+    );
     i += 1;
 
-    let error = locks.renew("widget:nope", "alice", Some(5_000), clock).expect_err("not locked");
+    let error = locks
+        .renew("widget:nope", "alice", Some(5_000), clock)
+        .expect_err("not locked");
     assert_eq!(error.code.as_str(), expect_err(steps, i, "renew missing"));
     assert_eq!(error.code, ErrorCode::NotFound);
     i += 1;
@@ -176,7 +261,10 @@ fn the_lock_timeline_matches_typescript() {
     // Past its lease: an expired lock reads as absent everywhere.
     clock += 2_000;
     assert!(locks.holder("note:short", clock).is_none());
-    assert_eq!(expect_ok(steps, i, "holder note:short after expiry"), &Value::Null);
+    assert_eq!(
+        expect_ok(steps, i, "holder note:short after expiry"),
+        &Value::Null
+    );
     i += 1;
 
     // And so a different actor may release it without a `forbidden`.
@@ -192,14 +280,19 @@ fn the_lock_timeline_matches_typescript() {
     i += 1;
 
     let dropped = locks.release_all_for("alice");
-    let expected = expect_ok(steps, i, "releaseAllFor alice").as_array().unwrap();
+    let expected = expect_ok(steps, i, "releaseAllFor alice")
+        .as_array()
+        .unwrap();
     assert_eq!(dropped.len(), expected.len(), "releaseAllFor");
     i += 1;
 
     let listed = locks.list(clock);
     assert_eq!(
         listed.len(),
-        expect_ok(steps, i, "list after releaseAllFor").as_array().unwrap().len()
+        expect_ok(steps, i, "list after releaseAllFor")
+            .as_array()
+            .unwrap()
+            .len()
     );
     i += 1;
 
@@ -230,13 +323,25 @@ fn the_version_registry_matches_typescript() {
     expect("seeded b", Value::from(versions.current("b", None)));
     // A stored 0 floors to 1: an object that exists has been written once, and
     // 0 is reserved for "nothing knows about this".
-    expect("seeded c floors at 1", Value::from(versions.current("c", None)));
-    expect("seeded d defaults to 1", Value::from(versions.current("d", None)));
+    expect(
+        "seeded c floors at 1",
+        Value::from(versions.current("c", None)),
+    );
+    expect(
+        "seeded d defaults to 1",
+        Value::from(versions.current("d", None)),
+    );
     expect("size", Value::from(versions.size(None)));
 
     versions.create_overlay("spec");
-    expect("overlay sees base", Value::from(versions.current("a", Some("spec"))));
-    expect("bump in overlay", Value::from(versions.bump("a", Some("spec"))));
+    expect(
+        "overlay sees base",
+        Value::from(versions.current("a", Some("spec"))),
+    );
+    expect(
+        "bump in overlay",
+        Value::from(versions.bump("a", Some("spec"))),
+    );
     expect("base untouched", Value::from(versions.current("a", None)));
     expect("overlay size", Value::from(versions.size(Some("spec"))));
     versions.discard("spec");
@@ -251,7 +356,10 @@ fn the_version_registry_matches_typescript() {
     versions.commit("spec2");
     expect("committed a", Value::from(versions.current("a", None)));
     expect("committed e", Value::from(versions.current("e", None)));
-    expect("hasOverlay after commit", Value::from(versions.has_overlay("spec2")));
+    expect(
+        "hasOverlay after commit",
+        Value::from(versions.has_overlay("spec2")),
+    );
 
     // Naming an overlay that does not exist forgets from the base.
     versions.forget("a", Some("no-such-overlay"));
@@ -272,7 +380,11 @@ fn resource_ids_parse_the_way_typescript_parses_them() {
         match case["parsed"].as_object() {
             Some(expected) => {
                 let parsed = parsed.unwrap_or_else(|| panic!("{raw} should have parsed"));
-                assert_eq!(parsed.scheme, expected["scheme"].as_str().unwrap(), "{raw}: scheme");
+                assert_eq!(
+                    parsed.scheme,
+                    expected["scheme"].as_str().unwrap(),
+                    "{raw}: scheme"
+                );
                 assert_eq!(parsed.id, expected["id"].as_str().unwrap(), "{raw}: id");
             }
             None => assert!(parsed.is_none(), "{raw} should not have parsed"),

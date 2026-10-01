@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod engine;
-mod process_job;
+mod files_panel;
+mod plan_panel;
+
 mod ui;
 
 use anyhow::Result;
@@ -22,22 +24,38 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
 
     if std::env::args().any(|arg| arg == "--engine") {
-        if let Err(error) = process_job::contain_engine_process() {
+        if let Err(error) = orcspace_app::platform::contain_engine_process() {
             eprintln!("engine process containment unavailable: {error}");
         }
         return run_engine(TerminalManager::streaming(token));
     }
     let manager = TerminalManager::new(token.clone());
+    let control =
+        ControlServer::start(manager.clone(), token.clone()).map_err(anyhow::Error::msg)?;
+    // A second instance must not replace the active instance's token before
+    // discovering that its control socket is already occupied.
     persist_control_token(&token)
         .map_err(|error| anyhow::anyhow!("cannot publish control token: {error}"))?;
-    let control = ControlServer::start(manager.clone(), token).map_err(anyhow::Error::msg)?;
     manager.set_control_socket(control.socket_path());
-    manager.spawn("terminal-1").map_err(anyhow::Error::msg)?;
+    // One terminal on launch; a QA capture asks for more so a layout has
+    // something to arrange.
+    let terminals = std::env::var("ORCSPACE_CAPTURE_TERMINALS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1)
+        .clamp(1, 8);
+    for index in 1..=terminals {
+        manager
+            .spawn(format!("terminal-{index}"))
+            .map_err(anyhow::Error::msg)?;
+    }
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1440.0, 920.0])
             .with_min_inner_size([960.0, 640.0])
+            .with_decorations(cfg!(target_os = "macos"))
+            .with_active(std::env::var_os("ORCSPACE_CAPTURE_PATH").is_none())
             .with_title("OrcSpace"),
         ..Default::default()
     };
@@ -82,6 +100,11 @@ enum EngineCommand {
         rows: u16,
         request_id: Option<String>,
     },
+    PauseOutput {
+        id: String,
+        paused: bool,
+        request_id: Option<String>,
+    },
     Dispose {
         id: String,
         request_id: Option<String>,
@@ -93,8 +116,13 @@ enum EngineCommand {
 #[serde(tag = "type", rename_all = "camelCase")]
 enum EngineEvent {
     Ready,
-    Data { id: String, data: String },
-    Exit { id: String },
+    Data {
+        id: String,
+        data: String,
+    },
+    Exit {
+        id: String,
+    },
     Response {
         request_id: Option<String>,
         ok: bool,
@@ -148,7 +176,10 @@ fn run_engine(manager: TerminalManager) -> Result<()> {
     // Only the output thread touches stdout. A full OS pipe must never hold
     // the command loop hostage while it is trying to interrupt or dispose.
     let (output, responses) = mpsc::sync_channel::<Vec<u8>>(4096);
-    let output = EngineOutput { sender: output, manager: manager.clone() };
+    let output = EngineOutput {
+        sender: output,
+        manager: manager.clone(),
+    };
     emit(&output, &EngineEvent::Ready)?;
 
     let pump_manager = manager.clone();
@@ -175,7 +206,9 @@ fn run_engine(manager: TerminalManager) -> Result<()> {
                     // Give ACKs priority between output chunks, preserving
                     // the PTY stream's own data/exit order.
                     if flush_responses(&mut writer, &responses)
-                        .and_then(|_| write_event(&mut writer, &event)).is_err() {
+                        .and_then(|_| write_event(&mut writer, &event))
+                        .is_err()
+                    {
                         pump_manager.dispose_all();
                         return;
                     }
@@ -186,14 +219,14 @@ fn run_engine(manager: TerminalManager) -> Result<()> {
     // Blocking receive: no polling tick between a keystroke arriving and the
     // shell being told about it.
     let result = (|| -> Result<()> {
-      while let Ok(command) = commands_rx.recv() {
-        let Some(command) = command else { break };
-        if matches!(command, EngineCommand::Shutdown) {
-            break;
+        while let Ok(command) = commands_rx.recv() {
+            let Some(command) = command else { break };
+            if matches!(command, EngineCommand::Shutdown) {
+                break;
+            }
+            handle_engine_command(&manager, command, &output)?;
         }
-        handle_engine_command(&manager, command, &output)?;
-      }
-      Ok(())
+        Ok(())
     })();
     manager.dispose_all();
     result
@@ -265,6 +298,22 @@ fn handle_engine_command(
                 },
             )?;
         }
+        EngineCommand::PauseOutput {
+            id,
+            paused,
+            request_id,
+        } => {
+            let result = manager.set_output_paused(&id, paused);
+            emit(
+                output,
+                &EngineEvent::Response {
+                    request_id,
+                    ok: result.is_ok(),
+                    id: Some(id),
+                    error: result.err(),
+                },
+            )?;
+        }
         EngineCommand::Dispose { id, request_id } => {
             let result = manager.dispose(&id);
             emit(
@@ -290,7 +339,10 @@ struct EngineOutput {
 fn emit(output: &EngineOutput, event: &EngineEvent) -> Result<()> {
     let mut encoded = serde_json::to_vec(event)?;
     encoded.push(b'\n');
-    output.sender.try_send(encoded).map_err(|error| anyhow::anyhow!("engine response queue unavailable: {error}"))?;
+    output
+        .sender
+        .try_send(encoded)
+        .map_err(|error| anyhow::anyhow!("engine response queue unavailable: {error}"))?;
     output.manager.notify_response();
     Ok(())
 }
@@ -298,7 +350,9 @@ fn emit(output: &EngineOutput, event: &EngineEvent) -> Result<()> {
 fn flush_responses(writer: &mut impl Write, responses: &mpsc::Receiver<Vec<u8>>) -> Result<()> {
     // Bound each pass so continuous input cannot starve terminal output.
     for _ in 0..4096 {
-        let Ok(encoded) = responses.try_recv() else { break };
+        let Ok(encoded) = responses.try_recv() else {
+            break;
+        };
         writer.write_all(&encoded)?;
     }
     writer.flush()?;
@@ -320,13 +374,22 @@ mod tests {
     fn commands_finish_while_stdout_is_not_being_drained() {
         let manager = TerminalManager::new("test".to_owned());
         let (output, responses) = mpsc::sync_channel(2);
-        let output = EngineOutput { sender: output, manager: manager.clone() };
+        let output = EngineOutput {
+            sender: output,
+            manager: manager.clone(),
+        };
         // No output consumer: handling a command must still finish.
         for _ in 0..2 {
-            handle_engine_command(&manager, EngineCommand::Write {
-                id: "missing".to_owned(), data: "\u{3}".to_owned(),
-                request_id: Some("w1".to_owned()),
-            }, &output).unwrap();
+            handle_engine_command(
+                &manager,
+                EngineCommand::Write {
+                    id: "missing".to_owned(),
+                    data: "\u{3}".to_owned(),
+                    request_id: Some("w1".to_owned()),
+                },
+                &output,
+            )
+            .unwrap();
         }
         // Bounded overload is explicit, never an unbounded blocking send.
         assert!(emit(&output, &EngineEvent::Ready).is_err());

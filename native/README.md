@@ -20,6 +20,13 @@ npm run native:run
 npm run native:build
 ```
 
+On Windows, run `npm ci` before the first native build. The build copies the
+Electron frontend's Windows 10 ConPTY runtime (`conpty.dll`, `OpenConsole.exe`)
+beside the executable. Ship both files with `orcspace.exe`. A standalone Rust
+build can instead set `ORCSPACE_CONPTY_DIR` to that runtime directory.
+The local portable-pty patch resolves the bundled `Conpty*` exports and enables
+VT passthrough, preserving synchronized cursor frames. Unix PTYs are unchanged.
+
 On Windows the Rust toolchain must have a working linker. The current
 environment can check this tree with `stable-x86_64-pc-windows-gnu`; the
 default MSVC target requires Visual C++ Build Tools and `link.exe`.

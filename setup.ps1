@@ -34,7 +34,7 @@ try {
   Write-Host " [ok] Detected Node.js $nodeVer" -ForegroundColor Green
 } catch {
   Write-Host " [x] Node.js is not found on your PATH." -ForegroundColor Red
-  Write-Host "     Please install Node.js (v20 or higher) from https://nodejs.org/" -ForegroundColor Yellow
+  Write-Host "     Please install Node.js 22.18.x or 24.x from https://nodejs.org/" -ForegroundColor Yellow
   exit 1
 }
 

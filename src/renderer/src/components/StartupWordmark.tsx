@@ -22,9 +22,15 @@ export default function StartupWordmark({ preview = false, onComplete }: { previ
     let width = 0
     let height = 0
     let started = 0
+    let lastDrawAt = 0
     let points: { cloud: ReturnType<typeof cloudPoint>; delay: number; radius: number }[] = []
 
     const draw = (now: number): void => {
+      if (!motion.matches && lastDrawAt && now - lastDrawAt < 10) {
+        frame = requestAnimationFrame(draw)
+        return
+      }
+      lastDrawAt = now
       const t = motion.matches ? (preview ? 4.5 : 9.2) : (now - started) / 1000
       context.clearRect(0, 0, width, height)
       const cx = width / 2
@@ -68,6 +74,7 @@ export default function StartupWordmark({ preview = false, onComplete }: { previ
 
     const resize = (): void => {
       cancelAnimationFrame(frame)
+      lastDrawAt = 0
       width = window.innerWidth
       height = window.innerHeight
       const ratio = Math.min(window.devicePixelRatio || 1, 2)

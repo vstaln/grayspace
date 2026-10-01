@@ -1,0 +1,15 @@
+.git
+.github
+node_modules
+**/node_modules
+native/target
+**/target
+dist
+out
+coverage
+.cache
+.parcel-cache
+.vite
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*

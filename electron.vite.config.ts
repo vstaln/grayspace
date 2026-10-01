@@ -21,9 +21,16 @@ function mainBytecodePlugin() {
       }
       const entry = resolve(options.dir, 'index.js')
       const env = { ...process.env }
+      const electronArgs = process.platform === 'linux' && process.getuid?.() === 0 ? ['--no-sandbox'] : []
+      const electron = require('electron')
+      const useXvfb = process.platform === 'linux' && !env.DISPLAY
       delete env.ELECTRON_RUN_AS_NODE
       delete env.NODE_OPTIONS
-      const result = spawnSync(require('electron'), [resolve('scripts/compile-main-bytecode.cjs'), entry], {
+      const command = useXvfb ? 'xvfb-run' : electron
+      const args = useXvfb
+        ? ['-a', electron, ...electronArgs, resolve('scripts/compile-main-bytecode.cjs'), entry]
+        : [...electronArgs, resolve('scripts/compile-main-bytecode.cjs'), entry]
+      const result = spawnSync(command, args, {
         env, encoding: 'utf8', windowsHide: true, timeout: 60_000
       })
       if (result.error || result.status !== 0) throw new Error(`Bytecode compilation failed: ${result.error || result.stderr}`)

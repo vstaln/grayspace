@@ -15,6 +15,7 @@ import { attachmentAgent } from '../lib/terminalAttachments'
 import { resolvePersistedAgent } from '../lib/persistedAgent'
 import { setCodeSessionCount } from '../lib/codeSessions'
 import { copyText } from '../lib/clipboard'
+import { agentLaunchCapacity, launchMemoryWarning, type AgentLaunchMemory } from '../lib/launchMemory'
 
 interface Session {
   id: string
@@ -353,7 +354,7 @@ const SessionCard = React.memo(function SessionCard({
       </div>
       <div className="min-h-0 flex-1 bg-bg">
         {isBrowserSession(session)
-          ? <BrowserWidget widgetId={session.id} onFullscreenChange={onFullscreenChange} />
+          ? <BrowserWidget widgetId={session.id} onFullscreenChange={onFullscreenChange} openPopupsInPlace />
           : <TerminalWidget id={session.id} surface="code" attachmentMode agentId={terminalAgentId(session)} flipped={terminalsFlipped} onProcessExit={onProcessExit} />}
       </div>
     </div>
@@ -392,8 +393,51 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
   const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([])
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null)
   const [agentCounts, setAgentCounts] = useState<Record<string, number>>({})
+  const [launchMemory, setLaunchMemory] = useState<AgentLaunchMemory>({ freeBytes: 0, totalBytes: 0 })
   const hadSessionsRef = useRef(false)
   const openLauncher = useCallback(() => setLauncherOpen(true), [])
+
+  useEffect(() => {
+    if (!active) return
+    let alive = true
+    const refresh = (): void => {
+      void window.api.system.memory().then((stats) => {
+        if (!alive || !('freeMem' in stats)) return
+        setLaunchMemory({
+          freeBytes: stats.freeMem,
+          availableBytes: stats.availableMem,
+          totalBytes: stats.totalMem,
+          swapFreeBytes: stats.swapFree,
+          swapTotalBytes: stats.swapTotal,
+          platform: stats.platform
+        })
+      }).catch(() => {})
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 15_000)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [active])
+
+  // The session cap, narrowed by what memory allows. Agents already running
+  // are reflected in the free-memory reading, so they are not subtracted a
+  // second time; unmeasured memory leaves the cap alone rather than reading
+  // as zero, which would silently disable every launch.
+  const fixedSessionRoom = Math.max(0, MAX_CODE_SESSIONS - sessions.length)
+  const availableAgentSlots = agentLaunchCapacity(launchMemory, fixedSessionRoom)
+  /**
+   * The same budget, but read from the session ref rather than render state,
+   * so a callback memoised before the last render still sees current sessions.
+   * The ref does not advance inside one synchronous loop: batch launchers
+   * (launchWorkspace, resumeConversations) read it once and count down.
+   */
+  const agentRoomNow = useCallback(
+    (): number =>
+      agentLaunchCapacity(launchMemory, Math.max(0, MAX_CODE_SESSIONS - sessionsRef.current.length)),
+    [launchMemory]
+  )
 
   useEffect(() => {
     if (activeAgentId && selectedAgentIds.includes(activeAgentId)) return
@@ -625,6 +669,14 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
   const applyRestore = useCallback((chosen: Set<string>): void => {
     const pending = pendingRestoreRef.current
     if (!pending) return
+    const chosenAgents = pending.sessions.filter((session) => chosen.has(session.id) && !isBrowserSession(session)).length
+    // The dialog is the gate and offers the same budget, so this should be
+    // unreachable. If the two ever disagree, refusing silently would leave a
+    // modal with no working button and no way out, so say what happened and
+    // honour the choice — these are sessions the user already had.
+    if (availableAgentSlots >= 1 && chosenAgents > availableAgentSlots) {
+      console.warn(`restore of ${chosenAgents} agents exceeds the memory budget of ${availableAgentSlots}; restoring anyway`)
+    }
     const { start, drop } = splitRestore(pending.sessions, chosen)
     // Nothing here was ever mounted, so there is no terminal to dispose —
     // only the queued command and the per-session view state to forget.
@@ -649,7 +701,7 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
     // Whatever was let go has to leave the saved board too.
     hydratedRef.current = true
     dirtyRef.current = true
-  }, [])
+  }, [availableAgentSlots])
 
   const skipRestore = useCallback((): void => {
     applyRestore(new Set())
@@ -815,6 +867,10 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
         saveTimerRef.current = null
         setSessions([])
         setPendingRestore(null)
+        // A truthy maximizedId collapses the grid to a single cell even with
+        // zero sessions; reset it (and featured) so the next sessions lay out.
+        setFeaturedId(null)
+        setMaximizedId(null)
       }
       setBackgroundSessions((current) => current.filter((session) => !removed.has(session.id)))
       answeredRestoreRef.current.delete(scope)
@@ -951,7 +1007,9 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
 
 
 
-    const amount = Math.min(count, Math.max(0, MAX_CODE_SESSIONS - sessionsRef.current.length))
+    const fixedRoom = Math.max(0, MAX_CODE_SESSIONS - sessionsRef.current.length)
+    const requestedCount = agent.id === 'browser' ? Math.min(1, count) : count
+    const amount = Math.min(requestedCount, agent.id === 'browser' ? fixedRoom : agentRoomNow())
     const created: Session[] = []
     for (let i = 0; i < amount; i++) {
       const id = makeSessionId()
@@ -965,7 +1023,34 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
     if (created.length === 0) return
     setSessions((current) => {
       const room = Math.max(0, MAX_CODE_SESSIONS - current.length)
-      return [...current, ...created.slice(0, room)]
+      const accepted = created.slice(0, room)
+      // The queue holds one stagger slot per queued id. Commands for sessions
+      // trimmed by the cap would otherwise linger as phantoms and delay real
+      // launches by AGENT_LAUNCH_STAGGER_MS each.
+      for (const dropped of created.slice(room)) clearInitialCommand(dropped.id)
+      return [...current, ...accepted]
+    })
+  }, [agentRoomNow, markLocalChange])
+
+  // `orc browser open` from an agent in Code lands here, so the browser opens
+  // beside the agent instead of on a canvas the user is not looking at.
+  useEffect(() => {
+    return window.api.browser.onOpenInCode(({ requestId, title }) => {
+      const agent = CODE_AGENTS.find((candidate) => candidate.id === 'browser')
+      const fail = (error: string): void => { void window.api.browser.respond(requestId, { ok: false, error }) }
+      if (!agent) return fail('browser sessions are unavailable in Code')
+      if (!hydratedRef.current) return fail('Code view is still restoring its sessions')
+      if (sessionsRef.current.length >= MAX_CODE_SESSIONS) return fail(`Code already has ${MAX_CODE_SESSIONS} sessions; close one first`)
+      markLocalChange()
+      const id = makeSessionId()
+      const session: Session = { id, agent, title: title || agent.label, status: 'active' }
+      // Keep the ref ahead of React so a second request in the same tick
+      // counts this session against the limit.
+      sessionsRef.current = [...sessionsRef.current, session]
+      // The limit was checked against the ref above; dropping the session here
+      // would answer the agent with an id that never mounts.
+      setSessions((current) => (current.some((item) => item.id === id) ? current : [...current, session]))
+      void window.api.browser.respond(requestId, { ok: true, result: { id } })
     })
   }, [markLocalChange])
 
@@ -1027,7 +1112,7 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
   }, [])
 
   const launchWorkspace = useCallback((): void => {
-    let remaining = Math.max(0, MAX_CODE_SESSIONS - sessionsRef.current.length)
+    let remaining = agentRoomNow()
     for (const agentId of selectedAgentIds) {
       if (remaining <= 0) break
       const agent = INLINE_AGENTS.find((candidate) => candidate.id === agentId)
@@ -1036,7 +1121,7 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
       launch(agent, count)
       remaining -= count
     }
-  }, [agentCounts, launch, selectedAgentIds])
+  }, [agentCounts, agentRoomNow, launch, selectedAgentIds])
 
   /**
    * Reopens a past conversation: the same agent, started with its own resume
@@ -1055,7 +1140,7 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
 
   const resumeConversations = useCallback((conversations: AgentConversation[]): void => {
     markLocalChange()
-    let remaining = Math.max(0, MAX_CODE_SESSIONS - sessionsRef.current.length)
+    let remaining = agentRoomNow()
     const created: Session[] = []
     for (const conversation of conversations) {
       if (remaining <= 0) break
@@ -1075,9 +1160,11 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
     if (created.length === 0) return
     setSessions((current) => {
       const room = Math.max(0, MAX_CODE_SESSIONS - current.length)
-      return [...current, ...created.slice(0, room)]
+      const accepted = created.slice(0, room)
+      for (const dropped of created.slice(room)) clearInitialCommand(dropped.id)
+      return [...current, ...accepted]
     })
-  }, [markLocalChange])
+  }, [agentRoomNow, markLocalChange])
 
   const renameSession = useCallback((id: string, title: string): void => {
     markLocalChange()
@@ -1280,11 +1367,13 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
     return kept.map((id) => byId.get(id)!)
   }, [sessions, backgroundSessions])
 
-  const availableSessionSlots = Math.max(0, MAX_CODE_SESSIONS - sessions.length)
-  const selectedSessionCount = Math.min(
-    availableSessionSlots,
-    Math.max(0, selectedAgentIds.reduce((total, id) => total + (agentCounts[id] ?? 1), 0))
+  const availableSessionSlots = availableAgentSlots
+  const selectedSessionCount = Math.max(
+    0,
+    selectedAgentIds.reduce((total, id) => total + (agentCounts[id] ?? 1), 0)
   )
+  const selectedSessionsFit = selectedSessionCount <= availableSessionSlots
+  const workspaceMemoryWarning = launchMemoryWarning(launchMemory, selectedSessionCount)
 
   return (
     <div
@@ -1302,6 +1391,7 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
               'this folder'
             }
             sessions={pendingRestore.sessions}
+            maxAgents={availableAgentSlots}
             onRestore={applyRestore}
             onSkip={skipRestore}
           />
@@ -1584,9 +1674,19 @@ export default function CodeView({ active, sidebarCollapsed, terminalsFlipped, l
                         </>
                       )}
 
+                      {workspaceMemoryWarning && (
+                        <div
+                          role="alert"
+                          data-testid="code-workspace-memory-warning"
+                          className="mb-4 rounded-panel border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] leading-snug text-danger"
+                        >
+                          {workspaceMemoryWarning}
+                        </div>
+                      )}
+
                       <button
                         type="button"
-                        disabled={selectedAgentIds.length === 0 || selectedSessionCount === 0}
+                        disabled={selectedAgentIds.length === 0 || selectedSessionCount === 0 || !selectedSessionsFit}
                         onClick={launchWorkspace}
                         data-testid="code-launch"
                         className="flex h-12 w-full items-center justify-center gap-2 rounded-panel bg-text text-[14px] font-medium text-bg transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line disabled:cursor-not-allowed disabled:opacity-30"

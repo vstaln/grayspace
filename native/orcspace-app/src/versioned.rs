@@ -113,8 +113,7 @@ impl VersionRegistry {
     pub fn size(&self, overlay_id: Option<&str>) -> usize {
         match overlay_id.and_then(|o| self.overlays.get(o)) {
             Some(overlay) => {
-                let mut merged: std::collections::HashSet<&String> =
-                    self.versions.keys().collect();
+                let mut merged: std::collections::HashSet<&String> = self.versions.keys().collect();
                 merged.extend(overlay.keys());
                 merged.len()
             }

@@ -101,7 +101,15 @@ export function requestInstanceLock(): boolean {
   return hasLock
 }
 
+/** First quiet check shortly after launch, then every few hours. */
+const UPDATE_FIRST_CHECK_MS = 30_000
+const UPDATE_RECHECK_MS = 4 * 60 * 60 * 1000
+
 export function initAutoUpdater(): void {
-  // Checks are initiated from Settings; register IPC in development too.
-  registerUpdater()
+  const updates = registerUpdater()
+  // Quiet checks only: a download may start, but installing always waits for
+  // the user, because it closes every running terminal. Both timers are
+  // unref'd so they never keep a quitting app alive.
+  setTimeout(() => updates.checkInBackground(), UPDATE_FIRST_CHECK_MS).unref()
+  setInterval(() => updates.checkInBackground(), UPDATE_RECHECK_MS).unref()
 }

@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url'
 
 const TOKEN_HEADER = 'x-orcspace-token'
 
-const ORC_VERSION = '2.0.9'
+const ORC_VERSION = '2.2.10'
 
 let cachedCandidateDirs
 function candidateDirs() {
@@ -501,6 +501,20 @@ const canvasLine = (value) => {
   if (value?.id) return widgetLine(value)
   return value?.ok === true ? 'ok' : undefined
 }
+const browserLine = (value) => {
+  const result = value?.data ?? value
+  if (Array.isArray(result?.browsers)) return result.browsers.length
+    ? result.browsers.map((browser) => browser.surface === 'code'
+      ? `  ${browser.id}  ${browser.title}  [code]`
+      : `  ${browser.id}  ${browser.title}  [canvas] (${browser.x}, ${browser.y})`).join('\n')
+    : '  (no browser widgets)'
+  if (result?.id) return `  ${result.id}  ${result.title ?? 'Browser'}${result.surface ? `  [${result.surface}]` : ''}${result.url ? `  ${result.url}` : ''}`
+  if (Array.isArray(result?.controls)) {
+    const controls = result.controls.map((control) => `  [${control.ref}] ${control.tag}${control.type ? `/${control.type}` : ''} ${control.label}${control.href ? ` → ${control.href}` : ''}`).join('\n')
+    return [`${result.title || '(untitled)'}  ${result.url || ''}`, '', result.text || '(no page text)', '', controls || '(no interactive elements)'].join('\n')
+  }
+  return result?.ok === true ? 'ok' : undefined
+}
 const terminalLine = (value) => {
   if (typeof value === 'string') return value
   if (typeof value?.output === 'string') return value.output
@@ -606,6 +620,7 @@ WORKER (dispatched agent reporting)
 THE APP & CANVAS
   orc plan list | create | update | toggle [<id>]         planner day tasks (create accepts --attachments)
   orc canvas list | place | image | move | rename | close canvas widgets & viewport
+  orc browser open [url] | list | navigate | snapshot | click | fill | select | press | scroll
   orc terminal open | send <id> <text> | read | close     direct terminal management
   orc git status | commit --message "..."                 git audit integration
   orc journal [--since N]                                 event audit log
@@ -659,6 +674,7 @@ const COMMAND_HELP = {
   doctor: 'orc doctor — diagnostics & connectivity check.',
   terminal: 'orc terminal open | send <id> <text> | read | close — direct terminal management.',
   canvas: 'orc canvas list | place | image | move | rename | focus | close — canvas widgets & viewport.',
+  browser: 'orc browser open [url] [--surface code|canvas] | list | navigate <id> <url> | snapshot <id> | click <id> <ref> | fill <id> <ref> --value "..." | select <id> <ref> --value "..." | press <id> <key> [--ref N] | scroll <id> [--pixels N]. Detected checkout and purchase flows are blocked, along with password and payment fields.',
   plan: 'orc plan list | create | update | done | toggle | delete [<id>] — planner day tasks.',
   git: 'orc git status | commit --message "..." — git audit integration.',
   journal: 'orc journal [--since N] — event audit log.',
@@ -677,7 +693,7 @@ const KNOWN_COMMANDS = [
   'worker-retain', 'dispatch-show', 'send', 'done', 'escalate', 'heartbeat', 'ask',
   'reply', 'ack', 'allow', 'deny', 'check', 'gate-create', 'gate-list', 'gate-resolve',
   'plan', 'canvas', 'terminal', 'git', 'journal', 'reset', 'doctor',
-  'api', 'version', 'help'
+  'api', 'version', 'help', 'browser'
 ]
 
 function commandHelp(name) {
@@ -1316,6 +1332,8 @@ async function main(argv) {
 
     case 'canvas':
       return emit(await canvas(positional[1], flags, positional), canvasLine)
+    case 'browser':
+      return emit(await browser(positional[1], flags, positional), browserLine)
     case 'plan':
       return emit(await plan(positional[1], flags, positional), planLine)
     case 'terminal':
@@ -1393,6 +1411,52 @@ async function lookupSender(askId) {
     return snapshot.messages.find((m) => m.id === askId)?.from
   } catch {
     return undefined
+  }
+}
+
+async function browser(action, flags, positional = []) {
+  const id = pick(flags, 'id') ?? positional[2]
+  switch (action) {
+    case 'list':
+    case undefined:
+      return get('/browser')
+    case 'open':
+      return post('/browser/open', {
+        url: pick(flags, 'url') ?? positional[2],
+        title: pick(flags, 'title'),
+        surface: pick(flags, 'surface')
+      }, { timeoutMs: 60_000 })
+    case 'navigate':
+      return post(`/browser/${enc(require1(id, 'browser navigate needs <id>'))}/navigate`, {
+        url: require1(pick(flags, 'url') ?? positional[3], 'browser navigate needs <id> <url>')
+      }, { timeoutMs: 60_000 })
+    case 'snapshot':
+      return get(`/browser/${enc(require1(id, 'browser snapshot needs <id>'))}/snapshot`)
+    case 'click':
+      return post(`/browser/${enc(require1(id, 'browser click needs <id>'))}/click`, {
+        ref: require1(pick(flags, 'ref') ?? positional[3], 'browser click needs <id> <ref>')
+      })
+    case 'fill':
+      return post(`/browser/${enc(require1(id, 'browser fill needs <id>'))}/fill`, {
+        ref: require1(pick(flags, 'ref') ?? positional[3], 'browser fill needs <id> <ref>'),
+        value: require1(pick(flags, 'value', 'text') ?? positional[4], 'browser fill needs --value "..."')
+      })
+    case 'select':
+      return post(`/browser/${enc(require1(id, 'browser select needs <id>'))}/select`, {
+        ref: require1(pick(flags, 'ref') ?? positional[3], 'browser select needs <id> <ref>'),
+        value: require1(pick(flags, 'value') ?? positional[4], 'browser select needs --value "..."')
+      })
+    case 'press':
+      return post(`/browser/${enc(require1(id, 'browser press needs <id>'))}/press`, {
+        key: require1(pick(flags, 'key') ?? positional[3], 'browser press needs <id> <key>'),
+        ref: pick(flags, 'ref')
+      })
+    case 'scroll':
+      return post(`/browser/${enc(require1(id, 'browser scroll needs <id>'))}/scroll`, {
+        pixels: num(pick(flags, 'pixels')) ?? 600
+      })
+    default:
+      throw new OrcError(`browser: unknown action "${action}" (open|list|navigate|snapshot|click|fill|select|press|scroll)`, 'invalid')
   }
 }
 

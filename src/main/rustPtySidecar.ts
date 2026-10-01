@@ -269,7 +269,16 @@ export class RustPtySidecar extends EventEmitter {
     this.sessionOwners.clear()
   }
 
-  private failTerminalWrites(id: string, message: string): void {
+  /**
+   * Fail every write for one terminal that is still waiting on an ACK.
+   *
+   * Called internally whenever the engine-side session goes away, and by the
+   * async-spawn fallback in TerminalManager: the engine has already reported
+   * the session gone, so sitting out the write-ACK timeout would only hang
+   * those callers ahead of the node-pty fallback that is about to give them a
+   * working shell.
+   */
+  failTerminalWrites(id: string, message: string): void {
     this.unacknowledged.delete(id)
     for (const [requestId, pending] of this.pendingWrites) {
       if (pending.terminalId !== id) continue
@@ -281,6 +290,10 @@ export class RustPtySidecar extends EventEmitter {
 
   resize(id: string, cols: number, rows: number): RustPtyResult {
     return this.send({ type: 'resize', id: this.sessions.get(id) ?? id, cols, rows })
+  }
+
+  pauseOutput(id: string, paused: boolean): RustPtyResult {
+    return this.send({ type: 'pauseOutput', id: this.sessions.get(id) ?? id, paused })
   }
 
   dispose(id: string): RustPtyResult {
@@ -346,9 +359,11 @@ export class RustPtySidecar extends EventEmitter {
     if (this.backendFailureSignalled || this.child.exitCode !== null || this.child.stdin.destroyed) {
       return { ok: false, error: 'rust engine is not running' }
     }
-    const lifecycle = command.type === 'dispose' || command.type === 'shutdown'
-    const capacity = MAX_ENGINE_STDIN_BUFFER_BYTES + (lifecycle ? 64 * 1024 : 0)
-    if (this.child.stdin.writableLength > capacity) {
+    const lifecycle = command.type === 'dispose' || command.type === 'shutdown' || command.type === 'pauseOutput'
+    // These tiny control packets must reach the engine even if an escaped
+    // paste overshot the data budget; dropping dispose can orphan a PTY, and
+    // dropping pauseOutput can let the renderer queue grow without bound.
+    if (!lifecycle && this.child.stdin.writableLength > MAX_ENGINE_STDIN_BUFFER_BYTES) {
       return { ok: false, error: 'rust engine input buffer is full' }
     }
     try {

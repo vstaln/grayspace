@@ -10,13 +10,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { isSupportedNodeVersion, SUPPORTED_NODE_VERSION_TEXT } from './node-support.mjs'
 import { verifyConptyRuntime } from './conpty-runtime.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const dist = join(root, 'dist')
 const skipTests = process.argv.includes('--skip-tests')
 const skipCi = process.argv.includes('--skip-ci')
-const nodeMajor = Number.parseInt(process.versions.node.split('.')[0], 10)
+const dirtyBuild = process.argv.includes('--dirty')
 
 
 
@@ -86,8 +87,8 @@ function sha256(path) {
 
 
 
-function verifyUnpackedRelease(packageJson) {
-  const unpacked = join(dist, 'win-unpacked')
+function verifyUnpackedRelease(packageJson, outputDir) {
+  const unpacked = join(outputDir, 'win-unpacked')
   const resources = join(unpacked, 'resources')
   const requiredFiles = [
     join(unpacked, 'OrcSpace.exe'),
@@ -96,7 +97,9 @@ function verifyUnpackedRelease(packageJson) {
     join(resources, 'cli', 'orc.cmd'),
     join(resources, 'cli', 'orc.bat'),
     join(resources, 'native', 'canvas-core', 'loader.cjs'),
+    join(resources, 'native', 'canvas-core', 'index.win32-x64-msvc.node'),
     join(resources, 'native', 'storage-core', 'loader.cjs'),
+    join(resources, 'native', 'storage-core', 'index.win32-x64-msvc.node'),
     join(resources, 'native', 'orcspace-engine.exe'),
     join(resources, 'app.asar.unpacked', 'node_modules', '@homebridge', 'node-pty-prebuilt-multiarch', 'build', 'Release', 'conpty.node')
   ]
@@ -135,26 +138,28 @@ try {
   if (process.platform !== 'win32') {
     throw new Error('The Windows installer must be built on Windows (electron-builder cannot cross-build NSIS reliably).')
   }
-  if (nodeMajor !== 22 && nodeMajor !== 24) {
-    throw new Error(`Node.js 22 or 24 is required for the native dependencies (detected ${process.versions.node}).`)
+  if (process.arch !== 'x64') {
+    throw new Error(`The Windows x64 installer must be built with x64 Node.js (detected ${process.arch}).`)
+  }
+  if (!isSupportedNodeVersion()) {
+    throw new Error(`Node.js ${SUPPORTED_NODE_VERSION_TEXT} is required for the build (detected ${process.versions.node}).`)
   }
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   if (!packageJson.version || !packageJson.name) throw new Error('package.json has no valid name/version.')
   if (!existsSync(join(root, 'package-lock.json'))) throw new Error('package-lock.json is required for a reproducible build.')
-  const installer = join(dist, `OrcSpace-Setup-${packageJson.version}-x64.exe`)
-  const legacyPortable = join(dist, `OrcSpace-${packageJson.version}-x64-Portable.exe`)
+  const outputDir = join(dist, 'installers', 'windows')
+  const installer = join(outputDir, `OrcSpace-Setup-${packageJson.version}-x64.exe`)
   const blockmap = `${installer}.blockmap`
-  const latest = join(dist, 'latest.yml')
-  const builderDebug = join(dist, 'builder-debug.yml')
-  const builderConfig = join(dist, 'builder-effective-config.yaml')
+  const latest = join(outputDir, 'latest.yml')
+  const builderDebug = join(outputDir, 'builder-debug.yml')
+  const builderConfig = join(outputDir, 'builder-effective-config.yaml')
 
   if (!skipCi) {
     runNpm(['ci', '--no-fund', '--no-audit'])
-  } else if (!process.argv.includes('--dirty')) {
-    throw new Error('--skip-ci requires --dirty: building on unpinned node_modules is not reproducible.')
+  } else if (!dirtyBuild && process.env.CI !== 'true') {
+    throw new Error('--skip-ci is only allowed for CI builds or with the explicit --dirty flag.')
   }
   runNpm(['run', 'typecheck'])
-  run(process.execPath, ['--test', 'scripts/release-security.test.cjs'])
   if (!skipTests) {
     // conpty.test.ts exercises the real Rust sidecar. Build it before the
     // test phase; npm run build would otherwise do this too late and a clean
@@ -164,43 +169,52 @@ try {
       ORCSPACE_NATIVE_STRICT: '1'
     })
     runNpm(['test'])
+  } else {
+    run(process.execPath, ['--test', 'scripts/release-security.test.cjs'])
   }
   // Build once, then package only the NSIS installer. The old `dist` script
   // produced both NSIS and portable artifacts, which doubled the work and
   // could leave a stale installer in `dist` after a partial build.
   runNpm(['run', 'build'])
-  mkdirSync(dist, { recursive: true })
-  rmSync(join(dist, 'win-unpacked'), { recursive: true, force: true })
+  mkdirSync(outputDir, { recursive: true })
+  rmSync(join(outputDir, 'win-unpacked'), { recursive: true, force: true })
   rmSync(installer, { force: true })
   rmSync(blockmap, { force: true })
   rmSync(latest, { force: true })
-  rmSync(legacyPortable, { force: true })
-  runLocalBin('electron-builder', ['--win', 'nsis', '--x64', '--publish', 'never'])
+  rmSync(join(outputDir, 'checksums.json'), { force: true })
+  rmSync(builderDebug, { force: true })
+  rmSync(builderConfig, { force: true })
+  runLocalBin('electron-builder', [
+    '--win', 'nsis', '--x64', '--publish', 'never',
+    `--config.directories.output=${outputDir}`
+  ])
 
-  verifyUnpackedRelease(packageJson)
-  run(process.execPath, ['scripts/smoke-packaged.cjs', join(dist, 'win-unpacked')])
+  verifyUnpackedRelease(packageJson, outputDir)
+  for (const artifact of [installer, blockmap, latest]) {
+    if (!existsSync(artifact) || statSync(artifact).size === 0) throw new Error(`Required Windows release artifact is missing: ${artifact}`)
+  }
+  run(process.execPath, ['scripts/smoke-packaged.cjs', join(outputDir, 'win-unpacked')])
 
   if (!existsSync(installer) || statSync(installer).size < 10 * 1024 * 1024) {
     throw new Error(`Expected release artifact is missing or suspiciously small: ${installer}`)
   }
 
-  const dirty = skipCi || process.argv.includes('--dirty')
   const manifest = {
     product: 'OrcSpace',
     version: packageJson.version,
     platform: 'win32',
     arch: 'x64',
-    dirty,
+    dirty: dirtyBuild,
     packageLockSha256: sha256(join(root, 'package-lock.json')),
     installer: { file: installer.split(/[/\\]/).pop(), sha256: sha256(installer), bytes: statSync(installer).size },
     generatedAt: new Date().toISOString(),
   }
-  writeFileSync(join(dist, 'checksums.json'), `${JSON.stringify(manifest, null, 2)}\n`)
-  rmSync(join(dist, 'win-unpacked'), { recursive: true, force: true })
+  writeFileSync(join(outputDir, 'checksums.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+  rmSync(join(outputDir, 'win-unpacked'), { recursive: true, force: true })
   rmSync(builderDebug, { force: true })
   rmSync(builderConfig, { force: true })
   console.log(`\n[ok] Stable Windows installer created: ${installer}`)
-  console.log(`[ok] SHA-256 manifest: ${join(dist, 'checksums.json')}`)
+  console.log(`[ok] SHA-256 manifest: ${join(outputDir, 'checksums.json')}`)
 } catch (error) {
   console.error(`\n[x] Installer build failed: ${error.message}`)
   process.exitCode = 1

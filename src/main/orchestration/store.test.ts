@@ -78,6 +78,20 @@ describe('OrchestrationStore', () => {
       )
     })
 
+    test('a failed task can be dispatched again; one waiting on a dependency cannot', () => {
+      const runId = run()
+      const task = store.createTask({ runId, spec: 'a', createdBy: 'coord' })
+      const first = store.createDispatch({ taskId: task.id, terminalId: 't1', agent: 'claude', preamble: 'p' })
+      store.settleDispatch(first.id, 'failed')
+      assert.doesNotThrow(() => store.createDispatch({ taskId: task.id, terminalId: 't2', agent: 'claude', preamble: 'p' }))
+
+      const blocked = store.createTask({ runId, spec: 'b', deps: [task.id], createdBy: 'coord' })
+      assert.throws(
+        () => store.createDispatch({ taskId: blocked.id, terminalId: 't3', agent: 'claude', preamble: 'p' }),
+        new RegExp(`waiting on ${task.id}`)
+      )
+    })
+
     test('a second worker_done is refused — the report is once, or it is not a report', () => {
       const task = store.createTask({ runId: run(), spec: 'a', createdBy: 'coord' })
       const dispatch = store.createDispatch({ taskId: task.id, terminalId: 't', agent: 'claude', preamble: 'p' })

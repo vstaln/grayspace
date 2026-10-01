@@ -105,4 +105,22 @@ export function registerBuiltinWidgets(): void {
     defaultSize: { w: 560, h: 560 },
     commands: ['chat.send', 'chat.cancel', 'widget.update', 'widget.remove']
   })
+  registerWidgetType({
+    kind: 'notes',
+    label: 'Notes',
+    defaultSize: { w: 520, h: 540 },
+    commands: ['note.create', 'note.update', 'note.delete', 'widget.update', 'widget.remove']
+  })
+  registerWidgetType({
+    kind: 'calendar',
+    label: 'Calendar',
+    defaultSize: { w: 560, h: 520 },
+    commands: ['plan.create', 'plan.update', 'plan.toggle', 'plan.delete', 'widget.update', 'widget.remove']
+  })
+  registerWidgetType({
+    kind: 'kanban',
+    label: 'Kanban',
+    defaultSize: { w: 760, h: 520 },
+    commands: ['plan.create', 'plan.update', 'plan.toggle', 'plan.delete', 'widget.update', 'widget.remove']
+  })
 }

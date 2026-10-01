@@ -89,13 +89,18 @@ pub struct FlowJournal {
 
 impl FlowJournal {
     pub fn new(start_seq: u64) -> Self {
-        Self { entries: Vec::new(), last_seq: start_seq }
+        Self {
+            entries: Vec::new(),
+            last_seq: start_seq,
+        }
     }
 
     pub fn last_seq(&self) -> u64 {
         self.last_seq
     }
 
+    // Keep the journal fields explicit at the command-flow boundary.
+    #[allow(clippy::too_many_arguments)]
     fn append(
         &mut self,
         phase: &str,
@@ -113,6 +118,7 @@ impl FlowJournal {
             at: at.max(0) as u64,
             phase: phase.to_owned(),
             actor_id: actor_id.to_owned(),
+            command_id: None,
             entry_type: command_type.to_owned(),
             target: target.to_owned(),
             payload,
@@ -251,10 +257,7 @@ impl CommandFlow {
                 if let Some(message) = validate_payload(schema, &command.payload) {
                     return Err(CommandError::new(
                         ErrorCode::Invalid,
-                        format!(
-                            "invalid payload for {}: {message}",
-                            command.command_type
-                        ),
+                        format!("invalid payload for {}: {message}", command.command_type),
                     ));
                 }
             }
@@ -387,7 +390,12 @@ impl CommandFlow {
                 )
             };
 
-            Ok(Accepted { seq, version, data, command_id: command.id.clone() })
+            Ok(Accepted {
+                seq,
+                version,
+                data,
+                command_id: command.id.clone(),
+            })
         })();
 
         if let Err(error) = &result {

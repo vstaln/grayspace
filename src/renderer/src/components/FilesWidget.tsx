@@ -28,7 +28,29 @@ import { useConfirm } from './ConfirmDialog'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 
 interface Props {
+  widgetId: string
   workspaceDir?: string | null
+}
+
+interface SavedFilesWidgetState {
+  workspaceDir?: string
+  currentPath: string | null
+  search: string
+  showHidden: boolean
+}
+
+function readSavedFilesState(widgetId: string): SavedFilesWidgetState {
+  try {
+    const raw = JSON.parse(localStorage.getItem(`orcspace-files-widget:${widgetId}`) || 'null') as Partial<SavedFilesWidgetState> | null
+    return {
+      workspaceDir: typeof raw?.workspaceDir === 'string' ? raw.workspaceDir : undefined,
+      currentPath: typeof raw?.currentPath === 'string' && raw.currentPath.length <= 4096 ? raw.currentPath : null,
+      search: typeof raw?.search === 'string' ? raw.search.slice(0, 500) : '',
+      showHidden: raw?.showHidden === true
+    }
+  } catch {
+    return { currentPath: null, search: '', showHidden: false }
+  }
 }
 
 function formatBytes(bytes: number): string {
@@ -88,15 +110,19 @@ function getFileIcon(entry: FileEntry): React.JSX.Element {
   return <File size={14} className="flex-none text-text-faint" />
 }
 
-export default React.memo(function FilesWidget({ workspaceDir }: Props): React.JSX.Element {
+export default React.memo(function FilesWidget({ widgetId, workspaceDir }: Props): React.JSX.Element {
   const confirm = useConfirm()
-  const [currentPath, setCurrentPath] = useState<string | null>(workspaceDir || null)
+  const [savedState] = useState(() => readSavedFilesState(widgetId))
+  const initialPathMatchesWorkspace = !workspaceDir || !savedState.workspaceDir || savedState.workspaceDir === workspaceDir
+  const [currentPath, setCurrentPath] = useState<string | null>(
+    () => (initialPathMatchesWorkspace ? savedState.currentPath : null) || workspaceDir || null
+  )
   const [parentPath, setParentPath] = useState<string | null>(null)
   const [items, setItems] = useState<FileEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [search, setSearch] = useState('')
-  const [showHidden, setShowHidden] = useState(false)
+  const [search, setSearch] = useState(savedState.search)
+  const [showHidden, setShowHidden] = useState(savedState.showHidden)
   const [previewFile, setPreviewFile] = useState<FileReadResult | null>(null)
   const [actionNotice, setActionNotice] = useState<string | null>(null)
   // Backend caps a single folder listing (see ipc/filesystem.ts). Past that
@@ -133,9 +159,10 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
 
 
 
-  const lastWorkspaceRef = useRef<string | null | undefined>(undefined)
+  const lastWorkspaceRef = useRef<string | null | undefined>(workspaceDir)
   useEffect(() => {
     const changed = lastWorkspaceRef.current !== workspaceDir
+    const previousWorkspace = lastWorkspaceRef.current
     lastWorkspaceRef.current = workspaceDir
     if (!changed) return
     dirSeq.current += 1
@@ -146,8 +173,21 @@ export default React.memo(function FilesWidget({ workspaceDir }: Props): React.J
     setError(null)
     setTruncated(false)
     setLoading(false)
-    setCurrentPath(workspaceDir || null)
+    const canRestoreSavedPath = previousWorkspace == null && workspaceDir && savedState.workspaceDir === workspaceDir
+    setCurrentPath((canRestoreSavedPath ? savedState.currentPath : null) || workspaceDir || null)
   }, [workspaceDir])
+
+  useEffect(() => {
+    if (!workspaceDir || !currentPath) return
+    try {
+      localStorage.setItem(`orcspace-files-widget:${widgetId}`, JSON.stringify({
+        workspaceDir,
+        currentPath,
+        search,
+        showHidden
+      }))
+    } catch {}
+  }, [widgetId, workspaceDir, currentPath, search, showHidden])
 
   useEffect(() => {
     if (!previewFile) return

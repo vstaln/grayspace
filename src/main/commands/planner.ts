@@ -15,6 +15,7 @@ interface PlanCreatePayload {
   day?: string
   time?: string
   attachments?: string[]
+  status?: string
 }
 
 interface PlanUpdatePayload {
@@ -24,6 +25,7 @@ interface PlanUpdatePayload {
   day?: string | null
   time?: string | null
   done?: boolean
+  status?: string
   order?: number
   attachments?: string[] | null
 }
@@ -34,7 +36,8 @@ const PLAN_FIELDS: CommandPayloadSchema['properties'] = {
   project: { type: 'string', description: 'Optional group label (e.g. a release)' },
   day: { type: 'string', description: 'Day YYYY-MM-DD; omit for the undated inbox' },
   time: { type: 'string', description: 'Time HH:MM' },
-  attachments: { type: 'array', description: 'Attached photo paths (from media store)' }
+  attachments: { type: 'array', description: 'Attached photo paths (from media store)' },
+  status: { type: 'string', description: 'Kanban column: "todo", "doing" or "done"; kept in sync with `done`' }
 }
 
 export function registerPlannerCommands({ core, planner }: CommandDeps): void {

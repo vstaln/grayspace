@@ -27,17 +27,27 @@ fn load() -> Fixture {
         .map(|entry| serde_json::from_value::<JournalEntry>(entry.clone()).expect("entry parses"))
         .collect();
     let clock = Clock(parsed["fixedNow"].as_f64().expect("fixture pins Date.now"));
-    Fixture { entries, snapshot: parsed["snapshot"].clone(), clock }
+    Fixture {
+        entries,
+        snapshot: parsed["snapshot"].clone(),
+        clock,
+    }
 }
 
 fn number(value: &Value) -> f64 {
-    value.as_f64().unwrap_or_else(|| panic!("expected a number, got {value}"))
+    value
+        .as_f64()
+        .unwrap_or_else(|| panic!("expected a number, got {value}"))
 }
 
 #[test]
 fn folding_the_fixture_reproduces_the_typescript_snapshot() {
     let fixture = load();
-    let state = fold(fixture.entries.iter(), CanvasState::default(), fixture.clock);
+    let state = fold(
+        fixture.entries.iter(),
+        CanvasState::default(),
+        fixture.clock,
+    );
 
     let expected_widgets = fixture.snapshot["widgets"].as_array().expect("widgets");
     let actual_widgets = list_widgets(&state);
@@ -58,7 +68,11 @@ fn folding_the_fixture_reproduces_the_typescript_snapshot() {
     for (index, (actual, expected)) in actual_widgets.iter().zip(expected_widgets).enumerate() {
         let at = format!("widget {index}");
         assert_eq!(actual.id, expected["id"].as_str().unwrap(), "{at}: id");
-        assert_eq!(actual.title, expected["title"].as_str().unwrap(), "{at}: title");
+        assert_eq!(
+            actual.title,
+            expected["title"].as_str().unwrap(),
+            "{at}: title"
+        );
         assert_eq!(
             actual.kind.as_deref(),
             expected["kind"].as_str(),
@@ -69,9 +83,21 @@ fn folding_the_fixture_reproduces_the_typescript_snapshot() {
         assert_eq!(actual.w, number(&expected["w"]), "{at}: w");
         assert_eq!(actual.h, number(&expected["h"]), "{at}: h");
         assert_eq!(actual.z, number(&expected["z"]), "{at}: z");
-        assert_eq!(actual.maximized, expected["maximized"] == Value::Bool(true), "{at}: maximized");
-        assert_eq!(actual.version, number(&expected["version"]), "{at}: version");
-        assert_eq!(actual.updated_at, number(&expected["updatedAt"]), "{at}: updatedAt");
+        assert_eq!(
+            actual.maximized,
+            expected["maximized"] == Value::Bool(true),
+            "{at}: maximized"
+        );
+        assert_eq!(
+            actual.version,
+            number(&expected["version"]),
+            "{at}: version"
+        );
+        assert_eq!(
+            actual.updated_at,
+            number(&expected["updatedAt"]),
+            "{at}: updatedAt"
+        );
     }
 
     let camera = &fixture.snapshot["camera"];
@@ -85,14 +111,21 @@ fn folding_the_fixture_reproduces_the_typescript_snapshot() {
         assert_eq!(actual.id, expected["id"].as_str().unwrap());
         assert_eq!(actual.color, expected["color"].as_str().unwrap());
         let points = expected["points"].as_array().unwrap();
-        assert_eq!(actual.points.len(), points.len(), "point count in {}", actual.id);
+        assert_eq!(
+            actual.points.len(),
+            points.len(),
+            "point count in {}",
+            actual.id
+        );
         for (point, expected_point) in actual.points.iter().zip(points) {
             assert_eq!(point.x, number(&expected_point["x"]));
             assert_eq!(point.y, number(&expected_point["y"]));
         }
     }
 
-    let expected_connections = fixture.snapshot["connections"].as_array().expect("connections");
+    let expected_connections = fixture.snapshot["connections"]
+        .as_array()
+        .expect("connections");
     assert_eq!(
         state.connections.len(),
         expected_connections.len(),
@@ -106,7 +139,11 @@ fn folding_the_fixture_reproduces_the_typescript_snapshot() {
         assert_eq!(actual.born_at, number(&expected["bornAt"]));
     }
 
-    assert_eq!(state.version, number(&fixture.snapshot["version"]), "canvas version");
+    assert_eq!(
+        state.version,
+        number(&fixture.snapshot["version"]),
+        "canvas version"
+    );
 }
 
 /// Replaying the same run twice must land in the same place — otherwise a
@@ -114,8 +151,16 @@ fn folding_the_fixture_reproduces_the_typescript_snapshot() {
 #[test]
 fn folding_is_deterministic() {
     let fixture = load();
-    let once = fold(fixture.entries.iter(), CanvasState::default(), fixture.clock);
-    let twice = fold(fixture.entries.iter(), CanvasState::default(), fixture.clock);
+    let once = fold(
+        fixture.entries.iter(),
+        CanvasState::default(),
+        fixture.clock,
+    );
+    let twice = fold(
+        fixture.entries.iter(),
+        CanvasState::default(),
+        fixture.clock,
+    );
     assert_eq!(once, twice);
 }
 
@@ -126,8 +171,16 @@ fn folding_a_tail_onto_a_snapshot_equals_folding_the_whole_run() {
     let fixture = load();
     let split = fixture.entries.len() / 2;
 
-    let whole = fold(fixture.entries.iter(), CanvasState::default(), fixture.clock);
-    let head = fold(fixture.entries[..split].iter(), CanvasState::default(), fixture.clock);
+    let whole = fold(
+        fixture.entries.iter(),
+        CanvasState::default(),
+        fixture.clock,
+    );
+    let head = fold(
+        fixture.entries[..split].iter(),
+        CanvasState::default(),
+        fixture.clock,
+    );
     let tail = fold(fixture.entries[split..].iter(), head, fixture.clock);
 
     assert_eq!(whole, tail);
@@ -167,11 +220,14 @@ fn folding_a_real_journal_matches_typescript() {
         .map(|line| serde_json::from_str(line).expect("journal line parses"))
         .collect();
 
-    let reference: Value = serde_json::from_str(
-        &std::fs::read_to_string(&snapshot_path).expect("snapshot readable"),
-    )
-    .expect("snapshot parses");
-    let clock = Clock(reference["fixedNow"].as_f64().expect("snapshot pins Date.now"));
+    let reference: Value =
+        serde_json::from_str(&std::fs::read_to_string(&snapshot_path).expect("snapshot readable"))
+            .expect("snapshot parses");
+    let clock = Clock(
+        reference["fixedNow"]
+            .as_f64()
+            .expect("snapshot pins Date.now"),
+    );
     let expected = &reference["snapshot"];
 
     assert_eq!(
@@ -185,7 +241,10 @@ fn folding_a_real_journal_matches_typescript() {
     let expected_widgets = expected["widgets"].as_array().expect("widgets");
 
     assert_eq!(
-        actual_widgets.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(),
+        actual_widgets
+            .iter()
+            .map(|w| w.id.as_str())
+            .collect::<Vec<_>>(),
         expected_widgets
             .iter()
             .map(|w| w["id"].as_str().unwrap())
@@ -195,27 +254,55 @@ fn folding_a_real_journal_matches_typescript() {
 
     for (actual, expected) in actual_widgets.iter().zip(expected_widgets) {
         let at = &actual.id;
-        assert_eq!(actual.title, expected["title"].as_str().unwrap(), "{at}: title");
-        assert_eq!(actual.kind.as_deref(), expected["kind"].as_str(), "{at}: kind");
+        assert_eq!(
+            actual.title,
+            expected["title"].as_str().unwrap(),
+            "{at}: title"
+        );
+        assert_eq!(
+            actual.kind.as_deref(),
+            expected["kind"].as_str(),
+            "{at}: kind"
+        );
         assert_eq!(actual.x, number(&expected["x"]), "{at}: x");
         assert_eq!(actual.y, number(&expected["y"]), "{at}: y");
         assert_eq!(actual.w, number(&expected["w"]), "{at}: w");
         assert_eq!(actual.h, number(&expected["h"]), "{at}: h");
         assert_eq!(actual.z, number(&expected["z"]), "{at}: z");
-        assert_eq!(actual.version, number(&expected["version"]), "{at}: version");
-        assert_eq!(actual.updated_at, number(&expected["updatedAt"]), "{at}: updatedAt");
+        assert_eq!(
+            actual.version,
+            number(&expected["version"]),
+            "{at}: version"
+        );
+        assert_eq!(
+            actual.updated_at,
+            number(&expected["updatedAt"]),
+            "{at}: updatedAt"
+        );
     }
 
     assert_eq!(state.camera.x, number(&expected["camera"]["x"]), "camera x");
     assert_eq!(state.camera.y, number(&expected["camera"]["y"]), "camera y");
-    assert_eq!(state.camera.zoom, number(&expected["camera"]["zoom"]), "camera zoom");
-    assert_eq!(state.strokes.len(), expected["strokes"].as_array().unwrap().len(), "strokes");
+    assert_eq!(
+        state.camera.zoom,
+        number(&expected["camera"]["zoom"]),
+        "camera zoom"
+    );
+    assert_eq!(
+        state.strokes.len(),
+        expected["strokes"].as_array().unwrap().len(),
+        "strokes"
+    );
     assert_eq!(
         state.connections.len(),
         expected["connections"].as_array().unwrap().len(),
         "connections"
     );
-    assert_eq!(state.version, number(&expected["version"]), "canvas version");
+    assert_eq!(
+        state.version,
+        number(&expected["version"]),
+        "canvas version"
+    );
 
     println!(
         "folded {} real entries into {} widgets, matching TypeScript",
@@ -236,6 +323,7 @@ fn folding_a_real_journal_matches_typescript() {
 #[test]
 fn an_image_widget_keeps_its_source_across_create_and_update() {
     let entry = |seq: u64, entry_type: &str, payload: Value| JournalEntry {
+        command_id: None,
         seq,
         at: 1_789_000_000_000 + seq,
         phase: "commit".to_owned(),
@@ -248,7 +336,7 @@ fn an_image_widget_keeps_its_source_across_create_and_update() {
         prev_hash: None,
         hash: None,
     };
-    let entries = vec![
+    let entries = [
         entry(
             1,
             "widget.create",
@@ -264,13 +352,63 @@ fn an_image_widget_keeps_its_source_across_create_and_update() {
         entry(2, "widget.update", serde_json::json!({ "x": 40.0 })),
     ];
 
-    let state = fold(entries.iter(), CanvasState::default(), Clock(1_789_000_000_000.0));
+    let state = fold(
+        entries.iter(),
+        CanvasState::default(),
+        Clock(1_789_000_000_000.0),
+    );
     let widgets = list_widgets(&state);
 
     assert_eq!(widgets.len(), 1, "the image widget must survive the fold");
     let widget = widgets[0];
     assert_eq!(widget.kind.as_deref(), Some("image"));
     assert_eq!(widget.x, 40.0, "the update must apply");
-    assert_eq!(widget.image_path.as_deref(), Some("C:\\shots\\shot.png"), "the update must not erase the source");
+    assert_eq!(
+        widget.image_path.as_deref(),
+        Some("C:\\shots\\shot.png"),
+        "the update must not erase the source"
+    );
     assert_eq!(widget.image_name.as_deref(), Some("shot.png"));
+}
+
+#[test]
+fn notes_calendar_and_kanban_widgets_survive_projection() {
+    let entries = ["notes", "calendar", "kanban"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, kind)| {
+            let id = format!("{kind}-{index}");
+            JournalEntry {
+                command_id: None,
+                seq: index as u64 + 1,
+                at: 1_789_000_000_000 + index as u64,
+                phase: "commit".to_owned(),
+                actor_id: "user".to_owned(),
+                entry_type: "widget.create".to_owned(),
+                target: format!("widget:{id}"),
+                payload: Some(serde_json::json!({
+                    "id": id,
+                    "title": kind,
+                    "kind": kind,
+                    "x": 0.0, "y": 0.0, "w": 320.0, "h": 240.0, "z": 1.0
+                })),
+                version: Some(index as i64 + 1),
+                error: None,
+                prev_hash: None,
+                hash: None,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let state = fold(
+        entries.iter(),
+        CanvasState::default(),
+        Clock(1_789_000_000_010.0),
+    );
+    let kinds = list_widgets(&state)
+        .into_iter()
+        .map(|widget| widget.kind.as_deref().unwrap_or_default().to_owned())
+        .collect::<Vec<_>>();
+
+    assert_eq!(kinds, ["notes", "calendar", "kanban"]);
 }

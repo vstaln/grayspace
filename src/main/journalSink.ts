@@ -64,6 +64,7 @@ export class FileJournalSink implements JournalSink {
   private bytes = 0
 
   private writing = false
+  private activeFlush: Promise<void> | null = null
 
 
 
@@ -90,13 +91,33 @@ export class FileJournalSink implements JournalSink {
   append(entry: JournalEntry): void {
     this.buffer.push(JSON.stringify(entry))
     if (this.timer !== null || this.retryTimer !== null) return
-    this.timer = setTimeout(() => void this.flushAsync(), this.flushMs)
+    this.timer = setTimeout(() => this.startFlush(), this.flushMs)
     this.timer.unref?.()
   }
 
 
 
 
+
+  private startFlush(): void {
+    if (this.activeFlush) {
+      if (this.timer !== null) clearTimeout(this.timer)
+      this.timer = null
+      return
+    }
+    const pending = this.flushAsync()
+    this.activeFlush = pending
+    void pending.then(() => {
+      if (this.activeFlush === pending) this.activeFlush = null
+    })
+  }
+
+  /** Wait for an in-flight append/rotation before flushing its buffered tail. */
+  async flushPending(): Promise<void> {
+    this.flush()
+    await this.activeFlush
+    this.flush()
+  }
 
   private async flushAsync(): Promise<void> {
     if (this.timer !== null) {
@@ -147,7 +168,7 @@ export class FileJournalSink implements JournalSink {
     }
 
     if (this.buffer.length > 0 && this.timer === null && this.retryTimer === null) {
-      this.timer = setTimeout(() => void this.flushAsync(), this.flushMs)
+      this.timer = setTimeout(() => this.startFlush(), this.flushMs)
       this.timer.unref?.()
     }
   }
@@ -236,7 +257,7 @@ export class FileJournalSink implements JournalSink {
     if (this.retryTimer !== null) return
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null
-      void this.flushAsync()
+      this.startFlush()
     }, this.retryMs)
     this.retryTimer.unref?.()
     this.retryMs = Math.min(this.retryMs * 2, this.retryMaxMs)

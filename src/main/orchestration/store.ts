@@ -520,6 +520,26 @@ export class OrchestrationStore extends EventEmitter {
     return promoted
   }
 
+  private hasOpenGate(taskId: string): boolean {
+    return [...this.gates.values()].some((gate) => gate.taskId === taskId && gate.resolvedAt === undefined)
+  }
+
+  /**
+   * Why this task cannot take a new worker, or null when it can.
+   *
+   * Status alone is not the test: a failed task is retried by dispatching it
+   * again, and a running one is reported by createDispatch with the dispatch
+   * that holds it. What does block is an unfinished dependency or a decision
+   * gate still waiting on the user.
+   */
+  dispatchBlocker(task: OrcTask): string | null {
+    if (task.status === 'completed') return `task "${task.id}" is already completed`
+    if (this.hasOpenGate(task.id)) return `task "${task.id}" is waiting on an open decision gate`
+    const waiting = task.deps.filter((dep) => this.tasks.get(dep)?.status !== 'completed')
+    if (waiting.length > 0) return `task "${task.id}" is waiting on ${waiting.join(', ')}`
+    return null
+  }
+
 
 
   createDispatch(input: {
@@ -539,6 +559,8 @@ export class OrchestrationStore extends EventEmitter {
         terminalId: open.terminalId
       })
     }
+    const blocker = this.dispatchBlocker(task)
+    if (blocker) throw new CommandError('conflict', blocker)
     const busyTerminal = this.dispatchForTerminal(input.terminalId)
     if (busyTerminal) {
       throw new CommandError('conflict', `terminal "${input.terminalId}" is already running dispatch ${busyTerminal.id}`)
@@ -873,7 +895,7 @@ export class OrchestrationStore extends EventEmitter {
       const task = this.tasks.get(gate.taskId)
 
 
-      if (task && task.status === 'blocked') {
+      if (task && task.status === 'blocked' && !this.hasOpenGate(task.id)) {
         task.status = this.isReady({ ...task, status: 'pending' }) ? 'ready' : 'pending'
         task.updatedAt = this.now()
         task.version = this.taskVersions.bump(task.id)
@@ -887,7 +909,7 @@ export class OrchestrationStore extends EventEmitter {
   listGates(filter: { runId?: string; open?: boolean } = {}): Gate[] {
     let all = [...this.gates.values()]
     if (filter.runId) all = all.filter((g) => g.runId === filter.runId)
-    if (filter.open) all = all.filter((g) => !g.resolvedAt)
+    if (filter.open) all = all.filter((g) => g.resolvedAt === undefined)
     return all.sort((a, b) => a.createdAt - b.createdAt)
   }
 

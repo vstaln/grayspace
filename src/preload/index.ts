@@ -34,6 +34,8 @@ import type {
   MediaFile,
   PlanItem,
   PlannerApi,
+  NoteItem,
+  NotesApi,
   RecentDir,
   RendererStateApi,
   SettingsApi,
@@ -44,12 +46,12 @@ import type {
   WorkspaceApi
 } from './api.ts'
 
-type ScopedCb<T> = (payload: T) => void
+type ScopedCb<T> = (payload: T, metadata?: unknown) => void
 const scopedChannelMap = new Map<
   string,
   {
     subscribers: Map<string, Set<ScopedCb<any>>>
-    ipcListener: (_e: IpcRendererEvent, eventId: string, payload: any) => void
+    ipcListener: (_e: IpcRendererEvent, eventId: string, payload: any, metadata?: unknown) => void
   }
 >()
 
@@ -58,12 +60,12 @@ function onScoped<T>(channel: string, id: string, cb: (payload: T) => void): () 
   let entry = scopedChannelMap.get(channel)
   if (!entry) {
     const subscribers = new Map<string, Set<ScopedCb<any>>>()
-    const ipcListener = (_e: IpcRendererEvent, eventId: string, payload: any): void => {
+    const ipcListener = (_e: IpcRendererEvent, eventId: string, payload: any, metadata?: unknown): void => {
       const set = subscribers.get(eventId)
       if (set) {
         for (const fn of set) {
           try {
-            fn(payload)
+            fn(payload, metadata)
           } catch (err) {
             console.error(`Error in scoped subscriber for ${channel}:${eventId}`, err)
           }
@@ -114,7 +116,10 @@ const windowControls: WindowApi = {
 
 const browser: BrowserApi = {
 
-  onOpenTab: (cb: (url: string) => void): (() => void) => onBroadcast('browser:onOpenTab', cb),
+  onOpenTab: (cb): (() => void) => onBroadcast('browser:onOpenTab', cb),
+  onAgentAction: (cb) => onBroadcast('browser:agent-action', cb),
+  onOpenInCode: (cb) => onBroadcast('browser:open-in-code', cb),
+  respond: (requestId, response) => ipcRenderer.invoke('browser:agent-response', requestId, response),
   clearData: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('browser:clear-data')
 }
 
@@ -141,8 +146,9 @@ const terminal: TerminalApi = {
   setLastPrompt: (id: string, prompt: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('terminal:set-last-prompt', id, prompt),
   detach: (id: string): void => ipcRenderer.send('terminal:detach', id),
+  ackOutput: (id: string, deliveryId: number): void => ipcRenderer.send('terminal:ack-output', id, deliveryId),
   setFocused: (focused: boolean, id: string): void => ipcRenderer.send('terminal:focus', focused, id),
-  onData: (id: string, cb: (data: string) => void): (() => void) => onScoped('terminal:onData', id, cb),
+  onData: (id: string, cb: (data: string, deliveryId?: number) => void): (() => void) => onScoped('terminal:onData', id, cb),
   onExit: (id: string, cb: (exitCode: number) => void): (() => void) => onScoped('terminal:onExit', id, cb),
   onPrompt: (id: string, cb: (prompt: string) => void): (() => void) => onScoped('terminal:onPrompt', id, cb),
   onBackendError: (cb: (message: string) => void): (() => void) => onBroadcast('terminal:onBackendError', cb)
@@ -272,6 +278,33 @@ const planner: PlannerApi = {
   onChange: (cb: (items: PlanItem[]) => void): (() => void) => onBroadcast('planner:onChange', cb)
 }
 
+const notes: NotesApi = {
+  list: (): Promise<NoteItem[]> => ipcRenderer.invoke('notes:list'),
+  create: (input: {
+    title: string
+    body?: string
+    tags?: string[]
+    category?: string
+    color?: string
+  }): Promise<NoteItem | { error: string }> => ipcRenderer.invoke('notes:create', input),
+  update: (
+    id: string,
+    patch: {
+      title?: string
+      body?: string
+      tags?: string[]
+      category?: string | null
+      color?: string | null
+      order?: number
+      baseVersion?: number
+    }
+  ): Promise<NoteItem | { error: string }> => ipcRenderer.invoke('notes:update', id, patch),
+  recolorCategory: (category: string, color: string): Promise<{ ok: true } | { error: string }> =>
+    ipcRenderer.invoke('notes:recolorCategory', category, color),
+  delete: (id: string): Promise<void | { error: string }> => ipcRenderer.invoke('notes:delete', id),
+  onChange: (cb: (items: NoteItem[]) => void): (() => void) => onBroadcast('notes:onChange', cb)
+}
+
 const git: GitApi = {
   status: (): Promise<GitStatus | { error: string }> => ipcRenderer.invoke('git:status'),
   commit: (message: string): Promise<{ hash: string } | { error: string }> => ipcRenderer.invoke('git:commit', message),
@@ -325,7 +358,9 @@ const fs: FsApi = {
 }
 
 const system: SystemApi = {
+  cpu: (): ReturnType<SystemApi['cpu']> => ipcRenderer.invoke('system:cpu'),
   stats: (): Promise<SystemStats | { error: string }> => ipcRenderer.invoke('system:stats'),
+  memory: (): ReturnType<SystemApi['memory']> => ipcRenderer.invoke('system:memory'),
   releaseLocks: (): Promise<{ ok: boolean } | { error: string }> => ipcRenderer.invoke('system:release-locks'),
   onPersistError: (cb: (payload: { store: string; message: string; at: number }) => void): (() => void) =>
     onBroadcast('system:persistError', cb)
@@ -347,6 +382,7 @@ contextBridge.exposeInMainWorld('api', {
   media,
   orchestration,
   planner,
+  notes,
   canvas,
   code,
   git,

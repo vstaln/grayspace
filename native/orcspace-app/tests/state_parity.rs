@@ -43,7 +43,10 @@ fn pretty_form_matches_json_stringify_with_two_spaces() {
 fn empty_containers_stay_collapsed_like_javascript() {
     assert_eq!(to_js_json_pretty(&json!({}), 2), "{}");
     assert_eq!(to_js_json_pretty(&json!([]), 2), "[]");
-    assert_eq!(to_js_json_pretty(&json!({ "a": {}, "b": [] }), 2), "{\n  \"a\": {},\n  \"b\": []\n}");
+    assert_eq!(
+        to_js_json_pretty(&json!({ "a": {}, "b": [] }), 2),
+        "{\n  \"a\": {},\n  \"b\": []\n}"
+    );
 }
 
 #[test]
@@ -67,7 +70,10 @@ fn nested_arrays_indent_one_level_per_depth() {
 
 #[test]
 fn compact_form_has_no_space_after_the_colon() {
-    assert_eq!(to_js_json(&json!({ "a": 1, "b": [1, 2] })), r#"{"a":1,"b":[1,2]}"#);
+    assert_eq!(
+        to_js_json(&json!({ "a": 1, "b": [1, 2] })),
+        r#"{"a":1,"b":[1,2]}"#
+    );
 }
 
 #[test]
@@ -78,8 +84,14 @@ fn key_order_is_document_order_not_sorted() {
 
 #[test]
 fn state_file_names_are_classified() {
-    assert_eq!(classify("workspace-canvas-0630010f33fdb64d.json"), StateKind::Canvas);
-    assert_eq!(classify("workspace-code-03ab2b00117dac4d.json"), StateKind::Code);
+    assert_eq!(
+        classify("workspace-canvas-0630010f33fdb64d.json"),
+        StateKind::Canvas
+    );
+    assert_eq!(
+        classify("workspace-code-03ab2b00117dac4d.json"),
+        StateKind::Code
+    );
     assert_eq!(classify("workspace-board.json"), StateKind::Board);
     assert_eq!(classify("orchestration.json"), StateKind::Orchestration);
     assert_eq!(classify("workspace-state.json"), StateKind::WorkspaceState);
@@ -93,8 +105,8 @@ fn state_file_names_are_classified() {
 #[test]
 #[ignore = "needs a real profile: set ORCSPACE_PROFILE"]
 fn round_trips_a_real_profile() {
-    let dir = std::env::var("ORCSPACE_PROFILE")
-        .expect("set ORCSPACE_PROFILE to a userData directory");
+    let dir =
+        std::env::var("ORCSPACE_PROFILE").expect("set ORCSPACE_PROFILE to a userData directory");
     let files = list_state_files(&dir).expect("profile directory is readable");
     assert!(!files.is_empty(), "no JSON state files found in {dir}");
 
@@ -129,6 +141,13 @@ fn round_trips_a_real_profile() {
         }
     }
 
-    println!("round-tripped {checked}/{} state files in {dir}", files.len());
-    assert!(failures.is_empty(), "state files did not round trip:\n{}", failures.join("\n"));
+    println!(
+        "round-tripped {checked}/{} state files in {dir}",
+        files.len()
+    );
+    assert!(
+        failures.is_empty(),
+        "state files did not round trip:\n{}",
+        failures.join("\n")
+    );
 }

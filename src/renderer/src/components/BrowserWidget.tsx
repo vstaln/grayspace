@@ -1,6 +1,19 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, FileText, Lock, RotateCw, Search, X } from 'lucide-react'
 import { BROWSER_PARTITION, HOME_URL, hostOf, toNavigationUrl, type Webview } from '../lib/browserShared'
+import { markBrowserMounted, markCodeBrowserGuest } from '../lib/mountedBrowsers'
+import {
+  assertRefInRange,
+  clickScript,
+  fillScript,
+  isProtectedCheckoutUrl,
+  pressFocusScript,
+  pressKeyScript,
+  scrollScript,
+  selectScript,
+  snapshotScript,
+  SUPPORTED_PRESS_KEYS
+} from '../../../shared/browserActionScripts'
 
 export type DroppedMediaKind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'doc'
 
@@ -15,7 +28,6 @@ const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 
 const VIDEO_EXTS = new Set(['mp4', 'm4v', 'webm', 'mkv', 'mov', 'avi', 'wmv', 'flv', 'ogv', 'mpg', 'mpeg'])
 const AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'flac', 'aac', 'm4a', 'opus', 'weba', 'wma'])
 const TEXT_EXTS = new Set(['txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'yaml', 'yml', 'xml', 'html', 'htm', 'log', 'js', 'ts', 'jsx', 'tsx', 'py', 'sh', 'bat', 'cmd', 'ps1'])
-
 export function mediaKindForName(name: string, fallback?: string): DroppedMediaKind {
   if (fallback === 'image' || fallback === 'video' || fallback === 'audio' || fallback === 'pdf' || fallback === 'text' || fallback === 'doc') {
     return fallback
@@ -52,9 +64,10 @@ function readUrl(widgetId: string | undefined): string {
   return HOME_URL
 }
 
-export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange }: {
+export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange, openPopupsInPlace = false }: {
   widgetId: string
   onFullscreenChange?: (active: boolean) => void
+  openPopupsInPlace?: boolean
 }): React.JSX.Element {
   const [url, setUrl] = useState(() => readUrl(widgetId))
   const [address, setAddress] = useState(() => readUrl(widgetId))
@@ -108,6 +121,8 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
   useLayoutEffect(() => {
     const view = viewEl
     if (!view) return undefined
+    let registeredGuestId = 0
+    let unmarkCodeGuest = (): void => {}
 
     const syncHistory = (): void => {
       try {
@@ -128,6 +143,16 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
 
 
     const onDomReady = (): void => {
+      if (openPopupsInPlace) {
+        try {
+          const guestId = view.getWebContentsId()
+          if (guestId > 0 && guestId !== registeredGuestId) {
+            unmarkCodeGuest()
+            registeredGuestId = guestId
+            unmarkCodeGuest = markCodeBrowserGuest(guestId)
+          }
+        } catch {}
+      }
       syncHistory()
     }
     const onFail = (event: Event): void => {
@@ -195,6 +220,7 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
     view.addEventListener('leave-html-full-screen', onLeaveHtmlFullscreen)
     view.addEventListener('crashed', onCrashed)
     return () => {
+      unmarkCodeGuest()
       view.removeEventListener('did-start-loading', onStart)
       view.removeEventListener('did-stop-loading', onStop)
       view.removeEventListener('did-finish-load', onDomReady)
@@ -206,7 +232,7 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
       view.removeEventListener('leave-html-full-screen', onLeaveHtmlFullscreen)
       view.removeEventListener('crashed', onCrashed)
     }
-  }, [onFullscreenChange, viewEl])
+  }, [onFullscreenChange, openPopupsInPlace, viewEl])
 
 
 
@@ -272,11 +298,11 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
     void window.api.fs.openPath(path).catch(() => {})
   }, [])
 
-  const navigate = useCallback((value: string): void => {
+  const navigate = useCallback(async (value: string): Promise<void> => {
     const target = toNavigationUrl(value)
     if (!target) {
       setLoadError('Enter a web address, a search, or a local file path')
-      return
+      throw new Error('enter a web address, a search, or a local file path')
     }
     setUrl(target)
     setAddress(target)
@@ -287,24 +313,151 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
     const view = viewRef.current
     if (!view) {
       setLoading(false)
-      return
+      throw new Error('browser page is not ready')
     }
     const fail = (err: unknown): void => {
       setLoading(false)
       setLoadError(err instanceof Error ? err.message : 'Could not load URL')
     }
+    const loadFromSource = (): Promise<void> => new Promise((resolve, reject) => {
+      let settled = false
+      const cleanup = (): void => {
+        window.clearTimeout(timer)
+        view.removeEventListener('did-stop-loading', onStop)
+        view.removeEventListener('did-fail-load', onFail)
+      }
+      const finish = (error?: Error): void => {
+        if (settled) return
+        settled = true
+        cleanup()
+        if (error) reject(error)
+        else resolve()
+      }
+      const onStop = (): void => finish()
+      const onFail = (event: Event): void => {
+        const detail = event as Event & { errorCode?: number; errorDescription?: string; isMainFrame?: boolean }
+        if (detail.isMainFrame === false) return
+        finish(new Error(detail.errorDescription || `Could not load URL (${detail.errorCode ?? 'unknown error'})`))
+      }
+      const timer = window.setTimeout(() => finish(new Error('browser page load timed out')), 45_000)
+      view.addEventListener('did-stop-loading', onStop)
+      view.addEventListener('did-fail-load', onFail)
+      try {
+        // Preserve Electron's documented recovery path for a synchronous
+        // loadURL failure before the guest WebContents is ready.
+        view.src = target
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)))
+      }
+    })
+
+    let loading: Promise<void>
     try {
-      // loadURL throws synchronously (it does not reject) while the guest is
-      // not ready yet; the src attribute navigates it in that window.
-      void Promise.resolve(view.loadURL(target)).catch(fail)
+      // A synchronous throw means the webview guest is not ready. Recover via
+      // src and wait for the actual navigation result. Promise rejection from
+      // loadURL is a page load failure and should be shown to the user.
+      loading = view.loadURL(target)
     } catch {
       try {
-        view.src = target
+        await loadFromSource()
       } catch (err) {
         fail(err)
+        throw err
       }
+      return
+    }
+
+    try {
+      await loading
+    } catch (err) {
+      fail(err)
+      throw err
     }
   }, [])
+
+  useEffect(() => {
+    if (!openPopupsInPlace) return
+    return window.api.browser.onOpenTab(({ url, sourceWebContentsId }) => {
+      try {
+        if (viewRef.current?.getWebContentsId() !== sourceWebContentsId) return
+      } catch {
+        return
+      }
+      void navigate(url).catch(() => {})
+    })
+  }, [navigate, openPopupsInPlace])
+
+  useEffect(() => {
+    const onAgentAction = (event: Event): void => {
+      const request = (event as CustomEvent<{
+        requestId?: string
+        widgetId?: string
+        action?: { kind?: string; url?: string; ref?: string; value?: string; key?: string; pixels?: number }
+      }>).detail
+      if (!request?.requestId || request.widgetId !== widgetId || !request.action) return
+
+      void (async () => {
+        const view = viewRef.current
+        if (!view) throw new Error('browser page is not ready')
+        const action = request.action!
+        let result: unknown
+
+        if (action.kind === 'navigate') {
+          if (!action.url || !/^https?:\/\//i.test(action.url)) throw new Error('only http and https addresses are allowed')
+          if (isProtectedCheckoutUrl(action.url)) throw new Error('checkout navigation is disabled')
+          await navigate(action.url)
+          result = { url: action.url }
+        } else if (action.kind === 'snapshot') {
+          result = await view.executeJavaScript(snapshotScript())
+        } else if (action.kind === 'click') {
+          const ref = Number(action.ref)
+          assertRefInRange(ref)
+          result = await view.executeJavaScript(clickScript(ref))
+          await new Promise((resolve) => window.setTimeout(resolve, 350))
+        } else if (action.kind === 'select') {
+          const ref = Number(action.ref)
+          assertRefInRange(ref)
+          const value = action.value ?? ''
+          if (value.length > 4000) throw new Error('selection is too long')
+          result = await view.executeJavaScript(selectScript(ref, value))
+        } else if (action.kind === 'fill') {
+          const ref = Number(action.ref)
+          assertRefInRange(ref)
+          const value = action.value ?? ''
+          if (value.length > 4000) throw new Error('text is too long')
+          result = await view.executeJavaScript(fillScript(ref, value))
+        } else if (action.kind === 'press') {
+          const key = action.key ?? ''
+          if (!(SUPPORTED_PRESS_KEYS as readonly string[]).includes(key)) throw new Error('unsupported key')
+          if (action.ref) {
+            const ref = Number(action.ref)
+            assertRefInRange(ref)
+            await view.executeJavaScript(pressFocusScript(ref))
+          }
+          result = await view.executeJavaScript(pressKeyScript(key), true)
+        } else if (action.kind === 'scroll') {
+          const pixels = Math.max(-1200, Math.min(1200, Number(action.pixels) || 0))
+          result = await view.executeJavaScript(scrollScript(pixels))
+        } else {
+          throw new Error('unsupported browser action')
+        }
+
+        await window.api.browser.respond(request.requestId!, { ok: true, result })
+      })().catch((error: unknown) => {
+        void window.api.browser.respond(request.requestId!, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      })
+    }
+
+    window.addEventListener('orcspace:browser-agent-action', onAgentAction)
+    const unmark = markBrowserMounted(widgetId)
+    return () => {
+      unmark()
+      window.removeEventListener('orcspace:browser-agent-action', onAgentAction)
+    }
+  }, [navigate, widgetId])
 
   const isHome = !media && (() => {
     try {
@@ -355,7 +508,7 @@ export default React.memo(function BrowserWidget({ widgetId, onFullscreenChange 
           </button>
           <form
             className="relative ml-1 flex min-w-0 flex-1 items-center"
-            onSubmit={(e) => { e.preventDefault(); navigate(address) }}
+            onSubmit={(e) => { e.preventDefault(); void navigate(address).catch(() => {}) }}
           >
             <div className="pointer-events-none absolute left-2.5 flex items-center text-text-faint">
               {isLocalFile ? <FileText size={10} strokeWidth={2} /> : isHttps ? <Lock size={10} strokeWidth={2} /> : <Search size={10} strokeWidth={2} />}

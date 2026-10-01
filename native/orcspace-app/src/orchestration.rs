@@ -161,10 +161,18 @@ impl OrchestrationStore {
 
     // --- runs ---------------------------------------------------------------
 
-    pub fn create_run(&mut self, objective: &str, coordinator: &str, now: i64) -> CommandResult<Run> {
+    pub fn create_run(
+        &mut self,
+        objective: &str,
+        coordinator: &str,
+        now: i64,
+    ) -> CommandResult<Run> {
         let objective = objective.trim();
         if objective.is_empty() {
-            return Err(CommandError::new(ErrorCode::Invalid, "a run needs an objective"));
+            return Err(CommandError::new(
+                ErrorCode::Invalid,
+                "a run needs an objective",
+            ));
         }
         let id = self.next_id("run");
         let run = Run {
@@ -181,7 +189,10 @@ impl OrchestrationStore {
 
     pub fn require_run(&self, id: &str) -> CommandResult<&Run> {
         self.runs.get(id).ok_or_else(|| {
-            CommandError::new(ErrorCode::NotFound, format!("no run \"{id}\" — call run-list first"))
+            CommandError::new(
+                ErrorCode::NotFound,
+                format!("no run \"{id}\" — call run-list first"),
+            )
         })
     }
 
@@ -204,6 +215,8 @@ impl OrchestrationStore {
 
     // --- tasks --------------------------------------------------------------
 
+    // Mirrors the existing command API and its independently optional fields.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_task(
         &mut self,
         run_id: &str,
@@ -245,7 +258,11 @@ impl OrchestrationStore {
         let task = OrcTask {
             id: id.clone(),
             run_id,
-            title: if title.is_empty() { first_line(spec) } else { title.to_owned() },
+            title: if title.is_empty() {
+                first_line(spec)
+            } else {
+                title.to_owned()
+            },
             spec: spec.to_owned(),
             deps: deps.to_vec(),
             images: images.to_vec(),
@@ -382,10 +399,42 @@ impl OrchestrationStore {
                 json!({ "dispatchId": open.id, "terminalId": open.terminal_id }),
             ));
         }
+        // Status alone is not the test: a failed task is retried by
+        // dispatching it again. What blocks is an unfinished dependency or a
+        // decision gate still waiting on the user.
+        let has_open_gate = self
+            .gates
+            .values()
+            .any(|gate| gate.task_id.as_deref() == Some(task_id) && gate.resolved_at.is_none());
+        if has_open_gate {
+            return Err(CommandError::new(
+                ErrorCode::Conflict,
+                format!("task \"{task_id}\" is waiting on an open decision gate"),
+            ));
+        }
+        let waiting: Vec<&str> = task
+            .deps
+            .iter()
+            .filter(|dep| {
+                self.tasks
+                    .get(dep.as_str())
+                    .is_none_or(|dependency| dependency.status != "completed")
+            })
+            .map(String::as_str)
+            .collect();
+        if !waiting.is_empty() {
+            return Err(CommandError::new(
+                ErrorCode::Conflict,
+                format!("task \"{task_id}\" is waiting on {}", waiting.join(", ")),
+            ));
+        }
         if let Some(busy) = self.dispatch_for_terminal(terminal_id) {
             return Err(CommandError::new(
                 ErrorCode::Conflict,
-                format!("terminal \"{terminal_id}\" is already running dispatch {}", busy.id),
+                format!(
+                    "terminal \"{terminal_id}\" is already running dispatch {}",
+                    busy.id
+                ),
             ));
         }
 
@@ -406,7 +455,10 @@ impl OrchestrationStore {
         };
         self.dispatches.insert(id, dispatch.clone());
 
-        let task = self.tasks.get_mut(&dispatch.task_id).expect("required above");
+        let task = self
+            .tasks
+            .get_mut(&dispatch.task_id)
+            .expect("required above");
         task.status = "dispatched".to_owned();
         task.updated_at = now;
         task.version += 1;
@@ -418,6 +470,13 @@ impl OrchestrationStore {
         self.dispatches
             .get(id)
             .ok_or_else(|| CommandError::new(ErrorCode::NotFound, format!("no dispatch \"{id}\"")))
+    }
+
+    pub fn set_dispatch_preamble(&mut self, id: &str, preamble: &str) -> CommandResult<Dispatch> {
+        self.require_dispatch(id)?;
+        let dispatch = self.dispatches.get_mut(id).expect("checked above");
+        dispatch.preamble = preamble.to_owned();
+        Ok(dispatch.clone())
     }
 
     pub fn list_dispatches(
@@ -484,8 +543,16 @@ impl OrchestrationStore {
 
         self.require_task(&dispatch.task_id)?;
         {
-            let task = self.tasks.get_mut(&dispatch.task_id).expect("checked above");
-            task.status = if outcome == "succeeded" { "completed" } else { "failed" }.to_owned();
+            let task = self
+                .tasks
+                .get_mut(&dispatch.task_id)
+                .expect("checked above");
+            task.status = if outcome == "succeeded" {
+                "completed"
+            } else {
+                "failed"
+            }
+            .to_owned();
             task.outcome = Some(outcome.to_owned());
             task.updated_at = now;
             task.version += 1;
@@ -583,7 +650,9 @@ impl OrchestrationStore {
         };
         self.messages.insert(id, message.clone());
         while self.messages.len() > MAX_MESSAGES {
-            let Some(oldest) = self.messages.keys().next().cloned() else { break };
+            let Some(oldest) = self.messages.keys().next().cloned() else {
+                break;
+            };
             self.messages.shift_remove(&oldest);
         }
         Ok(message)
@@ -606,7 +675,10 @@ impl OrchestrationStore {
 
     pub fn ack(&mut self, id: &str, actor_id: &str) -> CommandResult<Message> {
         let Some(message) = self.messages.get_mut(id) else {
-            return Err(CommandError::new(ErrorCode::NotFound, format!("no message \"{id}\"")));
+            return Err(CommandError::new(
+                ErrorCode::NotFound,
+                format!("no message \"{id}\""),
+            ));
         };
         if !message.acked_by.iter().any(|a| a == actor_id) {
             message.acked_by.push(actor_id.to_owned());
@@ -626,7 +698,10 @@ impl OrchestrationStore {
         self.require_run(run_id)?;
         let question = question.trim();
         if question.is_empty() {
-            return Err(CommandError::new(ErrorCode::Invalid, "a gate needs a question"));
+            return Err(CommandError::new(
+                ErrorCode::Invalid,
+                "a gate needs a question",
+            ));
         }
         if let Some(task_id) = task_id {
             let Some(task) = self.tasks.get(task_id) else {
@@ -676,7 +751,10 @@ impl OrchestrationStore {
     /// already acted on be rewritten underneath it.
     pub fn resolve_gate(&mut self, id: &str, resolution: &str, now: i64) -> CommandResult<Gate> {
         let Some(existing) = self.gates.get(id) else {
-            return Err(CommandError::new(ErrorCode::NotFound, format!("no gate \"{id}\"")));
+            return Err(CommandError::new(
+                ErrorCode::NotFound,
+                format!("no gate \"{id}\""),
+            ));
         };
         if existing.resolved_at.is_some() {
             return Err(CommandError::new(
@@ -684,7 +762,9 @@ impl OrchestrationStore {
                 format!("gate \"{id}\" is already resolved"),
             ));
         }
-        if !existing.options.is_empty() && !existing.options.iter().any(|option| option == resolution) {
+        if !existing.options.is_empty()
+            && !existing.options.iter().any(|option| option == resolution)
+        {
             return Err(CommandError::new(
                 ErrorCode::Invalid,
                 format!("resolution must be one of {}", existing.options.join(", ")),
@@ -697,15 +777,23 @@ impl OrchestrationStore {
         gate.version += 1;
         let resolved = gate.clone();
         if let Some(task_id) = task_id {
+            let has_open_gate = self.gates.values().any(|gate| {
+                gate.task_id.as_deref() == Some(task_id.as_str()) && gate.resolved_at.is_none()
+            });
+            if has_open_gate {
+                return Ok(resolved);
+            }
             let deps = self
                 .tasks
                 .get(&task_id)
                 .filter(|task| task.status == "blocked")
                 .map(|task| task.deps.clone());
             if let Some(deps) = deps {
-                let ready = deps
-                    .iter()
-                    .all(|dep| self.tasks.get(dep).is_some_and(|task| task.status == "completed"));
+                let ready = deps.iter().all(|dep| {
+                    self.tasks
+                        .get(dep)
+                        .is_some_and(|task| task.status == "completed")
+                });
                 if let Some(task) = self.tasks.get_mut(&task_id) {
                     task.status = if ready { "ready" } else { "pending" }.to_owned();
                     task.updated_at = now;
@@ -764,7 +852,11 @@ impl OrchestrationStore {
 // --- persistence ------------------------------------------------------------
 
 fn string_at(value: &serde_json::Value, key: &str) -> String {
-    value.get(key).and_then(|v| v.as_str()).unwrap_or("").to_owned()
+    value
+        .get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_owned()
 }
 
 fn opt_string(value: &serde_json::Value, key: &str) -> Option<String> {
@@ -776,7 +868,10 @@ fn opt_string(value: &serde_json::Value, key: &str) -> Option<String> {
 }
 
 fn int_at(value: &serde_json::Value, key: &str) -> i64 {
-    value.get(key).and_then(serde_json::Value::as_i64).unwrap_or(0)
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0)
 }
 
 fn opt_int(value: &serde_json::Value, key: &str) -> Option<i64> {
@@ -1002,7 +1097,10 @@ mod serialize {
             pairs.push(("settledAt", Value::from(settled_at)));
         }
         if !dispatch.files_modified.is_empty() {
-            pairs.push(("filesModified", Value::from(dispatch.files_modified.clone())));
+            pairs.push((
+                "filesModified",
+                Value::from(dispatch.files_modified.clone()),
+            ));
         }
         object(pairs)
     }

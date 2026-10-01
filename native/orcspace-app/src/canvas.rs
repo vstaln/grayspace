@@ -11,7 +11,7 @@
 //! and translated to screen, so a canvas saved by either implementation opens
 //! in the same place at the same zoom.
 
-use crate::projection::{CanvasState, Camera, Widget};
+use crate::projection::{Camera, CanvasState, Widget};
 use crate::theme::{geometry, hairline, monochrome, status, text};
 use egui::{Align2, Color32, CornerRadius, FontId, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
@@ -89,8 +89,13 @@ pub struct CanvasFrame<'a> {
 ///
 /// Returns how many widgets were painted, which the caller shows and the tests
 /// assert on.
-pub fn draw(ui: &mut egui::Ui, frame: &CanvasFrame<'_>, view: &View) -> usize {
-    let viewport = ui.available_rect_before_wrap();
+pub fn draw(
+    ui: &mut egui::Ui,
+    viewport: Rect,
+    frame: &CanvasFrame<'_>,
+    view: &View,
+    mut content: impl FnMut(&mut egui::Ui, &egui::Painter, &Widget, Rect, f32),
+) -> usize {
     let painter = ui.painter_at(viewport);
 
     painter.rect_filled(viewport, 0.0, monochrome::BASE);
@@ -109,6 +114,16 @@ pub fn draw(ui: &mut egui::Ui, frame: &CanvasFrame<'_>, view: &View) -> usize {
         }
         let active = frame.active_widget == Some(widget.id.as_str());
         draw_widget(&painter, widget, rect, view.zoom, active);
+        let body = Rect::from_min_max(
+            Pos2::new(
+                rect.left() + 1.0,
+                rect.top() + geometry::HEADER_HEIGHT * view.zoom,
+            ),
+            rect.max - Vec2::splat(1.0),
+        );
+        if body.is_positive() && body.intersects(viewport) {
+            content(ui, &painter, widget, body, view.zoom);
+        }
         painted += 1;
     }
 
@@ -131,7 +146,10 @@ fn draw_grid(painter: &egui::Painter, viewport: Rect, view: &View) {
     let mut x = viewport.left() + (first.x - viewport.left()).rem_euclid(pitch);
     while x < viewport.right() {
         painter.line_segment(
-            [Pos2::new(x, viewport.top()), Pos2::new(x, viewport.bottom())],
+            [
+                Pos2::new(x, viewport.top()),
+                Pos2::new(x, viewport.bottom()),
+            ],
             stroke,
         );
         x += pitch;
@@ -139,7 +157,10 @@ fn draw_grid(painter: &egui::Painter, viewport: Rect, view: &View) {
     let mut y = viewport.top() + (first.y - viewport.top()).rem_euclid(pitch);
     while y < viewport.bottom() {
         painter.line_segment(
-            [Pos2::new(viewport.left(), y), Pos2::new(viewport.right(), y)],
+            [
+                Pos2::new(viewport.left(), y),
+                Pos2::new(viewport.right(), y),
+            ],
             stroke,
         );
         y += pitch;
@@ -148,30 +169,22 @@ fn draw_grid(painter: &egui::Painter, viewport: Rect, view: &View) {
 
 /// One widget, with the chrome `WidgetFrame.tsx` builds.
 fn draw_widget(painter: &egui::Painter, widget: &Widget, rect: Rect, zoom: f32, active: bool) {
-    let radius = CornerRadius::same((geometry::WIDGET_RADIUS * zoom).round().clamp(0.0, 255.0) as u8);
+    let radius = CornerRadius::ZERO;
     let is_terminal = widget.kind.as_deref().unwrap_or("terminal") == "terminal";
 
     // A terminal's body is the canvas black, not the widget surface: its
     // content provides the contrast, and a lighter body would wash out the
     // output sitting on it.
-    let body = if is_terminal { monochrome::BASE } else { monochrome::SURFACE };
+    let body = if is_terminal {
+        monochrome::BASE
+    } else {
+        monochrome::SURFACE
+    };
     painter.rect_filled(rect, radius, body);
 
     let header_height = (geometry::HEADER_HEIGHT * zoom).min(rect.height());
     let header = Rect::from_min_size(rect.min, Vec2::new(rect.width(), header_height));
     painter.rect_filled(header, radius, monochrome::SURFACE);
-    // Square off the header's bottom corners so it meets the body flush; a
-    // rounded rect alone would leave two notches where they join.
-    if header.height() > geometry::WIDGET_RADIUS * zoom {
-        painter.rect_filled(
-            Rect::from_min_max(
-                Pos2::new(header.left(), header.bottom() - geometry::WIDGET_RADIUS * zoom),
-                header.max,
-            ),
-            0.0,
-            monochrome::SURFACE,
-        );
-    }
     painter.line_segment(
         [
             Pos2::new(header.left(), header.bottom()),
@@ -196,7 +209,11 @@ fn draw_widget(painter: &egui::Painter, widget: &Widget, rect: Rect, zoom: f32, 
         radius,
         Stroke::new(
             geometry::HAIRLINE,
-            if active { hairline::ACTIVE } else { hairline::SOFT },
+            if active {
+                hairline::ACTIVE
+            } else {
+                hairline::SOFT
+            },
         ),
         StrokeKind::Inside,
     );
@@ -218,7 +235,11 @@ fn draw_widget(painter: &egui::Painter, widget: &Widget, rect: Rect, zoom: f32, 
 fn elide(title: &str, width: f32, font_size: f32) -> String {
     let usable = (width - 20.0).max(0.0);
     let per_char = font_size * 0.55;
-    let fits = if per_char > 0.0 { (usable / per_char) as usize } else { 0 };
+    let fits = if per_char > 0.0 {
+        (usable / per_char) as usize
+    } else {
+        0
+    };
     if title.chars().count() <= fits {
         return title.to_owned();
     }
@@ -259,14 +280,88 @@ pub fn handle_pan_zoom(camera: &mut Camera, response: &egui::Response, zoom_delt
         camera.x += response.drag_delta().x as f64;
         camera.y += response.drag_delta().y as f64;
     }
-    if zoom_delta != 1.0 {
-        camera.zoom = ((camera.zoom as f32 * zoom_delta).clamp(MIN_ZOOM, MAX_ZOOM)) as f64;
+    if response.hovered() && zoom_delta != 1.0 {
+        if let Some(pointer) = response.hover_pos() {
+            zoom_at(camera, response.rect.min, pointer, zoom_delta);
+        }
     }
+}
+
+pub fn widget_at<'a>(state: &'a CanvasState, view: &View, pointer: Pos2) -> Option<&'a Widget> {
+    state
+        .widgets
+        .values()
+        .filter(|widget| view.widget_rect(widget).contains(pointer))
+        .max_by(|a, b| a.z.total_cmp(&b.z))
+}
+
+#[derive(Debug, PartialEq)]
+pub enum DragTarget {
+    Pan,
+    Widget(String),
+    Content,
+}
+
+pub fn drag_target(state: &CanvasState, view: &View, pointer: Pos2) -> DragTarget {
+    match widget_at(state, view, pointer) {
+        None => DragTarget::Pan,
+        Some(widget) => {
+            let rect = view.widget_rect(widget);
+            if !widget.maximized && pointer.y < rect.top() + geometry::HEADER_HEIGHT * view.zoom {
+                DragTarget::Widget(widget.id.clone())
+            } else {
+                DragTarget::Content
+            }
+        }
+    }
+}
+
+pub fn zoom_at(camera: &mut Camera, origin: Pos2, pointer: Pos2, factor: f32) {
+    if !factor.is_finite() || factor <= 0.0 {
+        return;
+    }
+    let old = View::new(camera, origin);
+    let world = old.to_world(pointer);
+    let zoom = (old.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+    camera.zoom = zoom as f64;
+    camera.x = (pointer.x - origin.x - world.x * zoom) as f64;
+    camera.y = (pointer.y - origin.y - world.y * zoom) as f64;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pointer_anchored_zoom_preserves_world_position_at_both_limits() {
+        let origin = Pos2::new(56.0, 40.0);
+        let pointer = Pos2::new(713.0, 492.0);
+        let mut camera = Camera {
+            x: -321.0,
+            y: 87.0,
+            zoom: 1.3,
+        };
+        let world = View::new(&camera, origin).to_world(pointer);
+        for factor in [1.2, 100.0, 0.0001, 2.0] {
+            zoom_at(&mut camera, origin, pointer, factor);
+            let actual = View::new(&camera, origin).to_screen(world);
+            assert!((actual - pointer).length() < 0.001);
+            assert!((MIN_ZOOM as f64..=MAX_ZOOM as f64).contains(&camera.zoom));
+        }
+    }
+
+    #[test]
+    fn invalid_zoom_gestures_do_not_corrupt_saved_camera() {
+        let mut camera = Camera {
+            x: 12.0,
+            y: 34.0,
+            zoom: 1.0,
+        };
+        for factor in [f32::NAN, f32::INFINITY, 0.0, -1.0] {
+            zoom_at(&mut camera, Pos2::ZERO, Pos2::ZERO, factor);
+            assert_eq!((camera.x, camera.y, camera.zoom), (12.0, 34.0, 1.0));
+        }
+    }
 
     fn view(zoom: f64, x: f64, y: f64) -> View {
         View::new(&Camera { x, y, zoom }, Pos2::ZERO)
@@ -299,7 +394,11 @@ mod tests {
 
     #[test]
     fn panning_moves_the_camera_and_zooming_stays_in_range() {
-        let mut camera = Camera { x: 0.0, y: 0.0, zoom: 1.0 };
+        let mut camera = Camera {
+            x: 0.0,
+            y: 0.0,
+            zoom: 1.0,
+        };
         for _ in 0..100 {
             camera.zoom = (camera.zoom * 2.0).min(MAX_ZOOM as f64);
         }
@@ -321,7 +420,15 @@ mod tests {
 
     #[test]
     fn a_widget_rect_scales_with_the_zoom() {
-        let widget = Widget {
+        let widget = test_widget();
+        let rect = view(2.0, 0.0, 0.0).widget_rect(&widget);
+        assert_eq!(rect.width(), 1240.0);
+        assert_eq!(rect.height(), 760.0);
+        assert_eq!(rect.min, Pos2::new(200.0, 100.0));
+    }
+
+    fn test_widget() -> Widget {
+        Widget {
             id: "w1".into(),
             title: "Terminal".into(),
             kind: Some("terminal".into()),
@@ -335,11 +442,46 @@ mod tests {
             image_name: None,
             version: 1.0,
             updated_at: 0.0,
-        };
-        let rect = view(2.0, 0.0, 0.0).widget_rect(&widget);
-        assert_eq!(rect.width(), 1240.0);
-        assert_eq!(rect.height(), 760.0);
-        assert_eq!(rect.min, Pos2::new(200.0, 100.0));
+        }
+    }
+
+    #[test]
+    fn drag_distinguishes_header_content_and_background_at_every_zoom() {
+        let mut state = CanvasState::default();
+        let widget = test_widget();
+        state.widgets.insert(widget.id.clone(), widget);
+        for zoom in [0.2, 1.0, 4.0] {
+            let view = view(zoom, 57.0, -123.0);
+            assert_eq!(
+                drag_target(&state, &view, view.to_screen(Pos2::new(110.0, 60.0))),
+                DragTarget::Widget("w1".into())
+            );
+            assert_eq!(
+                drag_target(&state, &view, view.to_screen(Pos2::new(110.0, 150.0))),
+                DragTarget::Content
+            );
+            assert_eq!(
+                drag_target(&state, &view, view.to_screen(Pos2::ZERO)),
+                DragTarget::Pan
+            );
+        }
+    }
+
+    #[test]
+    fn picking_respects_z_order_and_last_painted_ties() {
+        let mut state = CanvasState::default();
+        let first = test_widget();
+        let mut second = first.clone();
+        second.id = "w2".into();
+        state.widgets.insert(first.id.clone(), first);
+        state.widgets.insert(second.id.clone(), second);
+        let view = view(1.0, 0.0, 0.0);
+        let pointer = Pos2::new(110.0, 60.0);
+        assert_eq!(widget_at(&state, &view, pointer).unwrap().id, "w2");
+        state.widgets.get_mut("w1").unwrap().z = 3.0;
+        assert_eq!(widget_at(&state, &view, pointer).unwrap().id, "w1");
+        state.widgets.get_mut("w1").unwrap().maximized = true;
+        assert_eq!(drag_target(&state, &view, pointer), DragTarget::Content);
     }
 
     #[test]

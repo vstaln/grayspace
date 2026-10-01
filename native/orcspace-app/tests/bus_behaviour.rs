@@ -64,7 +64,10 @@ fn an_accepted_command_writes_intent_then_commit() {
     let accepted = outcome.result.expect("the command should be accepted");
 
     assert_eq!(accepted.data, json!({ "applied": true }));
-    assert_eq!(accepted.version, 1, "accepting a write advances the version");
+    assert_eq!(
+        accepted.version, 1,
+        "accepting a write advances the version"
+    );
     assert_eq!(phases(&flow), vec!["intent", "commit"]);
     assert_eq!(flow.journal.entries[1].version, Some(1));
     assert_eq!(accepted.seq, flow.journal.entries[1].seq);
@@ -85,7 +88,10 @@ fn an_unregistered_actor_is_refused() {
     let mut flow = flow();
     flow.register(CommandDefinition::new("widget.update", ok_handler()));
 
-    let outcome = flow.submit(command("mallory", "widget.update", "widget:w1", json!({})), NOW);
+    let outcome = flow.submit(
+        command("mallory", "widget.update", "widget:w1", json!({})),
+        NOW,
+    );
     let error = outcome.result.expect_err("an unknown actor is refused");
 
     assert_eq!(error.code, ErrorCode::UnknownActor);
@@ -122,7 +128,10 @@ fn an_invalid_payload_reports_the_schema_message() {
 fn a_malformed_target_is_refused() {
     let mut flow = flow();
     flow.register(CommandDefinition::new("widget.update", ok_handler()));
-    let outcome = flow.submit(command("alice", "widget.update", "not-a-target", json!({})), NOW);
+    let outcome = flow.submit(
+        command("alice", "widget.update", "not-a-target", json!({})),
+        NOW,
+    );
     assert_eq!(outcome.result.unwrap_err().code, ErrorCode::Invalid);
 }
 
@@ -143,11 +152,19 @@ fn a_resource_locked_by_another_actor_is_refused() {
         )
         .unwrap();
 
-    let outcome = flow.submit(command("alice", "widget.update", "widget:w1", json!({})), NOW);
-    let error = outcome.result.expect_err("alice cannot write what bob holds");
+    let outcome = flow.submit(
+        command("alice", "widget.update", "widget:w1", json!({})),
+        NOW,
+    );
+    let error = outcome
+        .result
+        .expect_err("alice cannot write what bob holds");
 
     assert_eq!(error.code, ErrorCode::Locked);
-    assert!(flow.journal.entries.is_empty(), "the gate fires before the intent");
+    assert!(
+        flow.journal.entries.is_empty(),
+        "the gate fires before the intent"
+    );
 }
 
 #[test]
@@ -155,13 +172,19 @@ fn a_stale_base_version_is_a_conflict() {
     let mut flow = flow();
     flow.register(CommandDefinition::new("widget.update", ok_handler()));
 
-    flow.submit(command("alice", "widget.update", "widget:w1", json!({})), NOW)
-        .result
-        .expect("first write lands");
+    flow.submit(
+        command("alice", "widget.update", "widget:w1", json!({})),
+        NOW,
+    )
+    .result
+    .expect("first write lands");
 
     let mut stale = command("alice", "widget.update", "widget:w1", json!({}));
     stale.base_version = Some(0);
-    let error = flow.submit(stale, NOW).result.expect_err("a stale writer is refused");
+    let error = flow
+        .submit(stale, NOW)
+        .result
+        .expect_err("a stale writer is refused");
 
     assert_eq!(error.code, ErrorCode::Conflict);
     assert_eq!(error.details.unwrap()["actual"], json!(1));
@@ -174,9 +197,12 @@ fn a_stale_base_version_is_a_conflict() {
 fn the_lock_gate_wins_over_the_version_gate() {
     let mut flow = flow();
     flow.register(CommandDefinition::new("widget.update", ok_handler()));
-    flow.submit(command("alice", "widget.update", "widget:w1", json!({})), NOW)
-        .result
-        .unwrap();
+    flow.submit(
+        command("alice", "widget.update", "widget:w1", json!({})),
+        NOW,
+    )
+    .result
+    .unwrap();
     flow.locks
         .acquire(
             AcquireInput {
@@ -209,7 +235,10 @@ fn a_failing_handler_aborts_the_intent_instead_of_leaving_it_dangling() {
         }),
     ));
 
-    let outcome = flow.submit(command("alice", "widget.update", "widget:w1", json!({})), NOW);
+    let outcome = flow.submit(
+        command("alice", "widget.update", "widget:w1", json!({})),
+        NOW,
+    );
     assert_eq!(outcome.result.unwrap_err().code, ErrorCode::Failed);
 
     assert_eq!(phases(&flow), vec!["intent", "abort"]);
@@ -228,7 +257,10 @@ fn the_implicit_lock_is_released_after_success_and_after_failure() {
     flow.register(CommandDefinition::new(
         "widget.fail",
         Box::new(|_| {
-            Err(orcspace_app::command::CommandError::new(ErrorCode::Failed, "nope"))
+            Err(orcspace_app::command::CommandError::new(
+                ErrorCode::Failed,
+                "nope",
+            ))
         }),
     ));
 
@@ -257,7 +289,10 @@ fn a_transient_command_leaves_no_journal_entries() {
         .result
         .expect("transient commands still answer");
 
-    assert!(flow.journal.entries.is_empty(), "a poll must not swamp the log");
+    assert!(
+        flow.journal.entries.is_empty(),
+        "a poll must not swamp the log"
+    );
     assert_eq!(accepted.seq, 0, "it reports the journal's current head");
 }
 
@@ -317,7 +352,12 @@ fn file_targets_are_normalised_before_the_lock_is_taken() {
         .unwrap();
 
     let outcome = flow.submit(
-        command("alice", "file.write", "file:C:\\Users\\User\\Notes.txt", json!({})),
+        command(
+            "alice",
+            "file.write",
+            "file:C:\\Users\\User\\Notes.txt",
+            json!({}),
+        ),
         NOW,
     );
     assert_eq!(
@@ -409,7 +449,10 @@ fn a_command_without_an_id_is_given_one() {
     let mut flow = flow();
     flow.register(CommandDefinition::new("widget.update", ok_handler()));
     let accepted = flow
-        .submit_command(command("alice", "widget.update", "widget:w1", json!({})), NOW)
+        .submit_command(
+            command("alice", "widget.update", "widget:w1", json!({})),
+            NOW,
+        )
         .result
         .unwrap();
     let id = accepted.command_id.expect("an id is minted");

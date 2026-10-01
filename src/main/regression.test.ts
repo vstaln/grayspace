@@ -78,16 +78,34 @@ describe('Regression — end-to-end invariants', () => {
     assert.equal(core.locks.isLockedByOther('widget:x', 'user'), false)
   })
 
-  test('widget kinds invariant: orchestration accepted, removed and unknown rejected', () => {
+  test('widget kinds invariant: current kinds survive and removed or unknown kinds are rejected', () => {
     const ok = sanitizeWidget({ id: 'w1', title: 't', x: 0, y: 0, w: 100, h: 100, z: 1, kind: 'orchestration' })
     assert.ok(ok, 'orchestration widget must be accepted')
     assert.equal(ok?.kind, 'orchestration')
     const chat = sanitizeWidget({ id: 'w-chat', title: 'AI Chat', x: 0, y: 0, w: 100, h: 100, z: 1, kind: 'chat' })
     assert.equal(chat?.kind, 'chat')
+    for (const kind of ['notes', 'calendar', 'kanban'] as const) {
+      const widget = sanitizeWidget({ id: `w-${kind}`, title: kind, x: 0, y: 0, w: 100, h: 100, z: 1, kind })
+      assert.equal(widget?.kind, kind, `${kind} widget must survive canvas persistence`)
+    }
     const removedNote = sanitizeWidget({ id: 'w2', title: 't', x: 0, y: 0, w: 100, h: 100, z: 1, kind: 'note' })
     assert.equal(removedNote, null, 'removed note widget must be rejected')
     const bad = sanitizeWidget({ id: 'w3', title: 't', x: 0, y: 0, w: 100, h: 100, z: 1, kind: 'invalid_kind' as never })
     assert.equal(bad, null, 'unknown kind should be rejected')
+  })
+
+  test('notes, calendar and kanban widgets survive a persisted canvas reload', () => {
+    const kinds = ['notes', 'calendar', 'kanban'] as const
+    const first = new CanvasStore()
+    for (const kind of kinds) {
+      first.putWidget({ id: `persist-${kind}`, title: kind, kind, x: 0, y: 0, w: 100, h: 100, z: 1 })
+    }
+    first.dispose()
+
+    const restored = new CanvasStore()
+    const widgets = restored.listWidgets().filter((widget) => widget.id.startsWith('persist-'))
+    assert.deepEqual(widgets.map((widget) => widget.kind), kinds)
+    restored.dispose()
   })
 
   test('strokes capped at 200k points', () => {

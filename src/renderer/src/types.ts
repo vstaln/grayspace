@@ -3,7 +3,7 @@
 
 
 
-export type WidgetKind = 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'image' | 'links' | 'music-player' | 'orchestration' | 'chat'
+export type WidgetKind = 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'image' | 'links' | 'music-player' | 'orchestration' | 'chat' | 'notes' | 'calendar' | 'kanban'
 
 export interface Widget {
   id: string
@@ -108,6 +108,9 @@ export const WIDGET_DEFAULTS: Record<WidgetKind, { title: string; w: number; h: 
   'music-player': { title: 'Music Player', w: 460, h: 420 },
   orchestration: { title: 'Orchestration', w: 520, h: 560 },
   chat: { title: 'AI Chat', w: 560, h: 560 },
+  notes: { title: 'Notes', w: 520, h: 540 },
+  calendar: { title: 'Calendar', w: 560, h: 520 },
+  kanban: { title: 'Kanban', w: 760, h: 520 },
 }
 
 

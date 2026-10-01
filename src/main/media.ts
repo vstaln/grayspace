@@ -1,5 +1,5 @@
 import * as electron from 'electron'
-import { createHash } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 
 const clipboard = (electron as unknown as { clipboard?: typeof electron.clipboard }).clipboard
 const nativeImage = (electron as unknown as { nativeImage?: typeof electron.nativeImage }).nativeImage
@@ -125,22 +125,55 @@ export function saveBytes(bytes: Buffer, ext: string): MediaFile {
   if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('File exceeds 256 MB limit')
   const clean = ext.replace(/^\./, '').toLowerCase()
   const safeExt = /^[a-z0-9_-]{1,16}$/i.test(clean) ? clean : 'bin'
-  const digest = createHash('sha1').update(bytes).digest('hex').slice(0, 16)
+  const digest = createHash('sha256').update(bytes).digest('hex')
   const dir = mediaDir()
   fs.mkdirSync(dir, { recursive: true })
   const name = `${digest}.${safeExt}`
   const path = join(dir, name)
 
-  if (!fs.existsSync(path)) fs.writeFileSync(path, bytes)
+  writeBytesIfMissing(path, bytes)
   return { name, path }
 }
 
 
 export function importFile(source: string): MediaFile {
   if (!isLocalPath(source)) throw new Error('UNC and remote paths are not allowed')
+  const stat = fs.statSync(source)
+  if (!stat.isFile()) throw new Error('File must be a regular file')
+  if (stat.size > MAX_MEDIA_BYTES) throw new Error('File exceeds 256 MB limit')
   const bytes = fs.readFileSync(source)
   if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('File exceeds 256 MB limit')
   return saveBytes(bytes, extname(source))
+}
+
+/** Publish content-addressed media as a complete file, including under concurrent pastes. */
+function writeBytesIfMissing(path: string, bytes: Buffer): void {
+  if (fs.existsSync(path)) return
+  const directory = dirname(path)
+  const temporary = join(directory, `.${Date.now()}-${process.pid}-${randomBytes(8).toString('hex')}.tmp`)
+  let descriptor: number | undefined
+  try {
+    descriptor = fs.openSync(temporary, 'wx', 0o600)
+    fs.writeFileSync(descriptor, bytes)
+    fs.fsyncSync(descriptor)
+    fs.closeSync(descriptor)
+    descriptor = undefined
+    try {
+      fs.renameSync(temporary, path)
+    } catch (error) {
+      if (fs.existsSync(path)) {
+        fs.rmSync(temporary, { force: true })
+        return
+      }
+      throw error
+    }
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor) } catch { }
+    }
+    try { fs.rmSync(temporary, { force: true }) } catch { }
+    throw error
+  }
 }
 
 
@@ -229,7 +262,7 @@ export function saveBytesToScratch(bytes: Buffer, ext: string): MediaFile {
   const dir = scratchDir()
   fs.mkdirSync(dir, { recursive: true })
   pruneScratch(dir)
-  const digest = createHash('sha1').update(bytes).digest('hex').slice(0, 16)
+  const digest = createHash('sha256').update(bytes).digest('hex')
   const name = `${digest}.${safeExt}`
   const path = join(dir, name)
   if (fs.existsSync(path)) {
@@ -246,7 +279,7 @@ export function saveBytesToScratch(bytes: Buffer, ext: string): MediaFile {
 
     }
   } else {
-    fs.writeFileSync(path, bytes)
+    writeBytesIfMissing(path, bytes)
   }
   return { name, path }
 }

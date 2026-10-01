@@ -32,23 +32,71 @@ fn load() -> Fixture {
 
 fn check(actual: &PlanItem, expected: &Value) {
     let at = &actual.id;
-    assert_eq!(actual.title, expected["title"].as_str().unwrap(), "{at}: title");
-    assert_eq!(actual.note, expected["note"].as_str().unwrap_or(""), "{at}: note");
-    assert_eq!(actual.project.as_deref(), expected["project"].as_str(), "{at}: project");
+    assert_eq!(
+        actual.title,
+        expected["title"].as_str().unwrap(),
+        "{at}: title"
+    );
+    assert_eq!(
+        actual.note,
+        expected["note"].as_str().unwrap_or(""),
+        "{at}: note"
+    );
+    assert_eq!(
+        actual.project.as_deref(),
+        expected["project"].as_str(),
+        "{at}: project"
+    );
     assert_eq!(actual.day.as_deref(), expected["day"].as_str(), "{at}: day");
-    assert_eq!(actual.time.as_deref(), expected["time"].as_str(), "{at}: time");
-    assert_eq!(actual.done, expected["done"] == Value::Bool(true), "{at}: done");
-    assert_eq!(actual.created_by, expected["createdBy"].as_str().unwrap(), "{at}: createdBy");
-    assert_eq!(actual.order, expected["order"].as_f64().unwrap(), "{at}: order");
-    assert_eq!(actual.created_at, expected["createdAt"].as_f64().unwrap(), "{at}: createdAt");
-    assert_eq!(actual.updated_at, expected["updatedAt"].as_f64().unwrap(), "{at}: updatedAt");
-    assert_eq!(actual.version, expected["version"].as_f64().unwrap(), "{at}: version");
+    assert_eq!(
+        actual.time.as_deref(),
+        expected["time"].as_str(),
+        "{at}: time"
+    );
+    assert_eq!(
+        actual.done,
+        expected["done"] == Value::Bool(true),
+        "{at}: done"
+    );
+    assert_eq!(
+        actual.created_by,
+        expected["createdBy"].as_str().unwrap(),
+        "{at}: createdBy"
+    );
+    assert_eq!(
+        actual.order,
+        expected["order"].as_f64().unwrap(),
+        "{at}: order"
+    );
+    assert_eq!(
+        actual.created_at,
+        expected["createdAt"].as_f64().unwrap(),
+        "{at}: createdAt"
+    );
+    assert_eq!(
+        actual.updated_at,
+        expected["updatedAt"].as_f64().unwrap(),
+        "{at}: updatedAt"
+    );
+    assert_eq!(
+        actual.version,
+        expected["version"].as_f64().unwrap(),
+        "{at}: version"
+    );
 
     let expected_attachments = expected
         .get("attachments")
         .and_then(Value::as_array)
-        .map(|items| items.iter().map(|v| v.as_str().unwrap().to_owned()).collect::<Vec<_>>());
-    assert_eq!(actual.attachments, expected_attachments, "{at}: attachments");
+        .map(|items| {
+            items
+                .iter()
+                .map(|v| v.as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        });
+    assert_eq!(
+        actual.attachments, expected_attachments,
+        "{at}: attachments"
+    );
 }
 
 #[test]
@@ -79,7 +127,10 @@ fn create_coerces_order_while_update_does_not() {
     let fixture = load();
     let state = fold(fixture.entries.iter(), PlannerState::new(), &fixture.today).unwrap();
     let created = state.get("p10").expect("p10 was created with order \"5\"");
-    assert_eq!(created.order, 5.0, "plan.create must coerce a numeric string");
+    assert_eq!(
+        created.order, 5.0,
+        "plan.create must coerce a numeric string"
+    );
 }
 
 #[test]
@@ -87,9 +138,17 @@ fn folding_is_deterministic_and_splits_cleanly() {
     let fixture = load();
     let whole = fold(fixture.entries.iter(), PlannerState::new(), &fixture.today).unwrap();
     let split = fixture.entries.len() / 2;
-    let head = fold(fixture.entries[..split].iter(), PlannerState::new(), &fixture.today).unwrap();
+    let head = fold(
+        fixture.entries[..split].iter(),
+        PlannerState::new(),
+        &fixture.today,
+    )
+    .unwrap();
     let tail = fold(fixture.entries[split..].iter(), head, &fixture.today).unwrap();
-    assert_eq!(whole, tail, "a snapshot plus its tail must equal the whole run");
+    assert_eq!(
+        whole, tail,
+        "a snapshot plus its tail must equal the whole run"
+    );
 }
 
 /// `plan.update` uses the throwing day validator, so a malformed day stops the

@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import net from 'node:net'
+import { spawnSync } from 'node:child_process'
 import { _electron as electron } from 'playwright'
 import { expect } from '@playwright/test'
 import type { ElectronApplication, Page } from 'playwright'
@@ -27,6 +28,7 @@ export type ViewportSize = { width: number; height: number }
 export interface LaunchOptions {
   profileDir?: string
   viewport?: ViewportSize
+  gpu?: boolean
 }
 
 
@@ -78,7 +80,7 @@ export async function launchOrcSpace(options?: LaunchOptions): Promise<OrcSpaceF
   const mcpPort = controlPort
 
   const app = await electron.launch({
-    args: [mainJs, `--user-data-dir=${profileDir}`, '--disable-gpu'],
+    args: [mainJs, `--user-data-dir=${profileDir}`, ...(options?.gpu ? [] : ['--disable-gpu'])],
     env: {
       ...process.env,
       ORCSPACE_TEST_USER_DATA: profileDir,
@@ -237,6 +239,16 @@ export async function closeOrcSpace(
   options?: { keepProfile?: boolean }
 ): Promise<void> {
   if (!fixture) return
+  const child = fixture.app.process()
   await fixture.app.close().catch(() => {})
-  if (!options?.keepProfile) fs.rmSync(fixture.profileDir, { recursive: true, force: true })
+  if (process.platform === 'win32' && child.pid) {
+    spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+  }
+  if (!options?.keepProfile) {
+    try {
+      fs.rmSync(fixture.profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 })
+    } catch (error) {
+      console.warn(`could not remove e2e profile ${fixture.profileDir}: ${String(error)}`)
+    }
+  }
 }

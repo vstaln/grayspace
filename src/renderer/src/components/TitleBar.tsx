@@ -17,7 +17,7 @@ import { IS_MAC } from '../lib/platform'
 import type { ArrangeMode } from '../lib/canvasLayout'
 import type { CodeLayoutMode } from '../lib/codeLayout'
 
-export type WorkView = 'canvas' | 'code'
+export type WorkView = 'canvas' | 'code' | 'overview'
 
 
 
@@ -460,6 +460,16 @@ export default React.memo(function TitleBar({
           >
             <span>Code</span>
           </button>
+          <button
+            type="button"
+            role="tab"
+            onClick={() => onViewChange('overview')}
+            aria-selected={activeView === 'overview'}
+            className={`${VIEW_TAB} title-bar-view-tab ${activeView === 'overview' ? VIEW_TAB_ACTIVE : VIEW_TAB_INACTIVE}`}
+            title="Overview"
+          >
+            <span>Overview</span>
+          </button>
           </div>
         </div>
       </div>
@@ -468,6 +478,7 @@ export default React.memo(function TitleBar({
       <div className="flex h-10 min-w-0 items-center justify-end" style={noDrag}>
         <div className="h-full flex-1" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties} />
         <div ref={rightIslandRef} className={`${ISLAND} relative gap-0`}>
+          {activeView !== 'overview' && (
           <div className={`${VIEW_SWITCH} mr-1`}>
             <button
               type="button"
@@ -481,6 +492,8 @@ export default React.memo(function TitleBar({
               <span>{terminalsFlipped ? 'Show terminals' : 'Flip terminals'}</span>
             </button>
           </div>
+          )}
+          {activeView !== 'overview' && (
           <div className="relative mr-1">
             <div className={VIEW_SWITCH}>
               <button
@@ -531,6 +544,7 @@ export default React.memo(function TitleBar({
               </div>
             )}
           </div>
+          )}
           {}
           <div className={`${VIEW_SWITCH} title-bar-git-switch`}>
           <button

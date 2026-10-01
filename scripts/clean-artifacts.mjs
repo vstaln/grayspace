@@ -18,6 +18,18 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 // path: repo-relative. why: what it is. rebuild: exact command that brings it
 // back, or null when the artifact is genuinely gone for good.
 const GROUPS = {
+  'generated-build-output': {
+    title: 'Generated build output and dependency caches',
+    entries: [
+      { path: 'dist', why: 'Electron installers and unpacked release output', rebuild: 'npm run dist or npm run dist:linux' },
+      { path: 'out', why: 'electron-vite output', rebuild: 'npm run build' },
+      { path: 'node_modules', why: 'installed npm dependencies', rebuild: 'npm ci' },
+      { path: 'native/target', why: 'Cargo build cache and binaries', rebuild: 'npm run build:native' },
+      { path: 'native/canvas-core/target', why: 'napi Cargo build cache', rebuild: 'npm run build:native' },
+      { path: 'native/storage-core/target', why: 'napi Cargo build cache', rebuild: 'npm run build:native' },
+      { path: 'test-results', why: 'Playwright test output', rebuild: 'npm run test:e2e' }
+    ]
+  },
   'rust-cache': {
     title: 'Rust build caches',
     entries: [

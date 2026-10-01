@@ -73,8 +73,9 @@ const nativeStorageCore = ((): NativeStorageCore | null => {
 
 
 
-export async function writeJsonAtomicAsync(file: string, data: unknown): Promise<void> {
+export async function writeJsonAtomicAsync(file: string, data: unknown, isCurrent?: () => boolean): Promise<void> {
   const text = JSON.stringify(data, null, 2)
+  if (isCurrent) return writeAtomicAsync(file, text, true, isCurrent)
   const writeText = nativeStorageCore?.writeTextAtomic
   if (typeof writeText === 'function') {
     try {
@@ -87,7 +88,7 @@ export async function writeJsonAtomicAsync(file: string, data: unknown): Promise
   await writeAtomicAsync(file, text, true)
 }
 
-async function writeAtomicAsync(file: string, text: string, keepBackup: boolean): Promise<void> {
+async function writeAtomicAsync(file: string, text: string, keepBackup: boolean, isCurrent?: () => boolean): Promise<void> {
   const dir = dirname(file)
   await fsp.mkdir(dir, { recursive: true })
   const temp = join(dir, `.${Date.now()}-${process.pid}-${randomBytes(8).toString('hex')}.tmp`)
@@ -101,6 +102,17 @@ async function writeAtomicAsync(file: string, text: string, keepBackup: boolean)
     await handle.writeFile(text, 'utf8')
     await handle.sync()
     await handle.close()
+    if (isCurrent) {
+      // Publication and its generation check must share one JS turn. A
+      // queued rename could otherwise overwrite a newer synchronous save.
+      if (!isCurrent()) {
+        await fsp.unlink(temp)
+        return
+      }
+      if (keepBackup && fs.existsSync(file)) fs.copyFileSync(file, backupPath(file))
+      fs.renameSync(temp, file)
+      return
+    }
     if (keepBackup) {
       try {
         await fsp.copyFile(file, backupPath(file))
@@ -132,7 +144,8 @@ export function writeTextAtomic(file: string, text: string): void {
 
 
 
-export async function writeTextAtomicAsync(file: string, text: string): Promise<void> {
+export async function writeTextAtomicAsync(file: string, text: string, isCurrent?: () => boolean): Promise<void> {
+  if (isCurrent) return writeAtomicAsync(file, text, false, isCurrent)
   const writeText = nativeStorageCore?.writeTextAtomic
   if (typeof writeText === 'function') {
     try {
@@ -225,6 +238,20 @@ export function readJsonFile<T>(file: string): JsonRead<T> {
 
 
 export function sweepTempFiles(dir: string, maxAgeMs = 3_600_000): void {
+  sweepTempFilesWithOptions(dir, { maxAgeMs })
+}
+
+/**
+ * Quarantined store files (`<file>.corrupt-<ms>`, written by readStoreJson)
+ * are kept for forensics, not forever. They are swept once older than
+ * corruptMaxAgeMs (default 7 days), independently of the short temp-file age.
+ */
+export function sweepTempFilesWithOptions(
+  dir: string,
+  options: { maxAgeMs?: number; corruptMaxAgeMs?: number } = {}
+): void {
+  const maxAgeMs = options.maxAgeMs ?? 3_600_000
+  const corruptMaxAgeMs = options.corruptMaxAgeMs ?? 7 * 24 * 60 * 60 * 1000
   let names: string[]
   try {
     names = fs.readdirSync(dir)
@@ -233,6 +260,23 @@ export function sweepTempFiles(dir: string, maxAgeMs = 3_600_000): void {
   }
   const now = Date.now()
   for (const name of names) {
+    // Quarantined corrupt stores: <anything>.corrupt-<epochMs>. Swept on the
+    // long clock (days, not the 1h temp age) so recent corruption stays
+    // diagnosable while old forensics do not pile up.
+    if (name.includes('.corrupt-')) {
+      // Strict shape only — a blanket "corrupt" substring would let one
+      // stray user file become deletable by the app.
+      if (/\.corrupt-\d+$/.test(name)) {
+        try {
+          const full = join(dir, name)
+          const stat = fs.statSync(full)
+          if (now - stat.mtimeMs > corruptMaxAgeMs) fs.unlinkSync(full)
+        } catch {
+
+        }
+      }
+      continue
+    }
     // Only this app's own temp shapes. A blanket /\.tmp$/ would also delete
     // whatever else happens to live in the user-data directory.
     //   atomic writes (JS and Rust storage-core): .<ms|nanos>-<pid>-<hex|dec>.tmp

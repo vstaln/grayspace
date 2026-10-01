@@ -17,9 +17,7 @@
 //! while an acceptance carries `ok`, `version`, `seq` and `data`.
 
 use crate::command::{CommandError, ErrorCode};
-use crate::orchestration::{
-    OrchestrationStore, MESSAGE_TYPES, OUTCOMES, TASK_STATUSES,
-};
+use crate::orchestration::{OrchestrationStore, MESSAGE_TYPES, OUTCOMES, TASK_STATUSES};
 use indexmap::IndexMap;
 use serde_json::{json, Map, Value};
 
@@ -63,12 +61,15 @@ impl Request {
         self.path
             .split('/')
             .filter(|segment| !segment.is_empty())
-            .map(|segment| percent_decode(segment))
+            .map(percent_decode)
             .collect()
     }
 
     fn param(&self, key: &str) -> Option<&str> {
-        self.query.get(key).map(String::as_str).filter(|v| !v.is_empty())
+        self.query
+            .get(key)
+            .map(String::as_str)
+            .filter(|v| !v.is_empty())
     }
 
     fn flag(&self, key: &str) -> bool {
@@ -119,7 +120,10 @@ impl Response {
                 body.insert(key.clone(), value.clone());
             }
         }
-        Self { status: error.code.http_status(), body: Value::Object(body) }
+        Self {
+            status: error.code.http_status(),
+            body: Value::Object(body),
+        }
     }
 
     /// An acceptance, shaped as `reply()` shapes it.
@@ -224,7 +228,8 @@ fn orchestration_route(
                     return Some(invalid(format!("unknown task status \"{status}\"")));
                 }
             }
-            let tasks = store.list_tasks(run_id_param, request.param("status"), request.flag("ready"));
+            let tasks =
+                store.list_tasks(run_id_param, request.param("status"), request.flag("ready"));
             Some(Response::json(
                 200,
                 json!({ "tasks": tasks.iter().map(task_json).collect::<Vec<_>>() }),
@@ -236,8 +241,7 @@ fn orchestration_route(
         }),
 
         ("GET", Some("dispatches"), None, _) => {
-            let dispatches =
-                store.list_dispatches(run_id_param, request.param("taskId"), None);
+            let dispatches = store.list_dispatches(run_id_param, request.param("taskId"), None);
             let unaccounted: Vec<String> = store
                 .unaccounted_dispatches(run_id_param)
                 .iter()
@@ -298,7 +302,8 @@ fn orchestration_route(
                     return Some(invalid(format!("unknown message type \"{message_type}\"")));
                 }
             }
-            let messages = store.inbox(agent_id, if types.is_empty() { None } else { Some(&types) });
+            let messages =
+                store.inbox(agent_id, if types.is_empty() { None } else { Some(&types) });
             // `waited` is always false here: long-polling belongs to the
             // transport, not the router, and a caller that asked to wait gets
             // the immediate answer rather than a wrong claim that it blocked.
@@ -403,7 +408,9 @@ fn orchestration_route(
                     OUTCOMES.join(", ")
                 )));
             }
-            let files = request.field("filesModified").map(|_| request.strings("filesModified"));
+            let files = request
+                .field("filesModified")
+                .map(|_| request.strings("filesModified"));
             Some(match store.settle_dispatch(id, outcome, files, deps.now) {
                 Ok((dispatch, task, promoted)) => Response::accepted(
                     200,
@@ -430,29 +437,107 @@ fn orchestration_route(
         }
 
         ("POST", Some("messages"), None, _) => {
-            let run_id = match store.resolve_run_id(request.text("runId")) {
-                Ok(id) => id,
-                Err(error) => return Some(Response::from_error(&error)),
+            let message_type = request.text("type").unwrap_or("note");
+            if !MESSAGE_TYPES.contains(&message_type) {
+                return Some(invalid(format!(
+                    "type must be one of {}",
+                    MESSAGE_TYPES.join(", ")
+                )));
+            }
+            let dispatch_id = request
+                .text("dispatchId")
+                .map(str::trim)
+                .filter(|id| !id.is_empty());
+            let dispatch = match dispatch_id {
+                Some(id) => match store.require_dispatch(id) {
+                    Ok(dispatch) => Some(dispatch.clone()),
+                    Err(error) => return Some(Response::from_error(&error)),
+                },
+                None => None,
+            };
+            let run_id = match request.text("runId") {
+                Some(id) if !id.trim().is_empty() => match store.resolve_run_id(Some(id)) {
+                    Ok(id) => id,
+                    Err(error) => return Some(Response::from_error(&error)),
+                },
+                _ => match dispatch.as_ref() {
+                    Some(dispatch) => dispatch.run_id.clone(),
+                    None => match store.resolve_run_id(None) {
+                        Ok(id) => id,
+                        Err(error) => return Some(Response::from_error(&error)),
+                    },
+                },
+            };
+            if let Some(dispatch) = dispatch.as_ref() {
+                if dispatch.run_id != run_id {
+                    return Some(invalid(format!(
+                        "dispatch \"{}\" belongs to run \"{}\"",
+                        dispatch.id, dispatch.run_id
+                    )));
+                }
+                if request
+                    .text("taskId")
+                    .is_some_and(|task_id| task_id != dispatch.task_id.as_str())
+                {
+                    return Some(invalid(format!(
+                        "dispatch \"{}\" belongs to task \"{}\"",
+                        dispatch.id, dispatch.task_id
+                    )));
+                }
+            }
+            if let Some(reply_to) = request.text("replyTo") {
+                if store.message_by_id(reply_to).is_none() {
+                    return Some(not_found(format!("no message \"{reply_to}\" to reply to")));
+                }
+            }
+            let settled = if message_type == "worker_done" {
+                let Some(dispatch) = dispatch.as_ref() else {
+                    return Some(invalid("worker_done needs --dispatch-id"));
+                };
+                let outcome = request.text("outcome").unwrap_or("");
+                if !OUTCOMES.contains(&outcome) {
+                    return Some(invalid(format!(
+                        "worker_done needs --outcome {}",
+                        OUTCOMES.join("|")
+                    )));
+                }
+                let files = request
+                    .field("filesModified")
+                    .map(|_| request.strings("filesModified"));
+                match store.settle_dispatch(&dispatch.id, outcome, files, deps.now) {
+                    Ok((dispatch, task, promoted)) => Some(json!({
+                        "dispatchId": dispatch.id,
+                        "taskId": task.id,
+                        "status": task.status,
+                        "promoted": promoted,
+                    })),
+                    Err(error) => return Some(Response::from_error(&error)),
+                }
+            } else {
+                None
             };
             let from = request.agent_id.as_deref().unwrap_or("api");
-            Some(
-                match store.send(
-                    &run_id,
-                    request.text("type").unwrap_or("note"),
-                    from,
-                    request.text("to").unwrap_or(""),
-                    request.text("subject").unwrap_or(""),
-                    request.text("body").unwrap_or(""),
-                    request.text("taskId"),
-                    request.text("dispatchId"),
-                    request.text("replyTo"),
-                    request.text("outcome"),
-                    deps.now,
-                ) {
-                    Ok(message) => Response::accepted(201, 1, 0, message_json(&message)),
-                    Err(error) => Response::from_error(&error),
-                },
-            )
+            let message = match store.send(
+                &run_id,
+                message_type,
+                from,
+                request.text("to").unwrap_or(""),
+                request.text("subject").unwrap_or(""),
+                request.text("body").unwrap_or(""),
+                request.text("taskId"),
+                dispatch_id,
+                request.text("replyTo"),
+                request.text("outcome"),
+                deps.now,
+            ) {
+                Ok(message) => message,
+                Err(error) => return Some(Response::from_error(&error)),
+            };
+            let mut data = message_json(&message);
+            if let (Some(settled), Value::Object(fields)) = (settled, &mut data) {
+                fields.insert("settled".to_owned(), settled);
+            }
+            Some(Response::accepted(201, 1, 0, data))
         }
         ("POST", Some("messages"), Some(id), Some("ack")) => {
             let actor = request.agent_id.as_deref().unwrap_or("api");

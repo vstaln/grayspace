@@ -24,9 +24,10 @@ export interface TerminalApi {
 
 
   detach(id: string): void
+  ackOutput(id: string, deliveryId: number): void
 
   setFocused(focused: boolean, id: string): void
-  onData(id: string, cb: (data: string) => void): () => void
+  onData(id: string, cb: (data: string, deliveryId?: number) => void): () => void
   onExit(id: string, cb: (exitCode: number) => void): () => void
   onPrompt(id: string, cb: (prompt: string) => void): () => void
   onBackendError(cb: (message: string) => void): () => void
@@ -131,11 +132,14 @@ export interface AppSettings {
   localModel: LocalModelSettings
   favoriteWidgets?: string[]
   favoriteTerminalNames?: string[]
+  customCodeAgents?: CustomCodeAgent[]
   imageInsertShortcut?: string
+  /** When true, agent permission asks (`orc ask --type permission`) are approved automatically instead of waiting on the user. */
+  autoApprovePermissions?: boolean
 }
 
 export interface AppUpdateState {
-  status: 'idle' | 'disabled' | 'checking' | 'current' | 'downloading' | 'ready' | 'installing' | 'error'
+  status: 'idle' | 'disabled' | 'checking' | 'current' | 'available' | 'downloading' | 'ready' | 'installing' | 'error'
   currentVersion: string
   version?: string
   percent?: number
@@ -374,6 +378,8 @@ export interface OrchestrationApi {
 
 
 
+export type PlanStatus = 'todo' | 'doing' | 'done'
+
 export interface PlanItem {
   id: string
   title: string
@@ -385,6 +391,8 @@ export interface PlanItem {
 
   time?: string
   done: boolean
+  /** Kanban column; kept in sync with `done` (done === status === 'done'). */
+  status?: PlanStatus
   createdBy: string
   order: number
   createdAt: number
@@ -403,6 +411,7 @@ export interface PlannerApi {
     day?: string
     time?: string
     attachments?: string[]
+    status?: PlanStatus
   }): Promise<PlanItem | { error: string }>
   update(
     id: string,
@@ -413,6 +422,7 @@ export interface PlannerApi {
       day?: string | null
       time?: string | null
       done?: boolean
+      status?: PlanStatus
       order?: number
       attachments?: string[] | null
       baseVersion?: number
@@ -424,12 +434,54 @@ export interface PlannerApi {
   onChange(cb: (items: PlanItem[]) => void): () => void
 }
 
+export interface NoteItem {
+  id: string
+  title: string
+  body: string
+  tags: string[]
+  category?: string
+  /** Always resolved: the note's own color, or its category's shared color, or the default. */
+  color: string
+  createdBy: string
+  order: number
+  createdAt: number
+  updatedAt: number
+  version: number
+}
+
+export interface NotesApi {
+  list(): Promise<NoteItem[]>
+  create(input: {
+    title: string
+    body?: string
+    tags?: string[]
+    category?: string
+    color?: string
+  }): Promise<NoteItem | { error: string }>
+  update(
+    id: string,
+    patch: {
+      title?: string
+      body?: string
+      tags?: string[]
+      category?: string | null
+      color?: string | null
+      order?: number
+      baseVersion?: number
+    }
+  ): Promise<NoteItem | { error: string }>
+  /** Recolors every note in a category at once. */
+  recolorCategory(category: string, color: string): Promise<{ ok: true } | { error: string }>
+  delete(id: string): Promise<void | { error: string }>
+  onChange(cb: (items: NoteItem[]) => void): () => void
+}
+
 
 
 export interface CanvasWidget {
   id: string
   title: string
-  kind?: 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'image' | 'links' | 'music-player' | 'orchestration' | 'chat'
+  kind?: 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'image' | 'links' | 'music-player' | 'orchestration' | 'chat' | 'notes' | 'calendar' | 'kanban'
   x: number
   y: number
   w: number
@@ -533,7 +585,7 @@ export interface CodeSession {
   status?: 'active' | 'finished'
 }
 
-export type WorkView = 'canvas' | 'code'
+export type WorkView = 'canvas' | 'code' | 'overview'
 
 export interface CodeSnapshot {
   workspaceScope?: string
@@ -705,6 +757,8 @@ export interface SystemStats {
   cores?: number[]
   totalMem: number
   freeMem: number
+  swapTotal: number
+  swapFree: number
   usedMem: number
   memUsagePercent: number
   processMemory: SystemProcessMemory
@@ -723,16 +777,55 @@ export interface SystemStats {
   error?: string
 }
 
+export interface SystemMemoryStats {
+  totalMem: number
+  /** Free physical memory, as the OS reports it. */
+  freeMem: number
+  /**
+   * What can actually be allocated without swapping. Equal to `freeMem`
+   * except on Linux, where `freeMem` is MemFree and understates it badly.
+   */
+  availableMem: number
+  swapTotal: number
+  swapFree: number
+  platform: string
+}
+
 export interface SystemApi {
+  cpu(): Promise<{ cpuPercent: number } | { error: string }>
   stats(): Promise<SystemStats | { error: string }>
+  memory(): Promise<SystemMemoryStats | { error: string }>
   releaseLocks(): Promise<{ ok: boolean } | { error: string }>
   onPersistError(cb: (payload: { store: string; message: string; at: number }) => void): () => void
 }
 
 export interface BrowserApi {
-  onOpenTab(cb: (url: string) => void): () => void
+  onOpenTab(cb: (payload: { url: string; sourceWebContentsId: number }) => void): () => void
+  onAgentAction(cb: (payload: BrowserAgentRequest) => void): () => void
+  /** An agent in Code asked for a browser; answer through `respond` with `{ id }`. */
+  onOpenInCode(cb: (payload: { requestId: string; title: string }) => void): () => void
+  respond(requestId: string, response: BrowserAgentResponse): Promise<{ ok: true } | { error: string }>
   clearData(): Promise<{ ok: boolean; error?: string }>
 }
+
+export type BrowserAgentAction =
+  | { kind: 'navigate'; url: string }
+  | { kind: 'snapshot' }
+  | { kind: 'click'; ref: string }
+  | { kind: 'fill'; ref: string; value: string }
+  | { kind: 'select'; ref: string; value: string }
+  | { kind: 'press'; ref?: string; key: string }
+  | { kind: 'scroll'; pixels: number }
+
+export interface BrowserAgentRequest {
+  requestId: string
+  widgetId: string
+  action: BrowserAgentAction
+}
+
+export type BrowserAgentResponse =
+  | { ok: true; result: unknown }
+  | { ok: false; error: string }
 
 export interface WindowApi {
   minimize(): void
@@ -741,3 +834,4 @@ export interface WindowApi {
   isMaximized(): Promise<boolean>
   onMaximizeChange(cb: (maximized: boolean) => void): () => void
 }
+import type { CustomCodeAgent } from '../shared/customCodeAgents'

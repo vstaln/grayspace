@@ -22,6 +22,7 @@ import {
   isPositiveInt as isPositiveTerminalInt,
   safeOrcTerminalEnv as resolveOrcTerminalEnv,
   terminalBaseEnv as resolveTerminalBaseEnv,
+  unixShellArgs as resolveUnixShellArgs,
   windowsShellArgs as resolveWindowsShellArgs
 } from './terminal/terminalEnvironment.ts'
 import {
@@ -38,6 +39,15 @@ import {
 } from './terminal/terminalDelivery.ts'
 export const MAX_TERMINALS = 32
 
+// PTY sizes come from renderer layout math and must fit the Rust engine's
+// u16 PtySize. Clamp absurd values (e.g. a zoomed ultrawide reporting 1e9)
+// instead of failing spawn with a deserialization error.
+const MAX_PTY_DIMENSION = 1000
+const RENDERER_OUTPUT_PAUSE_AT = 256 * 1024
+const RENDERER_OUTPUT_RESUME_AT = 64 * 1024
+function clampPtyDimension(value: unknown, fallback: number): number {
+  return isPositiveTerminalInt(value) ? Math.min(value, MAX_PTY_DIMENSION) : fallback
+}
 
 
 
@@ -45,7 +55,8 @@ export const MAX_TERMINALS = 32
 
 
 
-export { windowsShellArgs } from './terminal/terminalEnvironment.ts'
+
+export { windowsShellArgs, unixShellArgs } from './terminal/terminalEnvironment.ts'
 export { isDeadSessionError, isStalledInputError } from './terminal/terminalDelivery.ts'
 
 export interface TerminalInfo {
@@ -127,6 +138,11 @@ interface TerminalRecord {
   rows?: number
 
   lastDataAt: number
+
+  /** Text handed to the renderer that xterm has not confirmed parsing yet. */
+  rendererPendingChars: number
+  rendererPendingBatches: Map<number, number>
+  outputPaused: boolean
 
   exited?: boolean
 
@@ -281,6 +297,9 @@ export class TerminalManager extends EventEmitter {
       cwd: this.resolveCwd(options.cwd),
       output: new TerminalRingBuffer({ maxBytes: OUTPUT_BUFFER_LIMIT }),
       readOffset: 0,
+      rendererPendingChars: 0,
+      rendererPendingBatches: new Map(),
+      outputPaused: false,
       lastDataAt: 0
     }
     this.terminals.set(id, record)
@@ -403,6 +422,9 @@ export class TerminalManager extends EventEmitter {
         cwd: this.resolveCwd(cwd),
         output: new TerminalRingBuffer({ maxBytes: OUTPUT_BUFFER_LIMIT }),
         readOffset: 0,
+        rendererPendingChars: 0,
+        rendererPendingBatches: new Map(),
+        outputPaused: false,
         lastDataAt: 0
       }
       this.terminals.set(id, record)
@@ -437,6 +459,11 @@ export class TerminalManager extends EventEmitter {
       const result = this.rustPty.spawn(this.rustSpawnOptions(id, record, cols, rows))
       if (result.ok) {
         record.nativeAlive = true
+        // No local child for Rust sessions: the engine owns the shell and its
+        // whole tree (dispose kills it engine-side). Clear any stale node pid
+        // so release() never taskkills a recycled pid from a previous fallback.
+        record.pty = null
+        record.rootPid = undefined
         this.preferredId = id
         this.emit('spawn', id)
         return { ok: true }
@@ -450,10 +477,14 @@ export class TerminalManager extends EventEmitter {
   private spawnNodePty(id: string, record: TerminalRecord, cols?: number, rows?: number): SpawnResult {
     try {
       const windowsShell = this.getWindowsShell()
+      const shell = defaultShell(windowsShell)
+      const shellArgs = process.platform === 'win32'
+        ? resolveWindowsShellArgs(windowsShell)
+        : resolveUnixShellArgs(shell)
       const spawnOptions = {
         name: 'xterm-256color',
-        cols: isPositiveTerminalInt(cols) ? cols : 80,
-        rows: isPositiveTerminalInt(rows) ? rows : 24,
+        cols: clampPtyDimension(cols, 80),
+        rows: clampPtyDimension(rows, 24),
         cwd: record.cwd,
         env: {
           ...resolveTerminalBaseEnv(process.env as Record<string, string>),
@@ -473,14 +504,14 @@ export class TerminalManager extends EventEmitter {
       }
       let child: IPty
       try {
-        child = pty.spawn(defaultShell(windowsShell), resolveWindowsShellArgs(windowsShell), {
+        child = pty.spawn(shell, shellArgs, {
           ...spawnOptions,
           ...(process.platform === 'win32' ? windowsPtyOptions : {})
         })
       } catch (error) {
         if (process.platform !== 'win32') throw error
         console.warn('bundled ConPTY unavailable; using system ConPTY fallback', error)
-        child = pty.spawn(defaultShell(windowsShell), resolveWindowsShellArgs(windowsShell), {
+        child = pty.spawn(shell, shellArgs, {
           ...spawnOptions,
           ...systemWindowsPtyOptions
         })
@@ -541,8 +572,8 @@ export class TerminalManager extends EventEmitter {
     return {
       id,
       shell: defaultShell(this.getWindowsShell()),
-      cols: isPositiveTerminalInt(cols) ? cols : 80,
-      rows: isPositiveTerminalInt(rows) ? rows : 24,
+      cols: clampPtyDimension(cols, 80),
+      rows: clampPtyDimension(rows, 24),
       cwd: record.cwd,
       env
     }
@@ -573,6 +604,11 @@ export class TerminalManager extends EventEmitter {
     if (!current || !current.nativeAlive) return
     current.nativeAlive = false
     this.invalidateInput(id)
+    // The engine has already told us the session is gone, so every write
+    // still waiting on an ACK from it is dead. Fail them now: waiting out the
+    // write-ACK timeout would hang those callers behind the fallback below,
+    // which is about to give them a working shell.
+    this.rustPty?.failTerminalWrites(id, 'terminal session failed to start')
     // The sidecar acknowledges the command before portable-pty has finished
     // creating the child, so this failure arrives after spawn() already
     // returned. Keep the widget alive by taking the same node-pty fallback as
@@ -973,13 +1009,33 @@ export class TerminalManager extends EventEmitter {
 
 
 
+  /**
+   * Resolve where a write should go.
+   *
+   * Only an empty id or the `new` placeholder may float to another terminal.
+   * An explicit id either is running (returned as-is) or resolves to null so
+   * the caller fails with `not_found` carrying `{ requested, resolved }`
+   * instead of typing into the wrong shell. Every path logs
+   * requested->resolved so a misdirected write can be traced.
+   */
   resolveWriteTarget(requestedId: string): string | null {
-    if (requestedId && this.isRunning(requestedId)) return requestedId
-    if (this.preferredId && this.isRunning(this.preferredId)) return this.preferredId
-    const alive = this.list().filter((t) => t.alive)
-    if (alive.length === 1) return alive[0].id
-    if (alive.length > 1) return alive[alive.length - 1].id
-    return null
+    const normalized = (requestedId ?? '').trim()
+    const autoResolvable = normalized === '' || normalized === 'new'
+    if (!autoResolvable) {
+      if (this.isRunning(normalized)) return normalized
+      console.warn(`[terminal] resolveWriteTarget requested=${normalized} resolved=(none: not running)`)
+      return null
+    }
+    const pickFallback = (): string | null => {
+      if (this.preferredId && this.isRunning(this.preferredId)) return this.preferredId
+      const alive = this.list().filter((t) => t.alive)
+      if (alive.length === 1) return alive[0].id
+      if (alive.length > 1) return alive[alive.length - 1].id
+      return null
+    }
+    const resolved = pickFallback()
+    console.log(`[terminal] resolveWriteTarget requested=${normalized === '' ? '(empty)' : normalized} resolved=${resolved ?? '(none)'}`)
+    return resolved
   }
 
   resize(id: string, cols: number, rows: number): void {
@@ -1000,6 +1056,49 @@ export class TerminalManager extends EventEmitter {
 
 
       console.warn(`failed to resize terminal ${id}`, err)
+    }
+  }
+
+  noteRendererOutput(id: string, chars: number, deliveryId: number): void {
+    const record = this.terminals.get(id)
+    if (!record || !Number.isSafeInteger(chars) || chars <= 0 || !Number.isSafeInteger(deliveryId) || deliveryId <= 0) return
+    if (record.rendererPendingBatches.has(deliveryId)) return
+    record.rendererPendingBatches.set(deliveryId, chars)
+    record.rendererPendingChars += chars
+    if (record.rendererPendingChars >= RENDERER_OUTPUT_PAUSE_AT) this.setOutputPaused(id, record, true)
+  }
+
+  acknowledgeRendererOutput(id: string, deliveryId: number): void {
+    const record = this.terminals.get(id)
+    if (!record || !Number.isSafeInteger(deliveryId) || deliveryId <= 0) return
+    const chars = record.rendererPendingBatches.get(deliveryId)
+    if (chars === undefined) return
+    record.rendererPendingBatches.delete(deliveryId)
+    record.rendererPendingChars = Math.max(0, record.rendererPendingChars - chars)
+    if (record.rendererPendingChars <= RENDERER_OUTPUT_RESUME_AT) this.setOutputPaused(id, record, false)
+  }
+
+  resetRendererOutput(id: string): void {
+    const record = this.terminals.get(id)
+    if (!record) return
+    record.rendererPendingChars = 0
+    record.rendererPendingBatches.clear()
+    this.setOutputPaused(id, record, false)
+  }
+
+  private setOutputPaused(id: string, record: TerminalRecord, paused: boolean): void {
+    if (record.outputPaused === paused) return
+    record.outputPaused = paused
+    try {
+      if (record.pty) {
+        if (paused) record.pty.pause()
+        else record.pty.resume()
+      } else if (record.nativeAlive) {
+        const result = this.rustPty?.pauseOutput(id, paused)
+        if (result && !result.ok) console.warn(`failed to ${paused ? 'pause' : 'resume'} terminal output ${id}: ${result.error}`)
+      }
+    } catch (error) {
+      console.warn(`failed to ${paused ? 'pause' : 'resume'} terminal output ${id}`, error)
     }
   }
 
@@ -1118,6 +1217,15 @@ export class TerminalManager extends EventEmitter {
 
     const wasRunning = this.isRunning(id)
     this.invalidateInput(id)
+    // Backend calls may synchronously emit exit/failure events. Remove the
+    // record first so recovery cannot spawn a replacement during teardown.
+    this.terminals.delete(id)
+    record.rendererPendingChars = 0
+    record.rendererPendingBatches.clear()
+    this.setOutputPaused(id, record, false)
+    this.inputEpochs.delete(id)
+    this.inputTails.delete(id)
+    if (this.preferredId === id) this.preferredId = null
     try {
       record.pty?.kill()
     } catch {
@@ -1136,10 +1244,6 @@ export class TerminalManager extends EventEmitter {
       }
     }
     record.ptyDisposers = []
-    this.terminals.delete(id)
-    this.inputEpochs.delete(id)
-    this.inputTails.delete(id)
-    if (this.preferredId === id) this.preferredId = null
 
 
 

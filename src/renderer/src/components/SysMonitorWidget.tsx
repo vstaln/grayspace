@@ -87,13 +87,22 @@ function formatTokens(tokens?: number): string {
   return `${tokens} tokens`
 }
 
-export default React.memo(function SysMonitorWidget(): React.JSX.Element {
+function savedRefreshInterval(widgetId: string): number {
+  try {
+    const value = Number(localStorage.getItem(`orcspace-monitor-interval:${widgetId}`))
+    return [1000, 2000, 5000].includes(value) ? value : 5000
+  } catch {
+    return 5000
+  }
+}
+
+export default React.memo(function SysMonitorWidget({ widgetId }: { widgetId: string }): React.JSX.Element {
   const [stats, setStats] = useState<SystemStats | null>(null)
   const [loading, setLoading] = useState(false)
   const [paused, setPaused] = useState(false)
   const [cpuHistory, setCpuHistory] = useState<number[]>(() => new Array(25).fill(0))
   const [notice, setNotice] = useState<string | null>(null)
-  const [refreshInterval, setRefreshInterval] = useState<number>(5000)
+  const [refreshInterval, setRefreshInterval] = useState<number>(() => savedRefreshInterval(widgetId))
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const intervalMenuRef = useRef<HTMLDivElement>(null)
   const [intervalMenuOpen, setIntervalMenuOpen] = useState(false)
@@ -104,6 +113,12 @@ export default React.memo(function SysMonitorWidget(): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null)
   const statsSeqRef = useRef(0)
   const confirm = useConfirm()
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`orcspace-monitor-interval:${widgetId}`, String(refreshInterval))
+    } catch {}
+  }, [widgetId, refreshInterval])
 
   const showNotice = useCallback((msg: string): void => {
     setNotice(msg)

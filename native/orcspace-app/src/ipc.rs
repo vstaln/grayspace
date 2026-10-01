@@ -46,7 +46,10 @@ pub fn user_data_dir() -> PathBuf {
         }
     } else if cfg!(target_os = "macos") {
         if let Some(dir) = std::env::var_os("HOME") {
-            return PathBuf::from(dir).join("Library").join("Application Support").join("OrcSpace");
+            return PathBuf::from(dir)
+                .join("Library")
+                .join("Application Support")
+                .join("OrcSpace");
         }
     } else if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
         return PathBuf::from(dir).join("OrcSpace");
@@ -66,7 +69,11 @@ pub fn persist_control_token(token: &str) -> std::io::Result<PathBuf> {
     let path = control_token_path();
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent)?;
-    let temp = parent.join(format!(".control-token-{}-{}.tmp", std::process::id(), uuid::Uuid::new_v4().simple()));
+    let temp = parent.join(format!(
+        ".control-token-{}-{}.tmp",
+        std::process::id(),
+        uuid::Uuid::new_v4().simple()
+    ));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -79,11 +86,10 @@ pub fn persist_control_token(token: &str) -> std::io::Result<PathBuf> {
     file.write_all(token.as_bytes())?;
     file.sync_all()?;
     drop(file);
-    #[cfg(windows)]
-    {
-        let _ = std::fs::remove_file(&path);
+    if let Err(error) = std::fs::rename(&temp, &path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error);
     }
-    std::fs::rename(&temp, &path)?;
     Ok(path)
 }
 
@@ -109,7 +115,7 @@ pub fn socket_path(is_dev: bool) -> String {
     if cfg!(windows) {
         format!(r"\\.\pipe\orcspace{suffix}")
     } else {
-        let mut path = PathBuf::from(std::env::temp_dir());
+        let mut path = std::env::temp_dir();
         path.push(format!("orcspace{suffix}.sock"));
         path.to_string_lossy().into_owned()
     }
@@ -119,11 +125,41 @@ pub fn socket_path(is_dev: bool) -> String {
 /// cleanly. A unix socket is a file: binding onto an existing one fails with
 /// `AddrInUse` even when nothing is listening, which would make one crash
 /// prevent every later start. Windows named pipes have no such residue.
-pub fn prepare_socket_path(path: &str) {
-    if cfg!(windows) {
-        return;
+pub fn prepare_socket_path(path: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::{
+            io::ErrorKind,
+            os::unix::{fs::FileTypeExt, net::UnixStream},
+        };
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        if !metadata.file_type().is_socket() {
+            return Err(std::io::Error::new(
+                ErrorKind::AlreadyExists,
+                "Control path is not a socket",
+            ));
+        }
+        match UnixStream::connect(path) {
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    ErrorKind::AddrInUse,
+                    "Control server is already running",
+                ))
+            }
+            Err(error) if error.kind() == ErrorKind::ConnectionRefused => {
+                std::fs::remove_file(path)?
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
     }
-    let _ = std::fs::remove_file(path);
+    #[cfg(windows)]
+    let _ = path;
+    Ok(())
 }
 
 #[cfg(test)]

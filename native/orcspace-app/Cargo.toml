@@ -22,6 +22,9 @@ axum = "0.8"
 eframe = "0.36.1"
 egui = "0.36.1"
 portable-pty = "0.9"
+vt100 = "0.16.2"
+vte = "0.15"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 rodio = { version = "0.22.2", features = ["playback"] }
 serde = { version = "1", features = ["derive"] }
 # preserve_order is load-bearing, not a preference: the command journal hashes

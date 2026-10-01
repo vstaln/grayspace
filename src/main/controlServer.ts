@@ -7,6 +7,7 @@ import { getIpcSocketPath, prepareSocketPath, setActiveSocketPath } from './ipcS
 import { TerminalManager } from './terminals.ts'
 import { CanvasStore } from './canvasState.ts'
 import type { PlannerStore } from './plannerStore.ts'
+import type { NotesStore } from './notesStore.ts'
 import type { OrchestrationStore } from './orchestration/store.ts'
 import { MESSAGE_TYPES, TASK_STATUSES, type MessageType } from './orchestration/types.ts'
 import { listWorkers, resolveWorker } from './orchestration/workers.ts'
@@ -31,6 +32,10 @@ import {
   uniqueProjects
 } from './control/protocol.ts'
 import { waitForInbox, waitForReply } from './control/waiters.ts'
+import { requestBrowserAgentAction, requestCodeBrowserOpen } from './browserAutomation.ts'
+import { isRealBrowserTabOpen, openRealBrowserTab, realBrowserAction } from './realBrowser.ts'
+import type { CodeStore } from './codeState.ts'
+import type { BrowserAgentAction } from '../preload/api.ts'
 
 
 
@@ -104,9 +109,12 @@ interface ControlDeps {
   core: Core
   terminals: TerminalManager
   planner: PlannerStore
+  notes: NotesStore
   orchestration: OrchestrationStore
   canvas: CanvasStore
   state: AppState
+  /** Code view sessions — its browser sessions are addressable like canvas browsers. */
+  code?: Pick<CodeStore, 'snapshot'>
   defaultCwd(): string | undefined
 
   port?: number
@@ -196,16 +204,39 @@ export function startControlServer(deps: ControlDeps): http.Server {
           : 'a valid control token is required'
       })
     }
-    void route(req, res, deps).catch((err) => {
-      console.error('control request failed', err)
-      if (!res.headersSent) {
-        if (err instanceof URIError) return sendJson(res, 400, { error: 'invalid URL encoding' })
-        const raw = (err as { statusCode?: unknown })?.statusCode
-        const status2 = typeof raw === 'number' && Number.isInteger(raw) && raw >= 400 && raw <= 599 ? (raw as number) : 500
-        const message = status2 >= 500 ? 'internal error' : err instanceof Error ? err.message : String(err)
-        sendJson(res, status2, { error: message })
+    void (async () => {
+      try {
+        // POST/PATCH/DELETE callers may identify themselves in the JSON body.
+        // Parse once before charging the bucket so this matches submit()'s
+        // body > query > header identity precedence. readJson caches the result
+        // for the route handlers that consume the same body.
+        let agentId: unknown = url.searchParams.get('agentId') ?? req.headers['x-agent-id']
+        if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+          const body = await readJson(req)
+          agentId = body.agentId ?? agentId
+        }
+        if (isApiRateLimited(agentId)) {
+          sendJson(res, 429, { error: 'too many requests', code: 'rate_limited' })
+          return
+        }
+        await route(req, res, deps)
+      } catch (err) {
+        console.error('control request failed', err)
+        if (!res.headersSent) {
+          if (err instanceof URIError) return sendJson(res, 400, { error: 'invalid URL encoding' })
+          const raw = (err as { statusCode?: unknown })?.statusCode
+          const status2 = typeof raw === 'number' && Number.isInteger(raw) && raw >= 400 && raw <= 599 ? (raw as number) : 500
+          const message = status2 >= 500 ? 'internal error' : err instanceof Error ? err.message : String(err)
+          if (status2 === 408 || status2 === 413) {
+            // Let the error response reach the caller, then close the
+            // connection instead of keeping a timed-out or oversized upload
+            // alive for reuse.
+            res.shouldKeepAlive = false
+          }
+          sendJson(res, status2, { error: message })
+        }
       }
-    })
+    })()
   }
 
 
@@ -405,12 +436,6 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
   const method = req.method || 'GET'
   const { terminals, planner, canvas, core } = deps
 
-  // Charged to the caller that named itself, so one agent's runaway loop can
-  // only throttle that agent.
-  if (isApiRateLimited(url.searchParams.get('agentId') ?? req.headers['x-agent-id'])) {
-    return sendJson(res, 429, { error: 'too many requests', code: 'rate_limited' })
-  }
-
   const submit = async <T>(
     body: Json,
     type: string,
@@ -573,7 +598,11 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, deps: 
 
   if (await routePlanner(ctx)) return true
 
+  if (await routeNotes(ctx)) return true
+
   if (await routeCanvas(ctx)) return true
+
+  if (await routeBrowser(ctx)) return true
 
 
   sendJson(res, 404, { error: 'not found' })
@@ -943,6 +972,33 @@ async function routePlanner(ctx: DomainContext): Promise<boolean> {
   return false
 }
 
+async function routeNotes(ctx: DomainContext): Promise<boolean> {
+  const { req, res, parts, method, submit, reply } = ctx
+  const { notes } = ctx.deps
+  if (parts[0] !== 'note' && parts[0] !== 'notes') return false
+  if (method === 'GET' && parts.length === 1) {
+    const snapshot = notes.snapshot()
+    return sendJson(res, 200, snapshot)
+  }
+  if (method === 'POST' && parts.length === 1) {
+    const body = await readJson(req)
+    return reply(await submit(body, 'note.create', NEW.note, body), 201)
+  }
+  if (method === 'POST' && parts[1] === 'recolor' && parts.length === 2) {
+    const body = await readJson(req)
+    return reply(await submit(body, 'note.recolor', NEW.note, body))
+  }
+  if (method === 'PATCH' && parts[1]) {
+    const body = await readJson(req)
+    return reply(await submit(body, 'note.update', `note:${decodeURIComponent(parts[1])}`, body))
+  }
+  if (method === 'DELETE' && parts[1]) {
+    const body = await readJson(req)
+    return reply(await submit(body, 'note.delete', `note:${decodeURIComponent(parts[1])}`, {}))
+  }
+  return false
+}
+
 async function routeCanvas(ctx: DomainContext): Promise<boolean> {
   const { req, res, url, parts, method, deps, submit, reply } = ctx
   const { terminals, canvas, orchestration } = ctx.deps
@@ -1120,6 +1176,189 @@ async function routeCanvas(ctx: DomainContext): Promise<boolean> {
     return sendJson(res, 200, { output })
   }
   return false
+}
+
+const BROWSER_CHECKOUT_PATH = /(?:^|\/)(?:checkouts?(?:[-_](?:now|start|review|payment|confirm(?:ation)?|complete|finish))?|check-out|payments?|billing|place[-_]order|order[-_](?:review|confirm(?:ation)?|complete|finish)|complete[-_]order|confirm[-_]order|finish[-_]order|buy[-_]now|purchase)(?:\.[a-z]+)?(?:\/|$)/i
+
+function isProtectedCheckoutUrl(value: string): boolean {
+  try {
+    const candidate = new URL(value)
+    const checkoutHost = /(?:^|\.)(?:checkout|payments?|billing|purchase|orders?)(?:\.|$)/i.test(candidate.hostname)
+    const checkoutStep = [...candidate.searchParams].some(([key, step]) => /step|stage|flow|action|page/i.test(key) && BROWSER_CHECKOUT_PATH.test(step))
+    return BROWSER_CHECKOUT_PATH.test(candidate.pathname) || checkoutHost || checkoutStep
+  } catch {
+    return false
+  }
+}
+
+function browserNavigationUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const raw = value.trim()
+  if (!raw || raw.length > 2048 || /\s/.test(raw)) return null
+  const candidate = /^https?:\/\//i.test(raw)
+    ? raw
+    : /^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?([/?#]|$)/i.test(raw)
+      ? `http://${raw}`
+      : /^[\w.-]+(:\d+)?([/?#]|$)/.test(raw)
+        ? `https://${raw}`
+        : null
+  if (!candidate) return null
+  try {
+    const parsed = new URL(candidate)
+    if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.hostname || parsed.username || parsed.password) return null
+    return parsed.href
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Browsers Code opened for an agent, until the Code view's debounced save puts
+ * them in the store. Without it an agent that runs `snapshot` straight after
+ * `open` would be told its own browser does not exist.
+ */
+const recentCodeBrowsers = new Map<string, { title: string; at: number }>()
+const RECENT_CODE_BROWSER_MS = 10_000
+
+function codeBrowsers(code: ControlDeps['code']): Array<{ id: string; title: string }> {
+  const now = Date.now()
+  const found = new Map<string, string>()
+  try {
+    for (const session of code?.snapshot().sessions ?? []) {
+      if (session.agentId === 'browser' && session.status !== 'finished') found.set(session.id, session.title || session.label)
+    }
+  } catch {}
+  for (const [id, entry] of recentCodeBrowsers) {
+    if (found.has(id) || now - entry.at > RECENT_CODE_BROWSER_MS) recentCodeBrowsers.delete(id)
+    else found.set(id, entry.title)
+  }
+  return [...found].map(([id, title]) => ({ id, title }))
+}
+
+async function routeBrowser(ctx: DomainContext): Promise<boolean> {
+  const { req, res, url, parts, method, deps, submit } = ctx
+  const { canvas } = deps
+  if (parts[0] !== 'browser') return false
+
+  const body = method === 'POST' ? await readJson(req) : {}
+  const registered = registerHttpAgent(deps.core, body.agentId ?? url.searchParams.get('agentId') ?? req.headers['x-agent-id'])
+  if (!registered.ok) return sendJson(res, registered.status, { error: registered.error, code: registered.code })
+  deps.core.locks.heartbeat(registered.agentId)
+
+  if (method === 'GET' && parts.length === 1) {
+    const browsers = [
+      ...codeBrowsers(deps.code).map(({ id, title }) => ({ id, title, surface: 'code' as const })),
+      ...canvas.listWidgets()
+        .filter((widget) => widget.kind === 'browser')
+        .sort((a, b) => b.z - a.z)
+        .map(({ id, title, x, y, z }) => ({ id, title, surface: 'canvas' as const, x, y, z }))
+    ]
+    return sendJson(res, 200, { browsers })
+  }
+
+  if (method === 'POST' && parts[1] === 'open' && parts.length === 2) {
+    const targetUrl = body.url === undefined ? undefined : browserNavigationUrl(body.url)
+    if (body.url !== undefined && !targetUrl) return sendJson(res, 400, { error: 'url must be a valid http(s) address; localhost is supported' })
+    if (targetUrl && isProtectedCheckoutUrl(targetUrl)) return sendJson(res, 400, { error: 'checkout navigation is disabled' })
+    if (body.surface !== undefined && body.surface !== 'code' && body.surface !== 'canvas' && body.surface !== 'chrome') {
+      return sendJson(res, 400, { error: 'surface must be "chrome", "code" or "canvas"', code: 'invalid' })
+    }
+    const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim().slice(0, 120) : 'Browser'
+    // Default surface is the user's real, visible Chrome — a new tab they
+    // watch the agent act in — rather than the headless-feeling in-app
+    // canvas widget. An agent running in Code still defaults to a Code
+    // browser session, next to its terminal; `--surface` overrides either
+    // way, and `canvas` remains available for the embedded widget.
+    const surface = body.surface ?? (registered.agentId.startsWith('code-') ? 'code' : 'chrome')
+    if (surface === 'chrome') {
+      const id = `chrome-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const opened = await openRealBrowserTab(id, targetUrl ?? undefined)
+      if (!opened.ok) return sendJson(res, 502, { error: opened.error, code: 'failed' })
+      return sendJson(res, 201, { ok: true, data: { id, title, surface, ...(targetUrl ? { url: targetUrl } : {}) } })
+    }
+    if (surface === 'code') {
+      if (!deps.broadcast) return sendJson(res, 503, { error: 'browser control is unavailable', code: 'failed' })
+      const opened = await requestCodeBrowserOpen(title, deps.broadcast)
+      if (!opened.ok) return sendJson(res, 409, { error: opened.error, code: 'conflict' })
+      recentCodeBrowsers.set(opened.id, { title, at: Date.now() })
+      if (!targetUrl) return sendJson(res, 201, { ok: true, data: { id: opened.id, title, surface } })
+      const result = await requestBrowserAgentAction(opened.id, { kind: 'navigate', url: targetUrl }, deps.broadcast, 45_000)
+      if (!result.ok) return sendJson(res, 502, { error: result.error, code: 'failed', data: { id: opened.id } })
+      return sendJson(res, 201, { ok: true, data: { id: opened.id, title, surface, url: targetUrl } })
+    }
+    const { camera } = canvas.snapshot()
+    const zoom = Math.max(0.1, camera.zoom || 1)
+    const widget = await submit<{ id: string; title: string }>(body, 'widget.create', NEW.widget, {
+      kind: 'browser',
+      title,
+      x: (-camera.x + 100) / zoom,
+      y: (-camera.y + 105) / zoom,
+      z: Math.max(0, ...canvas.listWidgets().map((current) => current.z)) + 1
+    })
+    if (!widget.ok) return sendJson(res, STATUS_BY_CODE[widget.code] ?? 400, { error: widget.message, code: widget.code })
+    if (!targetUrl) return sendJson(res, 201, { ok: true, data: { id: widget.data.id, title: widget.data.title, surface } })
+    if (!deps.broadcast) return sendJson(res, 503, { error: 'browser control is unavailable', code: 'failed', data: { id: widget.data.id } })
+    const result = await requestBrowserAgentAction(widget.data.id, { kind: 'navigate', url: targetUrl }, deps.broadcast, 45_000)
+    if (!result.ok) return sendJson(res, 502, { error: result.error, code: 'failed', data: { id: widget.data.id } })
+    return sendJson(res, 201, { ok: true, data: { id: widget.data.id, title: widget.data.title, surface, url: targetUrl } })
+  }
+
+  if (parts.length < 3 || !['POST', 'GET'].includes(method)) return false
+  const rawId = safeDecode(parts[1])
+  if (!rawId || !/^[A-Za-z0-9._:-]{1,128}$/.test(rawId)) return sendJson(res, 400, { error: 'invalid browser widget id' })
+  const widget = canvas.widget(rawId)
+  const isCanvasBrowser = widget?.kind === 'browser'
+  const isChromeTab = rawId.startsWith('chrome-') && isRealBrowserTabOpen(rawId)
+  if (!isCanvasBrowser && !isChromeTab && !codeBrowsers(deps.code).some((browser) => browser.id === rawId)) {
+    return sendJson(res, 404, { error: `browser widget ${rawId} not found` })
+  }
+  if (!isChromeTab && !deps.broadcast) return sendJson(res, 503, { error: 'browser control is unavailable', code: 'failed' })
+
+  let action: BrowserAgentAction
+  if (parts[2] === 'snapshot' && method === 'GET' && parts.length === 3) {
+    action = { kind: 'snapshot' }
+  } else if (method === 'POST' && parts.length === 3) {
+    if (parts[2] === 'navigate') {
+      const targetUrl = browserNavigationUrl(body.url)
+      if (!targetUrl) return sendJson(res, 400, { error: 'url must be a valid http(s) address; localhost is supported' })
+      if (isProtectedCheckoutUrl(targetUrl)) return sendJson(res, 400, { error: 'checkout navigation is disabled' })
+      action = { kind: 'navigate', url: targetUrl }
+    } else if (parts[2] === 'click' || parts[2] === 'fill' || parts[2] === 'select') {
+      const ref = String(body.ref ?? '')
+      if (!/^\d{1,3}$/.test(ref) || Number(ref) < 1 || Number(ref) > 100) return sendJson(res, 400, { error: 'ref must be a number from 1 to 100' })
+      if (parts[2] === 'click') action = { kind: 'click', ref }
+      else {
+        if (typeof body.value !== 'string' || body.value.length > 4000) return sendJson(res, 400, { error: 'value must be a string up to 4000 characters' })
+        action = parts[2] === 'select'
+          ? { kind: 'select', ref, value: body.value }
+          : { kind: 'fill', ref, value: body.value }
+      }
+    } else if (parts[2] === 'press') {
+      const key = String(body.key ?? '')
+      if (!['Enter', 'Tab', 'Escape', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', ' '].includes(key)) {
+        return sendJson(res, 400, { error: 'unsupported key' })
+      }
+      const ref = body.ref === undefined ? undefined : String(body.ref)
+      if (ref !== undefined && (!/^\d{1,3}$/.test(ref) || Number(ref) < 1 || Number(ref) > 100)) {
+        return sendJson(res, 400, { error: 'ref must be a number from 1 to 100' })
+      }
+      action = { kind: 'press', key, ...(ref ? { ref } : {}) }
+    } else if (parts[2] === 'scroll') {
+      const pixels = Number(body.pixels ?? 600)
+      if (!Number.isFinite(pixels)) return sendJson(res, 400, { error: 'pixels must be a number' })
+      action = { kind: 'scroll', pixels: Math.max(-1200, Math.min(1200, pixels)) }
+    } else {
+      return sendJson(res, 404, { error: 'unknown browser action' })
+    }
+  } else {
+    return false
+  }
+
+  const result = isChromeTab
+    ? await realBrowserAction(rawId, action)
+    : await requestBrowserAgentAction(rawId, action, deps.broadcast!, action.kind === 'navigate' ? 45_000 : 20_000)
+  if (!result.ok) return sendJson(res, 502, { error: result.error, code: 'failed' })
+  return sendJson(res, 200, { ok: true, data: result.result })
 }
 
 function imageList(body: Json): string[] {

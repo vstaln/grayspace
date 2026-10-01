@@ -8,6 +8,7 @@ import { getUserDataDir } from './userData.ts'
 import { notifyCanvasWorkspaceChanged } from './canvasState.ts'
 import { notifyPersistError } from './persistNotifier.ts'
 import { codeWorkspaceScope } from '../shared/codeWorkspace.ts'
+import { normalizeCustomCodeAgents, type CustomCodeAgent } from '../shared/customCodeAgents.ts'
 import {
   readFolderWorkspaces,
   removeFolderSessions,
@@ -77,7 +78,10 @@ export interface AppSettings {
   favoriteWidgets?: string[]
 
   favoriteTerminalNames?: string[]
+  customCodeAgents?: CustomCodeAgent[]
   imageInsertShortcut?: string
+  /** When true, agent permission asks (`orc ask --type permission`) are approved automatically instead of waiting on the user. */
+  autoApprovePermissions?: boolean
 }
 
 export interface LocalModelSettings {
@@ -149,9 +153,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   aiModel: 'gpt-5.6-sol',
   aiReasoningEffort: 'medium',
   aiConnectedProviders: [],
-  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'image', 'links', 'music-player', 'chat'],
+  favoriteWidgets: ['terminal', 'files', 'sys-monitor', 'timer', 'planner', 'orchestration', 'browser', 'image', 'links', 'music-player', 'chat', 'notes', 'calendar', 'kanban'],
   favoriteTerminalNames: [],
-  imageInsertShortcut: 'Mod+Shift+I'
+  customCodeAgents: [],
+  imageInsertShortcut: 'Mod+Shift+I',
+  autoApprovePermissions: false
 }
 
 const MAX_RECENT = 12
@@ -459,6 +465,9 @@ export class AppState extends EventEmitter {
     if (Array.isArray(patch.favoriteTerminalNames)) {
       this.state.settings.favoriteTerminalNames = normalizeTerminalNameList(patch.favoriteTerminalNames)
     }
+    if (Array.isArray(patch.customCodeAgents)) {
+      this.state.settings.customCodeAgents = normalizeCustomCodeAgents(patch.customCodeAgents)
+    }
     if (typeof patch.imageInsertShortcut === 'string') {
       const shortcut = patch.imageInsertShortcut.trim().slice(0, 64)
       if (shortcut === '' || /^[A-Za-z]+(?:\+[A-Za-z0-9]+){1,4}$/.test(shortcut)) {
@@ -625,6 +634,7 @@ export class AppState extends EventEmitter {
     if (!Number.isFinite(this.state.settings.backgroundBlur))
       this.state.settings.backgroundBlur = DEFAULT_SETTINGS.backgroundBlur
     this.state.settings.favoriteTerminalNames = normalizeTerminalNameList(this.state.settings.favoriteTerminalNames)
+    this.state.settings.customCodeAgents = normalizeCustomCodeAgents(this.state.settings.customCodeAgents)
 
 
     this.decryptOrMigrate('openRouterApiKey', 'openRouterApiKeyEnc')

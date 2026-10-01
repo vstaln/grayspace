@@ -62,7 +62,10 @@ fn equal_priority_stays_fifo() {
         task("first", Priority::Normal, &["a"], 50),
     ];
     let picked = scheduler.pick_next(&tasks, &[], 200).unwrap();
-    assert_eq!(tasks[picked].id, "first", "the earlier arrival wins the tie");
+    assert_eq!(
+        tasks[picked].id, "first",
+        "the earlier arrival wins the tie"
+    );
 }
 
 /// Without ageing, a steady stream of high-priority work would starve low
@@ -123,7 +126,13 @@ fn nothing_is_picked_when_every_lane_is_busy() {
 
 #[test]
 fn the_queue_reports_full_at_its_limit() {
-    let scheduler = Scheduler { max_queue_length: 3, age_promote_ms: 5_000 };
+    let scheduler = Scheduler {
+        max_queue_length: 3,
+        age_promote_ms: 5_000,
+    };
     assert!(!scheduler.is_full(2));
-    assert!(scheduler.is_full(3), "at the limit a further enqueue is backpressure");
+    assert!(
+        scheduler.is_full(3),
+        "at the limit a further enqueue is backpressure"
+    );
 }

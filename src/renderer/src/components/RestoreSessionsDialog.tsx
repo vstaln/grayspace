@@ -23,6 +23,8 @@ interface Props {
   onRestore(chosen: Set<string>): void
   /** Keeps none of them. */
   onSkip(): void
+  /** Dynamic memory budget for agent processes. */
+  maxAgents?: number
 }
 
 /**
@@ -37,7 +39,8 @@ export default function RestoreSessionsDialog({
   folderName,
   sessions,
   onRestore,
-  onSkip
+  onSkip,
+  maxAgents = Number.POSITIVE_INFINITY
 }: Props): React.JSX.Element {
   const [chosen, setChosen] = useState<Set<string>>(() => defaultChoice(sessions))
   const restoreRef = useRef<HTMLButtonElement>(null)
@@ -50,6 +53,17 @@ export default function RestoreSessionsDialog({
     [chosen, startable]
   )
   const allChosen = count === startable.length && startable.length > 0
+  /**
+   * Blocking is only fair while deselecting can reach an allowed state.
+   *
+   * With a budget of zero every selection is over it and `count === 0` is
+   * refused too, so Restore could never enable — and this dialog has no
+   * Escape and no third button, which left "Start fresh" as the only way
+   * out: the memory reading would have decided to discard the board. Below
+   * one slot the budget advises instead of blocking.
+   */
+  const memoryCritical = maxAgents < 1
+  const exceedsMemory = !memoryCritical && count > maxAgents
 
   useEffect(() => {
     restoreRef.current?.focus()
@@ -138,6 +152,14 @@ export default function RestoreSessionsDialog({
           })}
         </ul>
 
+        {(exceedsMemory || (memoryCritical && count > 0)) && (
+          <div role="alert" className="mx-3 mb-1 rounded-panel border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] text-danger">
+            {memoryCritical
+              ? 'Memory is very low — the restored agents may fail to start. Freeing RAM first is safer.'
+              : `Memory allows restoring up to ${maxAgents} agent${maxAgents === 1 ? '' : 's'} now. Reduce the selection or free RAM.`}
+          </div>
+        )}
+
         <footer className="flex flex-wrap items-center gap-2 border-t border-line-soft px-4 py-3">
           <span className="mr-auto text-[11px] text-text-faint">
             {count} of {startable.length} selected
@@ -163,8 +185,8 @@ export default function RestoreSessionsDialog({
             ref={restoreRef}
             type="button"
             onClick={() => onRestore(new Set(chosen))}
-            disabled={count === 0}
-            title={count === 0 ? 'Nothing selected — use Start fresh to close them all' : undefined}
+            disabled={count === 0 || exceedsMemory}
+            title={count === 0 ? 'Nothing selected — use Start fresh to close them all' : exceedsMemory ? 'Not enough free memory for this selection' : undefined}
             className="flex min-h-[36px] items-center gap-1.5 rounded-panel border border-line bg-bg-hover px-3 text-[12px] font-medium text-text transition-colors duration-150 motion-reduce:transition-none hover:bg-bg-panel focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Play size={12} />

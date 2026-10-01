@@ -27,7 +27,10 @@ pub const STATE_INDENT: usize = 2;
 #[derive(Debug)]
 pub enum StateError {
     Io(std::io::Error),
-    Parse { file: PathBuf, error: serde_json::Error },
+    Parse {
+        file: PathBuf,
+        error: serde_json::Error,
+    },
 }
 
 impl std::fmt::Display for StateError {
@@ -59,8 +62,10 @@ impl StateFile {
         // Electron's writer emits a BOM on some paths and the JS reader strips
         // one before parsing (storage.ts does the same), so accept it here too.
         let trimmed = raw.trim_start_matches('\u{feff}');
-        let value = serde_json::from_str(trimmed)
-            .map_err(|error| StateError::Parse { file: path.clone(), error })?;
+        let value = serde_json::from_str(trimmed).map_err(|error| StateError::Parse {
+            file: path.clone(),
+            error,
+        })?;
         Ok(Self { path, value, raw })
     }
 

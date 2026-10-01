@@ -20,6 +20,18 @@ export function windowsShellArgs(windowsShell: 'cmd' | 'powershell'): string[] {
   return windowsShell === 'powershell' ? ['-NoLogo', '-NoExit', '-Command', 'chcp 65001 > $null'] : ['/K', 'chcp 65001 >nul']
 }
 
+/**
+ * Login args for POSIX shells, mirroring the Rust engine's `shell_arguments`
+ * (native/orcspace-app/src/platform.rs): zsh/bash/sh/fish get `-l` so
+ * /etc/profile, path_helper and ~/.zprofile load. Without this a GUI-launched
+ * app on macOS inherits Dock's minimal PATH and brew/nvm CLIs are missing.
+ */
+export function unixShellArgs(shell?: string): string[] {
+  const base = (shell ?? process.env.SHELL ?? '').split('/').pop()?.toLowerCase().trim() ?? ''
+  if (base === 'zsh' || base === 'bash' || base === 'sh' || base === 'fish') return ['-l']
+  return []
+}
+
 export function safeOrcTerminalEnv(id: string): Record<string, string> {
   try {
     return orcTerminalEnv(id)

@@ -21,6 +21,9 @@ import LinksWidget from './LinksWidget'
 import MusicPlayerWidget from './MusicPlayerWidget'
 import ChatWidget from './ChatWidget'
 import ImageWidget from './ImageWidget'
+import NotesWidget from './NotesWidget'
+import CalendarWidget from './CalendarWidget'
+import KanbanWidget from './KanbanWidget'
 import ErrorBoundary from './ErrorBoundary'
 import { NON_MAXIMIZABLE, RESIZE_HANDLES, ResizeDir, Widget, WidgetKind } from '../types'
 import { copyText } from '../lib/clipboard'
@@ -755,9 +758,9 @@ function WidgetBody({
     case 'orchestration':
       return <OrchestrationWidget />
     case 'files':
-      return <FilesWidget workspaceDir={workspaceDir} />
+      return <FilesWidget widgetId={widget.id} workspaceDir={workspaceDir} />
     case 'sys-monitor':
-      return <SysMonitorWidget />
+      return <SysMonitorWidget widgetId={widget.id} />
     case 'browser':
       return <BrowserWidget widgetId={widget.id} onFullscreenChange={onBrowserFullscreenChange} />
     case 'image':
@@ -768,6 +771,12 @@ function WidgetBody({
       return <MusicPlayerWidget widgetId={widget.id} />
     case 'chat':
       return <ChatWidget widgetId={widget.id} workspaceDir={workspaceDir} />
+    case 'notes':
+      return <NotesWidget />
+    case 'calendar':
+      return <CalendarWidget widgetId={widget.id} />
+    case 'kanban':
+      return <KanbanWidget widgetId={widget.id} />
     default:
       return <TerminalWidget id={widget.id} title={widget.title} surface="canvas" attachmentMode={attachmentMode} agentId={agentId} flipped={terminalsFlipped} onProcessExit={onProcessExit} />
   }

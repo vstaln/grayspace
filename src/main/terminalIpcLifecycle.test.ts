@@ -16,7 +16,7 @@ for (const rejects of [false, true]) {
     clearMountedTerminals()
     let fail!: () => void
     let first = true
-    const deps = { core: { flow: { submit: () => {
+    const deps = { terminals: { resetRendererOutput: () => {} }, core: { flow: { submit: () => {
       if (!first) return Promise.resolve({ ok: true, data: { ok: true } })
       first = false
       return new Promise((resolve, reject) => {

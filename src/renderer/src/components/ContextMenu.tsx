@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Clipboard, Cpu, FolderOpen, Globe, Image as ImageIcon, ListTodo, MessageCircle, Music2, Network, Terminal, Timer } from 'lucide-react'
+import { Calendar, Clipboard, Cpu, FolderOpen, Globe, Image as ImageIcon, KanbanSquare, ListTodo, MessageCircle, Music2, Network, StickyNote, Terminal, Timer } from 'lucide-react'
 import { Point, WidgetKind } from '../types'
 import { WIDGET_CATALOG } from '../lib/widgetCatalog'
 
@@ -17,6 +17,9 @@ interface Props {
   onPickMusicPlayer: () => void
   onPickOrchestration: () => void
   onPickChat: () => void
+  onPickNotes: () => void
+  onPickCalendar: () => void
+  onPickKanban: () => void
   favoriteWidgets: string[]
   onClose: () => void
 }
@@ -43,7 +46,10 @@ const WIDGET_ICONS: Record<WidgetKind, React.ReactNode> = {
   image: <ImageIcon size={15} className="text-accent" />,
   links: <Clipboard size={15} className="text-accent" />,
   'music-player': <Music2 size={15} className="text-accent" />,
-  chat: <MessageCircle size={15} className="text-accent" />
+  chat: <MessageCircle size={15} className="text-accent" />,
+  notes: <StickyNote size={15} className="text-accent" />,
+  calendar: <Calendar size={15} className="text-accent" />,
+  kanban: <KanbanSquare size={15} className="text-accent" />
 }
 
 export default function ContextMenu({
@@ -59,6 +65,9 @@ export default function ContextMenu({
   onPickMusicPlayer,
   onPickOrchestration,
   onPickChat,
+  onPickNotes,
+  onPickCalendar,
+  onPickKanban,
   favoriteWidgets,
   onClose
 }: Props): React.JSX.Element {
@@ -85,7 +94,10 @@ export default function ContextMenu({
         image: onPickImage,
         links: onPickLinks,
         'music-player': onPickMusicPlayer,
-        chat: onPickChat
+        chat: onPickChat,
+        notes: onPickNotes,
+        calendar: onPickCalendar,
+        kanban: onPickKanban
       }
       return WIDGET_CATALOG
         .map((entry) => ({
@@ -110,6 +122,9 @@ export default function ContextMenu({
       onPickMusicPlayer,
       onPickOrchestration,
       onPickChat,
+      onPickNotes,
+      onPickCalendar,
+      onPickKanban,
       favoriteWidgets
     ]
   )

@@ -9,7 +9,7 @@ export function registerPlannerIpc(deps: IpcDeps): void {
   ipcMain.handle('planner:list', () => deps.planner.list())
   ipcMain.handle(
     'planner:create',
-    async (_e, input: { title: string; note?: string; day?: string; time?: string; project?: string; attachments?: string[] }) => {
+    async (_e, input: { title: string; note?: string; day?: string; time?: string; project?: string; attachments?: string[]; status?: string }) => {
       const title = typeof input?.title === 'string' ? input.title.trim() : ''
       if (!title) return { ok: false, error: 'title is required' }
       if (title.length > 500) return { ok: false, error: 'title is too long' }
@@ -17,12 +17,13 @@ export function registerPlannerIpc(deps: IpcDeps): void {
       if (input?.attachments !== undefined && (!Array.isArray(input.attachments) || input.attachments.length > 20)) {
         return { ok: false, error: 'too many attachments' }
       }
-      const { note, day, time, project, attachments } = input as {
+      const { note, day, time, project, attachments, status } = input as {
         note?: string
         day?: string
         time?: string
         project?: string
         attachments?: string[]
+        status?: string
       }
       return unwrap(
         await send('plan.create', NEW.plan, {
@@ -31,7 +32,8 @@ export function registerPlannerIpc(deps: IpcDeps): void {
           ...(typeof day === 'string' ? { day } : {}),
           ...(typeof time === 'string' ? { time } : {}),
           ...(typeof project === 'string' ? { project } : {}),
-          ...(attachments !== undefined ? { attachments } : {})
+          ...(attachments !== undefined ? { attachments } : {}),
+          ...(typeof status === 'string' ? { status } : {})
         })
       )
     }
@@ -48,6 +50,7 @@ export function registerPlannerIpc(deps: IpcDeps): void {
         day?: string | null
         time?: string | null
         done?: boolean
+        status?: string
         order?: number
         attachments?: string[] | null
         baseVersion?: number

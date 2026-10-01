@@ -1,17 +1,20 @@
 /**
  * The private modes a terminal has to be put back into when nobody owns them.
  *
- * Three places need this: the main process, when a batch of output had to be
- * dropped; the renderer's parser queue, for the same reason on its side; and
- * the renderer's restore path, when a process exits or its history is replayed
- * into a shell that never asked for any of the modes in it.
- *
- * They lived as three separate literals, two of them byte-for-byte identical
- * across the main/renderer boundary. Nothing detects drift between copies of
- * an escape sequence: adding a newer mouse mode to one of them and not the
- * others would leave exactly the bug this text is about, in the two that were
- * missed. So the shared part is written once, here, and each use composes what
- * else it needs around it.
+* Three places need this: the main process, when a batch of output had to be
+* dropped; the renderer's parser queue, for the same reason on its side; and
+* the renderer's restore path, when a process exits or its history is replayed
+* into a shell that never asked for any of the modes in it.
+*
+* They lived as three separate literals, two of them byte-for-byte identical
+* across the main/renderer boundary. Nothing detects drift between copies of
+* an escape sequence: adding a newer mouse mode to one of them and not the
+* others would leave exactly the bug this text is about, in the two that were
+* missed. So the shared part is written once, here, and each use composes what
+* else it needs around it.
+ * A process may leave terminal modes enabled when it exits or is interrupted.
+ * These shared sequences restore the shell's expected modes before input
+ * resumes or old output is replayed.
  */
 
 /**
@@ -27,17 +30,6 @@ export const MOUSE_REPORTING_OFF =
   '\x1b[?1004l\x1b[?1005l\x1b[?1006l\x1b[?1015l'
 
 /**
- * Cancel partial control state after output was dropped.
- *
- * Leads with CAN, which aborts a control sequence the lost bytes may have left
- * half-written, and ends by leaving synchronized update, showing the cursor
- * and resetting SGR — the attributes a truncated frame is most likely to have
- * been in the middle of.
- */
-export const TERMINAL_OUTPUT_RESYNC =
-  `\x18${MOUSE_REPORTING_OFF}\x1b[?2026l\x1b[?25h\x1b[0m`
-
-/**
  * Reset modes owned by an exited process before handing input to a new shell.
  *
  * No CAN here: this runs at a point where the stream is intact and only the
@@ -46,7 +38,9 @@ export const TERMINAL_OUTPUT_RESYNC =
  * and a shell prompt depends on: autowrap (7), origin mode (6), insert mode
  * (4) and the scrolling region.
  *
- * It ends by leaving the alternate screen, and that part is not optional.
+ * It leaves the alternate screen before restoring origin mode and the
+ * scrolling region, so those settings are reset on the shell's normal buffer.
+ * Leaving the alternate screen is not optional.
  * Killing opencode the way a Bun panic does — no cleanup, no handlers — leaves
  * exactly this behind, measured on a real ConPTY:
  *
@@ -62,4 +56,4 @@ export const TERMINAL_OUTPUT_RESYNC =
  * only thing discarded is the frame of the application that died.
  */
 export const APP_OWNED_MODE_RESET =
-  `${MOUSE_REPORTING_OFF}\x1b[?2004l\x1b[?2026l\x1b[?25h\x1b[?7h\x1b[?6l\x1b[4l\x1b[r\x1b[?1049l`
+  `${MOUSE_REPORTING_OFF}\x1b[?2004l\x1b[?2026l\x1b[?1049l\x1b[?25h\x1b[?7h\x1b[?6l\x1b[4l\x1b[r`
