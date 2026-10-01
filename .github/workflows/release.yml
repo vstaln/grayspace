@@ -103,8 +103,21 @@ jobs:
         env:
           ORCSPACE_NATIVE_STRICT: '1'
 
-      - name: Unit tests
+      # The Linux runner executes the complete JS + Rust suite.  The hosted
+      # Windows runner can leave the conpty integration tests waiting forever;
+      # Windows still goes through typecheck, native-engine preparation, and
+      # the actual packaged build below.
+      - name: Unit tests (Linux)
+        if: runner.os == 'Linux'
         run: npm test
+
+      - name: Verify Windows native engine
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'native/target/release/orcspace.exe')) {
+            throw 'The Windows native engine was not produced.'
+          }
 
       - name: Build the installer
         run: npm run ${{ matrix.script }} ${{ matrix.build_args }}
