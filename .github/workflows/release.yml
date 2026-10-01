@@ -25,7 +25,7 @@ on:
 
 concurrency:
   group: orcspace-release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: write
