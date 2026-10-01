@@ -24,7 +24,7 @@ on:
       - 'v*'
 
 concurrency:
-  group: orcspace-release-${{ github.ref }}
+  group: orcspace-release-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 permissions:
