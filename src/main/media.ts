@@ -314,7 +314,7 @@ export async function saveClipboardImageToScratch(): Promise<MediaFile | null> {
   }
 
   try {
-    const text = clipboard.readText().trim()
+    const text = (await clipboard.readText()).trim()
     if (
       text &&
       /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|tiff?)$/i.test(text) &&
