@@ -200,6 +200,10 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       scrollback: 1500,
       cursorBlink: true,
       cursorInactiveStyle: 'outline',
+      // PTY echo is delivered through the renderer's output queue rather than
+      // xterm's own input path. Keep typed input following the live prompt even
+      // when the user was reading older scrollback before an interrupt.
+      scrollOnUserInput: true,
       convertEol: false,
 
 
@@ -239,6 +243,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     // stays queued so it can never be interleaved into the middle of the
     // history being replayed.
     let restoreInFlight = false
+    let interruptRecoveryPending = false
     let cancelRestore: (() => void) | undefined
     const flushWrites = (): void => {
       flushScheduled = false
@@ -318,6 +323,10 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       // Never yank the viewport of a fullscreen TUI (alternate screen): it
       // has no scrollback and forced scrolls tear the live frame.
       if (term.buffer.active.type === 'alternate') return
+      if (interruptRecoveryPending) {
+        term.scrollToBottom()
+        return
+      }
       const viewport = saved ?? terminalViewportById.get(id)
       if (!viewport) return
       if (viewport.atBottom) term.scrollToBottom()
@@ -348,6 +357,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     }
     const applyViewportAnchor = (anchor: ViewportAnchor): void => {
       if (!mounted) return
+      if (interruptRecoveryPending) return
       // Fullscreen TUIs live on the alternate screen buffer — forcing scroll
       // positions there corrupts the rendered frame. Anchors are also never
       // replayed across buffers: an offset captured inside Codex (typically
@@ -369,8 +379,29 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     let resizeAnchorGeneration = 0
     let resizeRestoreUntil = 0
     let fitTimer: ReturnType<typeof setTimeout> | null = null
+    const markInterruptRecoveryPending = (): void => {
+      interruptRecoveryPending = true
+      // A resize callback captured while the TUI owned the alternate buffer
+      // must not be replayed after Ctrl+C returns to the shell. Remember the
+      // live bottom immediately; waiting 400ms leaves a visible race where the
+      // next prompt can be rendered above the old viewport.
+      resizeAnchor = null
+      resizeAnchorGeneration += 1
+      resizeRestoreUntil = 0
+      if (term.buffer.active.type !== 'alternate') {
+        try { term.scrollToBottom() } catch {}
+      }
+      rememberViewport(id, { line: 0, atBottom: true })
+    }
+    const settleInterruptRecovery = (): void => {
+      if (!mounted || term.buffer.active.type === 'alternate') return
+      try { term.scrollToBottom() } catch {}
+      const activeBuffer = term.buffer.active
+      rememberViewport(id, { line: activeBuffer.viewportY, atBottom: true })
+      interruptRecoveryPending = false
+    }
     const restoreResizeAnchor = (generation: number): void => {
-      if (restoreInFlight || generation !== resizeAnchorGeneration || !resizeAnchor) return
+      if (restoreInFlight || interruptRecoveryPending || generation !== resizeAnchorGeneration || !resizeAnchor) return
       applyViewportAnchor(resizeAnchor)
     }
     const scheduleResizeAnchorRestore = (anchor: ViewportAnchor): void => {
@@ -413,6 +444,10 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     }
     const writeParsedDisposable = term.onWriteParsed(() => {
       keepCursorBlinking()
+      if (interruptRecoveryPending) {
+        if (term.buffer.active.type !== 'alternate') settleInterruptRecovery()
+        return
+      }
       if (!resizeAnchor || performance.now() > resizeRestoreUntil) return
       const generation = resizeAnchorGeneration
       requestAnimationFrame(() => restoreResizeAnchor(generation))
@@ -426,6 +461,10 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       // the normal buffer — saving them is what pinned the viewport to the top
       // after the TUI exited.
       if (term.buffer.active.type === 'alternate') return
+      if (interruptRecoveryPending) {
+        rememberViewport(id, { line: 0, atBottom: true })
+        return
+      }
       const activeBuffer = term.buffer.active
       rememberViewport(id, {
         line: activeBuffer.viewportY,
@@ -529,10 +568,14 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     const recoverModes = (): void => {
       if (!mounted || term.buffer.active.type === 'alternate') return
       if (!hasOrphanedModes(readEmulatorModes())) {
-        scrollPromptToBottom()
+        if (interruptRecoveryPending) settleInterruptRecovery()
+        else scrollPromptToBottom()
         return
       }
-      batchedWrite(APP_OWNED_MODE_RESET, scrollPromptToBottom)
+      batchedWrite(APP_OWNED_MODE_RESET, () => {
+        if (interruptRecoveryPending) settleInterruptRecovery()
+        else scrollPromptToBottom()
+      })
       // The reset leaves the alternate screen and clears the TUI's scroll
       // region; park the viewport at the live bottom so the next prompt line —
       // the one the user types on after Ctrl-C — is visible instead of the
@@ -565,6 +608,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
         // next successful launch.
         clearModeRecoveryTimer()
         clearInterruptRecoveryTimer()
+        interruptRecoveryPending = false
         if (mounted) setStartupNotice(null)
       }
       if (child === 'exited') {
@@ -602,18 +646,22 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     const recoverInterruptedShell = (): void => {
       if (!mounted) return
       const modes = readEmulatorModes()
-      if (modes.bufferType !== 'normal') return
-      if ((modes.mouseTracking ?? 'none') !== 'none') return
+      if (modes.bufferType !== 'normal' || (modes.mouseTracking ?? 'none') !== 'none') {
+        // Ctrl+C was handled by a still-running TUI. Do not keep suppressing
+        // legitimate viewport changes after that application remains alive.
+        interruptRecoveryPending = false
+        return
+      }
       if (
         modes.originMode !== true &&
         modes.synchronizedOutputMode !== true &&
         modes.insertMode !== true &&
         modes.wraparoundMode !== false
       ) {
-        scrollPromptToBottom()
+        settleInterruptRecovery()
         return
       }
-      batchedWrite(APP_OWNED_MODE_RESET, scrollPromptToBottom)
+      batchedWrite(APP_OWNED_MODE_RESET, settleInterruptRecovery)
     }
     const armInterruptRecovery = (): void => {
       clearInterruptRecoveryTimer()
@@ -653,11 +701,12 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       exitReported = true
       clearInitialCommand(id)
       clearInterruptRecoveryTimer()
+      markInterruptRecoveryPending()
       if (agentIdRef.current === 'codex' && agentId !== 'codex') agentIdRef.current = undefined
       // Through the render queue like everything else: a direct write would
       // overtake output still waiting in it and print the marker above the
       // shell's last lines.
-      batchedWrite(`${APP_OWNED_MODE_RESET}\r\n\x1b[90m[Process exited${typeof code === 'number' ? ` (code ${code})` : ''}]\x1b[0m\r\n`, scrollPromptToBottom)
+      batchedWrite(`${APP_OWNED_MODE_RESET}\r\n\x1b[90m[Process exited${typeof code === 'number' ? ` (code ${code})` : ''}]\x1b[0m\r\n`, settleInterruptRecovery)
       onProcessExitRef.current?.()
     })
 
@@ -704,7 +753,10 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       // state. Arm the second-chance recovery; it only acts on the corpse
       // state (normal buffer, no mouse, but TUI-only modes left on), so a TUI
       // that handles the key itself is never disturbed.
-      if (data.includes('\x03') || data.includes('\x04')) armInterruptRecovery()
+      if (data.includes('\x03') || data.includes('\x04')) {
+        markInterruptRecoveryPending()
+        armInterruptRecovery()
+      }
       const captured = captureTerminalInput(promptCapture, data)
       promptCapture = captured.capture
       for (const submitted of captured.submitted) {
