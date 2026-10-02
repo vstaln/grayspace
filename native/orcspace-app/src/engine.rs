@@ -1798,9 +1798,11 @@ fn bad_request(error: String) -> (StatusCode, String) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::windows_utf8_shell_args;
     use super::{
         constant_time_token_eq, encode_terminal_input, encode_terminal_message_input, take_events,
-        windows_utf8_shell_args, EventQueue, TerminalEvent, WriteRequest, MAX_PENDING_EVENT_BYTES,
+        EventQueue, TerminalEvent, WriteRequest, MAX_PENDING_EVENT_BYTES,
     };
     use serde_json::json;
     use std::sync::atomic::AtomicU64;

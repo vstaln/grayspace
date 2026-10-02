@@ -95,8 +95,14 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          electron_binary="$(node -p "require('electron')")"
-          sandbox="$(dirname "$electron_binary")/chrome-sandbox"
+          # Finish the Electron runtime download first: `require('electron')` may
+          # download lazily and print progress to stdout, which must never be
+          # mixed into the path we hand to chown/chmod.
+          node node_modules/electron/install.js
+          electron_dist="$(cd node_modules/electron/dist && pwd)"
+          sandbox="$electron_dist/chrome-sandbox"
+          test -x "$electron_dist/electron" || { echo "Electron binary missing in $electron_dist" >&2; exit 1; }
+          test -f "$sandbox" || { echo "chrome-sandbox missing: $sandbox" >&2; exit 1; }
           sudo chown root:root "$sandbox"
           sudo chmod 4755 "$sandbox"
           printf 'module.exports = 42;\n' > "$RUNNER_TEMP/bytecode-probe.js"

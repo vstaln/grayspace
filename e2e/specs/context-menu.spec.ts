@@ -8,6 +8,7 @@ import {
   listTerminals,
   type OrcSpaceFixture
 } from '../helpers/app'
+import { WIDGET_CATALOG } from '../../src/renderer/src/lib/widgetCatalog'
 
 
 
@@ -50,7 +51,13 @@ test('right-click offers every canvas action and places widgets on the canvas', 
   await openContextMenu()
 
 
-  await expect(page.getByRole('menu', { name: 'Context Menu' }).getByRole('menuitem')).toHaveCount(11)
+  // Default favorites cover the whole catalog, so the menu must list every
+  // catalog entry, in catalog order — not just some number of items.
+  const items = page.getByRole('menu', { name: 'Context Menu' }).getByRole('menuitem')
+  await expect(items).toHaveCount(WIDGET_CATALOG.length)
+  expect(await items.evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')))).toEqual(
+    WIDGET_CATALOG.map(({ kind }) => `cm-${kind}`)
+  )
 
 
   await page.getByTestId('cm-timer').click()
@@ -108,15 +115,32 @@ test('maximizing a browser keeps its webview mounted', async () => {
   const webview = frame.locator('webview')
   await expect(webview).toHaveCount(1)
   await webview.evaluate((element) => element.setAttribute('data-mount-marker', 'kept'))
-  const before = await frame.boundingBox()
-  expect(before).not.toBeNull()
 
   await frame.getByTestId('widget-maximize').click()
-  await expect.poll(async () => (await frame.boundingBox())?.width ?? 0).toBeGreaterThan((before?.width ?? 0) * 1.5)
-  await expect.poll(async () => (await frame.boundingBox())?.height ?? 0).toBeGreaterThan((before?.height ?? 0) * 1.5)
-  const after = await frame.boundingBox()
-  expect(after?.width ?? 0).toBeGreaterThan((before?.width ?? 0) * 1.5)
-  expect(after?.height ?? 0).toBeGreaterThan((before?.height ?? 0) * 1.5)
+  // A maximized widget fills the canvas area below the 40px title bar
+  // (App.tsx widgetStyles). Compare against that available area instead of a
+  // growth ratio, which depends on the CI window size.
+  const canvasBox = await page.getByTestId('canvas').boundingBox()
+  expect(canvasBox).not.toBeNull()
+  const available = {
+    x: canvasBox!.x,
+    y: canvasBox!.y + 40,
+    width: canvasBox!.width,
+    height: canvasBox!.height - 40
+  }
+  await expect
+    .poll(async () => {
+      const box = await frame.boundingBox()
+      return box
+        ? Math.max(
+            Math.abs(box.x - available.x),
+            Math.abs(box.y - available.y),
+            Math.abs(box.width - available.width),
+            Math.abs(box.height - available.height)
+          )
+        : Infinity
+    })
+    .toBeLessThanOrEqual(2)
   await expect(webview).toHaveAttribute('data-mount-marker', 'kept')
 
   await frame.getByTestId('widget-maximize').click()
