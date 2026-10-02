@@ -6,14 +6,11 @@ name: Build installers
 # Linux and Windows installers are built on their native GitHub-hosted runners;
 # electron-builder cannot cross-build either target reliably.
 #
-# Auto-update: installed apps read the GitHub release of orcspace/Orcspace-Uptade
+# Auto-update: installed apps read the GitHub release of this repository
 # (a public repository) and look for one feed file per platform:
 #   latest.yml        Windows (NSIS)
 #   latest-linux.yml  Linux    (AppImage and .deb)
 # All of them are uploaded to that release, next to the installers they describe.
-#
-# Secrets (all optional except UPDATE_RELEASE_TOKEN for publishing):
-#   UPDATE_RELEASE_TOKEN        token with contents:write on orcspace/Orcspace-Uptade
 #
 # Artifacts are attached to the run — download them from the run's summary page.
 
@@ -173,29 +170,12 @@ jobs:
         with:
           path: release-assets
 
-      # Publish both platform installers to the source repository.
-      - name: Publish installers
+      # This repository is the release/update channel, so publish directly here
+      # with the workflow token. Keeping one publish step avoids duplicate assets.
+      - name: Publish installers and update feeds
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            release-assets/orcspace-windows/*.exe
-            release-assets/orcspace-windows/*.exe.blockmap
-            release-assets/orcspace-windows/latest.yml
-            release-assets/orcspace-windows/checksums.json
-            release-assets/orcspace-linux-x64/*.AppImage
-            release-assets/orcspace-linux-x64/*.deb
-            release-assets/orcspace-linux-x64/*.tar.gz
-            release-assets/orcspace-linux-x64/latest-linux.yml
-            release-assets/orcspace-linux-x64/checksums-linux.json
-          fail_on_unmatched_files: true
-          draft: false
-          prerelease: false
-
-      - name: Publish installers and update feeds for in-app updates
-        uses: softprops/action-gh-release@v2
-        with:
-          repository: orcspace/Orcspace-Uptade
-          token: ${{ secrets.UPDATE_RELEASE_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: |
             release-assets/orcspace-windows/*.exe
             release-assets/orcspace-windows/*.exe.blockmap
