@@ -1,6 +1,6 @@
 {
   "name": "orcspace",
-  "version": "2.2.10",
+  "version": "2.2.11",
   "description": "OrcSpace — an infinite canvas for terminals and agent coordination",
   "type": "module",
   "main": "./out/main/index.js",
