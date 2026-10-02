@@ -2,7 +2,7 @@ import * as fs from 'fs'
 import { join } from 'path'
 
 const isDev = Boolean(process.env['ELECTRON_RENDERER_URL'] || process.env.NODE_ENV === 'development')
-export const APP_TITLE = isDev ? 'OrcSpace (Dev)' : 'OrcSpace'
+export const APP_TITLE = isDev ? 'GraySpace (Dev)' : 'GraySpace'
 
 function configuredPort(value: string | undefined, fallback: number): number {
   const parsed = Number(value)

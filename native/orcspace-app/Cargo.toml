@@ -1,8 +1,8 @@
 [package]
 name = "orcspace-app"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
-description = "Native Rust OrcSpace desktop application"
+description = "Native Rust GraySpace desktop application"
 
 [lib]
 name = "orcspace_app"

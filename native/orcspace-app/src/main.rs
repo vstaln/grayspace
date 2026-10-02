@@ -56,12 +56,12 @@ fn main() -> Result<()> {
             .with_min_inner_size([960.0, 640.0])
             .with_decorations(cfg!(target_os = "macos"))
             .with_active(std::env::var_os("ORCSPACE_CAPTURE_PATH").is_none())
-            .with_title("OrcSpace"),
+            .with_title("GraySpace"),
         ..Default::default()
     };
 
     eframe::run_native(
-        "OrcSpace",
+        "GraySpace",
         options,
         Box::new(move |cc| {
             // Applied before the first frame so nothing flashes in egui's
