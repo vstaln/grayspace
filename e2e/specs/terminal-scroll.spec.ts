@@ -9,6 +9,7 @@ import {
   waitForTerminalOutput,
   type OrcSpaceFixture
 } from '../helpers/app'
+import { runInterruptScenario, type ScenarioShell } from '../helpers/interruptScenario'
 
 
 
@@ -127,49 +128,22 @@ test('the wheel scrolls terminal scrollback, even while a TUI tracks the mouse',
   await expect.poll(firstVisibleLine).toBe(bottom)
 })
 
-test('Ctrl+C returns the next shell prompt to the live bottom', async () => {
-  const { page } = ctx
-  const knownBefore = (await listTerminals(ctx)).map((terminal) => terminal.id)
-  await openTerminalFromCanvas()
-  const id = await waitForTerminalShell(ctx, page, knownBefore)
-  const frame = terminalFrame(page)
-  const terminal = frame.getByTestId('terminal-xterm')
-  await terminal.click()
-  await frame.locator('textarea').focus()
+const interruptShells: ScenarioShell[] = process.platform === 'win32' ? ['cmd', 'powershell'] : ['posix']
 
-  await page.keyboard.type('cmd /c "for /L %i in (1,1,160) do @echo old%i"')
-  await page.keyboard.press('Enter')
-  await waitForTerminalOutput(ctx, id, (output) => output.includes('old160'))
-
-  const rows = terminal.locator('.xterm-rows')
-  const firstVisibleLine = async (): Promise<number> => rows.evaluate((element) => {
-    for (const row of Array.from(element.children)) {
-      const match = /^old(\d+)\s*$/.exec(row.textContent ?? '')
-      if (match) return Number(match[1])
+for (const shell of interruptShells) {
+  test(`Ctrl+C after a TUI leaves the next ${shell} prompt and command at the live bottom`, async () => {
+    const { page } = ctx
+    if (process.platform === 'win32') {
+      await page.evaluate((windowsShell) => window.api.settings.set({ windowsShell }), shell as 'cmd' | 'powershell')
     }
-    return -1
+    try {
+      const knownBefore = (await listTerminals(ctx)).map((terminal) => terminal.id)
+      await openTerminalFromCanvas()
+      await waitForTerminalShell(ctx, page, knownBefore)
+      await runInterruptScenario(page, terminalFrame(page).getByTestId('terminal-xterm'), shell)
+    } finally {
+      if (process.platform === 'win32') await page.evaluate(() => window.api.settings.set({ windowsShell: 'cmd' }))
+      await closeTerminal(page)
+    }
   })
-  await expect.poll(firstVisibleLine).toBeGreaterThan(1)
-  const box = await terminal.boundingBox()
-  if (!box) throw new Error('terminal pane has no box')
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
-  await page.mouse.wheel(0, -10_000)
-  await expect.poll(firstVisibleLine).toBe(1)
-
-  // Leave a foreground process with the same alternate-buffer/origin state as
-  // a TUI, then interrupt it while the viewport is still at old scrollback.
-  await page.keyboard.type(
-    'powershell -NoProfile -Command "$e=[char]27; [Console]::Write($e+\'[?1049h\'+$e+\'[?1000h\'+$e+\'[?6h\'+$e+\'[3;20r\'); while ($true) { Start-Sleep -Milliseconds 100 }"'
-  )
-  await page.keyboard.press('Enter')
-  await page.waitForTimeout(500)
-  await page.keyboard.press('Control+C')
-  await page.keyboard.type('echo recovery-marker')
-  await page.keyboard.press('Enter')
-  await waitForTerminalOutput(ctx, id, (output) => output.includes('recovery-marker'))
-
-  // The output API sees the marker even when the renderer is pinned to old
-  // scrollback. This DOM assertion verifies that the user can actually see it.
-  await expect(rows).toContainText('recovery-marker')
-  await closeTerminal(page)
-})
+}

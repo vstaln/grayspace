@@ -54,6 +54,14 @@ export const MOUSE_REPORTING_OFF =
  * a reset — wants the normal screen back. The scrollback is on the normal
  * buffer, so nothing the user wants is lost by leaving the alternate one; the
  * only thing discarded is the frame of the application that died.
+ *
+ * Origin mode and the scrolling region are reset inside a DECSC/DECRC pair.
+ * Both `CSI ?6l` and `CSI r` home the cursor to row 1, column 1 as a side
+ * effect. Without the save/restore, every recovery after Ctrl+C left the
+ * cursor at the top of the screen: the shell's next prompt (and whatever the
+ * user typed) was printed over the old output instead of below it, and under
+ * ConPTY the emulator's cursor no longer matched the cursor ConPTY renders
+ * from. The restore puts the cursor back on the row the shell is writing to.
  */
 export const APP_OWNED_MODE_RESET =
-  `${MOUSE_REPORTING_OFF}\x1b[?2004l\x1b[?2026l\x1b[?1049l\x1b[?25h\x1b[?7h\x1b[?6l\x1b[4l\x1b[r`
+  `${MOUSE_REPORTING_OFF}\x1b[?2004l\x1b[?2026l\x1b[?1049l\x1b[?25h\x1b[?7h\x1b[4l\x1b7\x1b[?6l\x1b[r\x1b8`

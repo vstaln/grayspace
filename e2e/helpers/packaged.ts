@@ -17,8 +17,14 @@ async function freePort(): Promise<number> {
   })
 }
 
+/** The packaged executable: `ORCSPACE_PACKAGED`, or electron-builder's default unpacked output. */
+export function packagedExecutable(): string {
+  if (process.env.ORCSPACE_PACKAGED) return path.resolve(process.env.ORCSPACE_PACKAGED)
+  return path.resolve(process.platform === 'win32' ? 'dist/win-unpacked/OrcSpace.exe' : 'dist/linux-unpacked/orcspace')
+}
+
 export async function launchPackaged() {
-  const executable = path.resolve(process.env.ORCSPACE_PACKAGED || 'dist/win-unpacked/OrcSpace.exe')
+  const executable = packagedExecutable()
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orcspace-packaged-e2e-'))
   const debugPort = await freePort()
   const env: NodeJS.ProcessEnv = { ...process.env }
@@ -26,11 +32,23 @@ export async function launchPackaged() {
   delete env.ELECTRON_RUN_AS_NODE
   delete env.ORCSPACE_TEST_USER_DATA
   delete env.ORCSPACE_DEV_USER_DATA
+  // The Chromium sandbox stays on: on Linux the caller provides a display and
+  // a setuid chrome-sandbox, exactly as the .deb installs it.
   const child = spawn(executable, [`--user-data-dir=${profileDir}`, `--remote-debugging-port=${debugPort}`, '--disable-gpu'], {
-    env, windowsHide: true, stdio: 'ignore'
+    env, windowsHide: true, stdio: 'ignore', detached: process.platform !== 'win32'
   })
   const stop = async () => {
-    if (child.pid && child.exitCode === null) spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    if (child.pid && child.exitCode === null && child.signalCode === null) {
+      if (process.platform === 'win32') {
+        spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+      } else {
+        try { process.kill(-child.pid, 'SIGTERM') } catch {}
+        await Promise.race([new Promise((resolve) => child.once('exit', resolve)), delay(5_000)])
+        if (child.exitCode === null && child.signalCode === null) {
+          try { process.kill(-child.pid, 'SIGKILL') } catch {}
+        }
+      }
+    }
     await delay(300)
     fs.rmSync(profileDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
   }
