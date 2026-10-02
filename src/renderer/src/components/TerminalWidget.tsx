@@ -34,6 +34,9 @@ const cachedSubmit = '\r'
 
 /** Keep xterm and the PTY at one geometry while a widget is being resized. */
 const RESIZE_SETTLE_DELAY_MS = 150
+const INTERRUPT_RECOVERY_DELAY_MS = 400
+const INTERRUPT_RECOVERY_RETRY_MS = 120
+const INTERRUPT_RECOVERY_MAX_MS = 5_000
 
 
 
@@ -244,6 +247,9 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     // history being replayed.
     let restoreInFlight = false
     let interruptRecoveryPending = false
+    let interruptRecoveryDeadline = 0
+    let deferredPtyInput = ''
+    let deferredPtyInputTimer: ReturnType<typeof setTimeout> | null = null
     let cancelRestore: (() => void) | undefined
     const flushWrites = (): void => {
       flushScheduled = false
@@ -381,6 +387,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     let fitTimer: ReturnType<typeof setTimeout> | null = null
     const markInterruptRecoveryPending = (): void => {
       interruptRecoveryPending = true
+      interruptRecoveryDeadline = performance.now() + INTERRUPT_RECOVERY_MAX_MS
       // A resize callback captured while the TUI owned the alternate buffer
       // must not be replayed after Ctrl+C returns to the shell. Remember the
       // live bottom immediately; waiting 400ms leaves a visible race where the
@@ -395,10 +402,13 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     }
     const settleInterruptRecovery = (): void => {
       if (!mounted || term.buffer.active.type === 'alternate') return
+      clearInterruptRecoveryTimer()
       try { term.scrollToBottom() } catch {}
       const activeBuffer = term.buffer.active
       rememberViewport(id, { line: activeBuffer.viewportY, atBottom: true })
       interruptRecoveryPending = false
+      interruptRecoveryDeadline = 0
+      scheduleDeferredPtyInputFlush()
     }
     const restoreResizeAnchor = (generation: number): void => {
       if (restoreInFlight || interruptRecoveryPending || generation !== resizeAnchorGeneration || !resizeAnchor) return
@@ -625,6 +635,8 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
         clearModeRecoveryTimer()
         clearInterruptRecoveryTimer()
         interruptRecoveryPending = false
+        interruptRecoveryDeadline = 0
+        scheduleDeferredPtyInputFlush()
         if (mounted) setStartupNotice(null)
       }
       if (child === 'exited') {
@@ -663,9 +675,22 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       if (!mounted) return
       const modes = readEmulatorModes()
       if (modes.bufferType !== 'normal' || (modes.mouseTracking ?? 'none') !== 'none') {
-        // Ctrl+C was handled by a still-running TUI. Do not keep suppressing
-        // legitimate viewport changes after that application remains alive.
-        interruptRecoveryPending = false
+        // The first check can still land while the TUI is unwinding. Do not
+        // release the stale-anchor guard yet: the shell prompt may arrive in
+        // the next PTY batch and a resize in between would pin it to the old
+        // TUI viewport. Retry until the buffer is normal, then settle once.
+        const remaining = interruptRecoveryDeadline - performance.now()
+        if (remaining <= 0) {
+          interruptRecoveryPending = false
+          interruptRecoveryDeadline = 0
+          scheduleDeferredPtyInputFlush()
+          return
+        }
+        if (interruptRecoveryTimer !== null) return
+        interruptRecoveryTimer = setTimeout(() => {
+          interruptRecoveryTimer = null
+          renderQueue.afterPending(recoverInterruptedShell)
+        }, Math.min(INTERRUPT_RECOVERY_RETRY_MS, remaining))
         return
       }
       if (
@@ -687,7 +712,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       interruptRecoveryTimer = setTimeout(() => {
         interruptRecoveryTimer = null
         renderQueue.afterPending(recoverInterruptedShell)
-      }, 400)
+      }, INTERRUPT_RECOVERY_DELAY_MS)
     }
 
     const dataUnsub = window.api.terminal.onData(id, (data, deliveryId) => {
@@ -744,6 +769,43 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
         }
       })
     }
+    function flushDeferredPtyInput(): void {
+      if (!mounted || interruptRecoveryPending || !deferredPtyInput) return
+      const data = deferredPtyInput
+      deferredPtyInput = ''
+      writePty(data)
+    }
+    function scheduleDeferredPtyInputFlush(): void {
+      if (!mounted || interruptRecoveryPending || !deferredPtyInput || deferredPtyInputTimer !== null) return
+      // Give the shell one event turn to paint the prompt after the TUI has
+      // released the normal buffer. Sending immediately can overwrite the
+      // first prompt characters through ConPTY while it is still unwinding.
+      deferredPtyInputTimer = setTimeout(() => {
+        deferredPtyInputTimer = null
+        flushDeferredPtyInput()
+      }, 75)
+    }
+    function queuePtyInput(data: string): void {
+      if (!data) return
+      let rest = data
+      while (true) {
+        const interrupt = rest.search(/[\x03\x04]/)
+        if (interrupt < 0) break
+        const before = rest.slice(0, interrupt)
+        if (before) queuePtyText(before)
+        writePty(rest[interrupt])
+        rest = rest.slice(interrupt + 1)
+      }
+      if (rest) queuePtyText(rest)
+    }
+    function queuePtyText(data: string): void {
+      if (interruptRecoveryPending || deferredPtyInput) {
+        deferredPtyInput += data
+        if (!interruptRecoveryPending) scheduleDeferredPtyInputFlush()
+        return
+      }
+      writePty(data)
+    }
     let promptCapture = EMPTY_TERMINAL_PROMPT_CAPTURE
     const learnAgentFromCommand = (command: string): boolean => {
       if (agentIdentityLockedRef.current) return false
@@ -779,7 +841,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
         const launchedAgent = learnAgentFromCommand(submitted.command)
         if (!launchedAgent) rememberPrompt(submitted.prompt)
       }
-      writePty(data)
+      queuePtyInput(data)
     })
     term.onResize(({ cols, rows }) => syncPtySize(cols, rows))
 
@@ -795,7 +857,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
           save: (bytes, ext) => window.api.media.saveBytesScratch(bytes, ext),
           stage: (bytes) => window.api.media.stageClipboardImage(bytes),
           paste: (text) => term.paste(text),
-          write: writePty,
+          write: queuePtyInput,
           report: (message) => batchedWrite(`\r\n\x1b[31m[${message.replace(/[\x00-\x1f\x7f]/g, ' ')}]\x1b[0m\r\n`),
           alive: () => mounted
         })
@@ -1521,6 +1583,10 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       if (queuedLaunchTimer !== null) clearTimeout(queuedLaunchTimer)
       clearModeRecoveryTimer()
       clearInterruptRecoveryTimer()
+      if (deferredPtyInputTimer !== null) {
+        clearTimeout(deferredPtyInputTimer)
+        deferredPtyInputTimer = null
+      }
       renderQueue.dispose()
       if (fitTimer !== null) {
         clearTimeout(fitTimer)

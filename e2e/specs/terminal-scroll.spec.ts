@@ -4,6 +4,7 @@ import {
   waitForCanvas,
   closeOrcSpace,
   terminalFrame,
+  listTerminals,
   waitForTerminalShell,
   waitForTerminalOutput,
   type OrcSpaceFixture
@@ -29,6 +30,40 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await closeOrcSpace(ctx)
 })
+
+async function openTerminalFromCanvas(): Promise<void> {
+  const canvas = ctx.page.getByTestId('canvas')
+  const point = await canvas.evaluate((el) => {
+    const rect = el.getBoundingClientRect()
+    const widgets = Array.from(el.querySelectorAll<HTMLElement>('.widget')).map((widget) => widget.getBoundingClientRect())
+    const candidates = [
+      { x: 48, y: 72 },
+      { x: rect.width - 48, y: 72 },
+      { x: 48, y: rect.height - 72 },
+      { x: rect.width - 48, y: rect.height - 72 }
+    ]
+    return candidates.find(({ x, y }) =>
+      x >= 0 && y >= 0 && x < rect.width && y < rect.height &&
+      !widgets.some((widget) => {
+        const px = rect.left + x
+        const py = rect.top + y
+        return px >= widget.left && px <= widget.right && py >= widget.top && py <= widget.bottom
+      })
+    ) ?? candidates[0]
+  })
+  await canvas.click({ button: 'right', position: point })
+  await ctx.page.getByTestId('cm-terminal').click()
+}
+
+async function closeTerminal(page: OrcSpaceFixture['page']): Promise<void> {
+  const terminals = page.locator('[data-testid^="widget-terminal-"]')
+  while (await terminals.count()) {
+    const before = await terminals.count()
+    await terminalFrame(page).getByTestId('widget-close').click()
+    await page.getByTestId('confirm-accept').click()
+    await expect(terminals).toHaveCount(before - 1)
+  }
+}
 
 test('the wheel scrolls terminal scrollback, even while a TUI tracks the mouse', async () => {
   const { page } = ctx
@@ -115,7 +150,10 @@ test('Ctrl+C returns the next shell prompt to the live bottom', async () => {
     return -1
   })
   await expect.poll(firstVisibleLine).toBeGreaterThan(1)
-  await page.mouse.wheel(0, -800)
+  const box = await terminal.boundingBox()
+  if (!box) throw new Error('terminal pane has no box')
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.wheel(0, -10_000)
   await expect.poll(firstVisibleLine).toBe(1)
 
   // Leave a foreground process with the same alternate-buffer/origin state as
