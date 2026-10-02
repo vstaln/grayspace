@@ -405,7 +405,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       applyViewportAnchor(resizeAnchor)
     }
     const scheduleResizeAnchorRestore = (anchor: ViewportAnchor): void => {
-      if (restoreInFlight) return
+      if (restoreInFlight || interruptRecoveryPending) return
       resizeAnchor = anchor
       resizeAnchorGeneration++
       const generation = resizeAnchorGeneration
@@ -426,8 +426,20 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
       fitTimer = setTimeout(() => {
         fitTimer = null
         if (!mounted || container.clientWidth === 0 || container.clientHeight === 0) return
-        const anchor = captureViewportAnchor()
         fit.fit()
+        // A process exit can resize the PTY while its final escape sequences
+        // are still being parsed. Never capture or replay that transient
+        // viewport: it belongs to the dead foreground program and would pull
+        // the next shell prompt back to the old top position.
+        if (interruptRecoveryPending) {
+          resizeAnchor = null
+          resizeAnchorGeneration += 1
+          try { term.scrollToBottom() } catch {}
+          const activeBuffer = term.buffer.active
+          rememberViewport(id, { line: activeBuffer.viewportY, atBottom: true })
+          return
+        }
+        const anchor = captureViewportAnchor()
         scheduleResizeAnchorRestore(anchor)
       }, RESIZE_SETTLE_DELAY_MS)
     }
@@ -445,7 +457,11 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
     const writeParsedDisposable = term.onWriteParsed(() => {
       keepCursorBlinking()
       if (interruptRecoveryPending) {
-        if (term.buffer.active.type !== 'alternate') settleInterruptRecovery()
+        if (term.buffer.active.type !== 'alternate') {
+          try { term.scrollToBottom() } catch {}
+          const activeBuffer = term.buffer.active
+          rememberViewport(id, { line: activeBuffer.viewportY, atBottom: true })
+        }
         return
       }
       if (!resizeAnchor || performance.now() > resizeRestoreUntil) return
