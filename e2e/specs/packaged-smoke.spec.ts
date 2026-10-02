@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { test, expect } from '@playwright/test'
 import { launchPackaged } from '../helpers/packaged'
 import { waitForCanvas } from '../helpers/app'
@@ -8,6 +10,8 @@ import { waitForCanvas } from '../helpers/app'
 // real installer output is the only way that path is exercised at all.
 test('the packaged app opens a terminal that reaches its shell prompt', async () => {
   test.setTimeout(180_000)
+  const executable = path.resolve(process.env.ORCSPACE_PACKAGED || 'dist/win-unpacked/OrcSpace.exe')
+  test.skip(!fs.existsSync(executable), `packaged executable is not present: ${executable}; build the Windows package first`)
   const app = await launchPackaged()
   try {
     const { page } = app

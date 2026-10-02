@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url'
 
 const TOKEN_HEADER = 'x-orcspace-token'
 
-const ORC_VERSION = '2.2.11'
+const ORC_VERSION = '2.2.20'
 
 let cachedCandidateDirs
 function candidateDirs() {

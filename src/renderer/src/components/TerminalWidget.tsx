@@ -887,7 +887,7 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
         }
       }
       if (!mounted) return false
-      writePty(shortcut)
+      queuePtyInput(shortcut)
       return true
     }
 
@@ -948,7 +948,9 @@ function TerminalWidget({ id, surface = 'canvas', title, agentId, flipped = fals
             term.clearSelection()
             return false
           }
-          writePty('\x03')
+          markInterruptRecoveryPending()
+          armInterruptRecovery()
+          queuePtyInput('\x03')
           return false
         }
 

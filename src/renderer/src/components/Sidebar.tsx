@@ -264,11 +264,14 @@ export function SettingsModal({
   useFocusTrap(dialogRef, open)
 
   useEffect(() => {
-    if (open) {
+    // Settings can refresh while the dialog is open (for example when a new
+    // terminal is created). Never overwrite text the user is editing with a
+    // concurrent settings snapshot, or a clear/save action can be lost.
+    if (open && !favoriteNamesDirty) {
       setFavoriteNamesText((settings.favoriteTerminalNames ?? []).join('\n'))
-      setFavoriteNamesDirty(false)
     }
-  }, [open, settings.favoriteTerminalNames])
+    if (!open) setFavoriteNamesDirty(false)
+  }, [open, settings.favoriteTerminalNames, favoriteNamesDirty])
 
   useEffect(() => {
     if (open) setImageShortcut(settings.imageInsertShortcut || DEFAULT_IMAGE_INSERT_SHORTCUT)
