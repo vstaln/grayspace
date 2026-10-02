@@ -34,5 +34,7 @@ pub mod terminal_screen;
 pub mod theme;
 pub mod ui_preferences;
 pub mod versioned;
+#[cfg(feature = "webview")]
+pub mod webview;
 
 pub mod platform;

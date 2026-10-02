@@ -24,8 +24,17 @@ egui = "0.36.1"
 portable-pty = "0.9"
 vt100 = "0.16.2"
 vte = "0.15"
-image = { version = "0.25.10", default-features = false, features = ["png"] }
-rodio = { version = "0.22.2", features = ["playback"] }
+rgpui = "1.3"
+rgpui-platform = { version = "1.3", features = ["x11"] }
+wry = { version = "0.57", optional = true }
+
+# tendril 0.5.0 vs 0.5.1 split: wry 0.57's dom_query wants ^0.5.0 while rgpui
+# 1.3's Windows-only tendril wants 0.5.1. Linux never evaluates rgpui's
+# windows-only dep, but the resolver still unifies — so pin the whole
+# workspace here until either side publishes a compatible range.
+# ponytail: O(n) ceiling none; upgrade path is dropping this pin once
+# wry+rgpui agree on one tendril minor.
+raw-window-handle = { version = "0.6", features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 # preserve_order is load-bearing, not a preference: the command journal hashes
 # JSON.stringify's output, and JavaScript writes object keys in insertion order.
@@ -45,6 +54,15 @@ sha2 = "0.10"
 indexmap = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
 uuid = { version = "1", features = ["v4"] }
+log = "0.4"
+
+[dependencies.gtk]
+version = "0.18"
+optional = true
+
+[features]
+default = []
+webview = ["dep:wry", "dep:gtk"]
 
 # Unix only: kill(2) on a negative pid is what reaps a terminal's whole
 # process group. Already in the dependency graph via portable-pty, so this

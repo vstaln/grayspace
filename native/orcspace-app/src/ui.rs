@@ -1,8 +1,7 @@
 use crate::engine::{ControlServer, TerminalEvent, TerminalManager};
 use eframe::egui::{self, Color32, Sense, Vec2};
 use egui::containers::{CentralPanel, Panel};
-use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
-use std::{fs::File, io::BufReader, time::Duration};
+use std::time::Duration;
 
 /// What the toolbar's "+" can add beside a terminal.
 const WIDGETS: [&str; 4] = ["Music Player", "Files", "Plan", "Browser"];
@@ -916,23 +915,7 @@ impl eframe::App for OrcSpaceApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if let Some(path) = &self.capture_path {
             for event in ui.input(|input| input.events.clone()) {
-                if let egui::Event::Screenshot { image, .. } = event {
-                    let pixels: Vec<u8> = image
-                        .pixels
-                        .iter()
-                        .flat_map(|pixel| pixel.to_array())
-                        .collect();
-                    match image::save_buffer(
-                        path,
-                        &pixels,
-                        image.size[0] as u32,
-                        image.size[1] as u32,
-                        image::ColorType::Rgba8,
-                    ) {
-                        Ok(()) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
-                        Err(error) => self.last_error = Some(format!("UI capture: {error}")),
-                    }
-                }
+                self.last_error = Some("screenshots disabled in GraySpace 0.0.1".into());
             }
             // Long enough for the shell to draw its prompt; a QA run that has
             // to drive the terminal first asks for more.
@@ -1023,8 +1006,7 @@ impl eframe::App for OrcSpaceApp {
 
 struct MusicPlayer {
     path: String,
-    stream: Option<MixerDeviceSink>,
-    sink: Option<Player>,
+    playing: bool,
     error: Option<String>,
     queue: Vec<String>,
     current: Option<usize>,
@@ -1038,8 +1020,7 @@ impl Default for MusicPlayer {
     fn default() -> Self {
         Self {
             path: String::new(),
-            stream: None,
-            sink: None,
+            playing: false,
             error: None,
             queue: Vec::new(),
             current: None,
@@ -1052,40 +1033,11 @@ impl Default for MusicPlayer {
 }
 
 impl MusicPlayer {
-    fn play_index(&mut self, index: usize) -> Result<(), String> {
-        self.error = None;
-        let path = self
-            .queue
-            .get(index)
-            .ok_or("Track is no longer in the queue")?;
-        let file = File::open(path).map_err(|error| error.to_string())?;
-        let decoder = Decoder::try_from(BufReader::new(file)).map_err(|error| error.to_string())?;
-        let duration = decoder.total_duration();
-        if self.stream.is_none() {
-            self.stream =
-                Some(DeviceSinkBuilder::open_default_sink().map_err(|error| error.to_string())?);
-        }
-        let sink = Player::connect_new(self.stream.as_ref().unwrap().mixer());
-        sink.set_volume(self.volume);
-        sink.append(decoder);
-        sink.play();
-        self.sink = Some(sink);
-        self.current = Some(index);
-        self.duration = duration;
-        self.active = true;
-        Ok(())
+    fn play_index(&mut self, _index: usize) -> Result<(), String> {
+        Err("audio disabled in GraySpace 0.0.1".into())
     }
 
-    fn update(&mut self) {
-        if self.active && self.sink.as_ref().is_some_and(Player::empty) {
-            self.active = false;
-            if let Some(next) = next_track(self.current, self.queue.len(), self.repeat) {
-                if let Err(error) = self.play_index(next) {
-                    self.error = Some(error);
-                }
-            }
-        }
-    }
+    fn update(&mut self) {}
 
     fn show(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().id_salt("music-body").show(ui, |ui| {
@@ -1122,7 +1074,7 @@ impl MusicPlayer {
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("NOW PLAYING").size(9.0).color(orcspace_app::theme::text::FAINT));
                 ui.add(egui::Label::new(egui::RichText::new(title).size(14.0)).truncate());
-                ui.label(egui::RichText::new(if self.current.is_none() { "Add an audio file below to begin" } else if self.active && self.sink.as_ref().is_some_and(|sink| !sink.is_paused()) { "Audio file · Playing" } else { "Audio file · Paused" }).size(10.0).color(orcspace_app::theme::text::FAINT));
+                ui.label(egui::RichText::new(if self.current.is_none() { "Add an audio file below to begin" } else if self.playing { "Audio file · Playing" } else { "Audio file · Paused" }).size(10.0).color(orcspace_app::theme::text::FAINT));
             });
         });
         ui.add_space(12.0);
@@ -1131,11 +1083,9 @@ impl MusicPlayer {
             if playback_button(ui, "Previous", self.queue.len() > 1).clicked() {
                 if let Err(error) = self.play_index(self.current.unwrap_or(0).saturating_sub(1)) { self.error = Some(error); }
             }
-            let paused = self.sink.as_ref().is_none_or(Player::is_paused) || !self.active;
-            if playback_button(ui, if paused { "Play" } else { "Pause" }, !self.queue.is_empty()).clicked() {
-                if let Some(sink) = self.sink.as_ref().filter(|sink| !sink.empty()) {
-                    if paused { sink.play(); } else { sink.pause(); }
-                } else if let Err(error) = self.play_index(self.current.unwrap_or(0)) { self.error = Some(error); }
+            let paused = true;
+            if playback_button(ui, "Play", !self.queue.is_empty()).clicked() {
+                if let Err(error) = self.play_index(self.current.unwrap_or(0)) { self.error = Some(error); }
             }
             let next = next_track(self.current, self.queue.len(), self.repeat);
             if playback_button(ui, "Stop", true).clicked() { self.stop(); }
@@ -1143,7 +1093,7 @@ impl MusicPlayer {
                 if let Err(error) = self.play_index(next.unwrap()) { self.error = Some(error); }
             }
         });
-        let position = self.sink.as_ref().map(Player::get_pos).unwrap_or_default().as_secs_f64();
+        let position = 0.0;
         let total = self.duration.unwrap_or_default().as_secs_f64();
         let mut seek = position.min(total);
         ui.horizontal(|ui| {
@@ -1151,9 +1101,7 @@ impl MusicPlayer {
             ui.label(egui::RichText::new(audio_time(position)).size(10.0).color(orcspace_app::theme::text::FAINT));
             let width = (ui.available_width() - 44.0).max(40.0);
             if track_slider(ui, width, &mut seek, total, total > 0.0).changed() {
-                if let Some(sink) = &self.sink {
-                    if let Err(error) = sink.try_seek(Duration::from_secs_f64(seek)) { self.error = Some(error.to_string()); }
-                }
+                self.error = Some("audio disabled in GraySpace 0.0.1".into());
             }
             ui.label(egui::RichText::new(audio_time(total)).size(10.0).color(orcspace_app::theme::text::FAINT));
         });
@@ -1166,7 +1114,6 @@ impl MusicPlayer {
                 let mut level = f64::from(self.volume);
                 if track_slider(ui, 96.0, &mut level, 1.0, true).changed() {
                     self.volume = level as f32;
-                    if let Some(sink) = &self.sink { sink.set_volume(self.volume); }
                 }
             });
         });
@@ -1207,11 +1154,7 @@ impl MusicPlayer {
     }
 
     fn stop(&mut self) {
-        if let Some(sink) = self.sink.take() {
-            sink.stop();
-        }
-        self.stream = None;
-        self.active = false;
+        self.playing = false;
     }
 }
 
