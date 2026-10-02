@@ -9,11 +9,65 @@ pub mod views_files;
 pub mod views_orchestration;
 pub mod views_planner;
 pub mod views_terminal;
+pub mod views_browser;
 
 use anyhow::Result;
 use crate::engine::{ControlServer, TerminalEvent, TerminalManager};
 use orcspace_app::ipc::persist_control_token;
 use rgpui::AppContext as _;
+
+/// Browser-tab shims over the vendored wry element (`orcspace_app::webview`,
+/// feature `webview`). They live on the bin crate because `views_browser`
+/// does: `webview.rs` is a lib module only when the feature is on, and the
+/// bin must compile with it off too.
+#[allow(dead_code)]
+pub fn next_webview_id() -> usize {
+    #[cfg(feature = "webview")]
+    {
+        orcspace_app::webview::WebView::next_id()
+    }
+    #[cfg(not(feature = "webview"))]
+    {
+        static NEXT_WV_ID: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(1);
+        NEXT_WV_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[allow(dead_code)]
+pub fn drain_closed_webviews() -> Vec<usize> {
+    #[cfg(feature = "webview")]
+    {
+        orcspace_app::webview::WebView::drain_closed()
+    }
+    #[cfg(not(feature = "webview"))]
+    {
+        Vec::new()
+    }
+}
+
+/// The Browser tab's element: the real wry child when the `webview` feature
+/// is on, a same-size placeholder div when it is off (default `cargo check`
+/// / `cargo test` builds).
+#[allow(dead_code)]
+pub fn webview_element(id: usize, url: String) -> rgpui::Div {
+    use rgpui::ParentElement as _;
+    use rgpui::Styled as _;
+    let _ = url;
+    // Real wry child when the `webview` feature is on (Task 5 wires the
+    // element here); same-size placeholder div when off so default
+    // `cargo check` / `cargo test` builds keep compiling.
+    #[cfg(feature = "webview")]
+    {
+        let _ = id;
+        todo!("webview feature element")
+    }
+    #[cfg(not(feature = "webview"))]
+    {
+        let _ = id;
+        rgpui::div().child("Browser - wry child renders here (Task 5)".to_string())
+    }
+}
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufWriter, Write};

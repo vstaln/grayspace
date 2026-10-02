@@ -1,4 +1,5 @@
 use rgpui::*;
+use rgpui::ParentElement as _;
 
 fn load_orchestration_store() -> orcspace_app::orchestration::OrchestrationStore {
     let path = orcspace_app::ipc::user_data_dir().join("orchestration.json");
@@ -104,12 +105,13 @@ impl Render for RootView {
                     1 => crate::views_planner::planner_pane().into_any_element(),
                     2 => crate::views_files::files_pane(&std::env::current_dir().unwrap_or_default())
                         .into_any_element(),
-                    3 => div()
-                        .flex_1()
-                        .text_color(rgb(0xa6adc8))
-                        .text_sm()
-                        .child("Browser — wry child renders here (Task 5)")
-                        .into_any_element(),
+                    3 => {
+                        let state = crate::views_browser::BrowserState::new(
+                            self.browser_url.clone(),
+                            self.browser_id,
+                        );
+                        state.render().into_any_element()
+                    }
                     _ => {
                         let store = load_orchestration_store();
                         crate::views_orchestration::orchestration_pane(&store).into_any_element()
