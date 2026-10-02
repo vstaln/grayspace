@@ -28,7 +28,7 @@ async function main() {
   const env = { ...process.env }
   delete env.WORKSPACE_CONTROL_PORT
   delete env.ELECTRON_RUN_AS_NODE
-  const child = spawn('xvfb-run', ['-a', binary, `--user-data-dir=${profile}`, '--no-sandbox', '--disable-gpu'], {
+  const child = spawn('xvfb-run', ['-a', binary, `--user-data-dir=${profile}`, '--disable-gpu'], {
     env,
     stdio: 'ignore',
     detached: true

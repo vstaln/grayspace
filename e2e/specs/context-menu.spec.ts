@@ -17,12 +17,12 @@ import { WIDGET_CATALOG } from '../../src/renderer/src/lib/widgetCatalog'
 
 let ctx: OrcSpaceFixture
 
-test.beforeAll(async () => {
+test.beforeEach(async () => {
   ctx = await launchOrcSpace()
   await waitForCanvas(ctx.page)
 })
 
-test.afterAll(async () => {
+test.afterEach(async () => {
   await closeOrcSpace(ctx)
 })
 
@@ -30,7 +30,6 @@ async function openContextMenu(): Promise<void> {
   const canvas = ctx.page.getByTestId('canvas')
   const position = await canvas.evaluate((el) => {
     const canvasRect = el.getBoundingClientRect()
-    const widgets = Array.from(el.querySelectorAll<HTMLElement>('.widget')).map((widget) => widget.getBoundingClientRect())
     const candidates: Array<{ x: number; y: number }> = []
     for (let y = 80; y < canvasRect.height; y += 80) {
       for (let x = 80; x < canvasRect.width; x += 120) candidates.push({ x, y })
@@ -38,7 +37,8 @@ async function openContextMenu(): Promise<void> {
     return candidates.find(({ x, y }) => {
       const px = canvasRect.left + x
       const py = canvasRect.top + y
-      return !widgets.some((rect) => px >= rect.left && px <= rect.right && py >= rect.top && py <= rect.bottom)
+      const target = document.elementFromPoint(px, py)
+      return target instanceof HTMLElement && !target.closest('.widget') && el.contains(target)
     }) ?? { x: 80, y: 80 }
   })
   await canvas.click({ button: 'right', position })

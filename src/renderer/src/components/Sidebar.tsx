@@ -261,16 +261,30 @@ export function SettingsModal({
   const [open, setOpen] = useState(false)
   const dialogRef = useRef<HTMLDivElement>(null)
   const mainRef = useRef<HTMLElement>(null)
+  const favoriteNamesSyncRef = useRef<string | null>(null)
   useFocusTrap(dialogRef, open)
 
   useEffect(() => {
     // Settings can refresh while the dialog is open (for example when a new
     // terminal is created). Never overwrite text the user is editing with a
     // concurrent settings snapshot, or a clear/save action can be lost.
-    if (open && !favoriteNamesDirty) {
-      setFavoriteNamesText((settings.favoriteTerminalNames ?? []).join('\n'))
+    if (!open) {
+      setFavoriteNamesDirty(false)
+      favoriteNamesSyncRef.current = null
+      return
     }
-    if (!open) setFavoriteNamesDirty(false)
+    if (favoriteNamesDirty) return
+
+    const current = settings.favoriteTerminalNames ?? []
+    const synced = favoriteNamesSyncRef.current
+    if (synced !== null) {
+      // update() resolves before every settings:onChange subscriber has
+      // delivered the new snapshot. Do not let that stale snapshot restore
+      // names the user has just cleared or saved.
+      if (JSON.stringify(current) !== synced) return
+      favoriteNamesSyncRef.current = null
+    }
+    setFavoriteNamesText(current.join('\n'))
   }, [open, settings.favoriteTerminalNames, favoriteNamesDirty])
 
   useEffect(() => {
@@ -281,8 +295,11 @@ export function SettingsModal({
     if (namesError || busy) return
     setBusy(true)
     try {
-      const saved = await update({ favoriteTerminalNames: favoriteNames })
+      const savedNames = favoriteNames
+      const saved = await update({ favoriteTerminalNames: savedNames })
       if (saved) {
+        setFavoriteNamesText(savedNames.join('\n'))
+        favoriteNamesSyncRef.current = JSON.stringify(savedNames)
         setFavoriteNamesDirty(false)
         setNotice('Favorite terminal names saved.')
       } else {

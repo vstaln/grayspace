@@ -21,6 +21,7 @@ const outputDir = join(dist, 'installers', 'linux')
 const skipTests = process.argv.includes('--skip-tests')
 const skipCi = process.argv.includes('--skip-ci')
 const dirtyBuild = process.argv.includes('--dirty')
+const packagedE2e = process.argv.includes('--packaged-e2e')
 let originalCliMode
 
 function run(command, args, env = process.env) {
@@ -47,6 +48,19 @@ function runLocalBin(name, args) {
   const command = join(root, 'node_modules', '.bin', `${name}${suffix}`)
   if (!existsSync(command)) throw new Error(`Missing local build tool: ${command}`)
   return run(command, args)
+}
+
+function prepareElectronSandbox() {
+  const sandbox = join(outputDir, 'linux-unpacked', 'chrome-sandbox')
+  if (!existsSync(sandbox)) throw new Error(`Packaged chrome-sandbox is missing: ${sandbox}`)
+  run('sudo', ['chown', 'root:root', sandbox])
+  run('sudo', ['chmod', '4755', sandbox])
+}
+
+function runPackagedE2e(executable) {
+  const playwright = join(root, 'node_modules', '.bin', 'playwright')
+  const args = ['test', 'e2e/specs/packaged-terminal-interrupt.spec.ts', '--project=ci']
+  run('xvfb-run', ['-a', playwright, ...args], { ...process.env, ORCSPACE_PACKAGED: executable })
 }
 
 function sha256(path) {
@@ -191,6 +205,7 @@ try {
   ])
 
   verifyUnpackedRelease(packageJson)
+  prepareElectronSandbox()
 
   // Find generated installer files
   const artifacts = []
@@ -207,6 +222,7 @@ try {
   }
   verifyUpdateFeed(packageJson, targets, expectedArtifacts)
   run(process.execPath, ['scripts/smoke-packaged-linux.cjs', join(outputDir, 'linux-unpacked')])
+  if (packagedE2e) runPackagedE2e(join(outputDir, 'linux-unpacked', 'orcspace'))
   rmSync(join(outputDir, 'linux-unpacked'), { recursive: true, force: true })
 
   const manifest = {

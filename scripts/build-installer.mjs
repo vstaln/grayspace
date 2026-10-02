@@ -18,6 +18,7 @@ const dist = join(root, 'dist')
 const skipTests = process.argv.includes('--skip-tests')
 const skipCi = process.argv.includes('--skip-ci')
 const dirtyBuild = process.argv.includes('--dirty')
+const packagedE2e = process.argv.includes('--packaged-e2e')
 
 
 
@@ -70,11 +71,19 @@ function runNpm(args) {
   return run(invocation.command, invocation.args, invocation.env)
 }
 
-function runLocalBin(name, args) {
+function runLocalBin(name, args, env = process.env) {
   const suffix = process.platform === 'win32' ? '.cmd' : ''
   const command = join(root, 'node_modules', '.bin', `${name}${suffix}`)
   if (!existsSync(command)) throw new Error(`Missing local build tool: ${command}`)
-  return run(command, args)
+  return run(command, args, env)
+}
+
+function runPackagedE2e(executable) {
+  const playwright = join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'playwright.cmd' : 'playwright')
+  const args = ['test', 'e2e/specs/packaged-terminal-interrupt.spec.ts', '--project=ci']
+  const env = { ...process.env, ORCSPACE_PACKAGED: executable }
+  if (process.platform === 'linux') run('xvfb-run', ['-a', playwright, ...args], env)
+  else run(playwright, args, env)
 }
 
 function sha256(path) {
@@ -194,6 +203,7 @@ try {
     if (!existsSync(artifact) || statSync(artifact).size === 0) throw new Error(`Required Windows release artifact is missing: ${artifact}`)
   }
   run(process.execPath, ['scripts/smoke-packaged.cjs', join(outputDir, 'win-unpacked')])
+  if (packagedE2e) runPackagedE2e(join(outputDir, 'win-unpacked', 'OrcSpace.exe'))
 
   if (!existsSync(installer) || statSync(installer).size < 10 * 1024 * 1024) {
     throw new Error(`Expected release artifact is missing or suspiciously small: ${installer}`)

@@ -37,7 +37,7 @@ jobs:
           - os: ubuntu-latest
             name: linux-x64
             script: dist:linux
-            build_args: '-- --skip-ci --skip-tests'
+            build_args: '-- --skip-ci --skip-tests --packaged-e2e'
             artifacts: |
               dist/installers/linux/*.AppImage
               dist/installers/linux/*.deb
@@ -47,7 +47,7 @@ jobs:
           - os: windows-latest
             name: windows
             script: dist
-            build_args: '-- --skip-ci --skip-tests'
+            build_args: '-- --skip-ci --skip-tests --packaged-e2e'
             artifacts: |
               dist/installers/windows/*.exe
               dist/installers/windows/*.exe.blockmap
