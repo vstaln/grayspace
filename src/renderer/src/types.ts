@@ -3,7 +3,7 @@
 
 
 
-export type WidgetKind = 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'image' | 'links' | 'music-player' | 'orchestration' | 'chat' | 'notes' | 'calendar' | 'kanban'
+export type WidgetKind = 'terminal' | 'planner' | 'files' | 'browser' | 'orchestration'
 
 export interface Widget {
   id: string
@@ -91,26 +91,16 @@ export const WIDGET_H = 420
 
 
 export const NON_MAXIMIZABLE: ReadonlySet<WidgetKind> = new Set<WidgetKind>([
-  'music-player',
   'orchestration'
 ])
 
 
 export const WIDGET_DEFAULTS: Record<WidgetKind, { title: string; w: number; h: number }> = {
   terminal: { title: 'Terminal', w: WIDGET_W, h: WIDGET_H },
-  timer: { title: 'Timer', w: 300, h: 220 },
   planner: { title: 'Planner', w: 420, h: 520 },
   files: { title: 'Files', w: 580, h: 480 },
-  'sys-monitor': { title: 'System Monitor', w: 460, h: 380 },
   browser: { title: 'Browser', w: 720, h: 480 },
-  image: { title: 'Image', w: 560, h: 420 },
-  links: { title: 'Links', w: 420, h: 360 },
-  'music-player': { title: 'Music Player', w: 460, h: 420 },
-  orchestration: { title: 'Orchestration', w: 520, h: 560 },
-  chat: { title: 'AI Chat', w: 560, h: 560 },
-  notes: { title: 'Notes', w: 520, h: 540 },
-  calendar: { title: 'Calendar', w: 560, h: 520 },
-  kanban: { title: 'Kanban', w: 760, h: 520 },
+  orchestration: { title: 'Orchestration', w: 520, h: 560 }
 }
 
 
@@ -129,10 +119,7 @@ export const WIDGET_DEFAULTS: Record<WidgetKind, { title: string; w: number; h: 
  * the size first and derive the position from the clamped result.
  */
 const WIDGET_MAX_SIZE: Partial<Record<WidgetKind, { w: number; h: number }>> = {
-  timer: { w: 360, h: 320 },
-  links: { w: 560, h: 520 },
   files: { w: 760, h: 620 },
-  'music-player': { w: 620, h: 580 },
   orchestration: { w: 760, h: 720 }
 }
 

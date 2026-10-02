@@ -22,10 +22,6 @@ describe('parseWidgetInvocation', () => {
     assert.equal(parseWidgetInvocation('/shell')?.kind, 'terminal')
     assert.equal(parseWidgetInvocation('/cmd')?.kind, 'terminal')
 
-    assert.equal(parseWidgetInvocation('/ai')?.kind, 'chat')
-    assert.equal(parseWidgetInvocation('/ask')?.kind, 'chat')
-    assert.equal(parseWidgetInvocation('/chat hello')?.initialCommand, 'hello')
-
     assert.equal(parseWidgetInvocation('/web https://example.com')?.kind, 'browser')
     assert.equal(parseWidgetInvocation('/browser')?.kind, 'browser')
 
@@ -37,18 +33,20 @@ describe('parseWidgetInvocation', () => {
     assert.equal(parseWidgetInvocation('/orch')?.kind, 'orchestration')
     assert.equal(parseWidgetInvocation('/agents')?.kind, 'orchestration')
 
-    assert.equal(parseWidgetInvocation('/sys')?.kind, 'sys-monitor')
-    assert.equal(parseWidgetInvocation('/monitor')?.kind, 'sys-monitor')
+    assert.equal(parseWidgetInvocation('/file')?.kind, 'files')
+  })
 
-    assert.equal(parseWidgetInvocation('/clock')?.kind, 'timer')
-    assert.equal(parseWidgetInvocation('/time')?.kind, 'timer')
+  test('removed widget kinds no longer resolve', () => {
+    for (const alias of ['/ai', '/ask', '/chat', '/sys', '/monitor', '/clock', '/time', '/music', '/link', '/note', '/calendar', '/kanban']) {
+      assert.equal(parseWidgetInvocation(alias), null, `${alias} must not resolve after the cut`)
+    }
   })
 
   test('supports prefix filter', () => {
-    assert.ok(parseWidgetInvocation('/ai', '/'))
-    assert.equal(parseWidgetInvocation('.ai', '/'), null)
-    assert.ok(parseWidgetInvocation('.ai', '.'))
-    assert.ok(parseWidgetInvocation('@ai', '@'))
+    assert.ok(parseWidgetInvocation('/orch', '/'))
+    assert.equal(parseWidgetInvocation('.orch', '/'), null)
+    assert.ok(parseWidgetInvocation('.orch', '.'))
+    assert.ok(parseWidgetInvocation('@orch', '@'))
   })
 
   test('returns null on unknown command name', () => {

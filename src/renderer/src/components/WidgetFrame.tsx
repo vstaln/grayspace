@@ -1,29 +1,15 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Check, Copy, Maximize2, Minimize2, Pencil, X } from 'lucide-react'
-import ClaudeIcon from './ClaudeIcon'
-import CodexIcon from './CodexIcon'
-import GrokIcon from './GrokIcon'
+import { ClaudeIcon, CodexIcon, CursorIcon, GrokIcon, KimiIcon, OpenCodeIcon } from './agent-icons'
 import AntigravityIcon from './AntigravityIcon'
-import OpenCodeIcon from './OpenCodeIcon'
-import CursorIcon from './CursorIcon'
-import KimiIcon from './KimiIcon'
 import TerminalWidget from './TerminalWidget'
 import { clearInitialCommand, queueInitialCommand, queueInitialCommandOnce } from '../lib/pendingTerminalCommands'
 import { capOldest } from '../lib/boundedCache'
-import TimerWidget from './TimerWidget'
 import PlannerWidget from './PlannerWidget'
 import OrchestrationWidget from './OrchestrationWidget'
 import FilesWidget from './FilesWidget'
-import SysMonitorWidget from './SysMonitorWidget'
 import BrowserWidget from './BrowserWidget'
-import LinksWidget from './LinksWidget'
-import MusicPlayerWidget from './MusicPlayerWidget'
-import ChatWidget from './ChatWidget'
-import ImageWidget from './ImageWidget'
-import NotesWidget from './NotesWidget'
-import CalendarWidget from './CalendarWidget'
-import KanbanWidget from './KanbanWidget'
 import ErrorBoundary from './ErrorBoundary'
 import { NON_MAXIMIZABLE, RESIZE_HANDLES, ResizeDir, Widget, WidgetKind } from '../types'
 import { copyText } from '../lib/clipboard'
@@ -751,32 +737,14 @@ function WidgetBody({
   terminalsFlipped: boolean
 }): React.JSX.Element {
   switch (widget.kind) {
-    case 'timer':
-      return <TimerWidget widgetId={widget.id} />
     case 'planner':
       return <PlannerWidget />
     case 'orchestration':
       return <OrchestrationWidget />
     case 'files':
       return <FilesWidget widgetId={widget.id} workspaceDir={workspaceDir} />
-    case 'sys-monitor':
-      return <SysMonitorWidget widgetId={widget.id} />
     case 'browser':
       return <BrowserWidget widgetId={widget.id} onFullscreenChange={onBrowserFullscreenChange} />
-    case 'image':
-      return <ImageWidget path={widget.imagePath} name={widget.imageName} />
-    case 'links':
-      return <LinksWidget widgetId={widget.id} />
-    case 'music-player':
-      return <MusicPlayerWidget widgetId={widget.id} />
-    case 'chat':
-      return <ChatWidget widgetId={widget.id} workspaceDir={workspaceDir} />
-    case 'notes':
-      return <NotesWidget />
-    case 'calendar':
-      return <CalendarWidget widgetId={widget.id} />
-    case 'kanban':
-      return <KanbanWidget widgetId={widget.id} />
     default:
       return <TerminalWidget id={widget.id} title={widget.title} surface="canvas" attachmentMode={attachmentMode} agentId={agentId} flipped={terminalsFlipped} onProcessExit={onProcessExit} />
   }

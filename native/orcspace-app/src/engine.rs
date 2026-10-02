@@ -305,7 +305,6 @@ impl TerminalManager {
         command.env("ORCSPACE_TERMINAL_ID", &id);
         command.env("ORCSPACE_AGENT_ID", &id);
         command.env("ORCSPACE_TOKEN", &self.inner.token);
-        command.env("ORCSPACE_NATIVE", "1");
         // See SOCKET_PATH_ENV: this is deliberately not ORCSPACE_URL, and a
         // test pins both sides of that contract against the real orc.mjs.
         if let Some(path) = self.control_socket() {

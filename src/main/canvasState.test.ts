@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { describe, test } from 'node:test'
-import { CanvasStore, sanitizeStrokesJs, sanitizeWidget, type CanvasDataState, type CanvasWidget } from './canvasState.ts'
+import { CanvasStore, sanitizeStrokesJs, type CanvasDataState, type CanvasWidget } from './canvasState.ts'
 import type { JournalEntry } from './core/index.ts'
 
 const point = (x: number, y: number) => ({ x, y })
@@ -253,29 +253,3 @@ describe('CanvasStore.reduce purity', () => {
   })
 })
 
-describe('Image widget persistence', () => {
-  test('keeps durable media references while rejecting oversized metadata', () => {
-    const image = sanitizeWidget({
-      id: 'image-1',
-      title: 'Screenshot',
-      kind: 'image',
-      imagePath: 'C:/Users/test/AppData/Roaming/OrcSpace/media/a.png',
-      imageName: 'a.png',
-      x: 0,
-      y: 0,
-      w: 560,
-      h: 420,
-      z: 1
-    })
-    assert.equal(image?.kind, 'image')
-    assert.equal(image?.imagePath, 'C:/Users/test/AppData/Roaming/OrcSpace/media/a.png')
-    assert.equal(image?.imageName, 'a.png')
-
-    const oversized = sanitizeWidget({
-      id: 'image-2', title: 'Bad', kind: 'image', imagePath: 'x'.repeat(4097),
-      x: 0, y: 0, w: 560, h: 420, z: 1
-    })
-    assert.ok(oversized, 'metadata should not invalidate the widget itself')
-    assert.equal(oversized?.imagePath, undefined)
-  })
-})

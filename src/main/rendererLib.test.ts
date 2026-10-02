@@ -58,7 +58,9 @@ describe('command input', () => {
     assert.equal(parseWidgetInvocation('/terminal')?.kind, 'terminal')
     assert.equal(parseWidgetInvocation('.files')?.kind, 'files')
     assert.equal(parseWidgetInvocation('@planner')?.kind, 'planner')
-    assert.equal(parseWidgetInvocation('/chat')?.kind, 'chat')
+    assert.equal(parseWidgetInvocation('@orchestration')?.kind, 'orchestration')
+    assert.equal(parseWidgetInvocation('/music-player'), null, 'removed kinds must not resolve')
+    assert.equal(parseWidgetInvocation('/chat'), null, 'removed kinds must not resolve')
     assert.equal(parseWidgetInvocation('terminal')?.kind, 'terminal')
   })
 

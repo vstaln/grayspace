@@ -70,3 +70,6 @@ native/*/*.node
 .audit-screens*/
 .ui-review/
 typescript-errors.txt
+
+# Local reference clones, not part of the app
+/reference/

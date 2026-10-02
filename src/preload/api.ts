@@ -481,7 +481,7 @@ export interface NotesApi {
 export interface CanvasWidget {
   id: string
   title: string
-  kind?: 'terminal' | 'timer' | 'planner' | 'files' | 'sys-monitor' | 'browser' | 'image' | 'links' | 'music-player' | 'orchestration' | 'chat' | 'notes' | 'calendar' | 'kanban'
+  kind?: 'terminal' | 'planner' | 'files' | 'browser' | 'orchestration'
   x: number
   y: number
   w: number

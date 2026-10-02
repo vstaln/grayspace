@@ -10,13 +10,6 @@ const WIDGET_ALIASES: Record<string, WidgetKind> = {
   cmd: 'terminal',
   files: 'files',
   file: 'files',
-  'sys-monitor': 'sys-monitor',
-  monitor: 'sys-monitor',
-  sys: 'sys-monitor',
-  system: 'sys-monitor',
-  timer: 'timer',
-  time: 'timer',
-  clock: 'timer',
   planner: 'planner',
   plan: 'planner',
   tasks: 'planner',
@@ -28,13 +21,6 @@ const WIDGET_ALIASES: Record<string, WidgetKind> = {
   workers: 'orchestration',
   browser: 'browser',
   web: 'browser',
-  links: 'links',
-  link: 'links',
-  music: 'music-player',
-  'music-player': 'music-player',
-  chat: 'chat',
-  ai: 'chat',
-  ask: 'chat'
 }
 
 export interface WidgetInvocation {

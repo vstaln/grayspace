@@ -1,9 +1,8 @@
 /**
  * The category-color palette for Notes (and, by extension, the Overview
- * graph's note nodes). Colors already in circulation elsewhere in the app —
- * SysMonitorWidget's CPU/RAM/limit indicators — reused here rather than
- * inventing a second, clashing accent vocabulary against the same
- * gray/white/charcoal base (ui/tokens.ts `monochrome`).
+ * graph's note nodes). Colors reused from the app's existing gray/white/
+ * charcoal base (ui/tokens.ts `monochrome`) rather than inventing a second,
+ * clashing accent vocabulary against it.
  */
 export const NOTE_CATEGORY_PALETTE = [
   '#7aa2f7', // blue

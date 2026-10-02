@@ -11,7 +11,6 @@ import {
   WidgetKind,
   WIDGET_DEFAULTS
 } from '../types'
-import { clearTimerPersist } from '../lib/timerPersist'
 import { clearInitialCommand } from '../lib/pendingTerminalCommands'
 import { applyDeltaToWidgets } from '../lib/canvasDeltaMerge'
 import { fitSpawnSize } from '../lib/canvasLayout'
@@ -103,24 +102,8 @@ function strokeBounds(stroke: Stroke): StrokeBounds {
  * canvas snapshot and the Code-session snapshot.
  */
 const PRUNABLE_WIDGET_PREFIXES = [
-  'orcspace-links:',
-  'orcspace-music-playlists:',
-  // MusicPlayerWidget writes the playlist/track cursor under its own prefix,
-  // and it was the one per-widget key this list never learned about: closing a
-  // music player left the entry behind, and the hydration sweep below skipped
-  // it too, so it survived for the life of the install.
-  'orcspace-music-index:',
-  'orcspace-music-volume:',
-  'orcspace-music-muted:',
   'orcspace-browser-url:',
-  'orcspace-browser-media:',
-  'orcspace-chat:messages:',
-  'orcspace-chat:config:',
-  // Cleared by name in removeWidget below, but only when the widget is still
-  // in `widgetsRef` at that moment. Listing it here also sweeps entries left
-  // by earlier installs, and both widgets are canvas-only (WidgetFrame is
-  // rendered from App alone), so "not on the canvas" is proof of garbage.
-  'orcspace-timer:'
+  'orcspace-browser-media:'
 ] as const
 
 /**
@@ -798,7 +781,6 @@ export function useCanvas({ favoriteTerminalNames = [] }: UseCanvasOptions = {})
     // A launch command that never made it to the pty must not outlive the
     // widget it was meant for.
     clearInitialCommand(id)
-    if ((target?.kind ?? 'terminal') === 'timer') clearTimerPersist(id)
     if (target && (target.kind ?? 'terminal') === 'terminal') {
 
 

@@ -31,7 +31,6 @@ import {
   serializeZoomBaseline,
   type ZoomAdaptationState
 } from './lib/responsiveCanvasZoom'
-import { DEFAULT_IMAGE_INSERT_SHORTCUT, matchesShortcut } from './lib/keyboardShortcut'
 import { isBrowserMounted, isCodeBrowserGuest } from './lib/mountedBrowsers'
 
 
@@ -736,34 +735,6 @@ function OrcSpaceCanvas({
     [canvas.addWidget, clampToVisibleWorld]
   )
 
-  const insertingImageRef = useRef(false)
-  const insertImageFromClipboard = useCallback(async (): Promise<void> => {
-    if (insertingImageRef.current) return
-    insertingImageRef.current = true
-    try {
-      const saved = await window.api.media.saveClipboard()
-      if (!saved) {
-        setCanvasNotice('No image found in the clipboard.')
-        return
-      }
-      const defaults = WIDGET_DEFAULTS.image
-      const cx = mainSize.w > 0 ? mainSize.w / 2 : window.innerWidth / 2
-      const cy = mainSize.h > 0 ? mainSize.h / 2 : window.innerHeight / 2
-      const center = toWorld(cx, cy)
-      const id = placeWidget(
-        'image',
-        { x: center.x - defaults.w / 2, y: center.y - defaults.h / 2 },
-        undefined,
-        saved.name,
-        { imagePath: saved.path, imageName: saved.name }
-      )
-      if (id) setCanvasNotice(`Image added: ${saved.name}`)
-    } catch (err) {
-      setCanvasNotice(`Could not add image: ${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      insertingImageRef.current = false
-    }
-  }, [mainSize.h, mainSize.w, placeWidget, setCanvasNotice, toWorld])
 
   const createWidgetFromCommand = useCallback((kind: WidgetKind, initialCommand: string): void => {
     const cx = mainSize.w > 0 ? mainSize.w / 2 : window.innerWidth / 2
@@ -1279,15 +1250,6 @@ function OrcSpaceCanvas({
   const handleCanvasShortcut = useCallback((e: KeyboardEvent | React.KeyboardEvent<HTMLElement>): void => {
     const isGlobalZoom = (e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '=' || e.key === '-' || e.key === '0')
     const target = e.target as HTMLElement | null
-    const imageHotkey = matchesShortcut(e, settings.imageInsertShortcut || DEFAULT_IMAGE_INSERT_SHORTCUT)
-    const imageHotkeyBlocked = Boolean(target?.closest(
-      '[role="dialog"],input:not(.xterm-helper-textarea),textarea:not(.xterm-helper-textarea),select,[contenteditable="true"]'
-    ))
-    if (imageHotkey && !imageHotkeyBlocked) {
-      e.preventDefault()
-      void insertImageFromClipboard()
-      return
-    }
     if (
       !isGlobalZoom &&
       target &&
@@ -1351,7 +1313,7 @@ function OrcSpaceCanvas({
     e.preventDefault()
     const step = e.shiftKey ? 10 : 50
     setCamera((c) => ({ ...c, x: c.x - dir[0] * step, y: c.y - dir[1] * step }))
-  }, [insertImageFromClipboard, onFitView, onResetZoom, onZoomIn, onZoomOut, setCamera, settings.imageInsertShortcut])
+  }, [onFitView, onResetZoom, onZoomIn, onZoomOut, setCamera, settings.imageInsertShortcut])
 
   useEffect(() => {
     if (!active) return
@@ -1694,48 +1656,19 @@ function OrcSpaceCanvas({
           continue
         }
         if (saved && 'path' in saved) {
-          if (isAudio) {
-            const existingPlayer = widgetsRef.current.find((w) => w.kind === 'music-player')
-            const track = {
-              id: crypto.randomUUID(),
-              url: `orc://media/${saved.name}`,
-              title: file.name.replace(/\.[a-z0-9]+$/i, ''),
-              provider: 'audio' as const
-            }
-            if (existingPlayer) {
-              window.dispatchEvent(new CustomEvent('orcspace:add-music-track', {
-                detail: { widgetId: existingPlayer.id, track }
-              }))
-              setCanvasNotice(`Added "${shortName(file.name)}" to music player`)
-            } else {
-              const widgetId = placeWidget('music-player', filePoint)
-              if (widgetId) {
-                placed += 1
-                deliverWhenMounted(
-                  widgetId,
-                  () => window.dispatchEvent(new CustomEvent('orcspace:add-music-track', {
-                    detail: { widgetId, track }
-                  })),
-                  () => setCanvasNotice(`Added "${shortName(file.name)}" to music player`),
-                  () => setCanvasNotice(`Failed to open "${shortName(file.name)}"`)
-                )
-              }
-            }
-          } else {
-            const widgetId = placeWidget('browser', filePoint)
-            if (widgetId) {
-              placed += 1
-              const mediaUrl = `orc://media/${saved.name}`
-              const kind = mediaKind
-              deliverWhenMounted(
-                widgetId,
-                () => window.dispatchEvent(new CustomEvent('orcspace:open-media', {
-                  detail: { widgetId, path: saved.path, name: file.name, mediaUrl, kind }
-                })),
-                () => setCanvasNotice(`Opened "${shortName(file.name)}"`),
-                () => setCanvasNotice(`Failed to open "${shortName(file.name)}"`)
-              )
-            }
+          const widgetId = placeWidget('browser', filePoint)
+          if (widgetId) {
+            placed += 1
+            const mediaUrl = `orc://media/${saved.name}`
+            const kind = mediaKind
+            deliverWhenMounted(
+              widgetId,
+              () => window.dispatchEvent(new CustomEvent('orcspace:open-media', {
+                detail: { widgetId, path: saved.path, name: file.name, mediaUrl, kind }
+              })),
+              () => setCanvasNotice(`Opened "${shortName(file.name)}"`),
+              () => setCanvasNotice(`Failed to open "${shortName(file.name)}"`)
+            )
           }
         }
       } catch (err) {
@@ -2033,18 +1966,9 @@ function OrcSpaceCanvas({
               setMenu(null)
             }}
             onPickFiles={() => { placeWidget('files', toWorld(menu.x, menu.y)); setMenu(null) }}
-            onPickSysMonitor={() => { placeWidget('sys-monitor', toWorld(menu.x, menu.y)); setMenu(null) }}
-            onPickTimer={() => { placeWidget('timer', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickPlanner={() => { placeWidget('planner', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickOrchestration={() => { placeWidget('orchestration', toWorld(menu.x, menu.y)); setMenu(null) }}
             onPickBrowser={() => { placeWidget('browser', toWorld(menu.x, menu.y)); setMenu(null) }}
-            onPickImage={() => { placeWidget('image', toWorld(menu.x, menu.y)); setMenu(null) }}
-            onPickLinks={() => { placeWidget('links', toWorld(menu.x, menu.y)); setMenu(null) }}
-            onPickMusicPlayer={() => { placeWidget('music-player', toWorld(menu.x, menu.y)); setMenu(null) }}
-            onPickChat={() => { placeWidget('chat', toWorld(menu.x, menu.y)); setMenu(null) }}
-            onPickNotes={() => { placeWidget('notes', toWorld(menu.x, menu.y)); setMenu(null) }}
-            onPickCalendar={() => { placeWidget('calendar', toWorld(menu.x, menu.y)); setMenu(null) }}
-            onPickKanban={() => { placeWidget('kanban', toWorld(menu.x, menu.y)); setMenu(null) }}
             favoriteWidgets={settings.favoriteWidgets ?? []}
             onClose={() => setMenu(null)}
           />

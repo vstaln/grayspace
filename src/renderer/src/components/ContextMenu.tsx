@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Calendar, Clipboard, Cpu, FolderOpen, Globe, Image as ImageIcon, KanbanSquare, ListTodo, MessageCircle, Music2, Network, StickyNote, Terminal, Timer } from 'lucide-react'
+import { FolderOpen, Globe, ListTodo, Network, Terminal } from 'lucide-react'
 import { Point, WidgetKind } from '../types'
 import { WIDGET_CATALOG } from '../lib/widgetCatalog'
 
@@ -8,18 +8,9 @@ interface Props {
   at: Point
   onPickTerminal: () => void
   onPickFiles: () => void
-  onPickSysMonitor: () => void
-  onPickTimer: () => void
   onPickPlanner: () => void
   onPickBrowser: () => void
-  onPickImage: () => void
-  onPickLinks: () => void
-  onPickMusicPlayer: () => void
   onPickOrchestration: () => void
-  onPickChat: () => void
-  onPickNotes: () => void
-  onPickCalendar: () => void
-  onPickKanban: () => void
   favoriteWidgets: string[]
   onClose: () => void
 }
@@ -38,36 +29,18 @@ interface Item {
 const WIDGET_ICONS: Record<WidgetKind, React.ReactNode> = {
   terminal: <Terminal size={15} className="text-accent" />,
   files: <FolderOpen size={15} className="text-accent" />,
-  'sys-monitor': <Cpu size={15} className="text-accent" />,
-  timer: <Timer size={15} className="text-accent" />,
   planner: <ListTodo size={15} className="text-accent" />,
   orchestration: <Network size={15} className="text-accent" />,
   browser: <Globe size={15} className="text-accent" />,
-  image: <ImageIcon size={15} className="text-accent" />,
-  links: <Clipboard size={15} className="text-accent" />,
-  'music-player': <Music2 size={15} className="text-accent" />,
-  chat: <MessageCircle size={15} className="text-accent" />,
-  notes: <StickyNote size={15} className="text-accent" />,
-  calendar: <Calendar size={15} className="text-accent" />,
-  kanban: <KanbanSquare size={15} className="text-accent" />
 }
 
 export default function ContextMenu({
   at,
   onPickTerminal,
   onPickFiles,
-  onPickSysMonitor,
-  onPickTimer,
   onPickPlanner,
   onPickBrowser,
-  onPickImage,
-  onPickLinks,
-  onPickMusicPlayer,
   onPickOrchestration,
-  onPickChat,
-  onPickNotes,
-  onPickCalendar,
-  onPickKanban,
   favoriteWidgets,
   onClose
 }: Props): React.JSX.Element {
@@ -86,18 +59,9 @@ export default function ContextMenu({
       const actions: Record<WidgetKind, () => void> = {
         terminal: onPickTerminal,
         files: onPickFiles,
-        'sys-monitor': onPickSysMonitor,
-        timer: onPickTimer,
         planner: onPickPlanner,
         orchestration: onPickOrchestration,
         browser: onPickBrowser,
-        image: onPickImage,
-        links: onPickLinks,
-        'music-player': onPickMusicPlayer,
-        chat: onPickChat,
-        notes: onPickNotes,
-        calendar: onPickCalendar,
-        kanban: onPickKanban
       }
       return WIDGET_CATALOG
         .map((entry) => ({
@@ -113,18 +77,9 @@ export default function ContextMenu({
     [
       onPickTerminal,
       onPickFiles,
-      onPickSysMonitor,
-      onPickTimer,
       onPickPlanner,
       onPickBrowser,
-      onPickImage,
-      onPickLinks,
-      onPickMusicPlayer,
       onPickOrchestration,
-      onPickChat,
-      onPickNotes,
-      onPickCalendar,
-      onPickKanban,
       favoriteWidgets
     ]
   )
