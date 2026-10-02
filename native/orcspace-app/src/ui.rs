@@ -1093,7 +1093,7 @@ impl MusicPlayer {
                 if let Err(error) = self.play_index(next.unwrap()) { self.error = Some(error); }
             }
         });
-        let position = 0.0;
+        let position: f64 = 0.0;
         let total = self.duration.unwrap_or_default().as_secs_f64();
         let mut seek = position.min(total);
         ui.horizontal(|ui| {

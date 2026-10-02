@@ -3,19 +3,19 @@
 mod engine;
 mod files_panel;
 mod plan_panel;
+mod shell;
 
 mod ui;
 
 use anyhow::Result;
-use eframe::egui;
 use engine::{ControlServer, TerminalEvent, TerminalManager};
 use orcspace_app::ipc::persist_control_token;
+use rgpui::AppContext as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, BufRead, BufWriter, Write};
 use std::sync::mpsc;
 use std::thread;
-use ui::OrcSpaceApp;
 
 fn main() -> Result<()> {
     let token = std::env::var("ORCSPACE_TOKEN")
@@ -30,6 +30,7 @@ fn main() -> Result<()> {
         return run_engine(TerminalManager::streaming(token));
     }
     let manager = TerminalManager::new(token.clone());
+    let _manager_keepalive = manager.clone();
     let control =
         ControlServer::start(manager.clone(), token.clone()).map_err(anyhow::Error::msg)?;
     // A second instance must not replace the active instance's token before
@@ -50,26 +51,18 @@ fn main() -> Result<()> {
             .map_err(anyhow::Error::msg)?;
     }
 
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1440.0, 920.0])
-            .with_min_inner_size([960.0, 640.0])
-            .with_decorations(cfg!(target_os = "macos"))
-            .with_active(std::env::var_os("ORCSPACE_CAPTURE_PATH").is_none())
-            .with_title("GraySpace"),
-        ..Default::default()
-    };
-
-    eframe::run_native(
-        "GraySpace",
-        options,
-        Box::new(move |cc| {
-            // Applied before the first frame so nothing flashes in egui's
-            // default palette on the way to OrcSpace's.
-            orcspace_app::theme::apply(&cc.egui_ctx);
-            Ok(Box::new(OrcSpaceApp::new(manager, control)))
-        }),
-    )?;
+    // The terminal manager + control server outlive the window: rgpui owns
+    // the event loop, so hand them to the UI thread via statics the RootView
+    // polls. (Task 4 wires drain_events into a 250ms refresh timer.)
+    let _ = (&manager, &control);
+    rgpui_platform::application().run(|cx: &mut rgpui::App| {
+        cx.open_window(
+            rgpui::WindowOptions::default(),
+            |_window: &mut rgpui::Window, cx: &mut rgpui::App| cx.new(crate::shell::RootView::new),
+        )
+        .expect("open GraySpace window");
+        cx.activate(true);
+    });
 
     Ok(())
 }
