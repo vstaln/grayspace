@@ -2,7 +2,7 @@ import * as electron from 'electron'
 import { createHash, randomBytes } from 'crypto'
 
 const clipboard = (electron as unknown as { clipboard?: typeof electron.clipboard }).clipboard
-const nativeImage = (electron as unknown as { nativeImage?: typeof electron.nativeImage }).nativeImage
+const ClipboardItem = (electron as unknown as { ClipboardItem?: typeof electron.ClipboardItem }).ClipboardItem
 import * as fs from 'fs'
 import * as os from 'os'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'path'
@@ -177,43 +177,49 @@ function writeBytesIfMissing(path: string, bytes: Buffer): void {
 }
 
 
-export function saveClipboardImage(): MediaFile | null {
+export async function saveClipboardImage(): Promise<MediaFile | null> {
   if (!clipboard) return null
-  const image = clipboard.readImage()
-  if (image.isEmpty()) return null
-  const bytes = image.toPNG()
+  const items = await clipboard.read()
+  const item = items.find((candidate) => candidate.types.some((type) => type.startsWith('image/')))
+  if (!item) return null
+  const imageType = item.types.find((type) => type.startsWith('image/'))
+  if (!imageType) return null
+  const payload = await item.getType(imageType) as Blob
+  const bytes = Buffer.from(await payload.arrayBuffer())
   if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('File exceeds 256 MB limit')
   return saveBytes(bytes, 'png')
 }
 
-export function readClipboardText(): string {
+export async function readClipboardText(): Promise<string> {
   try {
-    return clipboard?.readText() ?? ''
+    return clipboard ? await clipboard.readText() : ''
   } catch {
     return ''
   }
 }
 
-export function writeClipboardText(text: string): { ok: true } | { error: string } {
+export async function writeClipboardText(text: string): Promise<{ ok: true } | { error: string }> {
   if (!clipboard) return { error: 'Clipboard support is unavailable' }
   if (typeof text !== 'string' || text.length > 4096) return { error: 'Invalid clipboard text' }
   try {
-    clipboard.writeText(text)
+    await clipboard.writeText(text)
     return { ok: true }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }
   }
 }
 
-export function stageClipboardImage(bytes: Buffer): { ok: true } | { error: string } {
-  if (!clipboard || !nativeImage) return { error: 'Clipboard image support is unavailable' }
+export async function stageClipboardImage(bytes: Buffer): Promise<{ ok: true } | { error: string }> {
+  if (!clipboard || !ClipboardItem) return { error: 'Clipboard image support is unavailable' }
   if (!bytes.byteLength) return { error: 'Image is empty' }
   if (bytes.byteLength > MAX_MEDIA_BYTES) return { error: 'Image exceeds 256 MB' }
 
-  const image = nativeImage.createFromBuffer(bytes)
-  if (image.isEmpty()) return { error: 'Unsupported image format' }
-  clipboard.writeImage(image)
-  return { ok: true }
+  try {
+    await clipboard.write([new ClipboardItem({ 'image/png': new Blob([new Uint8Array(bytes)], { type: 'image/png' }) })])
+    return { ok: true }
+  } catch {
+    return { error: 'Unsupported image format' }
+  }
 }
 
 
@@ -295,11 +301,14 @@ export function saveBytesToScratch(bytes: Buffer, ext: string): MediaFile {
 
 
 
-export function saveClipboardImageToScratch(): MediaFile | null {
+export async function saveClipboardImageToScratch(): Promise<MediaFile | null> {
   if (!clipboard) return null
-  const image = clipboard.readImage()
-  if (!image.isEmpty()) {
-    const bytes = image.toPNG()
+  const items = await clipboard.read()
+  const item = items.find((candidate) => candidate.types.some((type) => type.startsWith('image/')))
+  const imageType = item?.types.find((type) => type.startsWith('image/'))
+  if (item && imageType) {
+    const payload = await item.getType(imageType) as Blob
+    const bytes = Buffer.from(await payload.arrayBuffer())
     if (bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('File exceeds 256 MB limit')
     return saveBytesToScratch(bytes, 'png')
   }

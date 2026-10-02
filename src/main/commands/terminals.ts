@@ -409,7 +409,7 @@ export function registerTerminalCommands({
           let mode = attachmentMode(files.length, shortcut)
 
           if (mode === 'clipboard' && shortcut) {
-            const staged = stageClipboardImage(readFileSync(files[0].path))
+            const staged = await stageClipboardImage(readFileSync(files[0].path))
             if ('ok' in staged) {
               const written = await terminals.writeInput(id, shortcut)
               if (!written.ok) throw new CommandError('failed', written.error)
