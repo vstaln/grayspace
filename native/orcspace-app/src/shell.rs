@@ -1,4 +1,17 @@
 use rgpui::*;
+
+fn load_orchestration_store() -> orcspace_app::orchestration::OrchestrationStore {
+    let path = orcspace_app::ipc::user_data_dir().join("orchestration.json");
+    match std::fs::read(&path) {
+        Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(value) if value.is_object() => {
+                orcspace_app::orchestration::OrchestrationStore::load(&value)
+            }
+            Ok(_) | Err(_) => orcspace_app::orchestration::OrchestrationStore::new(),
+        },
+        Err(_) => orcspace_app::orchestration::OrchestrationStore::new(),
+    }
+}
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static NEXT_WV_ID: AtomicUsize = AtomicUsize::new(1);
@@ -8,6 +21,8 @@ const TABS: [&str; 5] = ["Terminal", "Planner", "Files", "Browser", "Orchestrati
 pub struct RootView {
     focus: FocusHandle,
     active: usize,
+    manager: crate::engine::TerminalManager,
+    snapshots: Vec<crate::engine::TerminalSnapshot>,
     #[allow(dead_code)]
     browser_url: String,
     #[allow(dead_code)]
@@ -21,10 +36,32 @@ impl Focusable for RootView {
 }
 
 impl RootView {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+    pub fn new(manager: crate::engine::TerminalManager, cx: &mut Context<Self>) -> Self {
+        let snapshots = manager.snapshots();
+        // 250ms refresh: same non-blocking drain the egui loop used.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(250))
+                    .await;
+                let alive = this
+                    .update(cx, |view, cx| {
+                        view.snapshots = view.manager.snapshots();
+                        let _ = view.manager.drain_events();
+                        cx.notify();
+                    })
+                    .is_ok();
+                if !alive {
+                    break;
+                }
+            }
+        })
+        .detach();
         Self {
             focus: cx.focus_handle(),
             active: 0,
+            manager,
+            snapshots,
             browser_url: "https://example.com".into(),
             browser_id: NEXT_WV_ID.fetch_add(1, Ordering::Relaxed),
         }
@@ -62,15 +99,22 @@ impl Render for RootView {
         }
         div().size_full().flex().flex_col().child(strip).child(
             div().flex_1().p_2().text_color(rgb(0xa6adc8)).text_sm().child(
-                // Task 4 replaces each string with the real rgpui view.
                 match self.active {
-                    0 => "Terminal — engine snapshots render here (Task 4)",
-                    1 => "Planner — PlannerDocument items render here (Task 4)",
-                    2 => "Files — workspace browser renders here (Task 4)",
-                    3 => "Browser — wry child renders here (Task 5)",
-                    _ => "Orchestration — runs/tasks/dispatches render here (Task 4)",
-                }
-                .to_string(),
+                    0 => crate::views_terminal::terminal_pane(&self.snapshots).into_any_element(),
+                    1 => crate::views_planner::planner_pane().into_any_element(),
+                    2 => crate::views_files::files_pane(&std::env::current_dir().unwrap_or_default())
+                        .into_any_element(),
+                    3 => div()
+                        .flex_1()
+                        .text_color(rgb(0xa6adc8))
+                        .text_sm()
+                        .child("Browser — wry child renders here (Task 5)")
+                        .into_any_element(),
+                    _ => {
+                        let store = load_orchestration_store();
+                        crate::views_orchestration::orchestration_pane(&store).into_any_element()
+                    }
+                },
             ),
         )
     }

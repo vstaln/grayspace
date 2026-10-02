@@ -19,8 +19,6 @@ path = "src/orc.rs"
 [dependencies]
 anyhow = "1"
 axum = "0.8"
-eframe = "0.36.1"
-egui = "0.36.1"
 portable-pty = "0.9"
 vt100 = "0.16.2"
 vte = "0.15"

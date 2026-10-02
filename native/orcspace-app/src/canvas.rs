@@ -12,8 +12,150 @@
 //! in the same place at the same zoom.
 
 use crate::projection::{Camera, CanvasState, Widget};
-use crate::theme::{geometry, hairline, monochrome, status, text};
-use egui::{Align2, Color32, CornerRadius, FontId, Pos2, Rect, Stroke, StrokeKind, Vec2};
+use crate::theme::{geometry, status, text, Rgb};
+
+/// Minimal 2D geometry — replaces egui's Pos2/Rect/Vec2 at this boundary.
+/// Same semantics (y-down, inclusive contains), so the camera maths and its
+/// tests are unchanged; only the egui painters are gone.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pos2 {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Pos2 {
+    pub const ZERO: Self = Self { x: 0.0, y: 0.0 };
+
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
+
+impl std::ops::Sub for Pos2 {
+    type Output = Vec2;
+
+    fn sub(self, other: Self) -> Vec2 {
+        Vec2 {
+            x: self.x - other.x,
+            y: self.y - other.y,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Vec2 {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Vec2 {
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+
+    pub const fn splat(v: f32) -> Self {
+        Self { x: v, y: v }
+    }
+
+    pub fn length(self) -> f32 {
+        self.x.hypot(self.y)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rect {
+    pub min: Pos2,
+    pub max: Pos2,
+}
+
+impl Rect {
+    pub fn from_min_size(min: Pos2, size: Vec2) -> Self {
+        Self {
+            min,
+            max: Pos2::new(min.x + size.x, min.y + size.y),
+        }
+    }
+
+    pub fn from_min_max(min: Pos2, max: Pos2) -> Self {
+        Self { min, max }
+    }
+
+    pub fn width(self) -> f32 {
+        self.max.x - self.min.x
+    }
+
+    pub fn height(self) -> f32 {
+        self.max.y - self.min.y
+    }
+
+    pub fn left(self) -> f32 {
+        self.min.x
+    }
+
+    pub fn right(self) -> f32 {
+        self.max.x
+    }
+
+    pub fn top(self) -> f32 {
+        self.min.y
+    }
+
+    pub fn bottom(self) -> f32 {
+        self.max.y
+    }
+
+    pub fn center(self) -> Pos2 {
+        Pos2::new(
+            (self.min.x + self.max.x) / 2.0,
+            (self.min.y + self.max.y) / 2.0,
+        )
+    }
+
+    pub fn contains(self, p: Pos2) -> bool {
+        self.min.x <= p.x
+            && p.x <= self.max.x
+            && self.min.y <= p.y
+            && p.y <= self.max.y
+    }
+
+    pub fn contains_rect(self, other: Self) -> bool {
+        self.min.x <= other.min.x
+            && other.max.x <= self.max.x
+            && self.min.y <= other.min.y
+            && other.max.y <= self.max.y
+    }
+
+    pub fn intersects(self, other: Self) -> bool {
+        self.min.x < other.max.x
+            && other.min.x < self.max.x
+            && self.min.y < other.max.y
+            && other.min.y < self.max.y
+    }
+
+    pub fn intersect(self, other: Self) -> Self {
+        Self {
+            min: Pos2::new(
+                self.min.x.max(other.min.x),
+                self.min.y.max(other.min.y),
+            ),
+            max: Pos2::new(
+                self.max.x.min(other.max.x),
+                self.max.y.min(other.max.y),
+            ),
+        }
+    }
+
+    pub fn is_positive(self) -> bool {
+        self.min.x < self.max.x && self.min.y < self.max.y
+    }
+
+    pub fn expand2(self, margin: Vec2) -> Self {
+        Self {
+            min: Pos2::new(self.min.x - margin.x, self.min.y - margin.y),
+            max: Pos2::new(self.max.x + margin.x, self.max.y + margin.y),
+        }
+    }
+}
 
 /// The renderer clamps zoom to this range (`sanitizeCamera`), so a canvas
 /// written here cannot open out of range there.
@@ -85,153 +227,9 @@ pub struct CanvasFrame<'a> {
     pub active_widget: Option<&'a str>,
 }
 
-/// Paints the canvas: background, grid, then every visible widget.
-///
-/// Returns how many widgets were painted, which the caller shows and the tests
-/// assert on.
-pub fn draw(
-    ui: &mut egui::Ui,
-    viewport: Rect,
-    frame: &CanvasFrame<'_>,
-    view: &View,
-    mut content: impl FnMut(&mut egui::Ui, &egui::Painter, &Widget, Rect, f32),
-) -> usize {
-    let painter = ui.painter_at(viewport);
-
-    painter.rect_filled(viewport, 0.0, monochrome::BASE);
-    draw_grid(&painter, viewport, view);
-
-    let mut painted = 0;
-    // Painted in z order so a raised widget covers the ones below it, the same
-    // order the renderer stacks them in.
-    let mut widgets: Vec<&Widget> = frame.state.widgets.values().collect();
-    widgets.sort_by(|a, b| a.z.partial_cmp(&b.z).unwrap_or(std::cmp::Ordering::Equal));
-
-    for widget in widgets {
-        let rect = view.widget_rect(widget);
-        if !is_visible(rect, viewport) {
-            continue;
-        }
-        let active = frame.active_widget == Some(widget.id.as_str());
-        draw_widget(&painter, widget, rect, view.zoom, active);
-        let body = Rect::from_min_max(
-            Pos2::new(
-                rect.left() + 1.0,
-                rect.top() + geometry::HEADER_HEIGHT * view.zoom,
-            ),
-            rect.max - Vec2::splat(1.0),
-        );
-        if body.is_positive() && body.intersects(viewport) {
-            content(ui, &painter, widget, body, view.zoom);
-        }
-        painted += 1;
-    }
-
-    if painted == 0 {
-        draw_empty_hint(&painter, viewport);
-    }
-    painted
-}
-
-fn draw_grid(painter: &egui::Painter, viewport: Rect, view: &View) {
-    let pitch = GRID_PITCH * view.zoom;
-    // Below about six pixels the grid stops reading as a grid and starts
-    // reading as noise, and it costs a line per six pixels of screen.
-    if pitch < 6.0 {
-        return;
-    }
-    let stroke = Stroke::new(1.0, monochrome::SURFACE);
-
-    let first = view.to_screen(Pos2::ZERO);
-    let mut x = viewport.left() + (first.x - viewport.left()).rem_euclid(pitch);
-    while x < viewport.right() {
-        painter.line_segment(
-            [
-                Pos2::new(x, viewport.top()),
-                Pos2::new(x, viewport.bottom()),
-            ],
-            stroke,
-        );
-        x += pitch;
-    }
-    let mut y = viewport.top() + (first.y - viewport.top()).rem_euclid(pitch);
-    while y < viewport.bottom() {
-        painter.line_segment(
-            [
-                Pos2::new(viewport.left(), y),
-                Pos2::new(viewport.right(), y),
-            ],
-            stroke,
-        );
-        y += pitch;
-    }
-}
-
-/// One widget, with the chrome `WidgetFrame.tsx` builds.
-fn draw_widget(painter: &egui::Painter, widget: &Widget, rect: Rect, zoom: f32, active: bool) {
-    let radius = CornerRadius::ZERO;
-    let is_terminal = widget.kind.as_deref().unwrap_or("terminal") == "terminal";
-
-    // A terminal's body is the canvas black, not the widget surface: its
-    // content provides the contrast, and a lighter body would wash out the
-    // output sitting on it.
-    let body = if is_terminal {
-        monochrome::BASE
-    } else {
-        monochrome::SURFACE
-    };
-    painter.rect_filled(rect, radius, body);
-
-    let header_height = (geometry::HEADER_HEIGHT * zoom).min(rect.height());
-    let header = Rect::from_min_size(rect.min, Vec2::new(rect.width(), header_height));
-    painter.rect_filled(header, radius, monochrome::SURFACE);
-    painter.line_segment(
-        [
-            Pos2::new(header.left(), header.bottom()),
-            Pos2::new(header.right(), header.bottom()),
-        ],
-        Stroke::new(geometry::HAIRLINE, hairline::FAINT),
-    );
-
-    let title_size = (12.0 * zoom).clamp(7.0, 22.0);
-    painter.text(
-        Pos2::new(header.left() + 10.0 * zoom, header.center().y),
-        Align2::LEFT_CENTER,
-        elide(&widget.title, header.width(), title_size),
-        FontId::proportional(title_size),
-        text::NORMAL,
-    );
-
-    // The ring is one logical pixel at every zoom, as it is in the DOM — a
-    // ring that scaled would read as a border at 3x and vanish at 0.3x.
-    painter.rect_stroke(
-        rect,
-        radius,
-        Stroke::new(
-            geometry::HAIRLINE,
-            if active {
-                hairline::ACTIVE
-            } else {
-                hairline::SOFT
-            },
-        ),
-        StrokeKind::Inside,
-    );
-
-    if widget.maximized {
-        painter.text(
-            Pos2::new(rect.right() - 10.0 * zoom, header.center().y),
-            Align2::RIGHT_CENTER,
-            "▣",
-            FontId::proportional(title_size),
-            text::FAINT,
-        );
-    }
-}
-
-/// Rough character-count elide. egui can measure text exactly, but only with a
-/// `Ui`; the painter alone cannot, and a widget title is short enough that the
-/// approximation never visibly overflows.
+/// Rough character-count elide. A renderer can measure text exactly; without
+/// one a widget title is short enough that the approximation never visibly
+/// overflows.
 fn elide(title: &str, width: f32, font_size: f32) -> String {
     let usable = (width - 20.0).max(0.0);
     let per_char = font_size * 0.55;
@@ -250,16 +248,6 @@ fn elide(title: &str, width: f32, font_size: f32) -> String {
     format!("{head}…")
 }
 
-fn draw_empty_hint(painter: &egui::Painter, viewport: Rect) {
-    painter.text(
-        viewport.center(),
-        Align2::CENTER_CENTER,
-        "no widgets on this canvas",
-        FontId::proportional(13.0),
-        text::FAINT,
-    );
-}
-
 /// Status text for the corner readout.
 pub fn zoom_label(view: &View) -> String {
     format!("{:.0}%", view.zoom * 100.0)
@@ -267,23 +255,11 @@ pub fn zoom_label(view: &View) -> String {
 
 /// The colour a run's state should read as, so the two implementations agree
 /// about what "failed" looks like.
-pub fn outcome_color(outcome: Option<&str>) -> Color32 {
+pub fn outcome_color(outcome: Option<&str>) -> Rgb {
     match outcome {
         Some("succeeded") => status::OK,
         Some("failed") => status::DANGER,
         _ => text::DIM,
-    }
-}
-
-pub fn handle_pan_zoom(camera: &mut Camera, response: &egui::Response, zoom_delta: f32) {
-    if response.dragged() {
-        camera.x += response.drag_delta().x as f64;
-        camera.y += response.drag_delta().y as f64;
-    }
-    if response.hovered() && zoom_delta != 1.0 {
-        if let Some(pointer) = response.hover_pos() {
-            zoom_at(camera, response.rect.min, pointer, zoom_delta);
-        }
     }
 }
 

@@ -1,14 +1,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![recursion_limit = "256"]
 
-mod engine;
-mod files_panel;
-mod plan_panel;
-mod shell;
-
-mod ui;
+pub mod engine;
+pub mod files_panel;
+pub mod plan_panel;
+pub mod shell;
+pub mod views_files;
+pub mod views_orchestration;
+pub mod views_planner;
+pub mod views_terminal;
 
 use anyhow::Result;
-use engine::{ControlServer, TerminalEvent, TerminalManager};
+use crate::engine::{ControlServer, TerminalEvent, TerminalManager};
 use orcspace_app::ipc::persist_control_token;
 use rgpui::AppContext as _;
 use serde::{Deserialize, Serialize};
@@ -51,15 +54,15 @@ fn main() -> Result<()> {
             .map_err(anyhow::Error::msg)?;
     }
 
-    // The terminal manager + control server outlive the window: rgpui owns
-    // the event loop, so hand them to the UI thread via statics the RootView
-    // polls. (Task 4 wires drain_events into a 250ms refresh timer.)
-    let _ = (&manager, &control);
+    // The control server outlives the window on its own thread; the manager
+    // moves into the RootView, which polls snapshots()/drain_events() on a
+    // 250ms refresh timer (same non-blocking drain the egui loop used).
+    let _ = &control;
+    let root_manager = manager.clone();
     rgpui_platform::application().run(|cx: &mut rgpui::App| {
-        cx.open_window(
-            rgpui::WindowOptions::default(),
-            |_window: &mut rgpui::Window, cx: &mut rgpui::App| cx.new(crate::shell::RootView::new),
-        )
+        cx.open_window(rgpui::WindowOptions::default(), move |_window, cx| {
+            cx.new(|cx| crate::shell::RootView::new(root_manager.clone(), cx))
+        })
         .expect("open GraySpace window");
         cx.activate(true);
     });

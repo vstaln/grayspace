@@ -2,7 +2,12 @@
 //!
 //! Layouts follow `src/renderer/src/lib/codeLayout.ts`.
 
-use egui::{Rect, Vec2};
+use crate::canvas::{Pos2, Rect, Vec2};
+
+/// `egui::pos2` shorthand kept so the arrangement code reads as before.
+fn pos2(x: f32, y: f32) -> Pos2 {
+    Pos2::new(x, y)
+}
 
 /// CodeView uses a contiguous grid (`gap-0`); only the three-way split has tracks.
 const GAP: f32 = 0.0;
@@ -77,7 +82,7 @@ pub fn arrange(mode: CodeLayout, area: Rect, count: usize, focus: usize) -> Vec<
             let side = count - 1;
             let wide = (area.width() - GAP) * 2.0 / 3.0;
             let beside =
-                Rect::from_min_max(egui::pos2(area.left() + wide + GAP, area.top()), area.max);
+                Rect::from_min_max(pos2(area.left() + wide + GAP, area.top()), area.max);
             (0..count)
                 .map(|index| {
                     if index == main {
@@ -103,13 +108,13 @@ fn auto_layout(area: Rect, count: usize) -> Vec<Rect> {
         for index in 0..4 {
             let x = area.left() + (narrow + GAP) * (index % 2) as f32;
             let column = Rect::from_min_max(
-                egui::pos2(x, area.top()),
-                egui::pos2(x + narrow, area.bottom()),
+                pos2(x, area.top()),
+                pos2(x + narrow, area.bottom()),
             );
             cards.push(cell(column, 1, 2, 0, index / 2));
         }
         cards.push(Rect::from_min_max(
-            egui::pos2(area.left() + 2.0 * (narrow + GAP), area.top()),
+            pos2(area.left() + 2.0 * (narrow + GAP), area.top()),
             area.max,
         ));
         return cards;
@@ -162,9 +167,9 @@ pub fn three_way(area: Rect, split: [f32; 2]) -> Vec<Rect> {
     let x = area.left() + (area.width() - gap).max(0.0) * ratio(split[0]);
     let y = area.top() + (area.height() - gap).max(0.0) * ratio(split[1]);
     vec![
-        Rect::from_min_max(area.min, egui::pos2(x, area.bottom())),
-        Rect::from_min_max(egui::pos2(x + gap, area.top()), egui::pos2(area.right(), y)),
-        Rect::from_min_max(egui::pos2(x + gap, y + gap), area.max),
+        Rect::from_min_max(area.min, pos2(x, area.bottom())),
+        Rect::from_min_max(pos2(x + gap, area.top()), pos2(area.right(), y)),
+        Rect::from_min_max(pos2(x + gap, y + gap), area.max),
     ]
 }
 
@@ -175,8 +180,8 @@ fn cell(area: Rect, columns: usize, rows: usize, column: usize, row: usize) -> R
     let x = |index: usize| area.left() + (area.width() + GAP) * index as f32 / columns as f32;
     let y = |index: usize| area.top() + (area.height() + GAP) * index as f32 / rows as f32;
     Rect::from_min_max(
-        egui::pos2(x(column), y(row)),
-        egui::pos2(x(column + 1) - GAP, y(row + 1) - GAP),
+        pos2(x(column), y(row)),
+        pos2(x(column + 1) - GAP, y(row + 1) - GAP),
     )
     .intersect(area)
 }
@@ -186,7 +191,7 @@ mod tests {
     use super::*;
 
     fn area() -> Rect {
-        Rect::from_min_size(egui::pos2(0.0, 0.0), Vec2::new(1000.0, 500.0))
+        Rect::from_min_size(pos2(0.0, 0.0), Vec2::new(1000.0, 500.0))
     }
 
     #[test]

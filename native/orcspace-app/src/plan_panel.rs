@@ -4,7 +4,6 @@
 //! into the snapshot, which is the order the renderer uses. Writing the
 //! snapshot alone would leave a file no replay could reproduce.
 
-use eframe::egui::{self, Color32, Sense, Vec2};
 use orcspace_app::{
     journal_log::JournalLog,
     planner::{self, Today},
@@ -152,267 +151,6 @@ impl PlanPanel {
             self.note_dirty = false;
         }
     }
-
-    pub fn show(&mut self, ui: &mut egui::Ui) {
-        if self.store.is_none() && self.error.is_none() {
-            self.refresh();
-        }
-        // The editor is a bottom panel, so it has to claim its space before
-        // the list fills what is left.
-        self.show_editor(ui);
-        egui::Frame::NONE.inner_margin(12).show(ui, |ui| {
-            ui.spacing_mut().item_spacing = Vec2::new(8.0, 10.0);
-            self.show_composer(ui);
-            self.show_items(ui);
-            if let Some(error) = self.error.clone() {
-                ui.colored_label(orcspace_app::theme::status::DANGER, error);
-            }
-        });
-    }
-
-    fn show_composer(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            let width = (ui.available_width() - 56.0).max(80.0);
-            let field = ui.add_sized(
-                [width, 32.0],
-                egui::TextEdit::singleline(&mut self.draft).hint_text("New task"),
-            );
-            let submit =
-                field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            let add = ui
-                .add_enabled(!self.draft.trim().is_empty(), egui::Button::new("Add"))
-                .clicked();
-            if (submit || add) && !self.draft.trim().is_empty() {
-                let title = self.draft.trim().to_owned();
-                let id = format!("plan-{}", uuid::Uuid::new_v4());
-                if self.commit(
-                    "plan.create",
-                    &format!("plan:{id}"),
-                    serde_json::json!({"title": title}),
-                ) {
-                    self.draft.clear();
-                }
-            }
-        });
-    }
-
-    fn show_items(&mut self, ui: &mut egui::Ui) {
-        let items = self.items();
-        if items.is_empty() {
-            ui.label(
-                egui::RichText::new("No tasks yet")
-                    .size(11.0)
-                    .color(orcspace_app::theme::text::FAINT),
-            );
-            return;
-        }
-        let mut command = None;
-        egui::ScrollArea::vertical()
-            .id_salt("plan-items")
-            .max_height(260.0)
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                for (id, item) in &items {
-                    let selected = self.selected.as_deref() == Some(id.as_str());
-                    match task_row(ui, item, selected) {
-                        Some(RowAction::Toggle) => command = Some((id.clone(), RowAction::Toggle)),
-                        Some(RowAction::Delete) => command = Some((id.clone(), RowAction::Delete)),
-                        Some(RowAction::Select) => command = Some((id.clone(), RowAction::Select)),
-                        None => {}
-                    }
-                }
-            });
-        let Some((id, action)) = command else { return };
-        match action {
-            RowAction::Toggle => {
-                self.commit("plan.toggle", &format!("plan:{id}"), serde_json::json!({}));
-            }
-            RowAction::Delete => {
-                if self.commit("plan.delete", &format!("plan:{id}"), serde_json::json!({}))
-                    && self.selected.as_deref() == Some(id.as_str())
-                {
-                    self.clear_selection();
-                }
-            }
-            RowAction::Select => {
-                self.note = items
-                    .iter()
-                    .find(|(key, _)| *key == id)
-                    .map(|(_, item)| item.note.clone())
-                    .unwrap_or_default();
-                self.selected = Some(id);
-                self.note_dirty = false;
-            }
-        }
-    }
-
-    /// The note editor, pinned to the bottom of the widget with its formatting
-    /// bar — the only place in Plan where text is more than one line.
-    fn show_editor(&mut self, ui: &mut egui::Ui) {
-        if self.selected.is_none() {
-            return;
-        }
-        egui::containers::Panel::bottom("plan-editor")
-            .exact_size(184.0)
-            .resizable(false)
-            .frame(
-                egui::Frame::NONE
-                    .fill(orcspace_app::theme::monochrome::SURFACE)
-                    .inner_margin(12),
-            )
-            .show(ui, |ui| {
-                ui.painter().hline(
-                    ui.max_rect().x_range(),
-                    ui.max_rect().top(),
-                    egui::Stroke::new(1.0, orcspace_app::theme::hairline::FAINT),
-                );
-                let half = (ui.available_width() - 12.0) / 2.0;
-                let mut selection = None;
-                ui.horizontal_top(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width(half);
-                        let output = egui::TextEdit::multiline(&mut self.note)
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(5)
-                            .hint_text("Notes — **bold**, # large, - list")
-                            .show(ui);
-                        if output.response.changed() {
-                            self.note_dirty = true;
-                        }
-                        selection = output.cursor_range.map(|range| {
-                            let (primary, secondary) = (range.primary.index, range.secondary.index);
-                            (
-                                usize::from(primary.min(secondary)),
-                                usize::from(primary.max(secondary)),
-                            )
-                        });
-                    });
-                    ui.vertical(|ui| {
-                        ui.set_width(half);
-                        ui.add(egui::Label::new(note_job(&self.note, half)));
-                    });
-                });
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    for (label, mark) in [("B", Mark::Bold), ("A+", Mark::Large), ("•", Mark::List)]
-                    {
-                        if ui
-                            .add(egui::Button::new(label).min_size(Vec2::new(30.0, 26.0)))
-                            .on_hover_text(mark.hint())
-                            .clicked()
-                        {
-                            apply_mark(&mut self.note, mark, selection);
-                            self.note_dirty = true;
-                        }
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add_enabled(self.note_dirty, egui::Button::new("Save"))
-                            .clicked()
-                        {
-                            self.save_note();
-                        }
-                        if ui.button("Close").clicked() {
-                            self.clear_selection();
-                        }
-                    });
-                });
-            });
-    }
-}
-
-enum RowAction {
-    Toggle,
-    Delete,
-    Select,
-}
-
-#[derive(Clone, Copy)]
-enum Mark {
-    Bold,
-    Large,
-    List,
-}
-
-impl Mark {
-    fn hint(self) -> &'static str {
-        match self {
-            Self::Bold => "Bold",
-            Self::Large => "Large heading",
-            Self::List => "List item",
-        }
-    }
-}
-
-/// Wraps the selection in `**`, or turns the line it starts on into a heading
-/// or a list item. Without a selection the marks act on the whole note, which
-/// is what an empty click should do rather than nothing.
-fn apply_mark(note: &mut String, mark: Mark, selection: Option<(usize, usize)>) {
-    let characters: Vec<char> = note.chars().collect();
-    let (start, end) = selection
-        .filter(|(start, end)| start != end)
-        .unwrap_or((0, characters.len()));
-    let (start, end) = (start.min(characters.len()), end.min(characters.len()));
-    let before: String = characters[..start].iter().collect();
-    let middle: String = characters[start..end].iter().collect();
-    let after: String = characters[end..].iter().collect();
-    *note = match mark {
-        Mark::Bold => format!("{before}**{middle}**{after}"),
-        Mark::Large => format!("{}# {middle}{after}", line_start(&before)),
-        Mark::List => format!("{}- {middle}{after}", line_start(&before)),
-    };
-}
-
-/// A heading or bullet marker only means anything at the start of a line.
-fn line_start(before: &str) -> String {
-    if before.is_empty() || before.ends_with('\n') {
-        before.to_owned()
-    } else {
-        format!("{before}\n")
-    }
-}
-
-/// Renders the note's markdown subset: `# heading`, `**bold**`, `- item`.
-pub fn note_job(text: &str, wrap_width: f32) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob {
-        wrap: egui::text::TextWrapping {
-            max_width: wrap_width,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    for (index, line) in text.lines().enumerate() {
-        if index > 0 {
-            job.append("\n", 0.0, plain(11.0, false));
-        }
-        let (body, size, lead) = match line.strip_prefix("# ") {
-            Some(rest) => (rest, 16.0, ""),
-            None => match line.strip_prefix("- ") {
-                Some(rest) => (rest, 11.0, "• "),
-                None => (line, 11.0, ""),
-            },
-        };
-        if !lead.is_empty() {
-            job.append(lead, 0.0, plain(size, false));
-        }
-        let heading = size > 11.0;
-        for (bold, chunk) in split_bold(body) {
-            job.append(chunk, 0.0, plain(size, bold || heading));
-        }
-    }
-    job
-}
-
-fn plain(size: f32, bold: bool) -> egui::TextFormat {
-    egui::TextFormat {
-        font_id: if bold {
-            orcspace_app::theme::semibold(size)
-        } else {
-            egui::FontId::proportional(size)
-        },
-        color: orcspace_app::theme::text::NORMAL,
-        ..Default::default()
-    }
 }
 
 /// Splits a line on `**` pairs. An unclosed `**` is left as written rather
@@ -436,72 +174,28 @@ fn split_bold(line: &str) -> Vec<(bool, &str)> {
     out
 }
 
-fn task_row(ui: &mut egui::Ui, item: &planner::PlanItem, selected: bool) -> Option<RowAction> {
-    use orcspace_app::theme::{monochrome, text};
-    let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(ui.available_width(), 32.0), Sense::click());
-    let painter = ui.painter().with_clip_rect(rect);
-    if selected || response.hovered() {
-        painter.rect_filled(rect, 12.0, monochrome::RAISED);
+/// Renders the note's markdown subset (`# heading`, `**bold**`, `- item`)
+/// as plain text for the rgpui view. Bold markers are stripped; headings
+/// and bullets keep a text prefix so nothing reads as raw markup.
+pub fn render_note_text(text: &str) -> String {
+    let mut out = String::new();
+    for (index, line) in text.lines().enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        let (body, lead) = match line.strip_prefix("# ") {
+            Some(rest) => (rest, ""),
+            None => match line.strip_prefix("- ") {
+                Some(rest) => (rest, "\u{2022} "),
+                None => (line, ""),
+            },
+        };
+        out.push_str(lead);
+        for (_, chunk) in split_bold(body) {
+            out.push_str(chunk);
+        }
     }
-    let box_rect = egui::Rect::from_center_size(
-        egui::pos2(rect.left() + 18.0, rect.center().y),
-        Vec2::splat(14.0),
-    );
-    painter.rect_stroke(
-        box_rect,
-        4.0,
-        egui::Stroke::new(1.0, text::FAINT),
-        egui::StrokeKind::Inside,
-    );
-    if item.done {
-        let stroke = egui::Stroke::new(1.6, text::NORMAL);
-        painter.line_segment(
-            [
-                box_rect.left_center() + Vec2::new(3.0, 0.0),
-                box_rect.center_bottom() - Vec2::new(1.0, 3.0),
-            ],
-            stroke,
-        );
-        painter.line_segment(
-            [
-                box_rect.center_bottom() - Vec2::new(1.0, 3.0),
-                box_rect.right_top() + Vec2::new(-3.0, 3.0),
-            ],
-            stroke,
-        );
-    }
-    painter.text(
-        egui::pos2(rect.left() + 34.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        &item.title,
-        egui::FontId::proportional(11.0),
-        if item.done { text::FAINT } else { text::NORMAL },
-    );
-    let remove = egui::Rect::from_center_size(
-        egui::pos2(rect.right() - 16.0, rect.center().y),
-        Vec2::splat(20.0),
-    );
-    let removing = response.hovered() && ui.rect_contains_pointer(remove);
-    if removing {
-        painter.circle_filled(remove.center(), 10.0, Color32::from_rgb(0xE0, 0x43, 0x43));
-    }
-    if response.hovered() {
-        let stroke = egui::Stroke::new(1.2, if removing { text::NORMAL } else { text::FAINT });
-        let cross = remove.shrink(6.0);
-        painter.line_segment([cross.left_top(), cross.right_bottom()], stroke);
-        painter.line_segment([cross.right_top(), cross.left_bottom()], stroke);
-    }
-    if !response.clicked() {
-        return None;
-    }
-    if removing {
-        return Some(RowAction::Delete);
-    }
-    if ui.rect_contains_pointer(box_rect.expand(6.0)) {
-        return Some(RowAction::Toggle);
-    }
-    Some(RowAction::Select)
+    out
 }
 
 #[cfg(test)]
@@ -567,30 +261,6 @@ mod tests {
     }
 
     #[test]
-    fn bold_wraps_the_selection_and_leaves_the_rest_alone() {
-        let mut note = "alpha beta".to_owned();
-        apply_mark(&mut note, Mark::Bold, Some((6, 10)));
-        assert_eq!(note, "alpha **beta**");
-    }
-
-    #[test]
-    fn a_heading_starts_its_own_line() {
-        let mut note = "first\nsecond".to_owned();
-        apply_mark(&mut note, Mark::Large, Some((6, 12)));
-        assert_eq!(note, "first\n# second");
-        let mut inline = "abc".to_owned();
-        apply_mark(&mut inline, Mark::List, Some((1, 3)));
-        assert_eq!(inline, "a\n- bc");
-    }
-
-    #[test]
-    fn an_empty_selection_marks_the_whole_note() {
-        let mut note = "text".to_owned();
-        apply_mark(&mut note, Mark::Bold, Some((2, 2)));
-        assert_eq!(note, "**text**");
-    }
-
-    #[test]
     fn an_unclosed_bold_marker_is_left_as_written() {
         assert_eq!(split_bold("a **b"), vec![(false, "a **b")]);
         assert_eq!(
@@ -601,9 +271,11 @@ mod tests {
 
     #[test]
     fn headings_and_bullets_are_rendered_rather_than_shown_as_markup() {
-        let job = note_job("# Title\n- item\nplain", 200.0);
-        assert!(!job.text.contains('#'));
-        assert!(job.text.contains("• item"));
-        assert!(job.text.contains("Title"));
+        let text = render_note_text("# Title\n- item\nplain **bold**");
+        assert!(!text.contains('#'));
+        assert!(!text.contains("**"));
+        assert!(text.contains("\u{2022} item"));
+        assert!(text.contains("Title"));
+        assert!(text.contains("bold"));
     }
 }
