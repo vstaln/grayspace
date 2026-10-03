@@ -11,8 +11,8 @@ SmartScreen because the installer is unsigned.
 
 The Linux job produces an x64 AppImage, Debian package, portable `.tar.gz`,
 and checksum manifest. The AppImage can be started after `chmod +x
-OrcSpace-*.AppImage`; Debian and Ubuntu can install the `.deb` with `sudo apt
-install ./OrcSpace-*.deb`.
+GraySpace-*.AppImage`; Debian and Ubuntu can install the `.deb` with `sudo apt
+install ./GraySpace-*.deb`.
 
 The canonical download links are the assets on the `v2.2.10` GitHub release;
-the workflow also mirrors them to `orcspace/Orcspace-Uptade` for in-app updates.
+the workflow also mirrors them to `grayspace/Grayspace-Update` for in-app updates.

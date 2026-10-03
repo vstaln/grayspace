@@ -6,7 +6,7 @@ dist/
 
 # Source bundles produced for handing the project to another machine — a build
 # output, not an input, and re-creatable at any time.
-OrcSpace-mac-source.zip
+GraySpace-mac-source.zip
 
 # Rust / napi-rs build caches (native/*/target)
 native/*/target/
@@ -70,3 +70,6 @@ native/*/*.node
 .audit-screens*/
 .ui-review/
 typescript-errors.txt
+
+# Local reference clones, not part of the app
+/reference/

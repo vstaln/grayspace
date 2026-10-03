@@ -3,8 +3,8 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const binary = process.platform === 'win32'
-  ? 'native/target/release/orcspace.exe'
-  : 'native/target/release/orcspace'
+  ? 'native/target/release/grayspace.exe'
+  : 'native/target/release/grayspace'
 
 function newestInput(path) {
   if (!existsSync(path)) return 0
@@ -22,9 +22,9 @@ const binaryMtime = existsSync(binary) ? statSync(binary).mtimeMs : 0
 const buildInputs = [
   'native/Cargo.toml',
   'native/Cargo.lock',
-  'native/orcspace-app/Cargo.toml',
-  'native/orcspace-app/build.rs',
-  'native/orcspace-app/src',
+  'native/grayspace-app/Cargo.toml',
+  'native/grayspace-app/build.rs',
+  'native/grayspace-app/src',
   // portable-pty is patched in from this vendored tree, so changes here also
   // change the engine even when the app's own Rust sources are untouched.
   'native/vendor/portable-pty'
@@ -34,17 +34,17 @@ if (binaryMtime >= newestBuildInput) process.exit(0)
 
 const result = spawnSync(
   process.execPath,
-  ['scripts/native-cargo.mjs', 'build', '--release', '--bin', 'orcspace', '--manifest-path', 'native/orcspace-app/Cargo.toml'],
+  ['scripts/native-cargo.mjs', 'build', '--release', '--bin', 'grayspace', '--manifest-path', 'native/grayspace-app/Cargo.toml'],
   { stdio: 'inherit', shell: false }
 )
-// The Rust engine is optional at dev time: the Electron app falls back to Node
-// PTY (see native/README.md), and a missing Rust toolchain should not stop a
-// contributor from running `npm run dev`. A *packaged* build is different — a
+// The binary is optional at dev time: a missing Rust toolchain should not stop
+// a contributor from editing the repo, but anything that launches the GUI
+// needs it. A *packaged* build is different — a
 // release that silently ships without the engine is a release nobody notices is
 // degraded — so `prebuild` (and therefore every dist/installer script) is
-// strict by default. ORCSPACE_NATIVE_STRICT=0/1 overrides either way.
+// strict by default. GRAYSPACE_NATIVE_STRICT=0/1 overrides either way.
 function isStrict() {
-  const explicit = process.env.ORCSPACE_NATIVE_STRICT
+  const explicit = process.env.GRAYSPACE_NATIVE_STRICT
   if (explicit === '1') return true
   if (explicit === '0') return false
   return process.env.npm_lifecycle_event === 'prebuild'
@@ -54,9 +54,9 @@ if (result.error || (result.status ?? 1) !== 0) {
   const reason = result.error?.message ?? `exit code ${result.status ?? 1}`
   if (isStrict()) {
     console.error(`[native] engine build failed: ${reason}`)
-    console.error('[native] set ORCSPACE_NATIVE_STRICT=0 to build without the native engine.')
+    console.error('[native] set GRAYSPACE_NATIVE_STRICT=0 to build without the native engine.')
     process.exit(result.status || 1)
   }
-  console.warn(`[native] engine build skipped (${reason}); continuing with Node PTY fallback.`)
+  console.warn(`[native] engine build skipped (${reason}); continuing without the GUI binary.`)
 }
 process.exit(0)
