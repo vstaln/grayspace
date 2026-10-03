@@ -10,6 +10,7 @@ pub mod views_orchestration;
 pub mod views_planner;
 pub mod views_terminal;
 pub mod views_browser;
+pub mod cli_run;
 
 use anyhow::Result;
 use crate::engine::{ControlServer, TerminalEvent, TerminalManager};
@@ -75,17 +76,33 @@ use std::sync::mpsc;
 use std::thread;
 
 fn main() -> Result<()> {
-    let token = std::env::var("ORCSPACE_TOKEN")
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if !args.is_empty() && args[0] != "--gui" {
+        if args[0] == "--engine" {
+            let token = std::env::var("GRAYSPACE_TOKEN")
+                .ok()
+                .filter(|value| value.len() >= 32)
+                .or_else(|| std::env::var("ORCSPACE_TOKEN").ok().filter(|value| value.len() >= 32))
+                .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+            if let Err(error) = orcspace_app::platform::contain_engine_process() {
+                eprintln!("engine process containment unavailable: {error}");
+            }
+            return run_engine(TerminalManager::streaming(token));
+        }
+
+        // Run CLI command (whoami, workers, tell, plan, browser, status, help, etc.)
+        if let Err(error) = cli_run::run() {
+            eprintln!("grayspace: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    let token = std::env::var("GRAYSPACE_TOKEN")
         .ok()
         .filter(|value| value.len() >= 32)
+        .or_else(|| std::env::var("ORCSPACE_TOKEN").ok().filter(|value| value.len() >= 32))
         .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
-
-    if std::env::args().any(|arg| arg == "--engine") {
-        if let Err(error) = orcspace_app::platform::contain_engine_process() {
-            eprintln!("engine process containment unavailable: {error}");
-        }
-        return run_engine(TerminalManager::streaming(token));
-    }
     let manager = TerminalManager::new(token.clone());
     let _manager_keepalive = manager.clone();
     let control =

@@ -39,7 +39,8 @@ const MAX_SCROLLBACK: usize = 1_000_000;
 /// Compacting one slack's worth at a time turns that into one memmove per
 /// 256KB of output instead of one per token.
 const SCROLLBACK_SLACK: usize = 256 * 1024;
-const TOKEN_HEADER: &str = "x-orcspace-token";
+const TOKEN_HEADER: &str = "x-grayspace-token";
+const LEGACY_TOKEN_HEADER: &str = "x-orcspace-token";
 /// Ceiling for output that has been read from the PTYs but not yet handed to
 /// the app. When it is reached, the PTY reader waits here; the OS PTY buffer
 /// then provides backpressure instead of deleting live terminal bytes.
@@ -1772,6 +1773,7 @@ fn check_rate_limit(
 fn authenticate(headers: &HeaderMap, token: &str) -> Result<(), (StatusCode, String)> {
     let supplied = headers
         .get(TOKEN_HEADER)
+        .or_else(|| headers.get(LEGACY_TOKEN_HEADER))
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
     if constant_time_token_eq(supplied, token) {

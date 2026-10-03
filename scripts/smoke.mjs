@@ -40,6 +40,9 @@ child = spawn(binary, [], {
   windowsHide: true,
   env: {
     ...process.env,
+    GRAYSPACE_TEST_USER_DATA: profileDir,
+    GRAYSPACE_SOCKET_PATH: socketPath,
+    GRAYSPACE_TOKEN: token,
     ORCSPACE_TEST_USER_DATA: profileDir,
     ORCSPACE_SOCKET_PATH: socketPath,
     ORCSPACE_TOKEN: token
@@ -76,7 +79,7 @@ async function waitForHealth(deadline) {
   while (Date.now() < deadline) {
     if (exited) throw new Error(childExitMessage('control server health'))
     try {
-      const response = await requestIpc(socketPath, '/health', { headers: { 'x-orcspace-token': token } })
+      const response = await requestIpc(socketPath, '/health', { headers: { 'x-grayspace-token': token } })
       if (response.status === 200 && response.json && response.json.ok === true) return
     } catch {
     }

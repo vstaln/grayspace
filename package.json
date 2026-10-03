@@ -14,9 +14,9 @@
   },
   "scripts": {
     "native:check": "node scripts/native-cargo.mjs check --manifest-path native/Cargo.toml",
-    "native:run": "node scripts/native-cargo.mjs build --bin orc --manifest-path native/orcspace-app/Cargo.toml && node scripts/native-cargo.mjs run --bin grayspace --manifest-path native/orcspace-app/Cargo.toml",
-    "native:build": "node scripts/native-cargo.mjs build --release --bins --manifest-path native/orcspace-app/Cargo.toml",
-    "native:start": "node scripts/native-cargo.mjs build --release --bin orc --manifest-path native/orcspace-app/Cargo.toml && node scripts/native-cargo.mjs run --release --bin grayspace --manifest-path native/orcspace-app/Cargo.toml",
+    "native:run": "node scripts/native-cargo.mjs run --bin grayspace --manifest-path native/orcspace-app/Cargo.toml",
+    "native:build": "node scripts/native-cargo.mjs build --release --bin grayspace --manifest-path native/orcspace-app/Cargo.toml",
+    "native:start": "node scripts/native-cargo.mjs run --release --bin grayspace --manifest-path native/orcspace-app/Cargo.toml",
     "smoke": "node scripts/smoke.mjs",
     "check:version": "node scripts/check-version.mjs",
     "test": "node scripts/check-version.mjs && node scripts/native-cargo.mjs test --manifest-path native/Cargo.toml -p orcspace-app --lib --locked"

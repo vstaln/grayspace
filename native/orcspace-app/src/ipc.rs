@@ -20,43 +20,62 @@ use std::path::{Path, PathBuf};
 
 /// The environment variable every spawned terminal is told the socket through.
 ///
-/// It is not `ORCSPACE_URL`: `cli/orc.mjs` checks the socket path first and
-/// treats `ORCSPACE_URL` as an http address. Putting a pipe path in the URL
-/// variable makes every agent try to reach the control server over HTTP at a
-/// name that is not one — which fails silently, per agent, at spawn time.
-pub const SOCKET_PATH_ENV: &str = "ORCSPACE_SOCKET_PATH";
+/// It is not `GRAYSPACE_URL`: `cli/grayspace.mjs` checks the socket path first and
+/// treats `GRAYSPACE_URL` as an http address.
+pub const SOCKET_PATH_ENV: &str = "GRAYSPACE_SOCKET_PATH";
+pub const LEGACY_SOCKET_PATH_ENV: &str = "ORCSPACE_SOCKET_PATH";
 
-/// The directory shared with Electron and the JavaScript CLI.  Keeping the
-/// token beside the socket discovery files lets a standalone native build be
-/// addressed by `orc` without requiring callers to copy an environment value
-/// around manually.
+/// The directory shared with the control server and CLI.
 pub fn user_data_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("ORCSPACE_TEST_USER_DATA") {
+    if let Some(dir) = std::env::var_os("GRAYSPACE_TEST_USER_DATA").or_else(|| std::env::var_os("ORCSPACE_TEST_USER_DATA")) {
         return PathBuf::from(dir);
     }
-    if let Some(dir) = std::env::var_os("ORCSPACE_DEV_USER_DATA") {
+    if let Some(dir) = std::env::var_os("GRAYSPACE_DEV_USER_DATA").or_else(|| std::env::var_os("ORCSPACE_DEV_USER_DATA")) {
         return PathBuf::from(dir);
     }
     if cfg!(windows) {
         if let Some(dir) = std::env::var_os("APPDATA") {
+            let p = PathBuf::from(&dir).join("GraySpace");
+            if p.exists() || !PathBuf::from(&dir).join("OrcSpace").exists() {
+                return p;
+            }
             return PathBuf::from(dir).join("OrcSpace");
         }
         if let Some(dir) = std::env::var_os("LOCALAPPDATA") {
+            let p = PathBuf::from(&dir).join("GraySpace");
+            if p.exists() || !PathBuf::from(&dir).join("OrcSpace").exists() {
+                return p;
+            }
             return PathBuf::from(dir).join("OrcSpace");
         }
     } else if cfg!(target_os = "macos") {
         if let Some(dir) = std::env::var_os("HOME") {
+            let p = PathBuf::from(&dir)
+                .join("Library")
+                .join("Application Support")
+                .join("GraySpace");
+            if p.exists() || !PathBuf::from(&dir).join("Library").join("Application Support").join("OrcSpace").exists() {
+                return p;
+            }
             return PathBuf::from(dir)
                 .join("Library")
                 .join("Application Support")
                 .join("OrcSpace");
         }
     } else if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+        let p = PathBuf::from(&dir).join("GraySpace");
+        if p.exists() || !PathBuf::from(&dir).join("OrcSpace").exists() {
+            return p;
+        }
         return PathBuf::from(dir).join("OrcSpace");
     } else if let Some(dir) = std::env::var_os("HOME") {
+        let p = PathBuf::from(&dir).join(".config").join("GraySpace");
+        if p.exists() || !PathBuf::from(&dir).join(".config").join("OrcSpace").exists() {
+            return p;
+        }
         return PathBuf::from(dir).join(".config").join("OrcSpace");
     }
-    PathBuf::from(".orcspace")
+    PathBuf::from(".grayspace")
 }
 
 pub fn control_token_path() -> PathBuf {
@@ -106,17 +125,17 @@ pub fn is_dev_environment() -> bool {
 /// `ORCSPACE_SOCKET_PATH` overrides everything, which is what lets a test — or
 /// a second instance — run without touching the real one.
 pub fn socket_path(is_dev: bool) -> String {
-    if let Ok(explicit) = std::env::var("ORCSPACE_SOCKET_PATH") {
+    if let Ok(explicit) = std::env::var("GRAYSPACE_SOCKET_PATH").or_else(|_| std::env::var("ORCSPACE_SOCKET_PATH")) {
         if !explicit.is_empty() {
             return explicit;
         }
     }
     let suffix = if is_dev { "-dev" } else { "" };
     if cfg!(windows) {
-        format!(r"\\.\pipe\orcspace{suffix}")
+        format!(r"\\.\pipe\grayspace{suffix}")
     } else {
         let mut path = std::env::temp_dir();
-        path.push(format!("orcspace{suffix}.sock"));
+        path.push(format!("grayspace{suffix}.sock"));
         path.to_string_lossy().into_owned()
     }
 }
@@ -170,7 +189,7 @@ mod tests {
     #[test]
     fn a_dev_socket_is_named_apart_from_a_release_one() {
         // Guarded: an override in the environment would mask the difference.
-        if std::env::var_os("ORCSPACE_SOCKET_PATH").is_some() {
+        if std::env::var_os("GRAYSPACE_SOCKET_PATH").is_some() || std::env::var_os("ORCSPACE_SOCKET_PATH").is_some() {
             return;
         }
         let release = socket_path(false);
@@ -182,14 +201,14 @@ mod tests {
 
     #[test]
     fn the_path_matches_the_platform_convention() {
-        if std::env::var_os("ORCSPACE_SOCKET_PATH").is_some() {
+        if std::env::var_os("GRAYSPACE_SOCKET_PATH").is_some() || std::env::var_os("ORCSPACE_SOCKET_PATH").is_some() {
             return;
         }
         let path = socket_path(false);
         if cfg!(windows) {
-            assert_eq!(path, r"\\.\pipe\orcspace");
+            assert_eq!(path, r"\\.\pipe\grayspace");
         } else {
-            assert!(path.ends_with("orcspace.sock"), "got {path}");
+            assert!(path.ends_with("grayspace.sock"), "got {path}");
         }
     }
 
@@ -201,31 +220,31 @@ mod tests {
     #[test]
     fn the_cli_reads_the_variable_the_engine_writes() {
         let cli = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../cli/orc.mjs")
+            .join("../../cli/grayspace.mjs")
             .canonicalize();
         let Ok(cli) = cli else {
             // Checked out without the CLI: nothing to contradict.
             return;
         };
-        let source = std::fs::read_to_string(cli).expect("orc.mjs is readable");
+        let source = std::fs::read_to_string(cli).expect("grayspace.mjs is readable");
         assert!(
             source.contains(SOCKET_PATH_ENV),
-            "cli/orc.mjs no longer reads {SOCKET_PATH_ENV}"
+            "cli/grayspace.mjs no longer reads {SOCKET_PATH_ENV}"
         );
         // And it must be preferred over the http fallback, or a stale
-        // ORCSPACE_URL in the environment would win.
+        // GRAYSPACE_URL in the environment would win.
         let socket_at = source.find(SOCKET_PATH_ENV).expect("checked above");
-        if let Some(url_at) = source.find("ORCSPACE_URL") {
+        if let Some(url_at) = source.find("GRAYSPACE_URL").or_else(|| source.find("ORCSPACE_URL")) {
             assert!(
                 socket_at < url_at,
-                "orc.mjs must check the socket path before falling back to a URL"
+                "grayspace.mjs must check the socket path before falling back to a URL"
             );
         }
     }
 
     #[test]
     fn no_path_is_a_tcp_address() {
-        if std::env::var_os("ORCSPACE_SOCKET_PATH").is_some() {
+        if std::env::var_os("GRAYSPACE_SOCKET_PATH").is_some() || std::env::var_os("ORCSPACE_SOCKET_PATH").is_some() {
             return;
         }
         for path in [socket_path(false), socket_path(true)] {

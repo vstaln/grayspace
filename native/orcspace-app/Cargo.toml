@@ -12,10 +12,6 @@ path = "src/lib.rs"
 name = "grayspace"
 path = "src/main.rs"
 
-[[bin]]
-name = "orc"
-path = "src/orc.rs"
-
 [dependencies]
 anyhow = "1"
 axum = "0.8"

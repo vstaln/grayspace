@@ -5,32 +5,32 @@ use std::{
     net::TcpStream,
 };
 
-fn main() {
-    if let Err(error) = run() {
-        eprintln!("orc: {error}");
-        std::process::exit(1);
-    }
-}
-
-fn run() -> Result<(), String> {
+pub fn run() -> Result<(), String> {
     let argv: Vec<String> = env::args().skip(1).collect();
     let parsed = orcspace_app::cli::Args::parse(&argv);
     let mut args = env::args().skip(1);
     let command = args.next().unwrap_or_else(|| "help".to_owned());
     if matches!(command.as_str(), "help" | "--help" | "-h") {
-        println!("orc workers | orc tell <worker> \"message\" | orc worker-read <terminal>\nOrchestration commands: run-create, task-create, task-list, check, reply, done");
+        println!("grayspace workers | grayspace tell <worker> \"message\" | grayspace worker-read <terminal>\nOrchestration commands: run-create, task-create, task-list, check, reply, done");
         return Ok(());
     }
-    let url = env::var("ORCSPACE_SOCKET_PATH")
+    if matches!(command.as_str(), "version" | "--version" | "-V") {
+        println!("grayspace 0.0.1");
+        return Ok(());
+    }
+    let url = env::var("GRAYSPACE_SOCKET_PATH")
         .ok()
         .filter(|s| !s.is_empty())
+        .or_else(|| env::var("ORCSPACE_SOCKET_PATH").ok().filter(|s| !s.is_empty()))
+        .or_else(|| env::var("GRAYSPACE_URL").ok().filter(|s| !s.is_empty()))
         .or_else(|| env::var("ORCSPACE_URL").ok().filter(|s| !s.is_empty()))
         .unwrap_or_else(|| orcspace_app::ipc::socket_path(orcspace_app::ipc::is_dev_environment()));
-    let token = env::var("ORCSPACE_TOKEN")
+    let token = env::var("GRAYSPACE_TOKEN")
         .ok()
         .filter(|s| !s.is_empty())
+        .or_else(|| env::var("ORCSPACE_TOKEN").ok().filter(|s| !s.is_empty()))
         .or_else(|| std::fs::read_to_string(orcspace_app::ipc::control_token_path()).ok())
-        .ok_or("No control token; start OrcSpace first")?;
+        .ok_or("No control token; start GraySpace first")?;
     let token = token.trim().to_owned();
     if token.contains(['\r', '\n']) {
         return Err("Invalid control token".into());
@@ -73,6 +73,7 @@ fn run() -> Result<(), String> {
             let id = parsed
                 .pick(&["to", "id"])
                 .or_else(|| parsed.positionals().get(1).cloned())
+                .or_else(|| env::var("GRAYSPACE_TERMINAL_ID").ok())
                 .or_else(|| env::var("ORCSPACE_TERMINAL_ID").ok())
                 .ok_or("worker-read needs a terminal id")?;
             let response = request(
@@ -164,8 +165,6 @@ fn format_workers(response: &Value) -> String {
                     .iter()
                     .map(|worker| {
                         let id = worker.get("id").and_then(Value::as_str).unwrap_or("?");
-                        // Names beat ids for addressing, so the name leads and
-                        // the id follows only where they differ.
                         let name = worker.get("name").and_then(Value::as_str).unwrap_or(id);
                         let alive = worker
                             .get("alive")
@@ -208,7 +207,7 @@ fn request(
     };
     let payload = body.map(|value| value.to_string()).unwrap_or_default();
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nx-orcspace-token: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{payload}",
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nx-grayspace-token: {token}\r\nx-orcspace-token: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{payload}",
         payload.len()
     );
     stream
@@ -270,13 +269,13 @@ fn encode(value: &str) -> String {
 fn parse_http_url(url: &str) -> Result<(String, u16), String> {
     let authority = url
         .strip_prefix("http://")
-        .ok_or_else(|| "ORCSPACE_URL must use http://".to_owned())?
+        .ok_or_else(|| "GRAYSPACE_URL must use http://".to_owned())?
         .split('/')
         .next()
         .unwrap_or_default();
     let (host, port) = authority
         .rsplit_once(':')
-        .ok_or_else(|| "ORCSPACE_URL must include a port".to_owned())?;
+        .ok_or_else(|| "GRAYSPACE_URL must include a port".to_owned())?;
     let port = port
         .parse::<u16>()
         .map_err(|error| format!("invalid control server port: {error}"))?;

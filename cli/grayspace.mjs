@@ -25,8 +25,10 @@ import http from 'node:http'
 import https from 'node:https'
 import { fileURLToPath } from 'node:url'
 
-const TOKEN_HEADER = 'x-orcspace-token'
+const TOKEN_HEADER = 'x-grayspace-token'
+const LEGACY_TOKEN_HEADER = 'x-orcspace-token'
 
+const GRAYSPACE_VERSION = '0.0.1'
 const ORC_VERSION = '0.0.1'
 
 let cachedCandidateDirs
@@ -35,19 +37,24 @@ function candidateDirs() {
   const seen = new Set()
   cachedCandidateDirs = [
     path.join(process.cwd(), '.dev-user-data'),
+    process.env.GRAYSPACE_DEV_USER_DATA,
     process.env.ORCSPACE_DEV_USER_DATA,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'GraySpace') : null,
     process.env.APPDATA ? path.join(process.env.APPDATA, 'OrcSpace') : null,
     process.env.APPDATA ? path.join(process.env.APPDATA, 'Orcspace') : null,
     process.env.APPDATA ? path.join(process.env.APPDATA, 'orcspace') : null,
     process.env.APPDATA ? path.join(process.env.APPDATA, 'com.orcspace.app') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'GraySpace') : null,
     process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'OrcSpace') : null,
     process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Orcspace') : null,
     process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'orcspace') : null,
     process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'com.orcspace.app') : null,
     path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.dev-user-data'),
+    path.join(os.homedir(), '.config', 'GraySpace'),
     path.join(os.homedir(), '.config', 'OrcSpace'),
     path.join(os.homedir(), '.config', 'Orcspace'),
     path.join(os.homedir(), '.config', 'orcspace'),
+    path.join(os.homedir(), 'Library', 'Application Support', 'GraySpace'),
     path.join(os.homedir(), 'Library', 'Application Support', 'OrcSpace'),
     path.join(os.homedir(), 'Library', 'Application Support', 'Orcspace')
   ].flatMap((dir) => {
@@ -69,7 +76,7 @@ function candidateDirs() {
 
 
 function getCandidateTokens() {
-  const envToken = (process.env.ORCSPACE_TOKEN || '').trim()
+  const envToken = (process.env.GRAYSPACE_TOKEN || process.env.ORCSPACE_TOKEN || '').trim()
   if (envToken.length >= 32) {
     return [envToken]
   }
@@ -78,7 +85,7 @@ function getCandidateTokens() {
 
 function getAllCandidateTokens(stopAtFirst = false) {
   const tokens = []
-  const envToken = (process.env.ORCSPACE_TOKEN || '').trim()
+  const envToken = (process.env.GRAYSPACE_TOKEN || process.env.ORCSPACE_TOKEN || '').trim()
   if (envToken.length >= 32) {
     tokens.push(envToken)
     if (stopAtFirst) return tokens
@@ -114,7 +121,7 @@ function isProcessAlive(pid) {
 
 function isLiveRuntime(raw) {
   if (!raw || typeof raw !== 'object') return false
-  if (raw.app && raw.app !== 'orcspace') return false
+  if (raw.app && raw.app !== 'grayspace' && raw.app !== 'orcspace') return false
   if (!isProcessAlive(raw.pid)) return false
 
 
@@ -125,11 +132,13 @@ function isLiveRuntime(raw) {
 }
 
 function getDiscoveredTargets() {
-  if (process.env.ORCSPACE_SOCKET_PATH) {
-    return [{ socketPath: process.env.ORCSPACE_SOCKET_PATH }]
+  const explicitSocket = process.env.GRAYSPACE_SOCKET_PATH || process.env.ORCSPACE_SOCKET_PATH
+  if (explicitSocket) {
+    return [{ socketPath: explicitSocket }]
   }
-  if (process.env.ORCSPACE_URL) {
-    return [{ url: process.env.ORCSPACE_URL.replace(/\/+$/, '') }]
+  const explicitUrl = process.env.GRAYSPACE_URL || process.env.ORCSPACE_URL
+  if (explicitUrl) {
+    return [{ url: explicitUrl.replace(/\/+$/, '') }]
   }
   if (process.env.WORKSPACE_CONTROL_PORT) {
     const envPort = Number(process.env.WORKSPACE_CONTROL_PORT)
@@ -165,11 +174,13 @@ function getDiscoveredTargets() {
     }
   }
 
-  const isDev = fs.existsSync(path.join(process.cwd(), '.dev-user-data')) || Boolean(process.env.ORCSPACE_DEV_USER_DATA)
+  const isDev = fs.existsSync(path.join(process.cwd(), '.dev-user-data')) || Boolean(process.env.GRAYSPACE_DEV_USER_DATA || process.env.ORCSPACE_DEV_USER_DATA)
   const suffix = isDev ? '-dev' : ''
   if (process.platform === 'win32') {
+    addTarget({ socketPath: `\\\\.\\pipe\\grayspace${suffix}` })
     addTarget({ socketPath: `\\\\.\\pipe\\orcspace${suffix}` })
   } else {
+    addTarget({ socketPath: path.join(os.tmpdir(), `grayspace${suffix}.sock`) })
     addTarget({ socketPath: path.join(os.tmpdir(), `orcspace${suffix}.sock`) })
   }
   return targets
@@ -177,7 +188,7 @@ function getDiscoveredTargets() {
 
 let discoveredTargets
 const targets = () => (discoveredTargets ??= getDiscoveredTargets())
-const AGENT_ID = process.env.ORCSPACE_AGENT_ID || process.env.ORCSPACE_TERMINAL_ID || 'cli'
+const AGENT_ID = process.env.GRAYSPACE_AGENT_ID || process.env.GRAYSPACE_TERMINAL_ID || process.env.ORCSPACE_AGENT_ID || process.env.ORCSPACE_TERMINAL_ID || 'cli'
 let workingToken = null
 let workingTarget = null
 
@@ -558,75 +569,75 @@ function age(ms) {
 
 
 
-const HELP = `orc — OrcSpace agent CLI
+const HELP = `grayspace — GraySpace agent CLI
 
 THE OTHER AGENTS & ROSTER
-  orc whoami                                  identify your own agent, terminal & task
-  orc context | orc ctx                      show project folder, Code Workspace and active task
-  orc workers | orc ps | orc who              who else is open on the canvas (* marks you),
-                                              incl. what runs inside each terminal
-  orc version | orc --version                 print the CLI version
-  orc help <command>                          per-command usage, e.g. orc help workers
-  orc rename [<worker>] [--name <name>]       rename a terminal (canvas title = worker name)
-  orc tell <worker> "run the tests"           deliver text; read its answer with worker-read
+  grayspace whoami                                  identify your own agent, terminal & task
+  grayspace context | grayspace ctx                show project folder, Code Workspace and active task
+  grayspace workers | grayspace ps | grayspace who who else is open on the canvas (* marks you),
+                                                   incl. what runs inside each terminal
+  grayspace version | grayspace --version          print the CLI version
+  grayspace help <command>                         per-command usage, e.g. grayspace help workers
+  grayspace rename [<worker>] [--name <name>]      rename a terminal (canvas title = worker name)
+  grayspace tell <worker> "run the tests"          deliver text; read its answer with worker-read
   Workers are addressed by name anywhere --to is taken: a name, @name, a
   case-insensitive or unambiguous prefix, the terminal id, or "self".
 
 COORDINATION & RUNS
-  orc status | orc st                         summary of open run, tasks, live workers, unread mail
-  orc run-create --objective "..."            open a run (namespace + coordinator inbox)
-  orc run-list | orc runs                     list all runs, newest first
-  orc run-show [<id>] | orc run [<id>]        inspect details of a run and its tasks
-  orc run-close [<id>]                        close a run
+  grayspace status | grayspace st                  summary of open run, tasks, live workers, unread mail
+  grayspace run-create --objective "..."           open a run (namespace + coordinator inbox)
+  grayspace run-list | grayspace runs              list all runs, newest first
+  grayspace run-show [<id>] | grayspace run [<id>] inspect details of a run and its tasks
+  grayspace run-close [<id>]                       close a run
 
 TASKS & DAG
-  orc task-create [<spec>] [--title "..."]    file a task into the active run
+  grayspace task-create [<spec>] [--title "..."]   file a task into the active run
                            [--deps '["otask-1"]']
-  orc task-list | orc tasks [--ready]         list tasks; --ready = ready to dispatch
-  orc task-show [<id>] | orc task [<id>]      view full specification and details of a task
-  orc task-update [<id>] [--status <s>]       update a task's status, title, or spec
+  grayspace task-list | grayspace tasks [--ready]  list tasks; --ready = ready to dispatch
+  grayspace task-show [<id>] | grayspace task [<id>] view full specification and details of a task
+  grayspace task-update [<id>] [--status <s>]      update a task's status, title, or spec
 
 DISPATCH & WORKERS
-  orc worker-start [<taskId>] [--agent claude|codex|opencode|antigravity|grok]
+  grayspace worker-start [<taskId>] [--agent claude|codex|opencode|antigravity|grok]
                               [--terminal <id>] [--command "..."] [--no-inject]
-  orc dispatch [<taskId>] --to <terminalId>   dispatch work into an existing terminal
-  orc worker-show [<dispatchId>]              view details/preamble of a dispatch
-  orc worker-read [<dispatchId|name>] [--limit N]  read tail output of a worker terminal
-  orc logs [<dispatchId|terminalId|name>] [limit]  shortcut to read worker output
-  orc worker-release [<dispatchId>] [--close] release worker (optionally close terminal)
-  orc worker-retain [<dispatchId>]            retain worker for subsequent tasks
+  grayspace dispatch [<taskId>] --to <terminalId>  dispatch work into an existing terminal
+  grayspace worker-show [<dispatchId>]             view details/preamble of a dispatch
+  grayspace worker-read [<dispatchId|name>] [--limit N] read tail output of a worker terminal
+  grayspace logs [<dispatchId|terminalId|name>] [limit] shortcut to read worker output
+  grayspace worker-release [<dispatchId>] [--close] release worker (optionally close terminal)
+  grayspace worker-retain [<dispatchId>]           retain worker for subsequent tasks
 
 INBOX, QUESTIONS & DECISION GATES
-  orc check | orc inbox [--wait] [--types ...] check coordinator mail (--wait blocks)
+  grayspace check | grayspace inbox [--wait] [--types ...] check coordinator mail (--wait blocks)
                         [--ack <msgId>] [--all]
-  orc ack <messageId>                           acknowledge a message (safe after reading)
-  orc reply [<askId>] [<bodyText>]            answer a worker's pending question
-  orc allow <id> [--note "..."]                approve a permission request
-  orc deny <id> [--reason "..."]               deny a permission request
-  orc gate-create --question "..."            open a decision gate (blocks dependent task)
+  grayspace ack <messageId>                          acknowledge a message (safe after reading)
+  grayspace reply [<askId>] [<bodyText>]           answer a worker's pending question
+  grayspace allow <id> [--note "..."]               approve a permission request
+  grayspace deny <id> [--reason "..."]              deny a permission request
+  grayspace gate-create --question "..."           open a decision gate (blocks dependent task)
                   [--task <t>] [--options '["a","b"]']
-  orc gate-list | orc gates                   list all decision gates and resolutions
-  orc gate-resolve [<gateId>] [<resolution>]  resolve a gate and unblock its task
+  grayspace gate-list | grayspace gates            list all decision gates and resolutions
+  grayspace gate-resolve [<gateId>] [<resolution>] resolve a gate and unblock its task
 
 WORKER (dispatched agent reporting)
-  orc done --outcome succeeded|failed         report completion with modified files
+  grayspace done --outcome succeeded|failed        report completion with modified files
            [--task-id <t>] [--dispatch-id <d>] [--body "..."] [--files "a.ts,b.ts"]
-  orc ask --question "..." [--options "a,b"]  ask question and block until reply arrives
-  orc ask --type permission --question "..."   request permission and block until granted
-  orc escalate --body "..."                   escalate an issue to the coordinator
-  orc heartbeat                               keep worker activity alive
-  orc send --type <t> [--to <who>]            send direct message or broadcast
+  grayspace ask --question "..." [--options "a,b"] ask question and block until reply arrives
+  grayspace ask --type permission --question "..." request permission and block until granted
+  grayspace escalate --body "..."                  escalate an issue to the coordinator
+  grayspace heartbeat                              keep worker activity alive
+  grayspace send --type <t> [--to <who>]           send direct message or broadcast
 
 THE APP & CANVAS
-  orc plan list | create | update | toggle [<id>]         planner day tasks (create accepts --attachments)
-  orc canvas list | place | image | move | rename | close canvas widgets & viewport
-  orc browser open [url] | list | navigate | snapshot | click | fill | select | press | scroll
-  orc terminal open | send <id> <text> | read | close     direct terminal management
-  orc git status | commit --message "..."                 git audit integration
-  orc journal [--since N]                                 event audit log
-  orc reset                                               reset orchestration state
-  orc doctor                                              diagnostics & connectivity check
-  orc api <METHOD> <path> [json]                          direct REST escape hatch
+  grayspace plan list | create | update | toggle [<id>]        planner day tasks (create accepts --attachments)
+  grayspace canvas list | place | image | move | rename | close canvas widgets & viewport
+  grayspace browser open [url] | list | navigate | snapshot | click | fill | select | press | scroll
+  grayspace terminal open | send <id> <text> | read | close    direct terminal management
+  grayspace git status | commit --message "..."                git audit integration
+  grayspace journal [--since N]                                event audit log
+  grayspace reset                                              reset orchestration state
+  grayspace doctor                                             diagnostics & connectivity check
+  grayspace api <METHOD> <path> [json]                         direct REST escape hatch
 
 Destructive commands (reset, run-close, canvas close, terminal close,
 plan delete) require --yes to confirm.
