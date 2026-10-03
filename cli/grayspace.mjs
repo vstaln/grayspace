@@ -26,10 +26,8 @@ import https from 'node:https'
 import { fileURLToPath } from 'node:url'
 
 const TOKEN_HEADER = 'x-grayspace-token'
-const LEGACY_TOKEN_HEADER = 'x-orcspace-token'
 
 const GRAYSPACE_VERSION = '0.0.1'
-const ORC_VERSION = '0.0.1'
 
 let cachedCandidateDirs
 function candidateDirs() {
@@ -38,25 +36,11 @@ function candidateDirs() {
   cachedCandidateDirs = [
     path.join(process.cwd(), '.dev-user-data'),
     process.env.GRAYSPACE_DEV_USER_DATA,
-    process.env.ORCSPACE_DEV_USER_DATA,
     process.env.APPDATA ? path.join(process.env.APPDATA, 'GraySpace') : null,
-    process.env.APPDATA ? path.join(process.env.APPDATA, 'OrcSpace') : null,
-    process.env.APPDATA ? path.join(process.env.APPDATA, 'Orcspace') : null,
-    process.env.APPDATA ? path.join(process.env.APPDATA, 'orcspace') : null,
-    process.env.APPDATA ? path.join(process.env.APPDATA, 'com.orcspace.app') : null,
     process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'GraySpace') : null,
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'OrcSpace') : null,
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Orcspace') : null,
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'orcspace') : null,
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'com.orcspace.app') : null,
     path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.dev-user-data'),
     path.join(os.homedir(), '.config', 'GraySpace'),
-    path.join(os.homedir(), '.config', 'OrcSpace'),
-    path.join(os.homedir(), '.config', 'Orcspace'),
-    path.join(os.homedir(), '.config', 'orcspace'),
-    path.join(os.homedir(), 'Library', 'Application Support', 'GraySpace'),
-    path.join(os.homedir(), 'Library', 'Application Support', 'OrcSpace'),
-    path.join(os.homedir(), 'Library', 'Application Support', 'Orcspace')
+    path.join(os.homedir(), 'Library', 'Application Support', 'GraySpace')
   ].flatMap((dir) => {
     if (!dir) return []
     const resolved = path.resolve(dir)
@@ -68,15 +52,8 @@ function candidateDirs() {
   return cachedCandidateDirs
 }
 
-
-
-
-
-
-
-
 function getCandidateTokens() {
-  const envToken = (process.env.GRAYSPACE_TOKEN || process.env.ORCSPACE_TOKEN || '').trim()
+  const envToken = (process.env.GRAYSPACE_TOKEN || '').trim()
   if (envToken.length >= 32) {
     return [envToken]
   }
@@ -85,7 +62,7 @@ function getCandidateTokens() {
 
 function getAllCandidateTokens(stopAtFirst = false) {
   const tokens = []
-  const envToken = (process.env.GRAYSPACE_TOKEN || process.env.ORCSPACE_TOKEN || '').trim()
+  const envToken = (process.env.GRAYSPACE_TOKEN || '').trim()
   if (envToken.length >= 32) {
     tokens.push(envToken)
     if (stopAtFirst) return tokens
@@ -121,9 +98,8 @@ function isProcessAlive(pid) {
 
 function isLiveRuntime(raw) {
   if (!raw || typeof raw !== 'object') return false
-  if (raw.app && raw.app !== 'grayspace' && raw.app !== 'orcspace') return false
+  if (raw.app && raw.app !== 'grayspace') return false
   if (!isProcessAlive(raw.pid)) return false
-
 
   if (!Number.isInteger(raw.pid) && Number.isFinite(raw.writtenAt)) {
     if (Date.now() - raw.writtenAt > 24 * 60 * 60 * 1000) return false
@@ -132,11 +108,11 @@ function isLiveRuntime(raw) {
 }
 
 function getDiscoveredTargets() {
-  const explicitSocket = process.env.GRAYSPACE_SOCKET_PATH || process.env.ORCSPACE_SOCKET_PATH
+  const explicitSocket = process.env.GRAYSPACE_SOCKET_PATH
   if (explicitSocket) {
     return [{ socketPath: explicitSocket }]
   }
-  const explicitUrl = process.env.GRAYSPACE_URL || process.env.ORCSPACE_URL
+  const explicitUrl = process.env.GRAYSPACE_URL
   if (explicitUrl) {
     return [{ url: explicitUrl.replace(/\/+$/, '') }]
   }
@@ -174,21 +150,19 @@ function getDiscoveredTargets() {
     }
   }
 
-  const isDev = fs.existsSync(path.join(process.cwd(), '.dev-user-data')) || Boolean(process.env.GRAYSPACE_DEV_USER_DATA || process.env.ORCSPACE_DEV_USER_DATA)
+  const isDev = fs.existsSync(path.join(process.cwd(), '.dev-user-data')) || Boolean(process.env.GRAYSPACE_DEV_USER_DATA)
   const suffix = isDev ? '-dev' : ''
   if (process.platform === 'win32') {
     addTarget({ socketPath: `\\\\.\\pipe\\grayspace${suffix}` })
-    addTarget({ socketPath: `\\\\.\\pipe\\orcspace${suffix}` })
   } else {
     addTarget({ socketPath: path.join(os.tmpdir(), `grayspace${suffix}.sock`) })
-    addTarget({ socketPath: path.join(os.tmpdir(), `orcspace${suffix}.sock`) })
   }
   return targets
 }
 
 let discoveredTargets
 const targets = () => (discoveredTargets ??= getDiscoveredTargets())
-const AGENT_ID = process.env.GRAYSPACE_AGENT_ID || process.env.GRAYSPACE_TERMINAL_ID || process.env.ORCSPACE_AGENT_ID || process.env.ORCSPACE_TERMINAL_ID || 'cli'
+const AGENT_ID = process.env.GRAYSPACE_AGENT_ID || process.env.GRAYSPACE_TERMINAL_ID || 'cli'
 let workingToken = null
 let workingTarget = null
 
@@ -281,7 +255,7 @@ const int = (value, fallback) => {
 
 
 
-class OrcError extends Error {
+class GraySpaceError extends Error {
   constructor(message, code) {
     super(message)
     this.code = code
@@ -289,7 +263,7 @@ class OrcError extends Error {
 }
 
 
-const isNotFound = (err) => err instanceof OrcError && (err.code === 'not_found' || err.code === 'http_404')
+const isNotFound = (err) => err instanceof GraySpaceError && (err.code === 'not_found' || err.code === 'http_404')
 
 async function requestTarget({ target, method, path, headers, body, signal, timeoutMs }) {
   {
@@ -303,16 +277,16 @@ async function requestTarget({ target, method, path, headers, body, signal, time
         signal?.removeEventListener('abort', onAbort)
       }
       const timer = timeoutMs ? setTimeout(() => {
-        if (req) req.destroy(new OrcError(`OrcSpace request timed out after ${Math.round(timeoutMs / 1000)}s for ${path}`, 'timeout'))
+        if (req) req.destroy(new GraySpaceError(`GraySpace request timed out after ${Math.round(timeoutMs / 1000)}s for ${path}`, 'timeout'))
       }, timeoutMs) : null
 
       const onAbort = () => {
-        if (req) req.destroy(new OrcError('OrcSpace request aborted', signal?.reason?.name === 'TimeoutError' ? 'timeout' : 'aborted'))
+        if (req) req.destroy(new GraySpaceError('GraySpace request aborted', signal?.reason?.name === 'TimeoutError' ? 'timeout' : 'aborted'))
       }
       if (signal) {
         if (signal.aborted) {
           cleanup()
-          return reject(new OrcError('OrcSpace request aborted', 'aborted'))
+          return reject(new GraySpaceError('GraySpace request aborted', 'aborted'))
         }
         signal.addEventListener('abort', onAbort, { once: true })
       }
@@ -331,7 +305,7 @@ async function requestTarget({ target, method, path, headers, body, signal, time
         res.on('data', (chunk) => chunks.push(chunk))
         res.on('error', (err) => {
           cleanup()
-          reject(new OrcError(`OrcSpace response interrupted (${err.message})`, 'response_interrupted'))
+          reject(new GraySpaceError(`GraySpace response interrupted (${err.message})`, 'response_interrupted'))
         })
         res.on('end', () => {
           cleanup()
@@ -341,7 +315,7 @@ async function requestTarget({ target, method, path, headers, body, signal, time
           let payload
           if (contentType.includes('application/json')) {
             try { payload = JSON.parse(text) } catch {
-              reject(new OrcError('OrcSpace returned invalid JSON', 'invalid_response'))
+              reject(new GraySpaceError('GraySpace returned invalid JSON', 'invalid_response'))
               return
             }
           } else {
@@ -357,9 +331,9 @@ async function requestTarget({ target, method, path, headers, body, signal, time
 
       req.on('error', (err) => {
         cleanup()
-        if (err instanceof OrcError) return reject(err)
-        reject(new OrcError(
-          `OrcSpace is not reachable at ${target.socketPath || target.url} — is the app running? (${err.message})`,
+        if (err instanceof GraySpaceError) return reject(err)
+        reject(new GraySpaceError(
+          `GraySpace is not reachable at ${target.socketPath || target.url} — is the app running? (${err.message})`,
           ['ECONNREFUSED', 'ENOENT', 'ENOTFOUND'].includes(err.code) ? 'offline' : 'connection_lost'
         ))
       })
@@ -378,8 +352,8 @@ const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 8, maxFreeSock
 async function call(method, path, body, options = {}) {
   const initialTokens = workingToken ? [workingToken] : getCandidateTokens()
   if (initialTokens.length === 0) {
-    throw new OrcError(
-      'OrcSpace control token not found — ensure OrcSpace is running.',
+    throw new GraySpaceError(
+      'GraySpace control token not found — ensure GraySpace is running.',
       'no_token'
     )
   }
@@ -410,20 +384,20 @@ async function call(method, path, body, options = {}) {
 
         if (response.status === 401) {
           workingToken = null
-          throw new OrcError('a valid control token is required', 'http_401')
+          throw new GraySpaceError('a valid control token is required', 'http_401')
         }
 
         if (!response.ok) {
           const message = typeof response.payload === 'object' && response.payload?.error ? response.payload.error : `HTTP ${response.status}`
           const code = typeof response.payload === 'object' && response.payload?.code ? response.payload.code : `http_${response.status}`
-          throw new OrcError(message, code)
+          throw new GraySpaceError(message, code)
         }
 
         workingTarget = target
         workingToken = token
         return response.payload && typeof response.payload === 'object' && response.payload.ok === true && 'data' in response.payload ? response.payload.data : response.payload
       } catch (err) {
-        if (err instanceof OrcError && err.code === 'http_401') {
+        if (err instanceof GraySpaceError && err.code === 'http_401') {
 
 
           if (candidateTokens.length === 1) {
@@ -439,14 +413,14 @@ async function call(method, path, body, options = {}) {
         lastError = err
 
 
-        if (err instanceof OrcError && (err.code === 'offline' || (method === 'GET' && ['timeout', 'connection_lost', 'response_interrupted'].includes(err.code)))) break
+        if (err instanceof GraySpaceError && (err.code === 'offline' || (method === 'GET' && ['timeout', 'connection_lost', 'response_interrupted'].includes(err.code)))) break
         throw err
       }
     }
   }
 
   if (lastError) throw lastError
-  throw new OrcError('a valid control token is required', 'http_401')
+  throw new GraySpaceError('a valid control token is required', 'http_401')
 }
 
 const get = (path, params = {}, options = {}) => call('GET', withQuery(path, params), undefined, options)
@@ -646,50 +620,50 @@ Add --json to any command for machine-readable output.`
 
 
 const COMMAND_HELP = {
-  whoami: 'orc whoami — identify your own agent, terminal & task.',
-  context: 'orc context | orc ctx — project folder, Code Workspace and active task.',
-  workers: 'orc workers | orc ps | orc who — roster with what runs inside each terminal:\n  name (id), busy/idle (+exited), [agent] or [~guess], task + title, cwd, last activity.\n  * marks you. Add --json for machine-readable output.',
-  version: 'orc version | orc --version — print the CLI version.',
-  status: 'orc status | orc st — open run, tasks, live workers, unread mail.',
-  'run-create': 'orc run-create --objective "..." — open a run.',
-  'run-list': 'orc run-list | orc runs — list all runs, newest first.',
-  'run-show': 'orc run-show [<id>] | orc run [<id>] — inspect a run and its tasks.',
-  'run-close': 'orc run-close [<id>] --yes — close a run (destructive: needs --yes).',
-  'task-create': 'orc task-create [<spec>] [--title "..."] [--deps \'["otask-1"]\'] [--run <id>] — file a task.',
-  'task-list': 'orc task-list | orc tasks [--ready] [--run <id>] [--status <s>] — list tasks.',
-  'task-show': 'orc task-show [<id>] | orc task [<id>] — full task specification.',
-  'task-update': 'orc task-update [<id>] [--status <s>] [--title "..."] [--spec "..."] — update a task.',
-  'worker-start': 'orc worker-start [<taskId>] [--agent claude|codex|opencode|antigravity|grok] [--terminal <id>] [--command "..."] [--no-inject] — dispatch work.',
-  'worker-show': 'orc worker-show [<dispatchId>] [--preamble] — dispatch details.',
-  'worker-release': 'orc worker-release [<dispatchId>] [--close] — release a worker, optionally closing its terminal.',
-  'worker-retain': 'orc worker-retain [<dispatchId>] — keep a worker for subsequent tasks.',
-  'dispatch-show': 'orc dispatch-show [--task <taskId>] — list dispatches.',
-  dispatch: 'orc dispatch [<taskId>] --to <terminalId> — dispatch into an existing terminal.',
-  'worker-read': 'orc worker-read [<dispatchId|terminalId|name>] [--limit N] | orc logs [<dispatchId|terminalId|name>] [limit] — tail worker output.',
-  tell: 'orc tell <worker> "run the tests" — deliver text; use `orc worker-read <worker>` to read its answer.',
-  rename: 'orc rename [<worker>] [--name <name>] — rename a terminal.',
-  check: 'orc check | orc inbox [--wait] [--types ...] [--ack <msgId>] [--all] — read coordinator mail.',
-  reply: 'orc reply [<askId>] [<bodyText>] — answer a worker question.',
-  ask: 'orc ask --question "..." [--options "a,b"] — ask and block until a reply arrives.',
-  done: 'orc done --outcome succeeded|failed [--task-id <t>] [--dispatch-id <d>] [--body "..."] [--files "a.ts,b.ts"] — report completion.',
-  send: 'orc send --type <t> [--to <who>] [--subject "..."] [--body "..."] — direct message or broadcast.',
-  escalate: 'orc escalate --body "..." — escalate an issue to the coordinator.',
-  heartbeat: 'orc heartbeat — keep worker activity alive.',
-  ack: 'orc ack <messageId> — acknowledge a message after reading it.',
-  allow: 'orc allow <id> [--note "..."] — approve a permission request.',
-  deny: 'orc deny <id> [--reason "..."] — deny a permission request.',
-  'gate-create': 'orc gate-create --question "..." [--task <t>] [--options \'["a","b"]\'] — open a decision gate.',
-  'gate-list': 'orc gate-list | orc gates [--run <id>] [--open] — list decision gates.',
-  'gate-resolve': 'orc gate-resolve [<gateId>] <resolution> — resolve a gate and unblock its task.',
-  reset: 'orc reset [--tasks] [--messages] [--all] --yes — destructive reset of orchestration state.',
-  doctor: 'orc doctor — diagnostics & connectivity check.',
-  terminal: 'orc terminal open | send <id> <text> | read | close — direct terminal management.',
-  canvas: 'orc canvas list | place | image | move | rename | focus | close — canvas widgets & viewport.',
-  browser: 'orc browser open [url] [--surface code|canvas] | list | navigate <id> <url> | snapshot <id> | click <id> <ref> | fill <id> <ref> --value "..." | select <id> <ref> --value "..." | press <id> <key> [--ref N] | scroll <id> [--pixels N]. Detected checkout and purchase flows are blocked, along with password and payment fields.',
-  plan: 'orc plan list | create | update | done | toggle | delete [<id>] — planner day tasks.',
-  git: 'orc git status | commit --message "..." — git audit integration.',
-  journal: 'orc journal [--since N] — event audit log.',
-  api: 'orc api <METHOD> <path> [json] — direct REST escape hatch.'
+  whoami: 'grayspace whoami — identify your own agent, terminal & task.',
+  context: 'grayspace context | grayspace ctx — project folder, Code Workspace and active task.',
+  workers: 'grayspace workers | grayspace ps | grayspace who — roster with what runs inside each terminal:\n  name (id), busy/idle (+exited), [agent] or [~guess], task + title, cwd, last activity.\n  * marks you. Add --json for machine-readable output.',
+  version: 'grayspace version | grayspace --version — print the CLI version.',
+  status: 'grayspace status | grayspace st — open run, tasks, live workers, unread mail.',
+  'run-create': 'grayspace run-create --objective "..." — open a run.',
+  'run-list': 'grayspace run-list | grayspace runs — list all runs, newest first.',
+  'run-show': 'grayspace run-show [<id>] | grayspace run [<id>] — inspect a run and its tasks.',
+  'run-close': 'grayspace run-close [<id>] --yes — close a run (destructive: needs --yes).',
+  'task-create': 'grayspace task-create [<spec>] [--title "..."] [--deps \'["otask-1"]\'] [--run <id>] — file a task.',
+  'task-list': 'grayspace task-list | grayspace tasks [--ready] [--run <id>] [--status <s>] — list tasks.',
+  'task-show': 'grayspace task-show [<id>] | grayspace task [<id>] — full task specification.',
+  'task-update': 'grayspace task-update [<id>] [--status <s>] [--title "..."] [--spec "..."] — update a task.',
+  'worker-start': 'grayspace worker-start [<taskId>] [--agent claude|codex|opencode|antigravity|grok] [--terminal <id>] [--command "..."] [--no-inject] — dispatch work.',
+  'worker-show': 'grayspace worker-show [<dispatchId>] [--preamble] — dispatch details.',
+  'worker-release': 'grayspace worker-release [<dispatchId>] [--close] — release a worker, optionally closing its terminal.',
+  'worker-retain': 'grayspace worker-retain [<dispatchId>] — keep a worker for subsequent tasks.',
+  'dispatch-show': 'grayspace dispatch-show [--task <taskId>] — list dispatches.',
+  dispatch: 'grayspace dispatch [<taskId>] --to <terminalId> — dispatch into an existing terminal.',
+  'worker-read': 'grayspace worker-read [<dispatchId|terminalId|name>] [--limit N] | grayspace logs [<dispatchId|terminalId|name>] [limit] — tail worker output.',
+  tell: 'grayspace tell <worker> "run the tests" — deliver text; use `grayspace worker-read <worker>` to read its answer.',
+  rename: 'grayspace rename [<worker>] [--name <name>] — rename a terminal.',
+  check: 'grayspace check | grayspace inbox [--wait] [--types ...] [--ack <msgId>] [--all] — read coordinator mail.',
+  reply: 'grayspace reply [<askId>] [<bodyText>] — answer a worker question.',
+  ask: 'grayspace ask --question "..." [--options "a,b"] — ask and block until a reply arrives.',
+  done: 'grayspace done --outcome succeeded|failed [--task-id <t>] [--dispatch-id <d>] [--body "..."] [--files "a.ts,b.ts"] — report completion.',
+  send: 'grayspace send --type <t> [--to <who>] [--subject "..."] [--body "..."] — direct message or broadcast.',
+  escalate: 'grayspace escalate --body "..." — escalate an issue to the coordinator.',
+  heartbeat: 'grayspace heartbeat — keep worker activity alive.',
+  ack: 'grayspace ack <messageId> — acknowledge a message after reading it.',
+  allow: 'grayspace allow <id> [--note "..."] — approve a permission request.',
+  deny: 'grayspace deny <id> [--reason "..."] — deny a permission request.',
+  'gate-create': 'grayspace gate-create --question "..." [--task <t>] [--options \'["a","b"]\'] — open a decision gate.',
+  'gate-list': 'grayspace gate-list | grayspace gates [--run <id>] [--open] — list decision gates.',
+  'gate-resolve': 'grayspace gate-resolve [<gateId>] <resolution> — resolve a gate and unblock its task.',
+  reset: 'grayspace reset [--tasks] [--messages] [--all] --yes — destructive reset of orchestration state.',
+  doctor: 'grayspace doctor — diagnostics & connectivity check.',
+  terminal: 'grayspace terminal open | send <id> <text> | read | close — direct terminal management.',
+  canvas: 'grayspace canvas list | place | image | move | rename | focus | close — canvas widgets & viewport.',
+  browser: 'grayspace browser open [url] [--surface code|canvas] | list | navigate <id> <url> | snapshot <id> | click <id> <ref> | fill <id> <ref> --value "..." | select <id> <ref> --value "..." | press <id> <key> [--ref N] | scroll <id> [--pixels N]. Detected checkout and purchase flows are blocked, along with password and payment fields.',
+  plan: 'grayspace plan list | create | update | done | toggle | delete [<id>] — planner day tasks.',
+  git: 'grayspace git status | commit --message "..." — git audit integration.',
+  journal: 'grayspace journal [--since N] — event audit log.',
+  api: 'grayspace api <METHOD> <path> [json] — direct REST escape hatch.'
 }
 const COMMAND_ALIASES = {
   ctx: 'context', st: 'status', ps: 'workers', who: 'workers', runs: 'run-list', run: 'run-show',
@@ -749,7 +723,7 @@ async function main(argv) {
   const command = positional[0]
 
   if (flags.version === true) {
-    return emit({ version: ORC_VERSION }, (v) => `orc ${v.version}`)
+    return emit({ version: GRAYSPACE_VERSION }, (v) => `grayspace ${v.version}`)
   }
 
   if (command === 'help') {
@@ -757,8 +731,8 @@ async function main(argv) {
     const detail = topic ? commandHelp(topic) : undefined
     if (topic && !detail) {
       const hint = suggestCommand(topic)
-      throw new OrcError(
-        `no help for "${topic}"${hint ? ` — did you mean "${hint}"?` : ''} — run \`orc --help\``,
+      throw new GraySpaceError(
+        `no help for "${topic}"${hint ? ` — did you mean "${hint}"?` : ''} — run \`grayspace --help\``,
         'unknown_command'
       )
     }
@@ -851,11 +825,11 @@ async function main(argv) {
         get('/health').catch(() => null)
       ])
       const serverVersion = health && typeof health === 'object' ? health.version : undefined
-      const drift = serverVersion && serverVersion !== ORC_VERSION ? serverVersion : null
+      const drift = serverVersion && serverVersion !== GRAYSPACE_VERSION ? serverVersion : null
       const result = {
         ok: true,
         app: (workingTarget || targets()[0]).url || (workingTarget || targets()[0]).socketPath,
-        version: ORC_VERSION,
+        version: GRAYSPACE_VERSION,
         serverVersion: serverVersion ?? null,
         drift,
         agentId: AGENT_ID || null,
@@ -865,11 +839,11 @@ async function main(argv) {
       }
       return emit(result, (r) =>
         [
-          `OrcSpace: reachable at ${r.app} (orc ${r.version})`,
+          `GraySpace: reachable at ${r.app} (grayspace ${r.version})`,
           r.drift ? `Server: ${r.serverVersion} (drift — restart the app to match)` : `Server: ${r.serverVersion ?? '?'}`,
-          `Agent: ${r.agentId || '(not inside an OrcSpace terminal)'}`,
+          `Agent: ${r.agentId || '(not inside a GraySpace terminal)'}`,
           `Workspace: ${r.workspace || '(none)'}`,
-          `Mode: native orc CLI & orchestration`,
+          `Mode: native grayspace CLI & orchestration`,
           `Workers: ${r.workers} | open runs: ${r.runs}`
         ].join('\n')
       )
@@ -925,7 +899,7 @@ async function main(argv) {
       return emit(data, (d) =>
         d.runs.length
           ? d.runs.map((r) => `  ${r.id}${r.closedAt ? ' (closed)' : ' (active)'}  ${r.objective}`).join('\n')
-          : 'no runs yet — orc run-create --objective "..."'
+          : 'no runs yet — grayspace run-create --objective "..."'
       )
     }
     case 'run-show':
@@ -940,7 +914,7 @@ async function main(argv) {
         const listData = await get('/orchestration/runs')
         run = listData.runs.find((r) => r.id === id)
       }
-      if (!run) throw new OrcError(`no run "${id}"`, 'not_found')
+      if (!run) throw new GraySpaceError(`no run "${id}"`, 'not_found')
       const tasksData = await get('/orchestration/tasks', { runId: id })
       return emit({ run, tasks: tasksData.tasks }, ({ run: r, tasks: ts }) =>
         [
@@ -990,7 +964,7 @@ async function main(argv) {
         const data = await get('/orchestration/tasks', { runId: pick(flags, 'run', 'runId') })
         found = data.tasks.find((t) => t.id === id)
       }
-      if (!found) throw new OrcError(`no task "${id}"`, 'not_found')
+      if (!found) throw new GraySpaceError(`no task "${id}"`, 'not_found')
       return emit(found, (t) =>
         [
           `Task: ${t.id} [${t.status}]`,
@@ -1058,7 +1032,7 @@ async function main(argv) {
         const data = await get('/orchestration/dispatches')
         found = data.dispatches.find((d) => d.id === id)
       }
-      if (!found) throw new OrcError(`no dispatch "${id}"`, 'not_found')
+      if (!found) throw new GraySpaceError(`no dispatch "${id}"`, 'not_found')
       if (flags.preamble) return emit({ preamble: found.preamble }, (p) => p.preamble)
       return emit(found, dispatchLine)
     }
@@ -1080,7 +1054,7 @@ async function main(argv) {
         if (found) {
           terminalId = found.terminalId
         } else if (!/^[A-Za-z0-9_-]{1,128}$/.test(target)) {
-          throw new OrcError(`no dispatch "${target}"`, 'not_found')
+          throw new GraySpaceError(`no dispatch "${target}"`, 'not_found')
         }
       }
       const limitLines = Math.max(0, int(pick(flags, 'limit') ?? positional[2], 50))
@@ -1103,7 +1077,7 @@ async function main(argv) {
     case 'done': {
       const outcome = require1(pick(flags, 'outcome') ?? positional[1], 'done needs --outcome succeeded|failed')
       if (outcome !== 'succeeded' && outcome !== 'failed') {
-        throw new OrcError('done --outcome must be "succeeded" or "failed"', 'invalid')
+        throw new GraySpaceError('done --outcome must be "succeeded" or "failed"', 'invalid')
       }
       const result = await sendMessage(flags, 'worker_done', {
         outcome,
@@ -1136,9 +1110,9 @@ async function main(argv) {
           timeoutMs
         }, { timeoutMs: timeoutMs + 10_000 })
         if (!answer) {
-          throw new OrcError(
+          throw new GraySpaceError(
             `no reply within ${Math.round(timeoutMs / 1000)}s — the question is still pending as ${asked.id}; ` +
-              `resume with: orc check --wait --types reply`,
+              `resume with: grayspace check --wait --types reply`,
             'timeout'
           )
         }
@@ -1220,7 +1194,7 @@ async function main(argv) {
             ? d.messages.map(messageLine).join('\n')
             : d.waited
               ? '  (nothing arrived before the timeout)'
-              : '  (inbox empty — replies to `orc tell` stay in that terminal; use `orc worker-read <name>`)'
+              : '  (inbox empty — replies to `grayspace tell` stay in that terminal; use `grayspace worker-read <name>`)'
         )
       } finally {
         stop()
@@ -1279,7 +1253,7 @@ async function main(argv) {
     }
 
     case 'version': {
-      return emit({ version: ORC_VERSION }, (v) => `orc ${v.version}`)
+      return emit({ version: GRAYSPACE_VERSION }, (v) => `grayspace ${v.version}`)
     }
 
     case 'rename': {
@@ -1308,7 +1282,7 @@ async function main(argv) {
           (result.mode
             ? `${result.images?.length ?? 1} image(s) attached to ${to} via ${result.mode}${result.agent ? ` (${result.agent})` : ''}`
             : `delivered to ${to} (${result.delivery?.id ?? 'confirmed'})`) +
-          `\nread the answer with: orc worker-read ${to}`
+          `\nread the answer with: grayspace worker-read ${to}`
       )
     }
 
@@ -1329,7 +1303,7 @@ async function main(argv) {
     case 'reset':
       requireConfirm(flags, 'reset')
       if (flags.tasks !== true && flags.messages !== true && flags.all !== true) {
-        throw new OrcError('reset needs --tasks, --messages or --all', 'invalid')
+        throw new GraySpaceError('reset needs --tasks, --messages or --all', 'invalid')
       }
       return emit(
         await post('/orchestration/reset', {
@@ -1372,13 +1346,13 @@ async function main(argv) {
     }
     case 'api': {
       const method = String(positional[1] || 'GET').toUpperCase()
-      const apiPath = require1(positional[2], 'api needs a path, e.g. orc api GET /snapshot')
+      const apiPath = require1(positional[2], 'api needs a path, e.g. grayspace api GET /snapshot')
       let body
       if (positional[3]) {
         try {
           body = JSON.parse(positional[3])
         } catch {
-          throw new OrcError('api: body must be valid JSON', 'invalid')
+          throw new GraySpaceError('api: body must be valid JSON', 'invalid')
         }
       }
       return emit(await call(method, apiPath, method === 'GET' ? undefined : { agentId: AGENT_ID, ...body }))
@@ -1386,8 +1360,8 @@ async function main(argv) {
 
     default: {
       const hint = suggestCommand(command)
-      throw new OrcError(
-        `unknown command "${command}"${hint ? ` — did you mean "${hint}"?` : ''} — run \`orc --help\``,
+      throw new GraySpaceError(
+        `unknown command "${command}"${hint ? ` — did you mean "${hint}"?` : ''} — run \`grayspace --help\``,
         'unknown_command'
       )
     }
@@ -1467,7 +1441,7 @@ async function browser(action, flags, positional = []) {
         pixels: num(pick(flags, 'pixels')) ?? 600
       })
     default:
-      throw new OrcError(`browser: unknown action "${action}" (open|list|navigate|snapshot|click|fill|select|press|scroll)`, 'invalid')
+      throw new GraySpaceError(`browser: unknown action "${action}" (open|list|navigate|snapshot|click|fill|select|press|scroll)`, 'invalid')
   }
 }
 
@@ -1519,7 +1493,7 @@ async function canvas(action, flags, positional = []) {
       requireConfirm(flags, 'canvas close', id)
       return call('DELETE', `/widgets/${enc(require1(id, 'canvas close needs <id>'))}`, { agentId: AGENT_ID })
     default:
-      throw new OrcError(`canvas: unknown action "${action}" (list|place|image|rename|move|focus|close)`, 'invalid')
+      throw new GraySpaceError(`canvas: unknown action "${action}" (list|place|image|rename|move|focus|close)`, 'invalid')
   }
 }
 
@@ -1556,7 +1530,7 @@ async function plan(action, flags, positional = []) {
       requireConfirm(flags, 'plan delete', id)
       return call('DELETE', `/planner/${enc(require1(id, 'plan delete needs <id>'))}`, { agentId: AGENT_ID })
     default:
-      throw new OrcError(`plan: unknown action "${action}" (list|create|update|done|toggle|delete)`, 'invalid')
+      throw new GraySpaceError(`plan: unknown action "${action}" (list|create|update|done|toggle|delete)`, 'invalid')
   }
 }
 
@@ -1577,14 +1551,14 @@ async function terminal(action, flags, positional = []) {
       requireConfirm(flags, 'terminal close', id)
       return call('DELETE', `/widgets/${enc(require1(id, 'terminal close needs <terminal-id>'))}`, { agentId: AGENT_ID })
     default:
-      throw new OrcError(`terminal: unknown action "${action}" (open|send|read|close)`, 'invalid')
+      throw new GraySpaceError(`terminal: unknown action "${action}" (open|send|read|close)`, 'invalid')
   }
 }
 
 
 
 function require1(value, message) {
-  if (value === undefined || value === null || value === '' || value === true) throw new OrcError(message, 'invalid')
+  if (value === undefined || value === null || value === '' || value === true) throw new GraySpaceError(message, 'invalid')
   return String(value)
 }
 
@@ -1594,13 +1568,13 @@ const num = (v) => (v === undefined ? undefined : Number(v))
 function requireConfirm(flags, action, id) {
   if (flags.yes === true || flags.yes === 'true') return
   const label = id ? `${action} ${id}` : action
-  throw new OrcError(` destructive: ${label} — add --yes to confirm`, 'needs_confirm')
+  throw new GraySpaceError(` destructive: ${label} — add --yes to confirm`, 'needs_confirm')
 }
 
 main(process.argv.slice(2)).catch(async (err) => {
   const payload = { ok: false, error: err.message, code: err.code || 'failed' }
   if (asJson) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`)
-  else process.stderr.write(`orc: ${err.message}\n`)
+  else process.stderr.write(`grayspace: ${err.message}\n`)
   const codeMap = {
     invalid: 2,
     unknown_command: 2,

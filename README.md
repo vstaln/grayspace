@@ -24,7 +24,7 @@ node scripts/smoke.mjs  # spawn the release binary, check /health (needs a displ
 
 ## Layout
 
-- `native/orcspace-app` — the app: unified `grayspace` binary (GUI + CLI)
+- `native/grayspace-app` — the app: unified `grayspace` binary (GUI + CLI)
 - `cli/grayspace` — compat CLI shim for agents in shells
 - `scripts/` — `check-version`, `smoke`, `native-cargo` passthrough
 - `docs/` — 0.0.1 plan + spec

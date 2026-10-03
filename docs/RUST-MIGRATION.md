@@ -1,4 +1,4 @@
-# Migrating OrcSpace to Rust
+# Migrating GraySpace to Rust
 
 > **ACTIVE — 2026-09-19.** Native migration resumed at the user's request.
 > Preserve the existing UI and behavior one-to-one; replacing Electron alone
@@ -87,8 +87,8 @@ complete Electron settings screen.
 - Direct keyboard input, application cursor mode, Ctrl-letter shortcuts and
   bracketed paste are connected. Code view has bounded scrollback navigation.
   Closed terminals release parser buffers. PTY resize follows visible geometry.
-- Native screenshot capture is opt-in via `ORCSPACE_CAPTURE_PATH`; use an
-  isolated `ORCSPACE_TEST_USER_DATA` and control socket when exercising it.
+- Native screenshot capture is opt-in via `GRAYSPACE_CAPTURE_PATH`; use an
+  isolated `GRAYSPACE_TEST_USER_DATA` and control socket when exercising it.
 
 Verification: seven terminal-screen unit tests passed. The full Rust test suite
 passed at the earlier five-test terminal increment (six environment-dependent
@@ -106,17 +106,17 @@ full xterm compatibility; replace it if compatibility tests require it.
 
 ## Decision
 
-OrcSpace moves to the native Rust app in `native/orcspace-app`. Electron stays
+GraySpace moves to the native Rust app in `native/grayspace-app`. Electron stays
 the shipping product until a Rust block has proven parity — it is never removed
 on the strength of a plan. No third implementation is created: everything lands
-in the existing `orcspace-app` crate.
+in the existing `grayspace-app` crate.
 
 ## Strategy: back to front
 
 The backend moves first, the UI last.
 
 The codebase already contains the pattern: `src/main/rustPtySidecar.ts` runs
-`orcspace --engine` as a child process, speaks JSON over stdio, and falls back
+`grayspace --engine` as a child process, speaks JSON over stdio, and falls back
 to `node-pty` when the binary is missing or misbehaves. Each further block
 follows the same shape — Rust takes over a responsibility behind a fallback,
 while Electron keeps running as the reference implementation you can diff
@@ -136,7 +136,7 @@ compiles.
 | 1 | State file readers | Rust parses every `workspace-canvas-*.json`, `workspace-code-*.json`, `workspace-board.json`, `orchestration.json` and re-serializes byte-identically | **done** — 88/88 documents |
 | 2 | Projections | Folding the same journal in Rust and TypeScript yields identical canvas and planner snapshots | **done** — canvas on 2244 real entries, planner on a generated fixture |
 | 3 | Command flow | Same command sequence produces the same journal entries, versions, lock decisions and error codes | **done** — speculative overlays (dry run) deliberately deferred |
-| 4 | Control server + `orc` | All 13 route domains answer identically; all ~60 CLI commands produce identical `--json` output | **orchestration done** — store, routes and CLI, wired end to end; the other 12 domains need their stores first |
+| 4 | Control server + `grayspace` | All 13 route domains answer identically; all ~60 CLI commands produce identical `--json` output | **orchestration done** — store, routes and CLI, wired end to end; the other 12 domains need their stores first |
 | 5 | Terminals | Spawn, write, resize, dispose, scrollback persist, UTF-8 and ANSI correctness match; PTY children reaped on crash | partial — `engine.rs` runs under Electron on Windows |
 | 6 | UI | Canvas, 9 widget kinds, CodeView at parity, measured against the stable-60 criterion | **design system + canvas chrome only** — palette, widget frame, camera; no widget content, no CodeView |
 | 7 | Packaging | Installer, update channel, signing and notarization on Windows and macOS | not started |
@@ -299,7 +299,7 @@ do their own I/O outside the bus.
 
 ## Step 4 — the orchestration store (in progress)
 
-Most of `orc` is orchestration, so the store came before the routes. Runs,
+Most of `grayspace` is orchestration, so the store came before the routes. Runs,
 tasks, dispatches, messages and gates are ported, and a real
 `orchestration.json` loads: 5 runs, 8 tasks, 6 dispatches, with every task
 pointing at a run that exists and every dispatch at a task that exists.
@@ -312,7 +312,7 @@ The invariants are the reason this block is not mechanical:
 - a task may have one running dispatch and a terminal may run one; both are
   refused as `conflict`, because two workers on one task is the failure this
   exists to prevent
-- settling is one-way, so a duplicated `orc done` cannot flip an outcome
+- settling is one-way, so a duplicated `grayspace done` cannot flip an outcome
 - a settled dispatch stays "unaccounted" until it is explicitly released or
   retained, which is what makes a coordinator account for finished work
 
@@ -352,9 +352,9 @@ a running fleet. `allow`/`approve`/`permit` and `deny`/`reject`/`refuse` are
 interchangeable for the same reason.
 
 Feeding a CLI plan straight into the router caught a real gap the two halves
-hid separately: `POST /orchestration/messages` dropped `replyTo`, so `orc
+hid separately: `POST /orchestration/messages` dropped `replyTo`, so `grayspace
 reply` and every permission verb sent a message that could never be matched
-back to the ask it answered — and `orc ask` would have waited forever on an
+back to the ask it answered — and `grayspace ask` would have waited forever on an
 answer that had already arrived.
 
 Outstanding in block 4: the other 12 route domains — canvas, planner, terminal,
@@ -365,7 +365,7 @@ did.
 ## Step 6 — the design system (started, then parked)
 
 The native UI was a placeholder: a grid and one drawn card, in colours that had
-nothing to do with OrcSpace. That is now the real chrome.
+nothing to do with GraySpace. That is now the real chrome.
 
 `theme.rs` carries the tokens from `src/renderer/src/ui/tokens.ts` — the
 near-black monochrome ladder (#080808 → #1F1F1F), the #2A2A2E hairline, the
@@ -376,7 +376,7 @@ terminal body in canvas black rather than widget surface.
 
 Two contract tests read the renderer's own files — `tokens.ts` and
 `WidgetFrame.tsx` — and fail if either side drifts, so the two apps cannot
-quietly diverge into different-looking OrcSpaces.
+quietly diverge into different-looking GraySpaces.
 
 The camera matches too: translate-then-scale, zoom clamped to the 0.2–4 range
 `sanitizeCamera` enforces, and three screens of cull margin rather than

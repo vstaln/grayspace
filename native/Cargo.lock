@@ -2618,6 +2618,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "grayspace-app"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "axum",
+ "gtk",
+ "indexmap",
+ "libc",
+ "log",
+ "portable-pty",
+ "raw-window-handle",
+ "rgpui",
+ "rgpui-platform",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "uuid",
+ "vt100",
+ "vte",
+ "winapi",
+ "wry",
+]
+
+[[package]]
 name = "grid"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4369,31 +4394,6 @@ name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
-
-[[package]]
-name = "orcspace-app"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "axum",
- "gtk",
- "indexmap",
- "libc",
- "log",
- "portable-pty",
- "raw-window-handle",
- "rgpui",
- "rgpui-platform",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tokio",
- "uuid",
- "vt100",
- "vte",
- "winapi",
- "wry",
-]
 
 [[package]]
 name = "ordered-float"

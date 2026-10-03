@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const binary = path.join(root, 'native', 'target', 'release', process.platform === 'win32' ? 'grayspace.exe' : 'grayspace')
-const timeoutMs = Number(process.env.ORCSPACE_SMOKE_TIMEOUT_MS || 60_000)
+const timeoutMs = Number(process.env.GRAYSPACE_SMOKE_TIMEOUT_MS || 60_000)
 
 if (!fs.existsSync(binary)) {
   console.error(`[smoke] binary not found: ${binary}`)
@@ -27,7 +27,7 @@ const socketPath = process.platform === 'win32'
   ? `\\\\.\\pipe\\grayspace-smoke-${process.pid}`
   : path.join(profileDir, 'grayspace.sock')
 // Fixed token so the check knows what to present. The binary persists the
-// same value to control-token, which is what `orc` reads in real use.
+// same value to control-token, which is what `grayspace` reads in real use.
 const token = 'smoke-test-token-0123456789abcdef0123456789abcdef'
 
 let child
@@ -42,10 +42,7 @@ child = spawn(binary, [], {
     ...process.env,
     GRAYSPACE_TEST_USER_DATA: profileDir,
     GRAYSPACE_SOCKET_PATH: socketPath,
-    GRAYSPACE_TOKEN: token,
-    ORCSPACE_TEST_USER_DATA: profileDir,
-    ORCSPACE_SOCKET_PATH: socketPath,
-    ORCSPACE_TOKEN: token
+    GRAYSPACE_TOKEN: token
   }
 })
 
@@ -66,7 +63,7 @@ async function waitForToken(deadline) {
     try {
       const stored = fs.readFileSync(path.join(profileDir, 'control-token'), 'utf8').trim()
       if (stored === token) return stored
-      if (stored.length >= 32) throw new Error('control token mismatch: binary did not use ORCSPACE_TOKEN')
+      if (stored.length >= 32) throw new Error('control token mismatch: binary did not use GRAYSPACE_TOKEN')
     } catch (error) {
       if (error.message.startsWith('control token mismatch')) throw error
     }

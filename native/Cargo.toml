@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "orcspace-app",
+    "grayspace-app",
 ]
 # canvas-core and storage-core are NOT workspace members on purpose. They are
 # N-API addons built by `napi build --platform --release` (see native/build.mjs),
