@@ -1,9 +1,0 @@
-{
-  "name": "@orcspace/storage-core",
-  "private": true,
-  "main": "loader.cjs",
-  "types": "index.d.ts",
-  "scripts": {
-    "build": "napi build --platform --release"
-  }
-}

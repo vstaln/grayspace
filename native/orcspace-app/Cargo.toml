@@ -9,7 +9,7 @@ name = "orcspace_app"
 path = "src/lib.rs"
 
 [[bin]]
-name = "orcspace"
+name = "grayspace"
 path = "src/main.rs"
 
 [[bin]]

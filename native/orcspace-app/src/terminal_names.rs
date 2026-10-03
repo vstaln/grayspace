@@ -1,7 +1,6 @@
-//! Automatic terminal names, mirroring `src/main/terminalNames.ts`.
+//! Automatic terminal names (pool vendored in `tests/fixtures/terminalNames.ts`).
 //!
-//! The pool is fixed and shared with the renderer so a session opened in
-//! either one is called the same thing. Names are never suffixed: the pool is
+//! The pool is fixed so every session is called the same thing. Names are never suffixed: the pool is
 //! larger than the number of terminals a window holds, so "James-2" would only
 //! ever mean the picker had gone wrong.
 
@@ -114,17 +113,13 @@ mod tests {
         assert_eq!(pick_from(0, &taken(&NAMES)), None);
     }
 
-    /// The renderer and the native app must not drift into two name pools.
+    /// The pool must not drift from the vendored Electron pool.
     #[test]
     fn the_pool_matches_the_renderers() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../src/main/terminalNames.ts");
-        let Ok(source) = std::fs::read_to_string(path) else {
-            return;
-        };
+        const SOURCE: &str = include_str!("../tests/fixtures/terminalNames.ts");
         for name in NAMES {
             assert!(
-                source.contains(&format!("'{name}'")),
+                SOURCE.contains(&format!("'{name}'")),
                 "{name} is not in terminalNames.ts"
             );
         }

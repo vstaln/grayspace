@@ -1,7 +1,8 @@
-//! OrcSpace's design tokens.
+//! GraySpace's design tokens.
 //!
-//! These are not "a dark theme" — they are the exact values from
-//! src/renderer/src/ui/tokens.ts, and a test reads that file to keep them so.
+//! These are not "a dark theme" — they are the exact values vendored from the
+//! old Electron renderer's `tokens.ts` (see `tests/fixtures/tokens.ts`), and a
+//! test reads that fixture to keep them so.
 //! The palette is deliberately near-black and almost hueless: the canvas is a
 //! backdrop for terminals full of coloured output, and any tint in the chrome
 //! fights with it.
@@ -70,11 +71,12 @@ pub mod geometry {
 mod tests {
     use super::*;
 
-    fn tokens_source() -> Option<String> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../src/renderer/src/ui/tokens.ts");
-        std::fs::read_to_string(path).ok()
-    }
+    /// Vendored from the old Electron renderer's `tokens.ts`; kept as a fixture
+    /// so the Electron tree could be deleted without losing the parity check.
+    const TOKENS_SOURCE: &str = include_str!("../tests/fixtures/tokens.ts");
+    /// Vendored from the old renderer's `WidgetFrame.tsx`; only the header
+    /// height (`h-[34px]`) is contract.
+    const WIDGET_FRAME_SOURCE: &str = include_str!("../tests/fixtures/WidgetFrame.tsx");
 
     fn hex(color: Rgb) -> String {
         format!("#{:02x}{:02x}{:02x}", color.0, color.1, color.2)
@@ -85,11 +87,7 @@ mod tests {
     /// fails a test rather than producing two OrcSpaces that look different.
     #[test]
     fn the_palette_matches_the_renderers_tokens() {
-        let Some(source) = tokens_source() else {
-            // Checked out without the renderer: nothing to contradict.
-            return;
-        };
-        let lowered = source.to_lowercase();
+        let lowered = TOKENS_SOURCE.to_lowercase();
 
         for (name, color) in [
             ("base", monochrome::BASE),
@@ -113,23 +111,15 @@ mod tests {
 
     #[test]
     fn the_rail_and_sidebar_widths_match_the_tokens() {
-        let Some(source) = tokens_source() else {
-            return;
-        };
-        assert!(source.contains("railWidth: '56px'"));
-        assert!(source.contains("sidebarExpanded: '200px'"));
+        assert!(TOKENS_SOURCE.contains("railWidth: '56px'"));
+        assert!(TOKENS_SOURCE.contains("sidebarExpanded: '200px'"));
     }
 
     #[test]
     fn the_widget_chrome_matches_the_frame_component() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../src/renderer/src/components/WidgetFrame.tsx");
-        let Ok(source) = std::fs::read_to_string(path) else {
-            return;
-        };
         assert_eq!(geometry::WIDGET_RADIUS, 0.0);
         assert!(
-            source.contains("h-[34px]"),
+            WIDGET_FRAME_SOURCE.contains("h-[34px]"),
             "the header height moved; this draws {}",
             geometry::HEADER_HEIGHT
         );
