@@ -91,7 +91,11 @@ fn main() -> Result<()> {
 
         // Run CLI command (whoami, workers, tell, plan, browser, status, help, etc.)
         if let Err(error) = cli_run::run() {
-            eprintln!("grayspace: {error}");
+            let prog = std::env::args()
+                .next()
+                .and_then(|p| std::path::Path::new(&p).file_stem().map(|s| s.to_string_lossy().into_owned()))
+                .unwrap_or_else(|| "grayspace".to_string());
+            eprintln!("{prog}: {error}");
             std::process::exit(1);
         }
         return Ok(());

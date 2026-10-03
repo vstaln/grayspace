@@ -5,17 +5,25 @@ use std::{
     net::TcpStream,
 };
 
+fn prog_name() -> String {
+    env::args()
+        .next()
+        .and_then(|p| std::path::Path::new(&p).file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "grayspace".to_string())
+}
+
 pub fn run() -> Result<(), String> {
     let argv: Vec<String> = env::args().skip(1).collect();
     let parsed = grayspace_app::cli::Args::parse(&argv);
     let mut args = env::args().skip(1);
     let command = args.next().unwrap_or_else(|| "help".to_owned());
     if matches!(command.as_str(), "help" | "--help" | "-h") {
-        println!("grayspace workers | grayspace tell <worker> \"message\" | grayspace worker-read <terminal>\nOrchestration commands: run-create, task-create, task-list, check, reply, done");
+        let prog = prog_name();
+        println!("{prog} workers | {prog} tell <worker> \"message\" | {prog} worker-read <terminal>\nOrchestration commands: run-create, task-create, task-list, check, reply, done");
         return Ok(());
     }
     if matches!(command.as_str(), "version" | "--version" | "-V") {
-        println!("grayspace 0.0.1");
+        println!("{} 0.0.1", prog_name());
         return Ok(());
     }
     let url = env::var("GRAYSPACE_SOCKET_PATH")

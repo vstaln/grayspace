@@ -1,11 +1,15 @@
 #!/bin/sh
-# macOS / Linux / Windows (Git Bash/MSYS2) shim for the GraySpace agent CLI.
+# macOS / Linux / Windows (Git Bash/MSYS2) shim for the Space / GraySpace agent CLI.
 #
 # GRAYSPACE_NODE points at the app node runtime if set.
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-native_bin="$dir/../native/target/release/grayspace"
+native_bin="$dir/../native/target/release/space"
 if [ -x "$native_bin" ]; then
   exec "$native_bin" "$@"
+fi
+native_grayspace="$dir/../native/target/release/grayspace"
+if [ -x "$native_grayspace" ]; then
+  exec "$native_grayspace" "$@"
 fi
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*)

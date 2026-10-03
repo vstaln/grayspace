@@ -514,7 +514,7 @@ pub fn plan(command: &str, args: &Args) -> CommandResult<Plan> {
 
         _ => Err(CommandError::new(
             ErrorCode::UnknownCommand,
-            format!("unknown command \"{command}\" — try `grayspace help`"),
+            format!("unknown command \"{command}\" — see `--help`"),
         )),
     }
 }

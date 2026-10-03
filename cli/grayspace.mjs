@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url'
 const TOKEN_HEADER = 'x-grayspace-token'
 
 const GRAYSPACE_VERSION = '0.0.1'
+const PROG_NAME = path.basename(process.argv[1] || '').replace(/\.[^.]+$/, '').toLowerCase() === 'space' ? 'space' : 'grayspace'
 
 let cachedCandidateDirs
 function candidateDirs() {
@@ -683,7 +684,13 @@ const KNOWN_COMMANDS = [
 
 function commandHelp(name) {
   const canon = COMMAND_ALIASES[name] ?? name
-  return COMMAND_HELP[canon] ?? COMMAND_HELP[name]
+  const text = COMMAND_HELP[canon] ?? COMMAND_HELP[name]
+  if (!text) return undefined
+  return PROG_NAME === 'space' ? text.replaceAll('grayspace', 'space') : text
+}
+
+function getHelp() {
+  return PROG_NAME === 'space' ? HELP.replaceAll('grayspace', 'space') : HELP
 }
 
 
@@ -723,7 +730,7 @@ async function main(argv) {
   const command = positional[0]
 
   if (flags.version === true) {
-    return emit({ version: GRAYSPACE_VERSION }, (v) => `grayspace ${v.version}`)
+    return emit({ version: GRAYSPACE_VERSION }, (v) => `${PROG_NAME} ${v.version}`)
   }
 
   if (command === 'help') {
@@ -732,22 +739,22 @@ async function main(argv) {
     if (topic && !detail) {
       const hint = suggestCommand(topic)
       throw new GraySpaceError(
-        `no help for "${topic}"${hint ? ` — did you mean "${hint}"?` : ''} — run \`grayspace --help\``,
+        `no help for "${topic}"${hint ? ` — did you mean "${hint}"?` : ''} — run \`${PROG_NAME} --help\``,
         'unknown_command'
       )
     }
-    process.stdout.write(`${detail ?? HELP}\n`)
+    process.stdout.write(`${detail ?? getHelp()}\n`)
     return
   }
 
   if (!command) {
-    process.stdout.write(`${HELP}\n`)
+    process.stdout.write(`${getHelp()}\n`)
     return
   }
 
   if (flags.help === true) {
     const detail = commandHelp(command)
-    process.stdout.write(`${detail ?? HELP}\n`)
+    process.stdout.write(`${detail ?? getHelp()}\n`)
     return
   }
 
@@ -1346,7 +1353,7 @@ async function main(argv) {
     }
     case 'api': {
       const method = String(positional[1] || 'GET').toUpperCase()
-      const apiPath = require1(positional[2], 'api needs a path, e.g. grayspace api GET /snapshot')
+      const apiPath = require1(positional[2], `api needs a path, e.g. ${PROG_NAME} api GET /snapshot`)
       let body
       if (positional[3]) {
         try {
@@ -1361,7 +1368,7 @@ async function main(argv) {
     default: {
       const hint = suggestCommand(command)
       throw new GraySpaceError(
-        `unknown command "${command}"${hint ? ` — did you mean "${hint}"?` : ''} — run \`grayspace --help\``,
+        `unknown command "${command}"${hint ? ` — did you mean "${hint}"?` : ''} — run \`${PROG_NAME} --help\``,
         'unknown_command'
       )
     }
@@ -1574,7 +1581,7 @@ function requireConfirm(flags, action, id) {
 main(process.argv.slice(2)).catch(async (err) => {
   const payload = { ok: false, error: err.message, code: err.code || 'failed' }
   if (asJson) process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`)
-  else process.stderr.write(`grayspace: ${err.message}\n`)
+  else process.stderr.write(`${PROG_NAME}: ${err.message}\n`)
   const codeMap = {
     invalid: 2,
     unknown_command: 2,

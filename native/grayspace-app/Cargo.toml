@@ -12,6 +12,10 @@ path = "src/lib.rs"
 name = "grayspace"
 path = "src/main.rs"
 
+[[bin]]
+name = "space"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1"
 axum = "0.8"
