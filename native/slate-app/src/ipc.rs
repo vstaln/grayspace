@@ -110,11 +110,30 @@ pub fn control_request(
     let token = std::fs::read_to_string(control_token_path())
         .map(|value| value.trim().to_owned())
         .unwrap_or_default();
-    let mut stream = std::os::unix::net::UnixStream::connect(&socket)
-        .map_err(|e| format!("control socket {socket}: {e}"))?;
-    let timeout = std::time::Duration::from_secs(10);
-    let _ = stream.set_read_timeout(Some(timeout));
-    let _ = stream.set_write_timeout(Some(timeout));
+    #[cfg(unix)]
+    let mut stream = {
+        let stream = std::os::unix::net::UnixStream::connect(&socket)
+            .map_err(|e| format!("control socket {socket}: {e}"))?;
+        let timeout = std::time::Duration::from_secs(10);
+        stream
+            .set_read_timeout(Some(timeout))
+            .map_err(|e| e.to_string())?;
+        stream
+            .set_write_timeout(Some(timeout))
+            .map_err(|e| e.to_string())?;
+        stream
+    };
+    #[cfg(windows)]
+    let mut stream = {
+        if !socket.starts_with(r"\\.\pipe\") {
+            return Err("Control endpoint must be a local named pipe".into());
+        }
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&socket)
+            .map_err(|e| format!("control pipe: {e}"))?
+    };
     let payload = body
         .map(serde_json::to_vec)
         .transpose()

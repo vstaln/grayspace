@@ -39,6 +39,7 @@ pub(crate) const KITTY_FLAGS_MAX: u8 = 0b1_1111;
 #[derive(Default)]
 pub struct Decoder {
     parser: vte::Parser,
+    commands: Commands,
 }
 
 #[derive(Default)]
@@ -96,7 +97,7 @@ impl vte::Perform for Commands {
                 }
             }
             (b"<", 'u') => {
-                let count = if params.len() == 1 { first } else { 1 };
+                let count = if params.len() == 1 { first.max(1) } else { 1 };
                 self.controls.push(Control::KittyPop(count));
             }
             (b"?", 'u') => self.controls.push(Control::KittyQuery),
@@ -169,9 +170,8 @@ impl vte::Perform for Commands {
 
 impl Decoder {
     pub fn advance(&mut self, bytes: &[u8]) -> Vec<Control> {
-        let mut commands = Commands::default();
-        self.parser.advance(&mut commands, bytes);
-        commands.controls
+        self.parser.advance(&mut self.commands, bytes);
+        std::mem::take(&mut self.commands.controls)
     }
 }
 

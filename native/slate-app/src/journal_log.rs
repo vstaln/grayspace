@@ -173,6 +173,7 @@ impl JournalLog {
             None => crate::workspace::current(),
         };
         let mut current = Self::open(&self.path)?;
+        let needs_newline = current.needs_newline;
         if current.seq != self.seq || current.head != self.head {
             // Another writer (e.g. `slate plan` run from a terminal) appended
             // since we last committed. Adopt the on-disk head and continue
@@ -180,7 +181,6 @@ impl JournalLog {
             // handle.
             std::mem::swap(self, &mut current);
         }
-        let needs_newline = self.needs_newline;
         let mut entry = JournalEntry {
             seq: self
                 .seq
