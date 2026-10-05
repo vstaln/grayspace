@@ -324,6 +324,7 @@ fn folding_a_real_journal_matches_typescript() {
 fn an_image_widget_keeps_its_source_across_create_and_update() {
     let entry = |seq: u64, entry_type: &str, payload: Value| JournalEntry {
         command_id: None,
+        workspace_dir: None,
         seq,
         at: 1_789_000_000_000 + seq,
         phase: "commit".to_owned(),
@@ -380,6 +381,7 @@ fn notes_calendar_and_kanban_widgets_survive_projection() {
             let id = format!("{kind}-{index}");
             JournalEntry {
                 command_id: None,
+                workspace_dir: None,
                 seq: index as u64 + 1,
                 at: 1_789_000_000_000 + index as u64,
                 phase: "commit".to_owned(),

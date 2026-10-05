@@ -9,13 +9,13 @@
 //! and the dispatcher does the filesystem work:
 //!   * `file_open`      — `xdg-open <path>` (left-click on a file row)
 //!   * `file_reveal`    — file manager at `path` (dirs open themselves,
-//!                        files open their parent directory)
+//!     files open their parent directory)
 //!   * `file_copy_path` — absolute path onto the clipboard
 //!   * `file_new`       — create `untitled`/`untitled-N` of `kind` in `dir`
 //!   * `file_delete`    — remove the file / dir tree at `path`; only sent
-//!                        for the path `state.confirmDelete` already armed
+//!     for the path `state.confirmDelete` already armed
 //!   * `refresh`        — unknown-op no-op; `widget_command` still notifies,
-//!                        so it re-reads the directory for free
+//!     so it re-reads the directory for free
 //!
 //! Pane-local keys journaled on `widget.state`: `cwd`, `showHidden`,
 //! `sort` (`name`/`mtime`/`size`), `confirmDelete` (abs path armed for a
@@ -318,7 +318,7 @@ pub fn files_pane(
         } })
     };
 
-    let mut col = div().flex().flex_col().gap_1();
+    let mut col = div().flex().flex_col().gap_1().size_full();
 
     // Header strip — the original's toolbar row: which directory this is,
     // then the toggles and create/reveal affordances.
@@ -456,6 +456,16 @@ pub fn files_pane(
     }
     col = col.child(crumbs);
 
+    // The listing scrolls; the toolbar and crumbs above stay put.
+    let mut list = div()
+        .id(format!("slate-files-list-{}", wid))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll();
+
     match list_entries(&cur) {
         Ok(mut entries) => {
             // `state.showHidden` filters dotfiles — the `..` row below is
@@ -489,7 +499,7 @@ pub fn files_pane(
                 up.pop();
                 let target = up.to_string_lossy().into_owned();
                 let wid = wid.clone();
-                col = col.child(
+                list = list.child(
                     div()
                         .text_sm()
                         .cursor_pointer()
@@ -508,7 +518,7 @@ pub fn files_pane(
             }
 
             if entries.is_empty() {
-                col = col.child(
+                list = list.child(
                     div()
                         .text_sm()
                         .px_1()
@@ -659,7 +669,7 @@ pub fn files_pane(
                             cx,
                         )),
                 );
-                col = col.child(row);
+                list = list.child(row);
             }
 
             // The original's "Show more" — 200 rows a page, each click adds
@@ -667,7 +677,7 @@ pub fn files_pane(
             if total > limit {
                 let wid = wid.clone();
                 let next = limit + 200;
-                col = col.child(
+                list = list.child(
                     div()
                         .text_xs()
                         .cursor_pointer()
@@ -693,7 +703,7 @@ pub fn files_pane(
             }
         }
         Err(e) => {
-            col = col.child(
+            list = list.child(
                 div()
                     .text_sm()
                     .text_color(rgb(theme::hex(theme::status::DANGER)))
@@ -701,5 +711,5 @@ pub fn files_pane(
             );
         }
     }
-    div().flex_1().flex().flex_col().child(col)
+    col.child(list)
 }

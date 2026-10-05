@@ -36,6 +36,7 @@ impl JournalLock {
             }
             let file = std::fs::OpenOptions::new()
                 .create(true)
+                .truncate(false)
                 .write(true)
                 .open(&lock_path)
                 .map_err(|error| error.to_string())?;
@@ -44,7 +45,7 @@ impl JournalLock {
             if result != 0 {
                 return Err(std::io::Error::last_os_error().to_string());
             }
-            return Ok(Self(Some(file)));
+            Ok(Self(Some(file)))
         }
         #[cfg(not(unix))]
         {
@@ -173,6 +174,7 @@ impl JournalLog {
             None => crate::workspace::current(),
         };
         let mut current = Self::open(&self.path)?;
+        let needs_newline = current.needs_newline;
         if current.seq != self.seq || current.head != self.head {
             // Another writer (e.g. `slate plan` run from a terminal) appended
             // since we last committed. Adopt the on-disk head and continue
@@ -180,7 +182,6 @@ impl JournalLog {
             // handle.
             std::mem::swap(self, &mut current);
         }
-        let needs_newline = self.needs_newline;
         let mut entry = JournalEntry {
             seq: self
                 .seq
@@ -400,7 +401,8 @@ mod tests {
         assert_eq!(next.seq, 2);
         assert_eq!(next.prev_hash, first.hash);
         // The dead line stays on disk but the chain still verifies around it.
-        let kept = read(&path);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"acto\n"));
+        let kept = JournalLog::open(&path).unwrap().entries().to_vec();
         assert_eq!(kept.len(), 2);
         verify_chain(&kept).unwrap();
     }

@@ -331,8 +331,10 @@ fn column_view<'a>(
     key: &'a str,
     cards: &'a [Card],
     collapsed: bool,
-    collapsed_map: &'a serde_json::Map<String, Value>,
-    overrides: &'a serde_json::Map<String, Value>,
+    (collapsed_map, overrides): (
+        &'a serde_json::Map<String, Value>,
+        &'a serde_json::Map<String, Value>,
+    ),
     widget_id: &'a str,
     cx: &mut Context<crate::canvas_view::CanvasView>,
 ) -> impl IntoElement + 'a {
@@ -393,7 +395,16 @@ fn column_view<'a>(
     if collapsed {
         return col;
     }
-    let mut body = div().flex().flex_col().gap_1().px_1().pb_1().min_h_0();
+    let mut body = div()
+        .id(format!("slate-kanban-col-{}-{}", widget_id, key))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .px_1()
+        .pb_1()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll();
     for card in cards {
         body = body.child(card_view(card, widget_id, overrides, cx));
     }
@@ -464,8 +475,7 @@ pub fn kanban_pane(
                 "todo",
                 &grouped[0],
                 is_collapsed("todo"),
-                &collapsed_map,
-                &overrides,
+                (&collapsed_map, &overrides),
                 &widget.id,
                 cx,
             ))
@@ -474,8 +484,7 @@ pub fn kanban_pane(
                 "doing",
                 &grouped[1],
                 is_collapsed("doing"),
-                &collapsed_map,
-                &overrides,
+                (&collapsed_map, &overrides),
                 &widget.id,
                 cx,
             ))
@@ -484,8 +493,7 @@ pub fn kanban_pane(
                 "done",
                 &grouped[2],
                 is_collapsed("done"),
-                &collapsed_map,
-                &overrides,
+                (&collapsed_map, &overrides),
                 &widget.id,
                 cx,
             )),

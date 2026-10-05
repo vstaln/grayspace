@@ -105,16 +105,12 @@ pub fn control_request(
     path: &str,
     body: Option<&serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
+    #[cfg(unix)]
     use std::io::{Read, Write};
     let socket = socket_path(is_dev_environment());
     let token = std::fs::read_to_string(control_token_path())
         .map(|value| value.trim().to_owned())
         .unwrap_or_default();
-    let mut stream = std::os::unix::net::UnixStream::connect(&socket)
-        .map_err(|e| format!("control socket {socket}: {e}"))?;
-    let timeout = std::time::Duration::from_secs(10);
-    let _ = stream.set_read_timeout(Some(timeout));
-    let _ = stream.set_write_timeout(Some(timeout));
     let payload = body
         .map(serde_json::to_vec)
         .transpose()
@@ -129,20 +125,58 @@ pub fn control_request(
         ));
     }
     head.push_str("\r\n");
-    stream
-        .write_all(head.as_bytes())
-        .and_then(|_| {
-            if let Some(bytes) = &payload {
-                stream.write_all(bytes)
-            } else {
-                Ok(())
-            }
+    let mut request = head.into_bytes();
+    if let Some(bytes) = payload {
+        request.extend_from_slice(&bytes);
+    }
+    #[cfg(unix)]
+    let response = {
+        let mut stream = std::os::unix::net::UnixStream::connect(&socket)
+            .map_err(|e| format!("control socket {socket}: {e}"))?;
+        let timeout = std::time::Duration::from_secs(10);
+        stream
+            .set_read_timeout(Some(timeout))
+            .map_err(|e| e.to_string())?;
+        stream
+            .set_write_timeout(Some(timeout))
+            .map_err(|e| e.to_string())?;
+        stream
+            .write_all(&request)
+            .map_err(|e| format!("control write: {e}"))?;
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .map_err(|e| format!("control read: {e}"))?;
+        response
+    };
+    #[cfg(windows)]
+    let response = {
+        if !socket.starts_with(r"\\.\pipe\") {
+            return Err("Control endpoint must be a local named pipe".into());
+        }
+        std::thread::spawn(move || -> Result<Vec<u8>, String> {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| e.to_string())?;
+            runtime.block_on(async {
+                tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    let mut stream =
+                        tokio::net::windows::named_pipe::ClientOptions::new().open(&socket)?;
+                    stream.write_all(&request).await?;
+                    let mut response = Vec::new();
+                    stream.read_to_end(&mut response).await?;
+                    Ok::<_, std::io::Error>(response)
+                })
+                .await
+                .map_err(|_| "control request timed out".to_string())?
+                .map_err(|e| format!("control pipe: {e}"))
+            })
         })
-        .map_err(|e| format!("control write: {e}"))?;
-    let mut response = Vec::new();
-    stream
-        .read_to_end(&mut response)
-        .map_err(|e| format!("control read: {e}"))?;
+        .join()
+        .map_err(|_| "control request worker failed".to_string())??
+    };
     let text = String::from_utf8_lossy(&response);
     let status: u16 = text
         .split_whitespace()

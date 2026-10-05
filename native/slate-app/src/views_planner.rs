@@ -747,7 +747,14 @@ pub fn planner_pane(
                 }),
         );
     }
-    let mut list = div().flex().flex_col().gap_1().flex_1().min_h_0();
+    let mut list = div()
+        .id(format!("slate-planner-list-{}", wid))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll();
     for (index, row) in items.iter().enumerate() {
         list = list.child(planner_row(
             index + 1,

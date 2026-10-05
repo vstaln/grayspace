@@ -596,12 +596,12 @@ pub fn orchestration_pane(
         })
         .collect();
 
-    let mut col = div().flex().flex_col().gap_2();
+    let mut col = div().flex().flex_col().gap_2().size_full();
 
     if runs.is_empty() {
         // The original's empty state, with the native CLI's verb.
-        return div().flex_1().flex().flex_col().child(
-            col.child(
+        return col
+            .child(
                 div()
                     .text_sm()
                     .text_color(rgb(theme::hex(theme::text::DIM)))
@@ -612,8 +612,7 @@ pub fn orchestration_pane(
                     .text_xs()
                     .text_color(rgb(theme::hex(theme::text::FAINT)))
                     .child("slate run-create --objective \"…\""),
-            ),
-        );
+            );
     }
 
     // Header — the original showed the run's objective, coordinator and the
@@ -669,6 +668,17 @@ pub fn orchestration_pane(
         );
     }
 
+    // Everything below the header scrolls as one region; the header stays
+    // pinned at the top of the pane.
+    let mut list = div()
+        .id(format!("slate-orc-body-{}", wid))
+        .flex()
+        .flex_col()
+        .gap_2()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll();
+
     // Runs — click scopes the whole pane (journaled `selectedRun`), click the
     // selected one again to go back to all runs.
     {
@@ -683,7 +693,7 @@ pub fn orchestration_pane(
         if let Some(tail) = capped_tail(runs.len(), MAX_RUNS) {
             section = section.child(tail);
         }
-        col = col.child(section);
+        list = list.child(section);
     }
 
     // Tasks — the original's `Nc` rows: status tag, title, dep count, and
@@ -708,7 +718,7 @@ pub fn orchestration_pane(
         if let Some(tail) = capped_tail(tasks.len(), MAX_TASKS) {
             section = section.child(tail);
         }
-        col = col.child(section);
+        list = list.child(section);
     }
 
     // Dispatches — live workers first, then settled ones still waiting on
@@ -733,7 +743,7 @@ pub fn orchestration_pane(
         for d in settled.iter().take(MAX_DISPATCHES) {
             section = section.child(dispatch_row(d, &wid, cx));
         }
-        col = col.child(section);
+        list = list.child(section);
     }
 
     // Inbox — the original's "Permission required", "Waiting on you" and
@@ -764,7 +774,7 @@ pub fn orchestration_pane(
         for m in notices.iter().take(MAX_INBOX) {
             section = section.child(ack_row(m, &wid, cx));
         }
-        col = col.child(section);
+        list = list.child(section);
     }
 
     // Recent mail — the original's last-12 tail, newest first.
@@ -788,8 +798,8 @@ pub fn orchestration_pane(
         if let Some(tail) = capped_tail(messages.len(), MAX_MAIL) {
             section = section.child(tail);
         }
-        col = col.child(section);
+        list = list.child(section);
     }
 
-    div().flex_1().flex().flex_col().child(col)
+    col.child(list)
 }

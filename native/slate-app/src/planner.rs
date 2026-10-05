@@ -166,21 +166,33 @@ pub fn today_utc() -> Today {
 /// *local* calendar date, not UTC. Near midnight the two disagree, and only
 /// the local reading matches what the user sees.
 pub fn today_local() -> Today {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs()) as libc::time_t;
-    // SAFETY: `tm` is fully written by localtime_r before use; a null return
-    // falls back to UTC.
-    unsafe {
-        let mut tm: libc::tm = std::mem::zeroed();
-        if libc::localtime_r(&secs, &mut tm).is_null() {
-            return today_utc();
+    #[cfg(unix)]
+    {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs()) as libc::time_t;
+        // SAFETY: `tm` is fully written by localtime_r before use; a null return
+        // falls back to UTC.
+        unsafe {
+            let mut tm: libc::tm = std::mem::zeroed();
+            if libc::localtime_r(&secs, &mut tm).is_null() {
+                return today_utc();
+            }
+            Today(format!(
+                "{:04}-{:02}-{:02}",
+                tm.tm_year + 1900,
+                tm.tm_mon + 1,
+                tm.tm_mday
+            ))
         }
+    }
+    #[cfg(windows)]
+    {
+        let mut time: winapi::um::minwinbase::SYSTEMTIME = unsafe { std::mem::zeroed() };
+        unsafe { winapi::um::sysinfoapi::GetLocalTime(&mut time) };
         Today(format!(
             "{:04}-{:02}-{:02}",
-            tm.tm_year + 1900,
-            tm.tm_mon + 1,
-            tm.tm_mday
+            time.wYear, time.wMonth, time.wDay
         ))
     }
 }

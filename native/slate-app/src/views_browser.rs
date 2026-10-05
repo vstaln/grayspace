@@ -3,7 +3,7 @@
 //! Address-bar input + multi-tab are explicitly out for 0.0.1 — one tab,
 //! one URL. The vendored element keeps its guarantees (400x300 fallback,
 //! >1px guard, Logical bounds, per-id create-once/move-later, X11 child
-//! thread); Wayland renders a separate GTK window (accepted per spec).
+//! > thread); Wayland renders a separate GTK window (accepted per spec).
 
 use gpui::*;
 
@@ -12,16 +12,18 @@ pub struct BrowserState {
     pub id: usize,
 }
 
+impl Default for BrowserState {
+    fn default() -> Self {
+        Self::new("https://example.com", crate::next_webview_id())
+    }
+}
+
 impl BrowserState {
     pub fn new(url: impl Into<String>, id: usize) -> Self {
         Self {
             url: url.into(),
             id,
         }
-    }
-
-    pub fn default() -> Self {
-        Self::new("https://example.com", crate::next_webview_id())
     }
 
     pub fn render(&self, cx: &mut Context<crate::canvas_view::CanvasView>) -> impl IntoElement {

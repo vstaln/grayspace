@@ -359,7 +359,12 @@ pub fn notes_pane(
         .and_then(Value::as_str);
     let wid = widget.id.clone();
 
-    let mut col = div().flex().flex_col().gap_1();
+    let mut col = div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .size_full()
+        .overflow_hidden();
     // Header row: count on the left, + adds a blank note (writing the store
     // file directly) and expands it for the follow-up edit.
     col = col.child(
@@ -401,8 +406,18 @@ pub fn notes_pane(
                     )
             }),
     );
+    // The cards scroll under the pinned header; an expanded card's body
+    // text rides along inside its card.
+    let mut list = div()
+        .id(format!("slate-notes-list-{}", wid))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll();
     if let Some(error) = error {
-        col = col.child(
+        list = list.child(
             div()
                 .text_sm()
                 .text_color(rgb(theme::hex(theme::status::DANGER)))
@@ -410,7 +425,7 @@ pub fn notes_pane(
         );
     }
     if rows.is_empty() {
-        col = col.child(
+        list = list.child(
             div()
                 .text_sm()
                 .text_color(rgb(theme::hex(theme::text::FAINT)))
@@ -418,12 +433,7 @@ pub fn notes_pane(
         );
     }
     for row in &rows {
-        col = col.child(note_card(row, expanded == Some(row.id.as_str()), &wid, cx));
+        list = list.child(note_card(row, expanded == Some(row.id.as_str()), &wid, cx));
     }
-    div()
-        .flex_1()
-        .flex()
-        .flex_col()
-        .overflow_hidden()
-        .child(col)
+    col.child(list)
 }

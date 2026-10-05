@@ -485,7 +485,7 @@ impl TerminalScreen {
                     let Some(cell) = screen.cell(row, col) else {
                         continue;
                     };
-                    let style = CellStyle::of(&cell);
+                    let style = CellStyle::of(cell);
                     let (mut fg, mut bg) = (style.fg, style.bg);
                     let is_cursor = cursor == Some((row, col));
                     if is_cursor {
@@ -500,7 +500,7 @@ impl TerminalScreen {
                             && last.bold == style.bold
                             && last.italic == style.italic
                         {
-                            last.text.push_str(&text);
+                            last.text.push_str(text);
                             continue;
                         }
                     }
@@ -614,7 +614,7 @@ impl TerminalScreen {
                     continue;
                 }
                 if let Some(cell) = self.screen().cell(vis, col) {
-                    line.push_str(&cell.contents());
+                    line.push_str(cell.contents());
                 }
             }
             lines.push(line.trim_end().to_owned());
@@ -826,14 +826,13 @@ impl TerminalScreen {
                 // The caller may not track which button is down; the screen
                 // does — a bare Move while one is held is its drag.
                 let button = button.or_else(|| {
-                    self.mouse_buttons
-                        .iter()
-                        .position(|pressed| *pressed)
-                        .and_then(|index| match index {
-                            0 => Some(MouseButton::Primary),
-                            1 => Some(MouseButton::Middle),
-                            _ => Some(MouseButton::Secondary),
-                        })
+                    self.mouse_buttons.iter().position(|pressed| *pressed).map(
+                        |index| match index {
+                            0 => MouseButton::Primary,
+                            1 => MouseButton::Middle,
+                            _ => MouseButton::Secondary,
+                        },
+                    )
                 });
                 // Drag needs 1002+; bare motion needs the any-motion mode.
                 let code = match (button, self.mouse_mode) {
@@ -1206,7 +1205,7 @@ impl TerminalScreen {
         flags: u8,
     ) -> Option<Vec<u8>> {
         let all = flags & KITTY_ALL_KEYS != 0;
-        let event = (flags & KITTY_EVENT_TYPES != 0).then(|| match kind {
+        let event = (flags & KITTY_EVENT_TYPES != 0).then_some(match kind {
             KeyEventKind::Press => 1u8,
             KeyEventKind::Repeat => 2,
             KeyEventKind::Release => 3,
@@ -1431,15 +1430,15 @@ impl CellStyle {
 /// XTGETTCAP hexifies both names and values; the query arrives hex-encoded
 /// and the answer echoes names in the same alphabet.
 fn hex_decode(text: &[u8]) -> Option<Vec<u8>> {
-    if text.len() % 2 != 0 {
+    if !text.len().is_multiple_of(2) {
         return None;
     }
-    let pair = |pair: &[u8]| {
+    let pair = |pair: &[u8; 2]| {
         let hi = (pair[0] as char).to_digit(16)?;
         let lo = (pair[1] as char).to_digit(16)?;
         Some((hi << 4 | lo) as u8)
     };
-    text.chunks_exact(2).map(pair).collect()
+    text.as_chunks::<2>().0.iter().map(pair).collect()
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

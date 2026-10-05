@@ -6,7 +6,7 @@
 //! per render instead:
 //!
 //! * `/proc/stat`   — CPU busy %, as the delta between this render and the
-//!                    previous one (first render falls back to load1/cores);
+//!   previous one (first render falls back to load1/cores);
 //! * `/proc/meminfo`— RAM used/total (`MemTotal` − `MemAvailable`);
 //! * `/proc/loadavg`, `/proc/uptime`, `/proc/cpuinfo`,
 //!   `/proc/sys/kernel/hostname` — the Host & Runtime card.
@@ -308,7 +308,11 @@ pub fn sysmon_pane(cx: &mut Context<crate::canvas_view::CanvasView>) -> impl Int
                 .text_color(rgb(theme::hex(theme::text::FAINT)))
                 .child("No system stats — /proc is not readable here"),
         );
-        return div().flex_1().flex().flex_col().child(col);
+        return div()
+            .id("slate-sysmon-body")
+            .size_full()
+            .overflow_y_scroll()
+            .child(col);
     }
 
     // CPU Load card.
@@ -411,5 +415,11 @@ pub fn sysmon_pane(cx: &mut Context<crate::canvas_view::CanvasView>) -> impl Int
         }
     }
 
-    div().flex_1().flex().flex_col().child(col)
+    // The whole stack of cards is the scroll region — the pane keeps no
+    // pinned toolbar of its own.
+    div()
+        .id("slate-sysmon-body")
+        .size_full()
+        .overflow_y_scroll()
+        .child(col)
 }
