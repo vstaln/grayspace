@@ -2622,7 +2622,10 @@ trait Transport: Read + Write {}
 impl<T: Read + Write> Transport for T {}
 
 #[cfg(windows)]
-fn local_transport(path: &str) -> Result<Box<dyn Transport>, String> {
+fn local_transport(
+    path: &str,
+    _read_timeout: std::time::Duration,
+) -> Result<Box<dyn Transport>, String> {
     if !path.starts_with(r"\\.\pipe\") {
         return Err("Control endpoint must be a local named pipe".into());
     }

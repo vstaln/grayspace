@@ -400,7 +400,8 @@ mod tests {
         assert_eq!(next.seq, 2);
         assert_eq!(next.prev_hash, first.hash);
         // The dead line stays on disk but the chain still verifies around it.
-        let kept = read(&path);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"acto\n"));
+        let kept = JournalLog::open(&path).unwrap().entries().to_vec();
         assert_eq!(kept.len(), 2);
         verify_chain(&kept).unwrap();
     }

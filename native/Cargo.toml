@@ -12,6 +12,12 @@ members = [
 # the addon build — leave them excluded.
 exclude = ["canvas-core", "storage-core", "vendor/portable-pty"]
 
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

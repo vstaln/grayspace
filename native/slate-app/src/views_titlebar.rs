@@ -50,6 +50,7 @@
 
 use gpui::*;
 use serde_json::json;
+#[cfg(not(target_os = "macos"))]
 use slate_app::canvas::TITLE_BAR_HEIGHT;
 use slate_app::theme;
 
