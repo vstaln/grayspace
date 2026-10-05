@@ -110,7 +110,8 @@ fn run_show_encodes_the_id_into_the_path() {
 
 #[test]
 fn run_close_posts_to_the_close_sub_path() {
-    let plan = parse("run-close run-1");
+    assert_eq!(parse_err("run-close run-1").code, ErrorCode::NeedsConfirm);
+    let plan = parse("run-close run-1 --yes");
     assert_eq!(plan.method, "POST");
     assert_eq!(plan.path, "/orchestration/runs/run-1/close");
 }
@@ -243,18 +244,29 @@ fn permission_verbs_are_interchangeable() {
     for granting in ["allow", "approve", "permit"] {
         let plan = parse(&format!("{granting} msg-9"));
         assert_eq!(plan.body["replyTo"], json!("msg-9"), "{granting}");
-        assert_eq!(plan.body["body"], json!("allowed"), "{granting}");
+        assert_eq!(plan.body["body"], json!("allow"), "{granting}");
+        assert_eq!(
+            plan.body["subject"],
+            json!("permission_granted"),
+            "{granting}"
+        );
     }
     for refusing in ["deny", "reject", "refuse"] {
         let plan = parse(&format!("{refusing} msg-9"));
-        assert_eq!(plan.body["body"], json!("denied"), "{refusing}");
+        assert_eq!(plan.body["body"], json!("deny"), "{refusing}");
+        assert_eq!(
+            plan.body["subject"],
+            json!("permission_denied"),
+            "{refusing}"
+        );
     }
 }
 
 #[test]
-fn a_permission_note_replaces_the_default_body() {
+fn a_permission_note_keeps_the_verdict_in_the_body() {
     let plan = parse("deny msg-9 --reason too-risky");
-    assert_eq!(plan.body["body"], json!("too-risky"));
+    assert_eq!(plan.body["body"], json!("deny: too-risky"));
+    assert_eq!(plan.body["subject"], json!("permission_denied"));
 }
 
 // --- inbox and gates --------------------------------------------------------
@@ -344,7 +356,7 @@ fn every_command_plans_a_well_formed_request() {
         "heartbeat",
         "ask q",
         "reply m b",
-        "send --to a",
+        "send --type note --to a",
         "ack m",
         "check",
         "gate-create q",
