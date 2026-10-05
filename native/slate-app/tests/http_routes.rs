@@ -5,19 +5,118 @@
 //! renamed field or a changed status is a breaking change for every agent.
 
 use serde_json::{json, Value};
-use slate_app::http::{route, Request, Response, RouteDeps};
+use slate_app::http::{route, Request, Response, RouteDeps, RouteEnv};
 use slate_app::orchestration::OrchestrationStore;
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard};
 
 const NOW: i64 = 1_000_000;
 
+struct TestEnv {
+    root: PathBuf,
+    terminals: HashSet<String>,
+    locks: Mutex<slate_app::locks::LockManager>,
+}
+
+impl TestEnv {
+    fn new() -> Self {
+        Self {
+            root: std::env::temp_dir().join(format!("slate-http-{}", uuid::Uuid::new_v4())),
+            terminals: ["alice", "worker", "term-1", "term-2"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            locks: Mutex::new(slate_app::locks::LockManager::new(None)),
+        }
+    }
+}
+
+impl Drop for TestEnv {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+impl RouteEnv for TestEnv {
+    fn journal(&mut self) -> Result<slate_app::journal_log::JournalLog, String> {
+        slate_app::journal_log::JournalLog::open(self.root.join("journal.ndjson"))
+    }
+
+    fn terminals(&mut self) -> Vec<Value> {
+        self.terminals
+            .iter()
+            .map(|id| json!({"id": id, "name": id, "alive": true}))
+            .collect()
+    }
+
+    fn terminal_exists(&mut self, id: &str) -> bool {
+        self.terminals.contains(id)
+    }
+
+    fn dispose_terminal(&mut self, id: &str) -> Result<(), String> {
+        self.terminals.remove(id);
+        Ok(())
+    }
+
+    fn set_terminal_title(&mut self, _id: &str, _title: &str) {}
+
+    fn resolve_terminal(
+        &mut self,
+        target: &str,
+        _caller: Option<&str>,
+    ) -> Result<String, slate_app::command::CommandError> {
+        if self.terminals.contains(target) {
+            Ok(target.to_owned())
+        } else {
+            Err(slate_app::command::CommandError::new(
+                slate_app::command::ErrorCode::NotFound,
+                "unknown fixture terminal",
+            ))
+        }
+    }
+
+    fn spawn_terminal(&mut self, _title: &str, _cwd: &str) -> Result<String, String> {
+        let id = format!("term-{}", self.terminals.len() + 1);
+        self.terminals.insert(id.clone());
+        Ok(id)
+    }
+
+    fn write_terminal(&mut self, id: &str, _text: &str, _press_enter: bool) -> Result<(), String> {
+        if self.terminals.contains(id) {
+            Ok(())
+        } else {
+            Err("unknown fixture terminal".into())
+        }
+    }
+
+    fn tail_terminal(&mut self, id: &str, _max: usize) -> Option<String> {
+        self.terminals.contains(id).then(String::new)
+    }
+
+    fn locks(&self) -> MutexGuard<'_, slate_app::locks::LockManager> {
+        self.locks.lock().unwrap()
+    }
+
+    fn data_dir(&self) -> PathBuf {
+        self.root.clone()
+    }
+
+    fn socket_path(&self) -> Option<String> {
+        None
+    }
+}
+
 struct Server {
     store: OrchestrationStore,
+    env: TestEnv,
 }
 
 impl Server {
     fn new() -> Self {
         Self {
             store: OrchestrationStore::new(),
+            env: TestEnv::new(),
         }
     }
 
@@ -27,7 +126,7 @@ impl Server {
             app_version: "2.0.1",
             workspace_dir: Some("C:/work"),
             now: NOW,
-            env: None,
+            env: Some(&mut self.env),
         };
         route(&request, &mut deps).unwrap_or(Response {
             status: 404,
@@ -223,6 +322,29 @@ fn patching_a_task_updates_it() {
 }
 
 // --- dispatches -------------------------------------------------------------
+
+#[test]
+fn dispatch_without_a_runtime_environment_is_rejected_without_mutation() {
+    let mut server = Server::new();
+    server.run();
+    let task = server.task("work");
+    let mut deps = RouteDeps {
+        orchestration: &mut server.store,
+        app_version: "2.0.1",
+        workspace_dir: Some("C:/work"),
+        now: NOW,
+        env: None,
+    };
+    let response = route(
+        &Request::get("POST", "/orchestration/dispatches")
+            .with_body(json!({"taskId": task, "terminalId": "term-1", "agent": "claude"})),
+        &mut deps,
+    )
+    .unwrap();
+    assert_eq!(response.status, 500);
+    assert_eq!(response.body["needsEngineHandler"], true);
+    assert!(server.store.list_dispatches(None, None, None).is_empty());
+}
 
 #[test]
 fn a_dispatch_conflict_answers_409_with_the_code() {
@@ -608,7 +730,8 @@ mod cli_to_router {
             "alice",
         );
         assert_eq!(denied.status, 201);
-        assert_eq!(denied.body["data"]["body"], json!("too-risky"));
+        assert_eq!(denied.body["data"]["body"], json!("deny: too-risky"));
+        assert_eq!(denied.body["data"]["subject"], json!("permission_denied"));
         assert_eq!(denied.body["data"]["replyTo"], json!(id));
     }
 }
