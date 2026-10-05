@@ -386,6 +386,21 @@ impl Settings {
         self.to_json()
     }
 
+    /// Unmanaged key read — `extra` keys like `background` ride the file
+    /// verbatim; callers that know a key pull it here.
+    pub fn extra(&self, key: &str) -> Option<&Value> {
+        self.extra.get(key)
+    }
+
+    /// Unmanaged key write — same verbatim ride; returns whether it changed.
+    pub fn set_extra(&mut self, key: &str, value: Value) -> bool {
+        if self.extra.get(key) == Some(&value) {
+            return false;
+        }
+        self.extra.insert(key.to_owned(), value);
+        true
+    }
+
     pub fn link_syntax(&self) -> &str {
         &self.link_syntax
     }

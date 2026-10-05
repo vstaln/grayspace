@@ -602,6 +602,15 @@ impl TerminalManager {
             .and_then(serde_json::Value::as_str)
             .filter(|c| !c.is_empty())
             .map(str::to_owned);
+        // A renamed terminal keeps its label across restarts, not just its
+        // scrollback — the names map is what `slate terminal ls` and the
+        // widget header both read.
+        let saved_name = saved
+            .as_ref()
+            .and_then(|s| s.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|n| !n.is_empty())
+            .map(str::to_owned);
         let state_cwd = cwd
             .clone()
             .or(saved_cwd)
@@ -791,7 +800,7 @@ impl TerminalManager {
                 terminals.remove(&id);
             }
             terminals.insert(
-                id,
+                id.clone(),
                 TerminalHandle {
                     input_tx,
                     control_tx,
@@ -803,6 +812,9 @@ impl TerminalManager {
                     child_pid,
                 },
             );
+        }
+        if let Some(name) = saved_name {
+            self.set_name(&id, &name);
         }
         Ok(())
     }
@@ -836,6 +848,10 @@ impl TerminalManager {
     }
 
     pub fn dispose(&self, id: &str) -> Result<(), String> {
+        self.dispose_inner(id, false)
+    }
+
+    fn dispose_inner(&self, id: &str, keep_state: bool) -> Result<(), String> {
         let handle = lock_recover(&self.inner.terminals)
             .remove(id)
             .ok_or_else(|| format!("unknown terminal {id}"))?;
@@ -843,10 +859,14 @@ impl TerminalManager {
         stop_terminal_events(&self.inner, id);
         // Freeing the name lets the pool hand it to the next terminal.
         lock_recover(&self.inner.names).remove(id);
-        // A disposed terminal is gone for good — its saved session must not
-        // resurrect if a later spawn reuses the id.
-        if let Some(path) = terminal_state_file(id) {
-            let _ = std::fs::remove_file(path);
+        // A terminal the user closed is gone for good — its saved session
+        // must not resurrect if a later spawn reuses the id. App teardown
+        // (`dispose_all`) keeps the files instead: those are exactly the
+        // sessions the next launch replays.
+        if !keep_state {
+            if let Some(path) = terminal_state_file(id) {
+                let _ = std::fs::remove_file(path);
+            }
         }
         // Kill the whole tree: the actor may be blocked behind a stuck write,
         // and `child.kill()` alone would orphan grandchildren. Killing runs on
@@ -871,7 +891,7 @@ impl TerminalManager {
             .cloned()
             .collect();
         for id in ids {
-            let _ = self.dispose(&id);
+            let _ = self.dispose_inner(&id, true);
         }
     }
 
@@ -1933,6 +1953,9 @@ impl ControlServer {
                         .route("/terminal/{id}", delete(dispose_terminal))
                         .route("/canvas/focus", post(canvas_focus))
                         .route("/screenshot", post(screenshot))
+                        // Raw bytes — the JSON-envelope `media_route` stays
+                        // for the socket client; real HTTP GET gets the file.
+                        .route("/media/{name}", get(serve_media))
                         // Everything the ported router knows is served here, so
                         // adding a domain to `http::route` serves it without
                         // touching this file. The routes above stay explicit
@@ -3022,6 +3045,55 @@ async fn screenshot(
         .map_err(|error| bad_request(format!("screenshot task failed: {error}")))?
         .map(Json)
         .map_err(bad_request)
+}
+
+/// `GET /media/{name}` — the raw-bytes counterpart of http.rs `media_route`
+/// (which answers the JSON socket protocol). Same single-component name and
+/// the same image extension list, so a real HTTP client — an <img> in a
+/// widget, curl — gets the file itself with its Content-Type.
+async fn serve_media(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<axum::response::Response, (StatusCode, Json<serde_json::Value>)> {
+    authenticate(&headers, &state.token)?;
+    let mut components = std::path::Path::new(&name).components();
+    let single_name = matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none();
+    let content_type = single_name
+        .then(|| {
+            match std::path::Path::new(&name)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "png" => Some("image/png"),
+                "jpg" | "jpeg" => Some("image/jpeg"),
+                "gif" => Some("image/gif"),
+                "webp" => Some("image/webp"),
+                "svg" => Some("image/svg+xml"),
+                "avif" => Some("image/avif"),
+                "bmp" => Some("image/bmp"),
+                "heic" => Some("image/heic"),
+                "tif" | "tiff" => Some("image/tiff"),
+                "ico" => Some("image/x-icon"),
+                _ => None,
+            }
+        })
+        .flatten();
+    let Some(content_type) = content_type else {
+        return Err(bad_request(
+            "media needs a single image file name".to_owned(),
+        ));
+    };
+    let file = slate_app::ipc::user_data_dir().join("media").join(&name);
+    let bytes = std::fs::read(&file).map_err(|_| bad_request(format!("no such media: {name}")))?;
+    Ok(axum::response::Response::builder()
+        .header("content-type", content_type)
+        .body(axum::body::Body::from(bytes))
+        .unwrap())
 }
 
 /// The windowed portion of a screenshot request: find the Slate window, crop

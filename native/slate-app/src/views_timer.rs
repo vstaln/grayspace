@@ -244,7 +244,8 @@ pub fn timer_pane(
         .items_center()
         .justify_center()
         .gap_2()
-        .size_full()
+        .w_full()
+        .min_h_full()
         .p_2();
     col = col.child(
         div()
@@ -306,5 +307,12 @@ pub fn timer_pane(
                 }),
             )),
     );
-    col
+    // The wrapper owns the scroll; `min_h_full` on the column keeps the
+    // face centered when it fits and lets an overflowing pane reach the
+    // top instead of clipping it dead behind `justify_center`.
+    div()
+        .id(format!("slate-timer-body-{}", widget_id))
+        .size_full()
+        .overflow_y_scroll()
+        .child(col)
 }

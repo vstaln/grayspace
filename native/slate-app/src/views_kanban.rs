@@ -393,7 +393,16 @@ fn column_view<'a>(
     if collapsed {
         return col;
     }
-    let mut body = div().flex().flex_col().gap_1().px_1().pb_1().min_h_0();
+    let mut body = div()
+        .id(format!("slate-kanban-col-{}-{}", widget_id, key))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .px_1()
+        .pb_1()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll();
     for card in cards {
         body = body.child(card_view(card, widget_id, overrides, cx));
     }

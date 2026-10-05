@@ -245,6 +245,9 @@ pub struct CanvasView {
     settings: slate_app::settings::Settings,
     /// The TitleBar arrange dropdown's open state.
     arrange_menu: bool,
+    /// The settings modal (`orcspace:open-settings` → the gear in the
+    /// TitleBar/Toolbar) — `views_settings::settings_modal` renders over it.
+    settings_open: bool,
     counter: u64,
 }
 
@@ -326,6 +329,38 @@ const WIDGET_CATALOG: [(&str, &str, &str); 14] = [
 /// stay in the catalog (favorites may name them) but never spawn.
 fn renderable(kind: &str) -> bool {
     !matches!(kind, "music-player" | "chat")
+}
+
+/// The Toolbar's `W` — catalog rows filtered by the buffer's first token.
+/// Only a lone first token suggests (the original required
+/// `!N.trim().includes(" ")`); a `/ . @` sigil is stripped for the match,
+/// and a non-`any` `commandPrefix` gates to that sigil.
+fn toolbar_suggestions(buffer: &str, command_prefix: &str) -> Vec<(String, String, String)> {
+    let trimmed = buffer.trim();
+    if trimmed.contains(' ') {
+        return Vec::new();
+    }
+    let first = trimmed.split_whitespace().next().unwrap_or("");
+    if first.is_empty() {
+        return Vec::new();
+    }
+    let sigil = first.chars().next().filter(|c| "/.@".contains(*c));
+    if command_prefix != "any" && sigil.map(|c| c.to_string()).as_deref() != Some(command_prefix) {
+        return Vec::new();
+    }
+    let query = match sigil {
+        Some(_) => &first[1..],
+        None => first,
+    };
+    let squashed = query.replace('-', "");
+    WIDGET_CATALOG
+        .iter()
+        .filter(|(kind, _, _)| renderable(kind))
+        .filter(|(kind, _, _)| {
+            kind.starts_with(query) || kind.replace('-', "").starts_with(squashed.as_str())
+        })
+        .map(|&(kind, label, hint)| (kind.to_owned(), label.to_owned(), hint.to_owned()))
+        .collect()
 }
 
 /// WidgetFrame.tsx AGENTS: (label, command) — the launch picker types the
@@ -466,6 +501,7 @@ impl CanvasView {
             prefs: slate_app::ui_preferences::UiPreferences::load_or_default(),
             settings: slate_app::settings::Settings::load(),
             arrange_menu: false,
+            settings_open: false,
             counter: 0,
         };
         view.snapshots = view.manager.snapshots();
@@ -970,6 +1006,357 @@ impl CanvasView {
         self.commit("canvas.restore", "canvas", payload);
         self.suppress_history = false;
         self.canvas = restored;
+    }
+
+    /// Buttons in the TitleBar (`views_titlebar::titlebar_pane`) — window
+    /// controls ride gpui's Window; the rest flip view state.
+    pub(crate) fn titlebar_command(
+        &mut self,
+        action: &str,
+        _payload: Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            "settings" => self.settings_open = !self.settings_open,
+            "sidebar" => {
+                self.prefs.sidebar_open = !self.prefs.sidebar_open;
+                let _ = self
+                    .prefs
+                    .save(&slate_app::ui_preferences::UiPreferences::path());
+            }
+            "minimize" => window.minimize_window(),
+            "maximize" => window.zoom_window(),
+            "close" => cx.quit(),
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    /// Settings modal rows (`views_settings::settings_modal`) — writes
+    /// through to the persisted stores so a restart keeps the pick.
+    pub(crate) fn settings_command(
+        &mut self,
+        action: &str,
+        payload: Value,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            "close" => self.settings_open = false,
+            // The settings context's pickBackground/clearBackground — the
+            // pick stores a `data:image/…` URL under `extra["background"]`,
+            // exactly what the Electron settings.json carried.
+            "pick_background" | "background_pick" => {
+                let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+                    files: true,
+                    directories: false,
+                    multiple: false,
+                    prompt: Some("Wallpaper image".into()),
+                });
+                cx.spawn(async move |this, cx| {
+                    if let Ok(Ok(Some(paths))) = picked.await {
+                        if let Some(path) = paths.first() {
+                            let mime = match path
+                                .extension()
+                                .and_then(|ext| ext.to_str())
+                                .unwrap_or("")
+                                .to_ascii_lowercase()
+                                .as_str()
+                            {
+                                "jpg" | "jpeg" => "image/jpeg",
+                                "gif" => "image/gif",
+                                "webp" => "image/webp",
+                                "bmp" => "image/bmp",
+                                _ => "image/png",
+                            };
+                            if let Ok(bytes) = std::fs::read(path) {
+                                use base64::Engine as _;
+                                let url = format!(
+                                    "data:{mime};base64,{}",
+                                    base64::engine::general_purpose::STANDARD.encode(bytes)
+                                );
+                                let _ = this.update(cx, |this, cx| {
+                                    this.settings.set_extra("background", Value::from(url));
+                                    this.settings.save();
+                                    cx.notify();
+                                });
+                            }
+                        }
+                    }
+                })
+                .detach();
+            }
+            "background_clear" => {
+                self.settings.set_extra("background", Value::Null);
+                self.settings.save();
+            }
+            "toggle_fav" => {
+                if let Some(kind) = payload.get("kind").and_then(Value::as_str) {
+                    let favs = &mut self.settings.favorite_widgets;
+                    if let Some(at) = favs.iter().position(|k| k == kind) {
+                        favs.remove(at);
+                    } else {
+                        favs.push(kind.to_owned());
+                    }
+                    self.settings.save();
+                }
+            }
+            "toggle_pref" | "set_pref" => {
+                if let Some(key) = payload.get("key").and_then(Value::as_str) {
+                    let value = payload.get("value").cloned();
+                    let want = value.as_ref().and_then(Value::as_bool).unwrap_or(true);
+                    match key {
+                        "sidebar_open" => {
+                            self.prefs.sidebar_open = match &value {
+                                Some(_) => want,
+                                None => !self.prefs.sidebar_open,
+                            };
+                            let _ = self
+                                .prefs
+                                .save(&slate_app::ui_preferences::UiPreferences::path());
+                        }
+                        "auto_approve_permissions" => {
+                            self.settings.auto_approve_permissions = match &value {
+                                Some(_) => want,
+                                None => !self.settings.auto_approve_permissions,
+                            };
+                            self.settings.save();
+                        }
+                        "auto_names" => {
+                            self.prefs.auto_names = match &value {
+                                Some(_) => want,
+                                None => !self.prefs.auto_names,
+                            };
+                            let _ = self
+                                .prefs
+                                .save(&slate_app::ui_preferences::UiPreferences::path());
+                        }
+                        "arrange_mode" => {
+                            if let Some(label) = value.as_ref().and_then(Value::as_str) {
+                                if let Some(mode) = slate_app::arrange::ArrangeMode::ALL
+                                    .iter()
+                                    .find(|m| m.label().eq_ignore_ascii_case(label))
+                                {
+                                    let mode = *mode;
+                                    if mode != self.prefs.arrange_mode {
+                                        self.apply_arrange(mode, cx);
+                                    }
+                                }
+                            }
+                        }
+                        "image_insert_shortcut" => {
+                            if let Some(shortcut) = value.as_ref().and_then(Value::as_str) {
+                                if self.settings.set_image_insert_shortcut(shortcut) {
+                                    self.settings.save();
+                                }
+                            }
+                        }
+                        "background_dim" => {
+                            if let Some(v) = value.as_ref().and_then(Value::as_u64) {
+                                if self.settings.set_background_dim(v.min(100)) {
+                                    self.settings.save();
+                                }
+                            }
+                        }
+                        "background_blur" => {
+                            if let Some(v) = value.as_ref().and_then(Value::as_u64) {
+                                if self.settings.set_background_blur(v.min(200)) {
+                                    self.settings.save();
+                                }
+                            }
+                        }
+                        "background" => {
+                            // Set via pick_background; null here = Remove.
+                            if value == Some(Value::Null) {
+                                self.settings.set_extra("background", Value::Null);
+                                self.settings.save();
+                            }
+                        }
+                        _ => {
+                            // Unmanaged keys ride `extra` verbatim.
+                            if let Some(v) = value {
+                                if self.settings.set_extra(key, v) {
+                                    self.settings.save();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    /// Bottom-toolbar buttons (`views_toolbar::toolbar_pane`) — every control
+    /// the Electron Toolbar exposed, dispatching to the same code its keys do.
+    pub(crate) fn toolbar_command(
+        &mut self,
+        action: &str,
+        _payload: Value,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(tool) = action.strip_prefix("tool:") {
+            // One tool at a time, the shell's single `tool` state; picking
+            // the active tool again turns it off.
+            let toggling = match tool {
+                "draw" => self.draw_mode,
+                "erase" => self.erase_mode,
+                _ => self.select_mode,
+            };
+            self.draw_mode = tool == "draw" && !toggling;
+            self.erase_mode = tool == "erase" && !toggling;
+            self.select_mode = tool == "select" && !toggling;
+            cx.notify();
+            return;
+        }
+        if let Some(n) = action
+            .strip_prefix("stroke:")
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            self.stroke_color = n.min(STROKE_COLORS.len() - 1);
+            cx.notify();
+            return;
+        }
+        if let Some(id) = action.strip_prefix("target:") {
+            self.command_target = Some(id.to_owned());
+            cx.notify();
+            return;
+        }
+        if let Some(kind) = action.strip_prefix("suggest:") {
+            // The suggestions popover's click = "adopt this kind into the
+            // input" — the original filled `/<kind> ` and kept focus.
+            self.command_bar = Some(format!("/{kind} "));
+            cx.notify();
+            return;
+        }
+        if let Some(mode) = action.strip_prefix("mode:") {
+            self.command_message = mode == "message";
+            if self.command_bar.is_none() {
+                self.command_bar = Some(String::new());
+            }
+            cx.notify();
+            return;
+        }
+        let center = Pos2::new(self.viewport.x / 2.0, self.viewport.y / 2.0);
+        match action {
+            "clear_strokes" => {
+                self.canvas.strokes.clear();
+                self.commit_strokes();
+            }
+            "zoom_in" => zoom_at(&mut self.canvas.camera, Pos2::ZERO, center, 1.2),
+            "zoom_out" => zoom_at(&mut self.canvas.camera, Pos2::ZERO, center, 1.0 / 1.2),
+            "zoom_reset" => self.canvas.camera.zoom = 1.0,
+            "fit" => self.fit(self.viewport, cx),
+            "undo" => self.undo(false),
+            "redo" => self.undo(true),
+            "settings" => self.settings_open = !self.settings_open,
+            "focus_input" => {
+                if self.command_bar.is_none() {
+                    self.command_bar = Some(String::new());
+                }
+            }
+            "workspace:pick" => {
+                // Async folder pick; the workspace adopts the choice.
+                let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+                    files: false,
+                    directories: true,
+                    multiple: false,
+                    prompt: Some("Workspace folder".into()),
+                });
+                cx.spawn(async move |this, cx| {
+                    if let Ok(Ok(Some(paths))) = picked.await {
+                        if let Some(dir) = paths.first() {
+                            let _ = this.update(cx, |this, cx| {
+                                let dir = dir.to_string_lossy().into_owned();
+                                let mut state = slate_app::workspace::WorkspaceState::load();
+                                state.set_workspace_dir(Some(dir));
+                                state.save();
+                                // The workspace swap reloads the canvas —
+                                // its snapshot + journal tail are per-dir.
+                                let journal_path =
+                                    slate_app::ipc::user_data_dir().join("command-journal.ndjson");
+                                if let Ok(log) =
+                                    slate_app::journal_log::JournalLog::open(&journal_path)
+                                {
+                                    this.canvas = slate_app::canvas_store::load_with_tail(
+                                        slate_app::workspace::current().as_deref(),
+                                        &log,
+                                    )
+                                    .0;
+                                }
+                                cx.notify();
+                            });
+                        }
+                    }
+                })
+                .detach();
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    /// Sidebar rows (`views_sidebar::sidebar_pane`) — focus raises a widget
+    /// and centers the camera on it; the rest reuse the existing paths.
+    pub(crate) fn sidebar_command(&mut self, action: &str, payload: Value, cx: &mut Context<Self>) {
+        match action {
+            "toggle" => {
+                self.prefs.sidebar_open = !self.prefs.sidebar_open;
+                let _ = self
+                    .prefs
+                    .save(&slate_app::ui_preferences::UiPreferences::path());
+            }
+            "focus" => {
+                if let Some(id) = payload.get("id").and_then(Value::as_str) {
+                    self.raise(id);
+                    self.active = Some(id.to_owned());
+                    if let Some(widget) = self.canvas.widgets.get(id).cloned() {
+                        // Camera centers the widget at 1× like a shell click.
+                        let zoom = self.canvas.camera.zoom.max(0.2);
+                        self.canvas.camera.x =
+                            widget.x + widget.w / 2.0 - self.viewport.x as f64 / (2.0 * zoom);
+                        self.canvas.camera.y =
+                            widget.y + widget.h / 2.0 - self.viewport.y as f64 / (2.0 * zoom);
+                    }
+                }
+            }
+            "close" => {
+                if let Some(id) = payload.get("id").and_then(Value::as_str) {
+                    // Terminals confirm like the header ×; other kinds close.
+                    if is_terminal_kind(self.widget_kind(id).as_deref()) {
+                        self.pending_close = Some(id.to_owned());
+                    } else {
+                        self.close_widget(id, cx);
+                    }
+                }
+            }
+            "spawn" => {
+                if let Some(kind) = payload.get("kind").and_then(Value::as_str) {
+                    let center = Pos2::new(self.viewport.x / 2.0, self.viewport.y / 2.0);
+                    self.spawn_menu_widget(kind, center, cx);
+                }
+            }
+            "plan_toggle" => {
+                // Forward to the planner pane's op — the widget id is just a
+                // dispatch handle; the item id + `done` do the work.
+                let planner = self
+                    .canvas
+                    .widgets
+                    .values()
+                    .find(|w| w.kind.as_deref() == Some("planner"))
+                    .map(|w| w.id.clone());
+                if let Some(widget_id) = planner {
+                    self.widget_command(
+                        &widget_id,
+                        json!({ "op": "plan_toggle", "id": payload.get("id"), "done": payload.get("done") }),
+                        cx,
+                    );
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
     }
 
     fn commit_widget(&mut self, widget: &Widget) {
@@ -2121,6 +2508,28 @@ fn terminal_cell(rect: canvas::Rect, zoom: f32, pointer: Pos2) -> (u16, u16) {
     (col.min(999.0) as u16, row.min(999.0) as u16)
 }
 
+/// `settings.background` — the shell stored the wallpaper as a
+/// `data:image/<fmt>;base64,…` string (`Ga` gated it to a small whitelist
+/// of raster formats). Decode it into a gpui Image so `img()` can render
+/// it without a file on disk.
+fn decode_data_image(url: &str) -> Option<gpui::ImageSource> {
+    let rest = url.strip_prefix("data:image/")?;
+    let (format, payload) = rest.split_once(";base64,")?;
+    let format = match format {
+        "png" => gpui::ImageFormat::Png,
+        "jpg" | "jpeg" => gpui::ImageFormat::Jpeg,
+        "gif" => gpui::ImageFormat::Gif,
+        "webp" => gpui::ImageFormat::Webp,
+        "bmp" => gpui::ImageFormat::Bmp,
+        _ => return None,
+    };
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .ok()?;
+    Some(std::sync::Arc::new(gpui::Image::from_bytes(format, bytes)).into())
+}
+
 /// A stroke's "#rrggbb" journal color as the 0xRRGGBBAA `rgba()` wants —
 /// opaque. Anything unreadable falls back to the default white.
 fn stroke_color_u32(color: &str) -> u32 {
@@ -2880,6 +3289,28 @@ impl Render for CanvasView {
                 }
                 cx.notify();
             }));
+
+        // The wallpaper — the shell's `.wallpaper-container`: a full-bleed
+        // image under everything (settings `background` holds a data:image
+        // URL), dimmed by `backgroundDim`'s rgba(8,8,8,d) overlay.
+        if let Some(image) = self
+            .settings
+            .extra("background")
+            .and_then(Value::as_str)
+            .and_then(decode_data_image)
+        {
+            root = root.child(
+                div().absolute().inset_0().child(
+                    gpui::img(image)
+                        .size_full()
+                        .object_fit(gpui::ObjectFit::Cover),
+                ),
+            );
+            let dim = (self.settings.background_dim.min(100) as f32 / 100.0 * 255.0) as u32;
+            if dim > 0 {
+                root = root.child(div().absolute().inset_0().bg(rgba(0x08080800 | dim)));
+            }
+        }
 
         // ConnectionsLayer: arcs between widget top-centers, painted under
         // the widgets like the SVG inside the world transform. A maximized
@@ -3715,132 +4146,93 @@ impl Render for CanvasView {
             );
         }
 
-        // The command bar — the Electron Toolbar's command input — is a
-        // permanent bottom-center strip, not a popup: always rendered,
-        // focused by `/ . @` or by clicking it. `command_bar` = Some(buffer)
-        // only while it owns the keyboard.
+        // The bottom toolbar — the Electron `Fu` strip: tool buttons, the
+        // command input with suggestions, the overflow cluster (workspace
+        // chip, mode/target, zoom, clear-strokes, settings). `command_bar`
+        // = Some(buffer) only while it owns the keyboard.
         {
-            let open = self.command_bar.is_some();
             let buffer = self.command_bar.clone().unwrap_or_default();
+            let open = self.command_bar.is_some();
             let message = self.command_message;
-            let target_name = self.command_target.as_deref().map(|id| {
-                self.snapshots
-                    .iter()
-                    .find(|s| s.id == id)
-                    .map(|s| {
-                        self.manager
-                            .names()
-                            .get(id)
+            let names = self.manager.names();
+            let target_name = self
+                .command_target
+                .as_deref()
+                .map(|id| names.get(id).cloned().unwrap_or_else(|| id.to_owned()));
+            let terminals: Vec<(String, String)> = self
+                .snapshots
+                .iter()
+                .map(|snap| {
+                    (
+                        snap.id.clone(),
+                        names
+                            .get(&snap.id)
                             .cloned()
-                            .unwrap_or_else(|| s.id.clone())
-                    })
-                    .unwrap_or_else(|| id.to_owned())
-            });
-            let resolved = parse_widget_invocation(&buffer);
-            let hint = if message {
-                match &target_name {
-                    Some(name) => {
-                        format!("→ message {name} · tab: mode · ↑/↓: terminal · enter: send")
-                    }
-                    None => "→ message (no terminal)".to_owned(),
-                }
+                            .unwrap_or_else(|| snap.id.clone()),
+                    )
+                })
+                .collect();
+            let tool = if self.draw_mode {
+                "draw"
+            } else if self.erase_mode {
+                "erase"
+            } else if self.select_mode {
+                "select"
             } else {
-                match resolved {
-                    Some((kind, _)) => format!("→ {kind} · tab: message mode"),
-                    None if buffer.trim().is_empty() => {
-                        "/term · .files · @plan · web · tab: message".to_owned()
-                    }
-                    None => "→ no widget".to_owned(),
-                }
+                // No tool picked = the original's Pan state.
+                "pan"
             };
-            let bar_w = 520.0_f32.min((viewport_size.x - 24.0).max(120.0));
+            let workspace_name = slate_app::workspace::current()
+                .and_then(|dir| {
+                    std::path::Path::new(&dir)
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                })
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "No folder".to_owned());
+            let state = crate::views_toolbar::ToolbarState {
+                buffer: buffer.clone(),
+                open,
+                message_mode: message,
+                target_name,
+                terminals,
+                tool: tool.to_owned(),
+                stroke_color: self.stroke_color,
+                can_undo: !self.undo_stack.is_empty(),
+                can_redo: !self.redo_stack.is_empty(),
+                zoom_percent: (self.canvas.camera.zoom * 100.0).round().max(0.0) as u32,
+                workspace_name,
+                suggestions: if message {
+                    Vec::new()
+                } else {
+                    toolbar_suggestions(&buffer, self.settings.command_prefix())
+                },
+                suggestion_sel: 0,
+                enabled: true,
+            };
             root = root.child(
                 div()
-                    .id("slate-command-bar")
+                    .id("slate-toolbar-row")
                     .absolute()
-                    .left(px(((viewport_size.x - bar_w) / 2.0).max(0.0)))
                     .bottom(px(34.0))
-                    .w(px(bar_w))
+                    .left_0()
+                    .right_0()
                     .flex()
-                    .flex_col()
-                    .gap_1()
-                    .bg(rgb(theme::hex(theme::monochrome::SURFACE)))
-                    .border_1()
-                    .border_color(rgb(theme::hex(if open {
-                        theme::text::FAINT
-                    } else {
-                        theme::hairline::FAINT
-                    })))
-                    .px_3()
-                    .py_2()
+                    .justify_center()
+                    // A click on the row focuses the canvas input like the
+                    // old bar's body did — the strip's own buttons stop
+                    // propagation before this sees them.
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _event, window, cx| {
-                            // Clicking the bar focuses it; the canvas pan
-                            // below never sees the press.
                             cx.stop_propagation();
                             window.focus(&this.focus, cx);
                             this.active = None;
                             this.frame_focus = None;
-                            if this.command_bar.is_none() {
-                                this.command_bar = Some(String::new());
-                            }
                             cx.notify();
                         }),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_2()
-                            .font_family("monospace")
-                            .text_sm()
-                            .child(
-                                div()
-                                    .text_color(rgb(theme::hex(if message {
-                                        theme::status::INFO
-                                    } else {
-                                        theme::text::FAINT
-                                    })))
-                                    .child(if message {
-                                        format!(
-                                            "msg {}",
-                                            target_name.clone().unwrap_or_else(|| "·".to_owned())
-                                        )
-                                    } else {
-                                        "›".to_owned()
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_color(rgb(theme::hex(if open {
-                                        theme::text::NORMAL
-                                    } else {
-                                        theme::hairline::FAINT
-                                    })))
-                                    .child(if buffer.is_empty() && !open {
-                                        hint.clone()
-                                    } else {
-                                        buffer.clone()
-                                    }),
-                            )
-                            .when(open, |el| {
-                                el.child(
-                                    div()
-                                        .text_color(rgb(theme::hex(theme::text::DIM)))
-                                        .child("▌".to_owned()),
-                                )
-                            }),
-                    )
-                    .when(open, |el| {
-                        el.child(
-                            div()
-                                .text_xs()
-                                .text_color(rgb(theme::hex(theme::text::FAINT)))
-                                .child(hint),
-                        )
-                    }),
+                    .child(crate::views_toolbar::toolbar_pane(&state, cx)),
             );
         }
 
@@ -4206,6 +4598,63 @@ impl Render for CanvasView {
             }
             root = root.child(popup);
         }
+
+        // The left rail — the shell's `rail-shell` adapted to canvas mode:
+        // collapsed it is a 56px icon strip, expanded a 200px panel with
+        // the workspace, open widgets and the planner preview. It floats
+        // over the canvas between the title bar and the status bar.
+        {
+            let (rows, _) = crate::views_planner::planner_items();
+            let planner_items = json!({
+                "items": rows
+                    .iter()
+                    .map(|row| json!({
+                        "id": row.id,
+                        "title": row.title,
+                        "done": row.done,
+                        "day": row.day,
+                        "order": row.order,
+                    }))
+                    .collect::<Vec<_>>()
+            });
+            root = root.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(px(canvas::TITLE_BAR_HEIGHT))
+                    .bottom(px(24.0))
+                    .child(crate::views_sidebar::sidebar_pane(
+                        &self.canvas,
+                        &planner_items,
+                        self.prefs.sidebar_open,
+                        cx,
+                    )),
+            );
+        }
+
+        // The TitleBar — the shell's fixed 40px top strip (workspace name,
+        // arrange pick, window controls), floating over the canvas exactly
+        // like the Electron layer order: canvas → chrome.
+        if let Some(dir) = slate_app::workspace::current() {
+            root = root.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(canvas::TITLE_BAR_HEIGHT))
+                    .child(crate::views_titlebar::titlebar_pane(
+                        std::path::Path::new(&dir),
+                        self.snapshots.len(),
+                        cx,
+                    )),
+            );
+        }
+
+        // The settings modal — `orcspace:open-settings` from the gear.
+        if self.settings_open {
+            root = root.child(crate::views_settings::settings_modal(&self.settings, cx));
+        }
         root
     }
 }
@@ -4277,6 +4726,17 @@ impl CanvasView {
         if (self.agent_menu.is_some() || self.arrange_menu) && keystroke.key.as_str() == "escape" {
             self.agent_menu = None;
             self.arrange_menu = false;
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
+
+        // The settings modal is modal too — Escape closes it, everything
+        // else is swallowed while it is up.
+        if self.settings_open {
+            if keystroke.key.as_str() == "escape" {
+                self.settings_open = false;
+            }
             cx.notify();
             cx.stop_propagation();
             return;

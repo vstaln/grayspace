@@ -360,7 +360,13 @@ pub fn links_pane(
     cx: &mut Context<crate::canvas_view::CanvasView>,
 ) -> impl IntoElement {
     let rows = link_rows(widget_id);
-    let mut col = div().flex().flex_col().gap_1().p_1();
+    let mut col = div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .p_1()
+        .size_full()
+        .overflow_hidden();
     {
         let wid = widget_id.to_owned();
         col = col.child(
@@ -394,8 +400,17 @@ pub fn links_pane(
                 ),
         );
     }
+    // Rows scroll under the pinned count/+ header.
+    let mut list = div()
+        .id(format!("slate-links-list-{}", widget_id))
+        .flex()
+        .flex_col()
+        .gap_1()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll();
     if rows.is_empty() {
-        col = col.child(
+        list = list.child(
             div()
                 .text_sm()
                 .text_color(rgb(theme::hex(theme::text::FAINT)))
@@ -403,12 +418,7 @@ pub fn links_pane(
         );
     }
     for row in &rows {
-        col = col.child(link_row(row, widget_id, cx));
+        list = list.child(link_row(row, widget_id, cx));
     }
-    div()
-        .flex_1()
-        .flex()
-        .flex_col()
-        .overflow_hidden()
-        .child(col)
+    col.child(list)
 }

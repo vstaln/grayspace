@@ -382,7 +382,13 @@ pub fn calendar_pane(
     // the 1st — `(z + 3) % 7` because day 0 (1970-01-01) was a Thursday.
     let first_z = days_from_civil(y, m, 1);
     let start_z = first_z - (first_z + 3).rem_euclid(7);
-    let mut grid = div().flex().flex_col().flex_1().min_h_0();
+    let mut grid = div()
+        .id(format!("slate-calendar-grid-{}", wid))
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll();
     for week in 0..6i64 {
         let mut row = div().flex().flex_row().flex_1().min_h_0();
         for weekday in 0..7i64 {

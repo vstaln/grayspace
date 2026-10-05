@@ -13,9 +13,13 @@ pub mod views_links;
 pub mod views_notes;
 pub mod views_orchestration;
 pub mod views_planner;
+pub mod views_settings;
+pub mod views_sidebar;
 pub mod views_sysmon;
 pub mod views_terminal;
 pub mod views_timer;
+pub mod views_titlebar;
+pub mod views_toolbar;
 
 use crate::engine::{ControlServer, TerminalEvent, TerminalManager};
 use anyhow::Result;
@@ -73,6 +77,14 @@ fn main() -> Result<()> {
         }
 
         // Run CLI command (whoami, workers, tell, plan, browser, status, help, etc.)
+        // Rust ignores SIGPIPE by default, which turns `slate read | head`
+        // into a broken-pipe panic — restore the default disposition so the
+        // CLI dies quietly like every other Unix tool. The app path keeps
+        // the ignore: a closed control socket must not kill the GUI.
+        #[cfg(unix)]
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        }
         if let Err(error) = cli_run::run() {
             let prog = std::env::args()
                 .next()
