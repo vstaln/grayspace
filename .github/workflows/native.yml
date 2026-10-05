@@ -2,9 +2,9 @@ name: Native Rust
 
 on:
   push:
-    paths: ['native/**', '.github/workflows/native.yml']
+    paths: ['native/**', '.github/workflows/native.yml', 'package.json', 'package-lock.json']
   pull_request:
-    paths: ['native/**', '.github/workflows/native.yml']
+    paths: ['native/**', '.github/workflows/native.yml', 'package.json', 'package-lock.json']
   workflow_dispatch:
 
 jobs:
