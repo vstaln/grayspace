@@ -392,7 +392,10 @@ fn settling_reports_the_task_status_and_what_it_promoted() {
         Request::get("POST", "/orchestration/dispatches")
             .with_body(json!({ "taskId": first, "terminalId": "term-1", "agent": "claude" })),
     );
-    let dispatch_id = dispatch.body["data"]["id"].as_str().unwrap().to_owned();
+    let dispatch_id = dispatch.body["data"]["dispatchId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     let settled = server.call(
         Request::get(
@@ -415,7 +418,10 @@ fn an_unknown_outcome_is_refused_before_the_store_is_touched() {
         Request::get("POST", "/orchestration/dispatches")
             .with_body(json!({ "taskId": task, "terminalId": "term-1", "agent": "claude" })),
     );
-    let id = dispatch.body["data"]["id"].as_str().unwrap().to_owned();
+    let id = dispatch.body["data"]["dispatchId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     let response = server.call(
         Request::get("POST", &format!("/orchestration/dispatches/{id}/settle"))
@@ -441,7 +447,10 @@ fn the_dispatch_listing_names_what_is_unaccounted() {
         Request::get("POST", "/orchestration/dispatches")
             .with_body(json!({ "taskId": task, "terminalId": "term-1", "agent": "claude" })),
     );
-    let id = dispatch.body["data"]["id"].as_str().unwrap().to_owned();
+    let id = dispatch.body["data"]["dispatchId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     server.call(
         Request::get("POST", &format!("/orchestration/dispatches/{id}/settle"))
             .with_body(json!({ "outcome": "succeeded" })),
@@ -647,7 +656,10 @@ mod cli_to_router {
             "alice",
         );
         assert_eq!(dispatched.status, 201, "{:?}", dispatched.body);
-        let dispatch_id = dispatched.body["data"]["id"].as_str().unwrap().to_owned();
+        let dispatch_id = dispatched.body["data"]["dispatchId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
 
         // A second worker on the same task is refused with the code slate reports.
         let clash = run_cli(
