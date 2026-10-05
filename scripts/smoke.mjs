@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// GraySpace 0.0.1 smoke: spawns the native release binary, waits for its
+// Slate 0.0.1 smoke: spawns the native release binary, waits for its
 // control server, and GETs /health over the IPC socket.
 //
 // Needs a display (xvfb-run on headless Linux): the binary opens its window
@@ -13,8 +13,8 @@ import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const binary = path.join(root, 'native', 'target', 'release', process.platform === 'win32' ? 'grayspace.exe' : 'grayspace')
-const timeoutMs = Number(process.env.GRAYSPACE_SMOKE_TIMEOUT_MS || 60_000)
+const binary = path.join(root, 'native', 'target', 'release', process.platform === 'win32' ? 'slate.exe' : 'slate')
+const timeoutMs = Number(process.env.SLATE_SMOKE_TIMEOUT_MS || 60_000)
 
 if (!fs.existsSync(binary)) {
   console.error(`[smoke] binary not found: ${binary}`)
@@ -22,12 +22,12 @@ if (!fs.existsSync(binary)) {
   process.exit(1)
 }
 
-const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'grayspace-smoke-'))
+const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'slate-smoke-'))
 const socketPath = process.platform === 'win32'
-  ? `\\\\.\\pipe\\grayspace-smoke-${process.pid}`
-  : path.join(profileDir, 'grayspace.sock')
+  ? `\\\\.\\pipe\\slate-smoke-${process.pid}`
+  : path.join(profileDir, 'slate.sock')
 // Fixed token so the check knows what to present. The binary persists the
-// same value to control-token, which is what `grayspace` reads in real use.
+// same value to control-token, which is what `slate` reads in real use.
 const token = 'smoke-test-token-0123456789abcdef0123456789abcdef'
 
 let child
@@ -40,9 +40,9 @@ child = spawn(binary, [], {
   windowsHide: true,
   env: {
     ...process.env,
-    GRAYSPACE_TEST_USER_DATA: profileDir,
-    GRAYSPACE_SOCKET_PATH: socketPath,
-    GRAYSPACE_TOKEN: token
+    SLATE_TEST_USER_DATA: profileDir,
+    SLATE_SOCKET_PATH: socketPath,
+    SLATE_TOKEN: token
   }
 })
 
@@ -53,8 +53,8 @@ child.once('error', (error) => {
 })
 
 function childExitMessage(phase) {
-  if (childError) return `GraySpace failed during ${phase}: ${childError.message}`
-  return `GraySpace exited before ${phase} (needs a display — use xvfb-run on headless Linux)`
+  if (childError) return `Slate failed during ${phase}: ${childError.message}`
+  return `Slate exited before ${phase} (needs a display — use xvfb-run on headless Linux)`
 }
 
 async function waitForToken(deadline) {
@@ -63,7 +63,7 @@ async function waitForToken(deadline) {
     try {
       const stored = fs.readFileSync(path.join(profileDir, 'control-token'), 'utf8').trim()
       if (stored === token) return stored
-      if (stored.length >= 32) throw new Error('control token mismatch: binary did not use GRAYSPACE_TOKEN')
+      if (stored.length >= 32) throw new Error('control token mismatch: binary did not use SLATE_TOKEN')
     } catch (error) {
       if (error.message.startsWith('control token mismatch')) throw error
     }
@@ -76,7 +76,7 @@ async function waitForHealth(deadline) {
   while (Date.now() < deadline) {
     if (exited) throw new Error(childExitMessage('control server health'))
     try {
-      const response = await requestIpc(socketPath, '/health', { headers: { 'x-grayspace-token': token } })
+      const response = await requestIpc(socketPath, '/health', { headers: { 'x-slate-token': token } })
       if (response.status === 200 && response.json && response.json.ok === true) return
     } catch {
     }
@@ -101,7 +101,7 @@ function stop() {
 }
 
 function emergencyStop() {
-  console.error(`[smoke] hard timeout after ${timeoutMs + 5_000}ms; force-killing GraySpace process tree`)
+  console.error(`[smoke] hard timeout after ${timeoutMs + 5_000}ms; force-killing Slate process tree`)
   stop()
   process.exit(124)
 }

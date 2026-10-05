@@ -6,7 +6,7 @@ dist/
 
 # Source bundles produced for handing the project to another machine — a build
 # output, not an input, and re-creatable at any time.
-GraySpace-mac-source.zip
+Slate-mac-source.zip
 
 # Rust / napi-rs build caches (native/*/target)
 native/*/target/

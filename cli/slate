@@ -1,0 +1,22 @@
+#!/bin/sh
+# macOS / Linux / Windows (Git Bash/MSYS2) shim for the Slate agent CLI.
+#
+# SLATE_NODE points at the app node runtime if set.
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+native_bin="$dir/../native/target/release/slate"
+if [ -x "$native_bin" ]; then
+  exec "$native_bin" "$@"
+fi
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*)
+    if command -v cygpath >/dev/null 2>&1; then
+      script_path=$(cygpath -w "$dir/slate.mjs")
+    else
+      script_path="$dir/slate.mjs"
+    fi
+    ;;
+  *)
+    script_path="$dir/slate.mjs"
+    ;;
+esac
+exec "${SLATE_NODE:-node}" "$script_path" "$@"

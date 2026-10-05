@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="970" height="970" viewBox="0 0 970 970">
+  <title>slate mark lines, growing out from the centre</title>
+  <defs>
+    <mask id="lines" maskUnits="userSpaceOnUse" x="0" y="0" width="970" height="970">
+      <rect width="970" height="970" fill="#ffffff" />
+      <g>
+        <g transform="translate(538.60 451.88)"><path class="line" fill="#000000" style="animation-delay:0.100s" d="M -126.78 -102.57 L 0.00 0.00 L 346.88 -214.38 Z" /></g>
+        <g transform="translate(538.60 451.88)"><path class="line" fill="#000000" style="animation-delay:0.135s" d="M 0.00 0.00 L -126.78 -102.57 L -325.63 -55.62 L -352.09 13.65 L -148.14 91.55 Z" /></g>
+        <g transform="translate(538.60 451.88)"><path class="line" fill="#000000" style="animation-delay:0.171s" d="M 0.00 0.00 L 346.88 280.63 L 346.88 -214.38 Z" /></g>
+        <g transform="translate(538.60 451.88)"><path class="line" fill="#000000" style="animation-delay:0.206s" d="M 346.88 280.63 L 0.00 0.00 L -148.14 91.55 Z" /></g>
+        <g transform="translate(390.46 543.43)"><path class="line" fill="#000000" style="animation-delay:0.242s" d="M -203.96 -77.90 L -305.94 189.08 L 0.00 0.00 Z" /></g>
+        <g transform="translate(390.46 543.43)"><path class="line" fill="#000000" style="animation-delay:0.277s" d="M 0.00 0.00 L -305.94 189.08 L 495.02 189.08 Z" /></g>
+        <g transform="translate(411.82 349.31)"><path class="line" fill="#000000" style="animation-delay:0.312s" d="M 0.00 0.00 L -138.21 -111.82 L -198.85 46.94 Z" /></g>
+        <g transform="translate(411.82 349.31)"><path class="line" fill="#000000" style="animation-delay:0.348s" d="M 473.66 -111.82 L -138.21 -111.82 L 0.00 0.00 Z" /></g>
+        <g transform="translate(212.96 396.25)"><path class="line" fill="#000000" style="animation-delay:0.383s" d="M -26.46 69.27 L 0.00 0.00 L -128.44 30.32 Z" /></g>
+        <g transform="translate(212.96 396.25)"><path class="line" fill="#000000" style="animation-delay:0.419s" d="M 0.00 0.00 L 60.64 -158.76 L -128.44 30.32 Z" /></g>
+        <g transform="translate(186.50 465.52)"><path class="line" fill="#000000" style="animation-delay:0.454s" d="M -101.98 266.98 L 0.00 0.00 L -101.98 -38.95 Z" /></g>
+      </g>
+      <path fill="#ffffff" fill-rule="evenodd" transform="translate(84.52 237.49) scale(5.46)" d="M 0.000,34.630 0.000,90.662 146.695,90.662 146.695,0.000 34.630,0.000 Z M 16.976,37.960 10.002,35.296 18.786,33.223 Z M 5.893,40.035 14.874,43.465 5.893,66.977 Z M 123.009,84.769 15.140,84.769 56.342,59.305 Z M 130.434,81.297 62.650,55.406 82.935,42.870 Z M 140.802,82.105 88.246,39.587 140.802,7.106 Z M 14.872,28.092 24.376,18.588 21.328,26.568 Z M 53.420,18.992 28.261,24.931 34.583,8.381 37.071,5.893 37.229,5.893 Z M 60.673,17.279 46.599,5.893 108.907,5.893 Z M 49.414,56.659 5.893,83.556 5.893,83.492 20.379,45.568 Z M 59.214,23.679 78.080,38.942 55.723,52.760 22.481,40.063 25.719,31.586 Z M 83.392,35.659 66.467,21.967 129.700,7.039 Z" />
+    </mask>
+  </defs>
+  <path fill="#ffffff" mask="url(#lines)" d="M 273.60 237.49 L 885.48 237.49 L 885.48 732.51 L 84.52 732.51 L 84.52 426.57 Z" />
+  <style>
+    .line { transform-origin: 0 0; animation: line-grow 0.42s cubic-bezier(0.34, 1.25, 0.5, 1.0) both; }
+    @keyframes line-grow { from { transform: scale(0); } }
+    @media (prefers-reduced-motion: reduce) {
+      .line { animation: none; }
+    }
+  </style>
+</svg>

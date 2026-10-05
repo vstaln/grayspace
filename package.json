@@ -1,11 +1,11 @@
 {
-  "name": "grayspace",
+  "name": "slate",
   "version": "0.0.1",
-  "description": "GraySpace \u2014 an infinite canvas for terminals and agent coordination",
+  "description": "Slate \u2014 an infinite canvas for terminals and agent coordination",
   "type": "module",
   "license": "MIT",
-  "author": "GraySpace",
-  "homepage": "https://github.com/vstaln/GraySpace",
+  "author": "Slate",
+  "homepage": "https://github.com/vstaln/Slate",
   "engines": {
     "node": ">=22.18.0 <23 || >=24.0.0 <25"
   },
@@ -14,11 +14,11 @@
   },
   "scripts": {
     "native:check": "node scripts/native-cargo.mjs check --manifest-path native/Cargo.toml",
-    "native:run": "node scripts/native-cargo.mjs run --bin grayspace --manifest-path native/grayspace-app/Cargo.toml",
-    "native:build": "node scripts/native-cargo.mjs build --release --bin grayspace --manifest-path native/grayspace-app/Cargo.toml",
-    "native:start": "node scripts/native-cargo.mjs run --release --bin grayspace --manifest-path native/grayspace-app/Cargo.toml",
+    "native:run": "node scripts/native-cargo.mjs run --bin slate --manifest-path native/slate-app/Cargo.toml",
+    "native:build": "node scripts/native-cargo.mjs build --release --bin slate --manifest-path native/slate-app/Cargo.toml",
+    "native:start": "node scripts/native-cargo.mjs run --release --bin slate --manifest-path native/slate-app/Cargo.toml",
     "smoke": "node scripts/smoke.mjs",
     "check:version": "node scripts/check-version.mjs",
-    "test": "node scripts/check-version.mjs && node scripts/native-cargo.mjs test --manifest-path native/Cargo.toml -p grayspace-app --lib --locked"
+    "test": "node scripts/check-version.mjs && node scripts/native-cargo.mjs test --manifest-path native/Cargo.toml -p slate-app --lib --locked"
   }
 }
