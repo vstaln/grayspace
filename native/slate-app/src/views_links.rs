@@ -201,14 +201,9 @@ fn display_url(url: &str) -> String {
         .map(|(_, rest)| rest)
         .unwrap_or_else(|| url.trim());
     // host up to the first `/`, `?` or `#`; path stops at query/fragment.
-    let host_end = rest
-        .find(|c| matches!(c, '/' | '?' | '#'))
-        .unwrap_or(rest.len());
+    let host_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let (host, tail) = rest.split_at(host_end);
-    let path = tail
-        .split(|c| matches!(c, '?' | '#'))
-        .next()
-        .unwrap_or_default();
+    let path = tail.split(['?', '#']).next().unwrap_or_default();
     if path.is_empty() || path == "/" {
         host.to_owned()
     } else {

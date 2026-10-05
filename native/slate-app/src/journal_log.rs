@@ -36,6 +36,7 @@ impl JournalLock {
             }
             let file = std::fs::OpenOptions::new()
                 .create(true)
+                .truncate(false)
                 .write(true)
                 .open(&lock_path)
                 .map_err(|error| error.to_string())?;
@@ -44,7 +45,7 @@ impl JournalLock {
             if result != 0 {
                 return Err(std::io::Error::last_os_error().to_string());
             }
-            return Ok(Self(Some(file)));
+            Ok(Self(Some(file)))
         }
         #[cfg(not(unix))]
         {

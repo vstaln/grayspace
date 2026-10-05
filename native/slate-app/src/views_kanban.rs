@@ -331,8 +331,10 @@ fn column_view<'a>(
     key: &'a str,
     cards: &'a [Card],
     collapsed: bool,
-    collapsed_map: &'a serde_json::Map<String, Value>,
-    overrides: &'a serde_json::Map<String, Value>,
+    (collapsed_map, overrides): (
+        &'a serde_json::Map<String, Value>,
+        &'a serde_json::Map<String, Value>,
+    ),
     widget_id: &'a str,
     cx: &mut Context<crate::canvas_view::CanvasView>,
 ) -> impl IntoElement + 'a {
@@ -473,8 +475,7 @@ pub fn kanban_pane(
                 "todo",
                 &grouped[0],
                 is_collapsed("todo"),
-                &collapsed_map,
-                &overrides,
+                (&collapsed_map, &overrides),
                 &widget.id,
                 cx,
             ))
@@ -483,8 +484,7 @@ pub fn kanban_pane(
                 "doing",
                 &grouped[1],
                 is_collapsed("doing"),
-                &collapsed_map,
-                &overrides,
+                (&collapsed_map, &overrides),
                 &widget.id,
                 cx,
             ))
@@ -493,8 +493,7 @@ pub fn kanban_pane(
                 "done",
                 &grouped[2],
                 is_collapsed("done"),
-                &collapsed_map,
-                &overrides,
+                (&collapsed_map, &overrides),
                 &widget.id,
                 cx,
             )),

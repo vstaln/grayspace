@@ -121,7 +121,7 @@ impl vte::Perform for Commands {
             // An empty payload or `?` queries the clipboard rather than
             // writing it; only real writes are reported.
             Some(b"52") => {
-                let Some(Ok(payload)) = params.get(2).map(|p| std::str::from_utf8(*p)) else {
+                let Some(Ok(payload)) = params.get(2).map(|p| std::str::from_utf8(p)) else {
                     return;
                 };
                 if !payload.is_empty() && payload != "?" {
@@ -130,7 +130,7 @@ impl vte::Perform for Commands {
             }
             // OSC 7 ; file://host/path — the program reporting its cwd.
             Some(b"7") => {
-                let Some(Ok(uri)) = params.get(1).map(|p| std::str::from_utf8(*p)) else {
+                let Some(Ok(uri)) = params.get(1).map(|p| std::str::from_utf8(p)) else {
                     return;
                 };
                 if let Some(path) = file_uri_path(uri) {

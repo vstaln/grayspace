@@ -2508,7 +2508,7 @@ async fn read_terminal_output(
             params.get("offset").and_then(|v| v.parse::<usize>().ok()),
             params.get("limit").and_then(|v| v.parse::<usize>().ok()),
         )
-        .map_err(|error| not_found(error))?;
+        .map_err(not_found)?;
     Ok(Json(OutputResponse { output }))
 }
 
@@ -2580,7 +2580,7 @@ async fn spawn_terminal(
             .as_deref()
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
-            .or_else(|| slate_app::workspace::current())
+            .or_else(slate_app::workspace::current)
             .or_else(|| {
                 std::env::current_dir()
                     .ok()
@@ -2654,10 +2654,7 @@ async fn rename_terminal(
         .manager
         .resolve(&id, agent.as_deref())
         .map_err(command_failure)?;
-    state
-        .manager
-        .snapshot(&id)
-        .map_err(|error| not_found(error))?;
+    state.manager.snapshot(&id).map_err(not_found)?;
     state.manager.set_name(&id, name);
     Ok(Json(
         serde_json::json!({"ok": true, "id": id, "name": name}),
@@ -2907,10 +2904,7 @@ async fn dispose_terminal(
     if !exists {
         return Err(not_found(format!("terminal \"{id}\" not found")));
     }
-    state
-        .manager
-        .dispose(&id)
-        .map_err(|error| not_found(error))?;
+    state.manager.dispose(&id).map_err(not_found)?;
     // `submit('terminal.dispose', …)` — the journal records the kill before
     // the fallout is cleaned up, as the TypeScript did.
     let _ = commit_journal(

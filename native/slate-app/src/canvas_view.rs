@@ -2745,10 +2745,10 @@ impl Render for CanvasView {
             }
         }
         for (id, cols, rows) in sizes {
-            if self.term_cells.get(&id) != Some(&(cols, rows)) {
-                if self.manager.resize(&id, cols, rows).is_ok() {
-                    self.term_cells.insert(id, (cols, rows));
-                }
+            if self.term_cells.get(&id) != Some(&(cols, rows))
+                && self.manager.resize(&id, cols, rows).is_ok()
+            {
+                self.term_cells.insert(id, (cols, rows));
             }
         }
 
@@ -3078,18 +3078,18 @@ impl Render for CanvasView {
                         this.drag = Some(Drag::Erase { dirty });
                         cx.notify();
                     }
-                    Some(Drag::Select { start, .. }) => {
+                    Some(Drag::Select { start, .. })
+                        if (pointer - *start).length() >= DRAW_CLICK_THRESHOLD =>
+                    {
                         // The marquee materializes past the same 4px click
                         // threshold strokes use.
-                        if (pointer - *start).length() >= DRAW_CLICK_THRESHOLD {
-                            this.drag = Some(Drag::Select {
-                                start: *start,
-                                rect: Some((*start, pointer)),
-                            });
-                            cx.notify();
-                        }
+                        this.drag = Some(Drag::Select {
+                            start: *start,
+                            rect: Some((*start, pointer)),
+                        });
+                        cx.notify();
                     }
-                    None => {}
+                    Some(Drag::Select { .. }) | None => {}
                 }
             }))
             .on_mouse_up(
@@ -3964,7 +3964,7 @@ impl Render for CanvasView {
                                         this.notice(format!("agent pick: {error}"));
                                     }
                                     if let Err(error) =
-                                        this.manager.write_text(&menu_id, *command, true)
+                                        this.manager.write_text(&menu_id, command, true)
                                     {
                                         this.notice(format!("agent launch: {error}"));
                                     }
@@ -5131,7 +5131,7 @@ impl CanvasView {
             let prefix = keystroke
                 .key_char
                 .as_deref()
-                .or_else(|| match keystroke.key.as_str() {
+                .or(match keystroke.key.as_str() {
                     "slash" => Some("/"),
                     "period" => Some("."),
                     "at" => Some("@"),
@@ -5268,8 +5268,8 @@ impl CanvasView {
                     "up" => (0.0, step),
                     _ => (0.0, -step),
                 };
-                self.canvas.camera.x += dx as f64;
-                self.canvas.camera.y += dy as f64;
+                self.canvas.camera.x += dx;
+                self.canvas.camera.y += dy;
                 self.camera_dirty_at = Some(Instant::now());
             }
             _ => return,

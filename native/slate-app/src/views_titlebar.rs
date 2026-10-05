@@ -14,8 +14,8 @@
 //! - **right**: another drag spacer, "Flip terminals" (canvas/code only),
 //!   the Arrange menu, the Git pill (`title-bar-git`: branch + dirty dot
 //!   + checkout panel), an `h-4 w-px` divider, and — non-macOS only, the
-//!   `!vt` guard — minimize, maximize/restore and close, each a `jr`
-//!   button (`h-10 w-[46px]`, close hovering `#e04343` → white).
+//!     `!vt` guard — minimize, maximize/restore and close, each a `jr`
+//!     button (`h-10 w-[46px]`, close hovering `#e04343` → white).
 //!
 //! This port keeps the grid, the surface/hairline chrome, the divider and
 //! the window controls; the rest is adapted to what this build can back:

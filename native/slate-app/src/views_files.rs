@@ -9,13 +9,13 @@
 //! and the dispatcher does the filesystem work:
 //!   * `file_open`      — `xdg-open <path>` (left-click on a file row)
 //!   * `file_reveal`    — file manager at `path` (dirs open themselves,
-//!                        files open their parent directory)
+//!     files open their parent directory)
 //!   * `file_copy_path` — absolute path onto the clipboard
 //!   * `file_new`       — create `untitled`/`untitled-N` of `kind` in `dir`
 //!   * `file_delete`    — remove the file / dir tree at `path`; only sent
-//!                        for the path `state.confirmDelete` already armed
+//!     for the path `state.confirmDelete` already armed
 //!   * `refresh`        — unknown-op no-op; `widget_command` still notifies,
-//!                        so it re-reads the directory for free
+//!     so it re-reads the directory for free
 //!
 //! Pane-local keys journaled on `widget.state`: `cwd`, `showHidden`,
 //! `sort` (`name`/`mtime`/`size`), `confirmDelete` (abs path armed for a

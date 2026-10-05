@@ -176,9 +176,7 @@ fn day_cell(
     widget_id: &str,
     key: String,
     day_of_month: i64,
-    in_month: bool,
-    is_today: bool,
-    is_selected: bool,
+    (in_month, is_today, is_selected): (bool, bool, bool),
     titles: &[String],
     cx: &mut Context<crate::canvas_view::CanvasView>,
 ) -> impl IntoElement {
@@ -399,9 +397,11 @@ pub fn calendar_pane(
                 &wid,
                 key.clone(),
                 cd,
-                cm == m,
-                key == today_key,
-                selected_day == Some(key.as_str()),
+                (
+                    cm == m,
+                    key == today_key,
+                    selected_day == Some(key.as_str()),
+                ),
                 titles,
                 cx,
             ));

@@ -6,7 +6,7 @@
 //! per render instead:
 //!
 //! * `/proc/stat`   — CPU busy %, as the delta between this render and the
-//!                    previous one (first render falls back to load1/cores);
+//!   previous one (first render falls back to load1/cores);
 //! * `/proc/meminfo`— RAM used/total (`MemTotal` − `MemAvailable`);
 //! * `/proc/loadavg`, `/proc/uptime`, `/proc/cpuinfo`,
 //!   `/proc/sys/kernel/hostname` — the Host & Runtime card.

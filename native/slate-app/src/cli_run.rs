@@ -296,7 +296,7 @@ pub fn run() -> Result<(), String> {
             if matches!(
                 other,
                 "reply" | "allow" | "approve" | "permit" | "deny" | "reject" | "refuse"
-            ) && plan.body.get("to").map_or(true, |v| v.is_null())
+            ) && plan.body.get("to").is_none_or(|v| v.is_null())
             {
                 if let Some(ask_id) = plan.body.get("replyTo").and_then(Value::as_str) {
                     if let Some(sender) = lookup_sender(&url, &token, ask_id) {
@@ -558,7 +558,7 @@ fn print_response(
                             } else {
                                 " (closed)"
                             },
-                            format!("  {}", as_str(run, "objective")),
+                            format_args!("  {}", as_str(run, "objective")),
                         );
                     }
                 }

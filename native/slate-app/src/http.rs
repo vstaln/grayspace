@@ -992,8 +992,8 @@ fn orchestration_route(
                     Ok("@coordinator".to_owned())
                 } else if matches!(raw.as_str(), "*" | "@all" | "@idle" | "@coordinator") {
                     Ok(raw)
-                } else if raw.starts_with('@') {
-                    let agent = raw[1..].to_owned();
+                } else if let Some(agent) = raw.strip_prefix('@') {
+                    let agent = agent.to_owned();
                     let running = deps
                         .orchestration
                         .list_dispatches(Some(&run_id), None, Some("running"))
@@ -1810,7 +1810,7 @@ fn widgets_route(request: &Request, segments: &[String], deps: &mut RouteDeps<'_
                     .widgets
                     .values()
                     .filter(|widget| widget.kind.as_deref() != Some("terminal"))
-                    .map(|widget| widget_row(widget)),
+                    .map(widget_row),
             );
             Response::json(200, json!({ "widgets": widgets }))
         }
@@ -1933,7 +1933,7 @@ fn widgets_route(request: &Request, segments: &[String], deps: &mut RouteDeps<'_
                     let widget = canvas
                         .widgets
                         .get(&id)
-                        .map(|widget| widget_row(widget))
+                        .map(widget_row)
                         .unwrap_or_else(|| json!({ "id": id }));
                     accepted(&entry, 201, widget)
                 }
@@ -2014,7 +2014,7 @@ fn widgets_route(request: &Request, segments: &[String], deps: &mut RouteDeps<'_
             let widget = canvas
                 .widgets
                 .get(raw)
-                .map(|widget| widget_row(widget))
+                .map(widget_row)
                 .unwrap_or_else(|| json!({ "id": raw }));
             accepted(&entry, 200, widget)
         }
@@ -3370,7 +3370,7 @@ fn snapshot_route(request: &Request, deps: &mut RouteDeps<'_>) -> Response {
             .widgets
             .values()
             .filter(|widget| widget.kind.as_deref() != Some("terminal"))
-            .map(|widget| widget_row(widget)),
+            .map(widget_row),
     );
     let last_seq = log.sequence();
     let since = request

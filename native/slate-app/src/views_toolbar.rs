@@ -176,9 +176,7 @@ fn suggestion_row(
     index: usize,
     selected: bool,
     prefix: char,
-    kind: &str,
-    label: &str,
-    hint: &str,
+    (kind, label, hint): (&str, &str, &str),
     enabled: bool,
     cx: &mut Context<crate::canvas_view::CanvasView>,
 ) -> impl IntoElement {
@@ -437,9 +435,7 @@ pub fn toolbar_pane(
                 index,
                 index == sel,
                 prefix,
-                kind,
-                label,
-                hint,
+                (kind, label, hint),
                 enabled,
                 cx,
             ));
@@ -590,8 +586,7 @@ pub fn toolbar_pane(
                     .child("❯"),
             )
             .child(div().min_w_0().max_w(px(140.0)).truncate().child(title));
-        if enabled && next.is_some() {
-            let next = next.expect("checked above");
+        if let (true, Some(next)) = (enabled, next) {
             el = el
                 .cursor_pointer()
                 .hover(|el| {

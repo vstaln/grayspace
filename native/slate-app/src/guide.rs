@@ -7,7 +7,7 @@
 //! markers are what let a later run find and replace it in place.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const BEGIN: &str = "<!-- BEGIN SLATE (managed) -->";
 const END: &str = "<!-- END SLATE (managed) -->";
@@ -150,7 +150,7 @@ fn sync_file(path: &Path, body: &str) {
 /// `syncOrcGuide(dir)` — stamp the managed block into the workspace's
 /// three agent-guide files. Best-effort: guide files are advisory, and
 /// a read-only workspace must not keep the app from starting.
-pub fn sync_slate_guide(dir: &PathBuf) {
+pub fn sync_slate_guide(dir: &Path) {
     let body = guide_body();
     for name in GUIDE_FILES {
         sync_file(&dir.join(name), &body);
